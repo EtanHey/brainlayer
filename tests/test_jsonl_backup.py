@@ -61,6 +61,42 @@ def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = 
 def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
+    class Files:
+        def __init__(self):
+            self.updates = []
+            self.deleted = []
+
+        def list(self, **kwargs):
+            self.last_operation = "list"
+            return self
+
+        def update(self, **kwargs):
+            self.updates.append(kwargs)
+            self.last_operation = "update"
+            return self
+
+        def delete(self, **kwargs):
+            self.deleted.append(kwargs)
+            self.last_operation = "delete"
+            return self
+
+        def execute(self):
+            if self.last_operation == "list":
+                return {
+                    "files": [
+                        {"id": f"old-{index}", "name": f"claude-jsonl-2026-08-{index + 1:02d}.tar.gz"}
+                        for index in range(40)
+                    ]
+                }
+            return {}
+
+    class Service:
+        def __init__(self):
+            self._files = Files()
+
+        def files(self):
+            return self._files
+
     monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_RETENTION", raising=False)
     now = time.time()
     source_root = tmp_path / "sessions"
@@ -70,7 +106,9 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
     old_archives = [staging_dir / f"claude-jsonl-2026-09-{day:02d}.tar.gz" for day in (1, 2)]
     for archive in old_archives:
         archive.write_bytes(b"preserve me")
+    service = Service()
     _mock_drive_success(jsonl_backup, monkeypatch)
+    monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: service)
 
     result = jsonl_backup.run_backup(
         source_roots=[source_root],
@@ -87,8 +125,23 @@ def test_jsonl_retention_is_disabled_by_default_and_keeps_local_archives(tmp_pat
     assert result["retention_mode"] == "trash"
     assert result["retention_deleted"] == []
     assert result["local_archive_removed"] is False
+    assert service._files.updates == []
+    assert service._files.deleted == []
     assert all(archive.exists() for archive in old_archives)
     assert Path(result["archive"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("value", "enabled"),
+    (("0", False), ("", False), ("false", False), ("yes", False), ("1", True), ("true", True)),
+)
+def test_jsonl_retention_env_is_explicit_only(value, enabled, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    monkeypatch.setattr(jsonl_backup, "RETENTION_ENABLED", False)
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_RETENTION", value)
+
+    assert jsonl_backup._retention_enabled() is enabled
 
 
 def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp_path, monkeypatch):
@@ -182,9 +235,20 @@ def test_jsonl_retention_opt_in_trashes_drive_objects_and_never_hard_deletes(tmp
 
 
 def test_jsonl_backup_source_has_no_drive_hard_delete_call():
-    source = Path("src/brainlayer/jsonl_backup.py").read_text(encoding="utf-8")
+    from brainlayer import jsonl_backup
+
+    source = Path(jsonl_backup.__file__).read_text(encoding="utf-8")
 
     assert ".delete(" not in source
+    assert "backup_daily.prune_drive_backups(" not in source
+
+    mutated = source.replace(
+        "                _prune_drive_backups_to_trash(\n",
+        "                backup_daily.prune_drive_backups(\n",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        assert "backup_daily.prune_drive_backups(" not in mutated
 
 
 def _icloud_state(*, uploaded: bool, status: str) -> dict:
@@ -223,6 +287,15 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
     backup_daily_source = Path("src/brainlayer/backup_daily.py").read_text(encoding="utf-8")
 
     assert inspect_jsonl_retention_invariant(source, backup_daily_source=backup_daily_source) == []
+
+    unsafe = source.replace(
+        "                _prune_drive_backups_to_trash(\n",
+        "                backup_daily.prune_drive_backups(\n",
+        1,
+    )
+    assert "JSONL retention must not call backup_daily.prune_drive_backups" in (
+        inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+    )
 
     mutations = (
         (
