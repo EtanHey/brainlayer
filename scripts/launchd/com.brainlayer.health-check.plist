@@ -11,10 +11,16 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
-		<string>__BRAINLAYER_BIN__</string>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>"$1" -c 'from brainlayer.cli import app; app()' "$2" "$3" "$4"; health_status=$?; "$1" -c 'from brainlayer.cli import app; app()' "$5" "$6"; observability_status=$?; if [ "$health_status" -ne 0 ]; then exit "$health_status"; fi; exit "$observability_status"</string>
+		<string>brainlayer-health-check</string>
+		<string>__BRAINLAYER_PYTHON__</string>
 		<string>health-check</string>
 		<string>--json</string>
 		<string>--heal</string>
+		<string>observability</string>
+		<string>--write</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>

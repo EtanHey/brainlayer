@@ -78,7 +78,16 @@ def check(
         changed = False
         for section in SECTIONS:
             for index, item in enumerate(golden[section]["inputs"]):
-                rows, digest = _metadata(fixture_root / item["path"])
+                try:
+                    rows, digest = _metadata(fixture_root / item["path"])
+                except sqlite3.Error as exc:
+                    findings.append(
+                        f"{case['case_id']}: $.{section}.inputs[{index}] ({item['path']}): status: malformed ({exc})"
+                    )
+                    if write:
+                        item.update(status="malformed", rows_or_bytes=None, sha256_first_64kb=None)
+                        changed = True
+                    continue
                 stale = []
                 if item["rows_or_bytes"] != rows:
                     stale.append(f"rows_or_bytes {item['rows_or_bytes']!r} != {rows!r}")
@@ -125,7 +134,7 @@ def main() -> int:
         print(f"{'updated' if args.write else 'stale'} input receipts: {len(findings)}")
     else:
         print("observability golden input receipts: clean")
-    return 0 if args.write or not findings else 1
+    return 0 if not findings else 1
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,6 +55,24 @@ def test_dev_golden_input_receipts_match_fixture_artifacts() -> None:
         )
         == []
     )
+
+
+def test_golden_input_checker_reports_malformed_database_as_drift(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixtures"
+    shutil.copytree(evaluator.FIXTURES, fixture)
+    case = next(item for item in json.loads((fixture / "cases.json").read_text())["cases"] if item["split"] == "dev")
+    (fixture / case["inputs"]["db"]).write_bytes(b"not sqlite")
+
+    findings = golden_inputs.check(fixture_root=fixture, heldout_root=None, split="dev", write=False)
+
+    assert any("status: malformed" in finding for finding in findings)
+
+
+def test_golden_input_checker_write_mode_exits_nonzero_when_it_updates(monkeypatch) -> None:
+    monkeypatch.setattr(golden_inputs, "check", lambda **kwargs: ["updated receipt"])
+    monkeypatch.setattr(sys, "argv", ["check_observability_golden_inputs.py", "--write"])
+
+    assert golden_inputs.main() == 1
 
 
 def test_builder_uses_vector_store_schema_without_handwritten_ddl(tmp_path: Path) -> None:
