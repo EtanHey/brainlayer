@@ -1154,9 +1154,7 @@ def test_weekly_shared_drive_pool_keeps_the_three_newest_archives():
     class FakeFiles:
         def __init__(self):
             self.deleted: list[str] = []
-            self.files = [
-                {"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 5)
-            ]
+            self.files = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, 5)]
 
         def list(self, **kwargs):  # noqa: ARG002
             query = kwargs["q"]
