@@ -1580,6 +1580,7 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
                 '  print) [ "${2##*/}" = "com.brainlayer.watch" ] && [ -f "$FAKE_LOADED" ] && printf "%s\\n" "state = running" "pid = 4242" && exit 0; exit 1 ;;',
                 '  bootout) if [ -f "$FAKE_FAIL_BOOTOUT_ONCE" ]; then exit 5; fi; rm -f "$FAKE_LOADED"; exit 0 ;;',
                 '  bootstrap) touch "$FAKE_LOADED"; exit 0 ;;',
+                "  unload) exit 5 ;;",
                 "  *) exit 0 ;;",
                 "esac",
                 "",
@@ -1630,6 +1631,18 @@ def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist
     assert sum(command.startswith("bootout ") for command in commands) == 3
     assert sum(command.startswith("bootstrap ") for command in commands) == 1
     assert not (home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist.reload-pending").exists()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "remove"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert (home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist").exists()
+    assert wrapper.exists()
 
 
 def test_fleet_watchdog_rejects_unload_timeout_before_enable_or_bootstrap(tmp_path: Path) -> None:
