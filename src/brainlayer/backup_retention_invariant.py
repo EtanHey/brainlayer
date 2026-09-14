@@ -323,7 +323,7 @@ def inspect_jsonl_retention_invariant(source: str, *, backup_daily_source: str) 
     if not _upload_requests_md5(upload_file):
         errors.append("Drive upload must request md5Checksum from the API")
 
-    prune_calls = _calls(run_backup, "prune_drive_backups")
+    prune_calls = _calls(run_backup, "_prune_drive_backups_to_trash") + _calls(run_backup, "prune_drive_backups")
     archive_unlinks = [
         call
         for call in _calls(run_backup, "unlink")
