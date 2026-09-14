@@ -55,7 +55,7 @@ let package = Package(
                 "RENDER_VERIFICATION.md",
             ],
             resources: [
-                .copy("Fixtures"),
+                .copy("fixtures"),
             ]
         ),
         .testTarget(

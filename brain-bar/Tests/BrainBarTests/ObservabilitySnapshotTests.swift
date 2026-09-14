@@ -285,7 +285,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
     }
 
     private var liveFixtureURL: URL {
-        Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures")!
+        Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "fixtures")!
     }
 
     private func color(

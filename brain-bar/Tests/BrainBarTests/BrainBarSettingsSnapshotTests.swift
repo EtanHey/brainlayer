@@ -18,7 +18,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             root: tempRoot,
             name: "provider",
             config: providerConfig,
-            observabilityURL: Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures")
+            observabilityURL: Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "fixtures")
         )
         try render(viewModel: providerViewModel, named: "provider-and-jobs")
 
