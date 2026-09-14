@@ -80,8 +80,8 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let tilesIndex = try XCTUnwrap(dashboardSource.range(of: "summaryTiles(layout: layout)")?.lowerBound)
 
         XCTAssertLessThan(statusIndex, tilesIndex, "The one-line status must precede the three dashboard tiles.")
-        XCTAssertTrue(dashboardSource.contains("All good"))
-        XCTAssertTrue(dashboardSource.contains("1 thing needs you"))
+        XCTAssertTrue(source.contains("All good"))
+        XCTAssertTrue(source.contains("1 thing needs you"))
         XCTAssertTrue(dashboardSource.contains("brainbar.dashboard.status"))
         XCTAssertTrue(dashboardSource.contains("ObservabilityTechnicalDetailsView"))
         XCTAssertFalse(dashboardSource.contains("lastGoodContentOpacity"))
@@ -228,7 +228,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
         let tilesSource = try sourceSlice(
             from: "private func summaryTiles",
-            throughBefore: "private var onePageMemoryCounts",
+            throughBefore: "private var onePageBackupLines",
             in: dashboard
         )
 

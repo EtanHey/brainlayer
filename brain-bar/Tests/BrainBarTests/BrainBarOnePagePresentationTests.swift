@@ -43,6 +43,18 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testUnverifiedBackupTimestampIsNotCalledLastGood() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.unverifiedResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+
+        XCTAssertEqual(presentation.backupLines.map(\.tone), [.red, .red])
+        XCTAssertTrue(presentation.backupLines.allSatisfy { $0.text.hasSuffix("no verified copy") })
+        XCTAssertFalse(presentation.backupLines.map(\.text).joined().contains("last good"))
+    }
+
+    @MainActor
     func testLoadingObservabilityIsNeutralInsteadOfAThingNeedingAttention() throws {
         let presentation = try makePresentation(
             result: .unreadable("Loading observability data."),
@@ -99,15 +111,15 @@ enum BrainBarOnePageTestFixture {
 
     static func healthyResult() throws -> ObservabilityReadResult {
         .readable(try document(byHour: [
-            .init(hour: Date(timeIntervalSince1970: 1_789_354_800), count: 2),
+            .init(hour: Date(timeIntervalSince1970: 1_789_333_200), count: 2),
             .init(hour: Date(timeIntervalSince1970: 1_789_383_600), count: 5),
         ]))
     }
 
     static func todayBoundaryResult() throws -> ObservabilityReadResult {
         .readable(try document(byHour: [
-            .init(hour: Date(timeIntervalSince1970: 1_789_351_200), count: 11),
-            .init(hour: Date(timeIntervalSince1970: 1_789_354_800), count: 2),
+            .init(hour: Date(timeIntervalSince1970: 1_789_329_600), count: 11),
+            .init(hour: Date(timeIntervalSince1970: 1_789_333_200), count: 2),
             .init(hour: Date(timeIntervalSince1970: 1_789_383_600), count: 5),
         ]))
     }
@@ -116,8 +128,13 @@ enum BrainBarOnePageTestFixture {
         .readable(try document(byHour: nil))
     }
 
+    static func unverifiedResult() throws -> ObservabilityReadResult {
+        .readable(try document(byHour: [], backupsVerified: false))
+    }
+
     private static func document(
-        byHour: [ObservabilityDocument.HourBucket]?
+        byHour: [ObservabilityDocument.HourBucket]?,
+        backupsVerified: Bool = true
     ) throws -> ObservabilityDocument {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
@@ -154,12 +171,12 @@ enum BrainBarOnePageTestFixture {
                     at: now.addingTimeInterval(-3_600),
                     ageHours: 1,
                     archiveId: "transcripts-verified",
-                    verified: true
+                    verified: backupsVerified
                 ),
                 dbSnapshot: .init(
                     lastAt: now.addingTimeInterval(-7_200),
                     destination: "brainlayer-verified.db.gz",
-                    verified: true
+                    verified: backupsVerified
                 ),
                 launchd: .init(
                     label: "com.brainlayer.jsonl-backup",

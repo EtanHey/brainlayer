@@ -18,7 +18,14 @@ struct ObservabilityDocument: Codable, Sendable {
         let totalChunks: Int?
         let inWindow: Window?
     }
-    struct Window: Codable, Sendable { let count: Int }
+    struct Window: Codable, Sendable {
+        let count: Int
+        let byHour: [HourBucket]?
+    }
+    struct HourBucket: Codable, Sendable {
+        let hour: Date
+        let count: Int
+    }
     struct Emitters: Codable, Sendable {
         let state: String, reason: String
         let inputs: [Input]

@@ -162,6 +162,7 @@ private struct BrainBarDashboardContent: View {
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
+    var referenceNow: Date? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -171,7 +172,8 @@ private struct BrainBarDashboardContent: View {
                 collector: collector,
                 hotkeyStatus: hotkeyStatus,
                 dbPath: dbPath,
-                observabilityResult: observabilityResult
+                observabilityResult: observabilityResult,
+                referenceNow: referenceNow
             )
         }
     }
@@ -319,6 +321,137 @@ enum BrainBarOnePageComposition {
     static let primaryTileCount = 3
     static let primaryTilesHaveEqualHeight = true
     static let detailsExpandedByDefault = false
+}
+
+enum BrainBarOnePageStatusTone: Sendable, Equatable {
+    case green
+    case amber
+    case neutral
+}
+
+struct BrainBarOnePageStatus: Sendable, Equatable {
+    let headline: String
+    let reason: String?
+    let tone: BrainBarOnePageStatusTone
+}
+
+struct BrainBarOnePagePresentation: Sendable, Equatable {
+    let status: BrainBarOnePageStatus
+    let backupLines: [ObservabilityStatusLine]
+    let totalMemories: Int?
+    let newToday: Int?
+    let ingestRateText: String
+    let ingestVolumeText: String
+    let ingestChartLabel: String
+    let ingestAccessibilitySummary: String
+
+    static func derive(
+        snapshotFreshness: SnapshotFreshnessState,
+        hero: BrainBarHeroPresentation,
+        observability: ObservabilityReadResult,
+        stats: DashboardStats,
+        ingest: DashboardFlowLane,
+        now: Date,
+        calendar: Calendar = .current,
+        locale: Locale = .current
+    ) -> Self {
+        let status: BrainBarOnePageStatus
+        if case .unreadable("Loading observability data.") = observability {
+            status = .init(headline: "Checking…", reason: nil, tone: .neutral)
+        } else {
+            switch snapshotFreshness {
+            case .loading:
+                status = .init(headline: "Checking…", reason: nil, tone: .neutral)
+            case let .stale(ageSeconds):
+                status = .init(
+                    headline: "1 thing needs you",
+                    reason: "Dashboard data is \(ageText(ageSeconds)) old.",
+                    tone: .amber
+                )
+            case .error:
+                status = .init(
+                    headline: "1 thing needs you",
+                    reason: "Dashboard data could not refresh.",
+                    tone: .amber
+                )
+            case .live:
+                status = hero.healthTone == .green
+                    ? .init(headline: "All good", reason: nil, tone: .green)
+                    : .init(headline: "1 thing needs you", reason: hero.healthReason, tone: .amber)
+            }
+        }
+
+        let backupLines: [ObservabilityStatusLine]
+        let totalMemories: Int?
+        let newToday: Int?
+        if case let .readable(document) = observability, document.backups.state == "measured" {
+            let snapshot = document.backups.dbSnapshot
+            let upload = document.backups.lastVerifiedUpload
+            backupLines = [
+                .init(
+                    text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar) : nil } ?? "no verified copy")",
+                    tone: snapshot?.verified == true ? .green : .red
+                ),
+                .init(
+                    text: "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar) : nil } ?? "no verified copy")",
+                    tone: upload?.verified == true ? .green : .red
+                ),
+            ]
+        } else {
+            backupLines = [
+                .init(text: "Database · Drive · status unavailable", tone: .red),
+                .init(text: "Transcripts · Drive · status unavailable", tone: .red),
+            ]
+        }
+
+        if case let .readable(document) = observability, document.stores.state == "measured" {
+            totalMemories = document.stores.totalChunks ?? stats.chunkCount
+            if let buckets = document.stores.inWindow?.byHour {
+                let midnight = calendar.startOfDay(for: now)
+                newToday = buckets
+                    .filter { $0.hour >= midnight && $0.hour <= now }
+                    .reduce(0) { $0 + $1.count }
+            } else {
+                newToday = nil
+            }
+        } else {
+            totalMemories = stats.chunkCount
+            newToday = nil
+        }
+
+        let count = ingest.values.reduce(0, +)
+        let window = ingest.activityWindowMinutes.isMultiple(of: 60)
+            ? "\(ingest.activityWindowMinutes / 60) h"
+            : "\(ingest.activityWindowMinutes) min"
+        let rate = ingest.rateText.hasSuffix("/min")
+            ? String(ingest.rateText.dropLast(4)) + " memories/min"
+            : "\(ingest.rateText) memories/min"
+        let volume = "\(DashboardMetricFormatter.integerString(count, locale: locale)) new memories in \(window)"
+
+        return Self(
+            status: status,
+            backupLines: backupLines,
+            totalMemories: totalMemories,
+            newToday: newToday,
+            ingestRateText: rate,
+            ingestVolumeText: volume,
+            ingestChartLabel: "NEW MEMORIES",
+            ingestAccessibilitySummary: "\(volume); \(rate)"
+        )
+    }
+
+    private static func ageText(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds) s" }
+        if seconds < 3_600 { return "\(seconds / 60) min" }
+        return "\(seconds / 3_600) h"
+    }
+
+    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar) -> String {
+        if calendar.isDate(date, inSameDayAs: now) {
+            return "last good today \(date.formatted(date: .omitted, time: .shortened))"
+        }
+        return "last good \(date.formatted(date: .abbreviated, time: .shortened))"
+    }
 }
 
 @MainActor
@@ -480,6 +613,7 @@ private struct BrainBarDashboardView: View {
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
+    var referenceNow: Date? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
@@ -494,7 +628,7 @@ private struct BrainBarDashboardView: View {
     @State private var vectorDetailHeight: CGFloat = 0
 
     private var flowSummary: DashboardFlowSummary {
-        DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats)
+        DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: currentNow)
     }
 
     private var vectorSignal: BrainBarSignalCoverage {
@@ -521,13 +655,26 @@ private struct BrainBarDashboardView: View {
     private var heroPresentation: BrainBarHeroPresentation {
         let backupTruth = BrainBarHeroBackupTruth.derive(
             from: effectiveObservabilityResult,
-            now: Date(),
+            now: currentNow,
             cadence: observabilityCadence
         )
         return BrainBarHeroPresentation.derive(
             flow: flowSummary,
             stats: collector.stats,
             backupTruth: backupTruth
+        )
+    }
+
+    private var currentNow: Date { referenceNow ?? Date() }
+
+    private var onePagePresentation: BrainBarOnePagePresentation {
+        BrainBarOnePagePresentation.derive(
+            snapshotFreshness: collector.snapshotFreshnessState,
+            hero: heroPresentation,
+            observability: effectiveObservabilityResult,
+            stats: collector.stats,
+            ingest: flowSummary.allCommits,
+            now: currentNow
         )
     }
 
@@ -611,12 +758,17 @@ private struct BrainBarDashboardView: View {
     }
 
     private var statusStrip: some View {
-        let status = onePageStatus
+        let status = onePagePresentation.status
+        let statusColor: Color = switch status.tone {
+        case .green: .green
+        case .amber: .orange
+        case .neutral: .brainBarTextSecondary
+        }
         return HStack(spacing: 9) {
             Circle()
-                .fill(status.allGood ? Color.green : Color.orange)
+                .fill(statusColor)
                 .frame(width: 9, height: 9)
-            Text(status.allGood ? "All good" : "1 thing needs you")
+            Text(status.headline)
                 .font(.system(size: 14, weight: .bold, design: .rounded))
             if let reason = status.reason {
                 Text("— \(reason)")
@@ -631,35 +783,15 @@ private struct BrainBarDashboardView: View {
         .background(
             BrainBarGlassPanel(
                 cornerRadius: 12,
-                tint: status.allGood ? .green : .orange
+                tint: statusColor
             )
         )
         .accessibilityIdentifier("brainbar.dashboard.status")
     }
 
-    private var onePageStatus: (allGood: Bool, reason: String?) {
-        switch collector.snapshotFreshnessState {
-        case .loading:
-            return (false, "Dashboard status is still loading.")
-        case let .stale(ageSeconds):
-            return (false, "Dashboard data is \(onePageAge(ageSeconds)) old.")
-        case .error:
-            return (false, "Dashboard data could not refresh.")
-        case .live:
-            let hero = heroPresentation
-            return hero.healthTone == .green ? (true, nil) : (false, hero.healthReason)
-        }
-    }
-
-    private func onePageAge(_ seconds: Int) -> String {
-        if seconds < 60 { return "\(seconds) s" }
-        if seconds < 3_600 { return "\(seconds / 60) min" }
-        return "\(seconds / 3_600) h"
-    }
-
     @ViewBuilder
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
-        let tileHeight = max(220, layout.sparklineHeight + 112)
+        let tileHeight: CGFloat = 172
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: layout.gridSpacing) {
                 backupTile(height: tileHeight)
@@ -682,9 +814,9 @@ private struct BrainBarDashboardView: View {
     }
 
     private func memoryTile(height: CGFloat) -> some View {
-        let counts = onePageMemoryCounts
+        let counts = onePagePresentation
         return summaryTile(title: "Memory", identifier: "memory", height: height) {
-            if let total = counts.total {
+            if let total = counts.totalMemories {
                 Text("\(DashboardMetricFormatter.integerString(total)) memories total")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .monospacedDigit()
@@ -707,13 +839,14 @@ private struct BrainBarDashboardView: View {
 
     private func ingestTile(height: CGFloat) -> some View {
         let lane = flowSummary.allCommits
+        let presentation = onePagePresentation
         let fetchedAt = collector.lastDataFetchedAt ?? Date()
         return summaryTile(title: "Ingest", identifier: "ingest", height: height) {
-            Text(lane.rateText)
+            Text(presentation.ingestRateText)
                 .font(.system(size: 22, weight: .bold, design: .rounded))
                 .monospacedDigit()
             BrainBarHeroSparkline(
-                label: lane.sparklineLabel,
+                label: presentation.ingestChartLabel,
                 values: lane.values,
                 secondaryValues: [],
                 primarySeriesLabel: nil,
@@ -729,10 +862,10 @@ private struct BrainBarDashboardView: View {
                 pulseRevision: allCommitPulseRevision,
                 referenceValue: nil,
                 metricDisclosure: nil,
-                accessibilitySummary: "\(lane.volumeText); \(lane.rateText)"
+                accessibilitySummary: presentation.ingestAccessibilitySummary
             )
             .frame(height: 92)
-            Text("\(lane.volumeText) · live")
+            Text(presentation.ingestVolumeText)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.brainBarTextSecondary)
         }
@@ -758,44 +891,8 @@ private struct BrainBarDashboardView: View {
         .accessibilityIdentifier("brainbar.dashboard.tile.\(identifier)")
     }
 
-    private var onePageMemoryCounts: (total: Int?, newToday: Int?) {
-        guard case let .readable(document) = effectiveObservabilityResult,
-              document.stores.state == "measured" else {
-            return (collector.stats.chunkCount, nil)
-        }
-        return (
-            document.stores.totalChunks ?? collector.stats.chunkCount,
-            document.stores.inWindow?.count ?? collector.stats.recentWriteCount
-        )
-    }
-
     private var onePageBackupLines: [ObservabilityStatusLine] {
-        guard case let .readable(document) = effectiveObservabilityResult,
-              document.backups.state == "measured" else {
-            return [
-                .init(text: "iCloud · status unavailable", tone: .red),
-                .init(text: "Drive · status unavailable", tone: .red),
-            ]
-        }
-        let snapshot = document.backups.dbSnapshot
-        let upload = document.backups.lastVerifiedUpload
-        return [
-            .init(
-                text: "iCloud · \(snapshot.map { backupMoment($0.lastAt) } ?? "no verified copy")",
-                tone: snapshot?.verified == true ? .green : .red
-            ),
-            .init(
-                text: "Drive · \(upload.map { backupMoment($0.at) } ?? "no verified copy")",
-                tone: upload?.verified == true ? .green : .red
-            ),
-        ]
-    }
-
-    private func backupMoment(_ date: Date) -> String {
-        if Calendar.current.isDateInToday(date) {
-            return "last good today \(date.formatted(date: .omitted, time: .shortened))"
-        }
-        return "last good \(date.formatted(date: .abbreviated, time: .shortened))"
+        onePagePresentation.backupLines
     }
 
     private func signalCoveragePanel(layout: BrainBarDashboardLayout) -> some View {
@@ -2079,7 +2176,8 @@ enum BrainBarDashboardPreview {
     static func make(
         collector: StatsCollector,
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
-        observabilityResult: ObservabilityReadResult? = nil
+        observabilityResult: ObservabilityReadResult? = nil,
+        now: Date? = nil
     ) -> AnyView {
         AnyView(
             ZStack {
@@ -2087,7 +2185,8 @@ enum BrainBarDashboardPreview {
                 BrainBarDashboardContent(
                     collector: collector,
                     hotkeyStatus: hotkeyStatus,
-                    observabilityResult: observabilityResult
+                    observabilityResult: observabilityResult,
+                    referenceNow: now
                 )
             }
             .environment(\.colorScheme, .dark)
