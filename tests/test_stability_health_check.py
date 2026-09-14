@@ -1289,9 +1289,7 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
     )
 
     issue_codes = [issue.code for issue in result.issues]
-    assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded", "observability_unloaded"} <= set(
-        issue_codes
-    )
+    assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded", "observability_unloaded"} <= set(issue_codes)
     assert not [command for command in commands if command[:2] == ["launchctl", "enable"]]
     assert [
         "launchctl",
