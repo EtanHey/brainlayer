@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -635,3 +638,49 @@ def test_launchd_plist_render_rejects_xml_forbidden_interpreter_path(tmp_path):
 
     with pytest.raises(HookPythonUnresolved):
         render_launchd_plist("<string>__BRAINLAYER_PYTHON__</string>", python=str(python))
+
+
+def test_observability_launchd_runs_writer_every_five_minutes_with_rendered_keg_python(tmp_path):
+    from brainlayer.hook_python import render_launchd_plist
+
+    template = (REPO_ROOT / "scripts/launchd/com.brainlayer.observability.plist").read_text(encoding="utf-8")
+    python = tmp_path / "opt" / "brainlayer" / "libexec" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+
+    rendered = render_launchd_plist(template, python=str(python))
+    plist = plistlib.loads(rendered.encode())
+
+    assert plist["Label"] == "com.brainlayer.observability"
+    assert plist["ProgramArguments"] == [
+        "__BRAINLAYER_ENV_RUN__",
+        str(python),
+        "-m",
+        "brainlayer",
+        "observability",
+        "--write",
+    ]
+    assert plist["StartInterval"] == 300
+    assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer/observability.out.log"
+    assert plist["StandardErrorPath"] == "__HOME__/Library/Logs/brainlayer/observability.err.log"
+    assert plist["Nice"] == 10
+
+
+def test_brainlayer_module_executes_observability_cli_from_isolated_source_environment(tmp_path):
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": os.environ["PATH"],
+        "PYTHONPATH": str(REPO_ROOT / "src"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "brainlayer", "observability", "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

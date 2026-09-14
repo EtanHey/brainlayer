@@ -108,7 +108,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
   python; a `ModuleNotFoundError` there blocks the deploy exactly as an invalid signature does.
 
 ## PR Workflow
-- Request `@codex review`.
+- Review = Codex↔Claude pair + CodeRabbit (+ at most one bot); never write the Codex bot's at-mention token.
 - Request a lead-routed Claude pair review through the active collab lane.
 - Do not route mandatory reviews to Bugbot or Greptile.
 
@@ -241,6 +241,7 @@ brainlayer enrich
 - The Python producer writes `observability.json` beside the resolved DB; `BRAINLAYER_OBSERVABILITY_PATH` overrides that path.
 - The frozen contract is `tests/fixtures/observability/observability-schema.v1.json` (`schema_version: 1`).
 - `stores`, `emitters`, `author_unknown`, and `backups` fail closed: every section carries `state`, `reason`, and `inputs[]`; measured sections use an empty reason, while `unmeasurable` sections require a non-silent one and no numeric output.
+- Run the producer with `brainlayer observability --write`; check fixture drift with `python3 scripts/check_observability_golden_inputs.py --split dev`.
 
 ## P1 Pipeline Contracts
 - BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. By default, provider

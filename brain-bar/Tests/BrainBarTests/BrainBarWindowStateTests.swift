@@ -63,6 +63,44 @@ final class BrainBarWindowStateTests: XCTestCase {
     }
 
     @MainActor
+    func testRetrievalEntryPointsAreAbsentByDefaultAndPresentWhenSettingIsEnabled() {
+        XCTAssertFalse(BrainBarRetrievalToolsSettings().isEnabled)
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: false),
+            [.dashboard, .injections, .observability]
+        )
+        XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
+        XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: false),
+            .observability
+        )
+
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: true),
+            BrainBarTab.allCases
+        )
+        XCTAssertTrue(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: true))
+        XCTAssertTrue(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: true))
+        XCTAssertEqual(
+            BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: true),
+            .graph
+        )
+    }
+
+    func testRetrievalPolicyDrivesRenderedRootAndAppMenuEntryPoints() throws {
+        let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
+
+        XCTAssertTrue(root.contains("ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools))"))
+        XCTAssertTrue(root.contains("if BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
+        XCTAssertTrue(app.contains("if retrievalTools.isEnabled {"))
+        XCTAssertTrue(app.contains("Button(\"Search BrainLayer\")"))
+        XCTAssertTrue(app.contains("Button(\"Capture Note\")"))
+        XCTAssertTrue(app.contains("guard BrainBarRetrievalToolsSettings.shared.isEnabled else { return }"))
+    }
+
+    @MainActor
     func testLiveWindowDefaultsToObservability() {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .observability)
     }
@@ -114,6 +152,15 @@ final class BrainBarWindowStateTests: XCTestCase {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
+    }
+
+    private func brainBarSourceFile(
+        _ relativePath: String,
+        testFilePath: StaticString = #filePath
+    ) throws -> String {
+        let testsURL = URL(fileURLWithPath: "\(testFilePath)")
+        let packageRoot = testsURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: packageRoot.appendingPathComponent(relativePath), encoding: .utf8)
     }
 }
 

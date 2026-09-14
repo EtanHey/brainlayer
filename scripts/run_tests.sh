@@ -228,6 +228,16 @@ map_changed_files_to_pytests() {
           fi
         done
         ;;
+      src/brainlayer/__main__.py)
+        # The package module entrypoint delegates to the Typer app. Its subprocess contract is
+        # pinned in test_hook_python.py beside the launchd plist that executes `python -m
+        # brainlayer`; the generic module rule would look for tests/test___main__.py and escalate.
+        test_path="$TEST_ROOT/test_hook_python.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       src/brainlayer/__init__.py)
         # A release bump touches this file and nothing else in src/. The generic
         # src/brainlayer/*.py rule below looks for tests/test___init__.py, finds nothing, and

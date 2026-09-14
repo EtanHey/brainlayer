@@ -39,6 +39,9 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     }
 
     func testCommandBarBecomesReadyWhenDatabaseWasInstalledWhilePanelWasHidden() {
+        BrainBarRetrievalToolsSettings.shared.update(enabled: true)
+        defer { BrainBarRetrievalToolsSettings.shared.update(enabled: false) }
+
         let runtime = BrainBarRuntime()
         let controller = BrainBarDashboardPanelController(runtime: runtime)
         let tempDBPath = NSTemporaryDirectory() + "brainbar-commandbar-ready-\(UUID().uuidString).db"

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreGraphics
 import Foundation
 
@@ -47,6 +48,37 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
         case .observability:
             return "Observability"
         }
+    }
+}
+
+enum BrainBarRetrievalToolsPolicy {
+    static func visibleTabs(showRetrievalTools: Bool) -> [BrainBarTab] {
+        showRetrievalTools ? BrainBarTab.allCases : BrainBarTab.allCases.filter { tab in
+            tab != .graph
+        }
+    }
+
+    static func showsCommandBar(showRetrievalTools: Bool) -> Bool {
+        showRetrievalTools
+    }
+
+    static func allowsQuickActions(showRetrievalTools: Bool) -> Bool {
+        showRetrievalTools
+    }
+
+    static func selectedTab(_ selectedTab: BrainBarTab, showRetrievalTools: Bool) -> BrainBarTab {
+        visibleTabs(showRetrievalTools: showRetrievalTools).contains(selectedTab) ? selectedTab : .observability
+    }
+}
+
+@MainActor
+final class BrainBarRetrievalToolsSettings: ObservableObject {
+    static let shared = BrainBarRetrievalToolsSettings()
+
+    @Published private(set) var isEnabled = false
+
+    func update(enabled: Bool) {
+        isEnabled = enabled
     }
 }
 

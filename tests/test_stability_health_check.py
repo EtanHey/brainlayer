@@ -1289,13 +1289,19 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
     )
 
     issue_codes = [issue.code for issue in result.issues]
-    assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded"} <= set(issue_codes)
+    assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded", "observability_unloaded"} <= set(issue_codes)
     assert not [command for command in commands if command[:2] == ["launchctl", "enable"]]
     assert [
         "launchctl",
         "bootstrap",
         f"gui/{__import__('os').getuid()}",
         str(Path("~/Library/LaunchAgents/com.brainlayer.watch.plist").expanduser()),
+    ] in commands
+    assert [
+        "launchctl",
+        "bootstrap",
+        f"gui/{os.getuid()}",
+        str(Path("~/Library/LaunchAgents/com.brainlayer.observability.plist").expanduser()),
     ] in commands
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
@@ -1453,6 +1459,7 @@ def test_health_check_bootstraps_non_paused_labels_during_active_pause(tmp_path,
         "com.brainlayer.watch",
         "com.brainlayer.drain",
         "com.brainlayer.health-check",
+        "com.brainlayer.observability",
     }
 
 

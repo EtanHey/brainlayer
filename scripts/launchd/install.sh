@@ -16,6 +16,7 @@
 #   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh health-check # Install stability health check only
+#   ./scripts/launchd/install.sh observability # Install observability producer only
 #   ./scripts/launchd/install.sh tier0-watchdog # Install /bin/sh meta-watchdog only
 #   ./scripts/launchd/install.sh throughput-watchdog # Install watcher throughput watchdog only
 #   ./scripts/launchd/install.sh fleet-watchdog # Install com.brainlayer.* revival watchdog only
@@ -214,11 +215,11 @@ fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
 launchd_install_usage() {
-    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
+    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|observability|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
+    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
@@ -1027,6 +1028,9 @@ case "${1:-all}" in
     health-check)
         install_plist health-check
         ;;
+    observability)
+        install_plist observability
+        ;;
     tier0|tier0-watchdog)
         install_tier0_watchdog
         ;;
@@ -1079,7 +1083,7 @@ case "${1:-all}" in
         elif ! install_many jsonl-backup; then
             failures=1
         fi
-        if ! install_many maintenance-nightly maintenance-weekly health-check p0-counter; then
+        if ! install_many maintenance-nightly maintenance-weekly health-check observability p0-counter; then
             failures=1
         fi
         if ! install_tier0_watchdog; then
@@ -1114,6 +1118,7 @@ case "${1:-all}" in
         remove_plist maintenance-nightly 2>/dev/null || true
         remove_plist maintenance-weekly 2>/dev/null || true
         remove_plist health-check 2>/dev/null || true
+        remove_plist observability 2>/dev/null || true
         remove_plist tier0-watchdog 2>/dev/null || true
         remove_plist throughput-watchdog 2>/dev/null || true
         remove_fleet_watchdog 2>/dev/null || true

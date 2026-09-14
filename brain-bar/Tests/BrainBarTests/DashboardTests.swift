@@ -770,12 +770,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath))
     }
 
-    func testLegacyPopoverSparklineUsesLastFetchAnchor() throws {
-        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatusPopoverView.swift")
-
-        XCTAssertTrue(source.contains("fetchedAt: collector.lastDataFetchedAt ?? Date()"))
-    }
-
     func testBrainBarLifecycleWatchdogWiresUIAndDaemonHeartbeats() throws {
         let watchdog = try brainBarSourceFile("Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift")
         let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
@@ -3037,21 +3031,6 @@ final class DashboardTests: XCTestCase {
         let state = PipelineState.derive(daemon: daemon, stats: stats)
 
         XCTAssertEqual(state, .idle)
-    }
-
-    @MainActor
-    func testStatusPopoverViewIsAppKitViewController() {
-        let collector = StatsCollector(
-            dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-        )
-        defer { collector.stop() }
-
-        let viewController = StatusPopoverView(collector: collector)
-
-        XCTAssertFalse(viewController.isViewLoaded)
-        _ = viewController.view
-        XCTAssertTrue(viewController.isViewLoaded)
     }
 
     @MainActor

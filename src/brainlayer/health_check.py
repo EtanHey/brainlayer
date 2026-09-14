@@ -43,6 +43,7 @@ DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_DRAIN_LABEL = "com.brainlayer.drain"
 DEFAULT_HEALTH_CHECK_LABEL = "com.brainlayer.health-check"
 DEFAULT_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
+DEFAULT_OBSERVABILITY_LABEL = "com.brainlayer.observability"
 DEFAULT_INDEX_LABEL = "com.brainlayer.index"
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
@@ -116,6 +117,7 @@ class HealthCheckConfig:
     drain_label: str = DEFAULT_DRAIN_LABEL
     health_check_label: str = DEFAULT_HEALTH_CHECK_LABEL
     enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
+    observability_label: str = DEFAULT_OBSERVABILITY_LABEL
     index_label: str = DEFAULT_INDEX_LABEL
     watch_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.watch.plist").expanduser()
@@ -721,6 +723,7 @@ def _apply_heals(
         "health_check_unloaded",
         "hotlane_unloaded",
         "enrichment_unloaded",
+        "observability_unloaded",
     }
     for issue_code, (label, plist_path) in issue_labels.items():
         key = _heal_key(label, issue_code)
@@ -1393,6 +1396,7 @@ def run_health_check(
             config.drain_label,
             config.health_check_label,
             config.enrichment_label,
+            config.observability_label,
         ):
             if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
                 action = _bootstrap_if_absent(label, _plist_for_label(config, label), command_runner)
@@ -1405,6 +1409,7 @@ def run_health_check(
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
         (config.health_check_label, "health_check_unloaded", "health-check launchd label is not loaded"),
         (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
+        (config.observability_label, "observability_unloaded", "observability launchd label is not loaded"),
     ):
         if not label:
             continue
