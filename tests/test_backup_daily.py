@@ -202,7 +202,7 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, *, machine_id):  # noqa: ARG001
         uploads.append(Path(file_path))
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -246,7 +246,7 @@ def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, 
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, *, machine_id):  # noqa: ARG001
         uploaded_bytes["drive-file-id"] = Path(file_path).read_bytes()
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -426,7 +426,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1223,6 +1223,65 @@ class _DriveResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+def test_raw_drive_upload_sets_machine_app_property(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"backup")
+    uploaded_metadata: dict[str, object] = {}
+
+    def fake_post(*args, **kwargs):  # noqa: ARG001
+        uploaded_metadata.update(json.loads(kwargs["data"]))
+        return _DriveResponse(200, headers={"Location": "https://upload.test/session"})
+
+    class SuccessfulSession:
+        def put(self, *args, **kwargs):  # noqa: ARG002
+            return _DriveResponse(200, payload={"id": "drive-file-id"})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "post", fake_post)
+    monkeypatch.setattr(backup_daily.requests, "Session", SuccessfulSession)
+
+    backup_daily.upload_file_to_drive_raw(
+        snapshot,
+        "folder-id",
+        type("Credentials", (), {"token": "test-token"})(),
+        machine_id="m1",
+    )
+
+    assert uploaded_metadata["appProperties"] == {"brainlayer_machine": "m1"}
+
+
+def test_backup_receipt_records_drive_folder_and_machine_id(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"backup")
+
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        folder_parts=["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db-m1"],
+        machine_id="m1",
+        date_stamp="2026-09-14",
+        upload=False,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert result["drive_folder"] == "Brain Drive/06_ARCHIVE/backups/brainlayer-db-m1"
+    assert result["machine_id"] == "m1"
+
+
 def _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot):
     class FakeArtifact:
         gzip_path = snapshot
@@ -1364,7 +1423,17 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
 
     assert ranges == ["bytes 0-5/6", "bytes */6", "bytes */6", "bytes 3-5/6"]
     assert timeouts == pytest.approx([5.02] * 4)
-    assert verified == [(service, {"file_id": "drive-file-id", "expected_name": snapshot.name, "expected_size": 6})]
+    assert verified == [
+        (
+            service,
+            {
+                "file_id": "drive-file-id",
+                "expected_name": snapshot.name,
+                "expected_size": 6,
+                "expected_machine_id": backup_daily.CANONICAL_MACHINE_ID,
+            },
+        )
+    ]
     assert result["uploaded"] is True
     assert result["verified"] is True
 
@@ -1394,6 +1463,7 @@ def test_drive_upload_missing_range_never_advances_unconfirmed_bytes(tmp_path, m
             snapshot,
             "folder-id",
             type("Credentials", (), {"token": "test-token"})(),
+            machine_id="test-machine",
         )
 
     assert ranges == ["bytes 0-5/6", "bytes */6", "bytes 0-5/6", "bytes */6"]
@@ -1459,7 +1529,7 @@ def _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service):
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1549,7 +1619,7 @@ def test_run_backup_unverified_upload_skips_drive_and_local_gzip_pruning(tmp_pat
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1617,7 +1687,7 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials: {
+        lambda file_path, folder_id, credentials, *, machine_id: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),

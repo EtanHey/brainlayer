@@ -859,18 +859,24 @@ def upload_file_to_drive_raw(
     file_path: Path,
     folder_id: str,
     credentials: Any,
+    *,
+    machine_id: str,
     chunk_size: int = 8 * 1024 * 1024,
     max_attempts: int = 30,
 ) -> dict[str, Any]:
     """Upload large backups with Drive's raw resumable protocol."""
     file_path = Path(file_path)
     total = file_path.stat().st_size
-    metadata = {"name": file_path.name, "parents": [folder_id]}
+    metadata = {
+        "name": file_path.name,
+        "parents": [folder_id],
+        "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
+    }
     init = requests.post(
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
         # md5Checksum is REQUIRED: retention coverage compares it against the surviving
         # object. Without it the integrity branch silently becomes dead code (PR #815 review).
-        "&fields=id,name,size,md5Checksum",
+        "&fields=id,name,size,md5Checksum,appProperties",
         headers={
             "Authorization": f"Bearer {credentials.token}",
             "Content-Type": "application/json; charset=UTF-8",
@@ -1198,9 +1204,20 @@ def verify_sqlite_backup_artifact(
     return result
 
 
-def verify_drive_upload(service: Any, *, file_id: str, expected_name: str, expected_size: int) -> None:
+def verify_drive_upload(
+    service: Any,
+    *,
+    file_id: str,
+    expected_name: str,
+    expected_size: int,
+    expected_machine_id: str,
+) -> None:
     """Verify that Drive can see the uploaded file with the expected name and byte size."""
-    metadata = service.files().get(fileId=file_id, fields="id,name,size,trashed", supportsAllDrives=True).execute()
+    metadata = (
+        service.files()
+        .get(fileId=file_id, fields="id,name,size,trashed,appProperties", supportsAllDrives=True)
+        .execute()
+    )
     if metadata.get("trashed"):
         raise RuntimeError(f"Uploaded Drive backup is trashed: {file_id}")
     if metadata.get("name") != expected_name:
@@ -1211,6 +1228,12 @@ def verify_drive_upload(service: Any, *, file_id: str, expected_name: str, expec
         raise RuntimeError(f"Uploaded Drive backup size is not numeric: {metadata.get('size')!r}") from exc
     if actual_size != expected_size:
         raise RuntimeError(f"Uploaded Drive backup size mismatch: {actual_size} != {expected_size}")
+    properties = metadata.get("appProperties")
+    actual_machine_id = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
+    if actual_machine_id != expected_machine_id:
+        raise RuntimeError(
+            f"Uploaded Drive backup machine mismatch: {actual_machine_id!r} != {expected_machine_id!r}"
+        )
 
 
 def prune_drive_backups(
@@ -1288,6 +1311,8 @@ def run_backup(
     result: dict[str, Any] = {
         "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
         "db": str(resolved_db_path),
+        "drive_folder": "/".join(resolved_folder_parts),
+        "machine_id": resolved_machine_id,
         "uploaded": False,
         "local_removed": False,
         "verified": False,
@@ -1343,7 +1368,12 @@ def run_backup(
                 folder_id=folder_id,
                 machine_id=resolved_machine_id,
             )
-            uploaded = upload_file_to_drive_raw(snapshot, folder_id, credentials)
+            uploaded = upload_file_to_drive_raw(
+                snapshot,
+                folder_id,
+                credentials,
+                machine_id=resolved_machine_id,
+            )
             file_id = uploaded.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
@@ -1352,6 +1382,7 @@ def run_backup(
                 file_id=file_id,
                 expected_name=snapshot.name,
                 expected_size=snapshot_size,
+                expected_machine_id=resolved_machine_id,
             )
             result.update(
                 verify_sqlite_backup_artifact(
