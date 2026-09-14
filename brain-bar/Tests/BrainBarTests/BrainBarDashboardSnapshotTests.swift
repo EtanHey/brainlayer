@@ -45,6 +45,16 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         }
     }
 
+    func testOnePageCompositionContract() {
+        XCTAssertEqual(
+            BrainBarOnePageComposition.visibleSectionIDs,
+            ["status", "backups", "memory", "ingest", "details"]
+        )
+        XCTAssertEqual(BrainBarOnePageComposition.primaryTileCount, 3)
+        XCTAssertTrue(BrainBarOnePageComposition.primaryTilesHaveEqualHeight)
+        XCTAssertFalse(BrainBarOnePageComposition.detailsExpandedByDefault)
+    }
+
     @MainActor
     func testDashboardRendersAtAllBreakpoints() throws {
         try XCTSkipIf(
