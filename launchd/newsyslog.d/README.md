@@ -11,7 +11,8 @@ such as BrainBar, watch, and enrichment keep their `StandardOutPath` and
 or copy-truncate mode, so those logs need a coupled launchd restart or pid-file
 signal path before they can be safely added. Drain is excluded because its
 daemon owns `drain.err.log` through a rotating Python handler; launchd captures
-only bootstrap failures in `drain.bootstrap.err.log`.
+stderr for the daemon's whole life in `drain.bootstrap.err.log`, including any
+uncaught traceback.
 
 Install `brainlayer.conf` into `/etc/newsyslog.d/` with:
 

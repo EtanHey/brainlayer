@@ -300,13 +300,14 @@ def _log(path: Path, message: str) -> None:
 
 def _blocking_writer_details(db_path: Path) -> dict[str, Any]:
     """Return the freshest instrumented writer currently active on this DB."""
-    from .writer_telemetry import heartbeat_dir
+    from .writer_telemetry import _heartbeat_path
 
-    digest = hashlib.sha256(str(db_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    own_heartbeat = _heartbeat_path(db_path)
+    heartbeat_prefix = own_heartbeat.name.rsplit("-", 1)[0]
     now = time.monotonic()
     stale_before = time.time() - max(5.0, _drain_busy_timeout_ms() / 1000.0 + 5.0)
     candidates: list[tuple[float, dict[str, Any]]] = []
-    for path in heartbeat_dir().glob(f"writer-txn-{digest}-*.json"):
+    for path in own_heartbeat.parent.glob(f"{heartbeat_prefix}-*.json"):
         try:
             if path.stat().st_mtime < stale_before:
                 continue
