@@ -1,25 +1,40 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from brainlayer import jsonl_backup
+from brainlayer.backup_daily import _backup_log_path
 from brainlayer.backup_retention_invariant import inspect_jsonl_retention_invariant
 from brainlayer.health_check import (
     DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS,
     _jsonl_backup_attempt_time,
     inspect_jsonl_backup_health,
 )
+from brainlayer.paths import get_db_path
 
 LABEL = "com.brainlayer.jsonl-backup"
 THRESHOLD_HOURS = DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS // 3600
 
 
-def _path(env: Mapping[str, str], name: str) -> Path:
+def _path(env: Mapping[str, str], name: str, *, db_path: Path) -> Path:
     value = env.get(name)
-    return Path(value).expanduser() if value else Path(f"/__brainlayer_missing_input__/{name}")
+    if value:
+        return Path(value).expanduser()
+    defaults = {
+        "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": Path(
+            env.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH") or str(jsonl_backup.DEFAULT_LOG_PATH)
+        ).expanduser(),
+        "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": _backup_log_path(None, db_path=db_path, env=env),
+        "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": Path.home() / "Library" / "LaunchAgents" / ".disabled-retention-P0",
+    }
+    if name in defaults:
+        return defaults[name]
+    return Path(f"/__brainlayer_missing_input__/{name}")
 
 
 def _read_json_lines(path: Path, *, mixed: bool) -> tuple[list[dict[str, Any]], str, int]:
@@ -152,24 +167,67 @@ def build_backups_section(
     now: datetime,
 ) -> dict[str, Any]:
     """Return the schema-v1 backup measurement, recording every touched input."""
-    jsonl_path = _path(env, "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG")
-    daily_path = _path(env, "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG")
-    launchd_path = _path(env, "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT")
-    disabled_path = _path(env, "BRAINLAYER_OBSERVABILITY_DISABLED_DIR")
+    db_path = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()
+    jsonl_path = _path(env, "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG", db_path=db_path)
+    daily_path = _path(env, "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG", db_path=db_path)
+    disabled_path = _path(env, "BRAINLAYER_OBSERVABILITY_DISABLED_DIR", db_path=db_path)
 
     jsonl_records, jsonl_status, _ = _read_json_lines(jsonl_path, mixed=False)
     jsonl_input = record_input(jsonl_path, status=jsonl_status, rows_or_bytes=None)
     daily_records, daily_status, skipped = _read_json_lines(daily_path, mixed=True)
     daily_input = record_input(daily_path, status=daily_status, rows_or_bytes=None, skipped_lines=skipped)
 
-    try:
-        launchd_text = launchd_path.read_text(encoding="utf-8")
-        launchd_status = "empty" if not launchd_text else "read"
-    except FileNotFoundError:
-        launchd_text, launchd_status = "", "missing"
-    except (OSError, UnicodeDecodeError):
-        launchd_text, launchd_status = "", "malformed"
-    launchd_input = record_input(launchd_path, status=launchd_status, rows_or_bytes=None)
+    launchd_override = env.get("BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT")
+    launchd_not_loaded = False
+    command_failure: str | None = None
+    if launchd_override:
+        launchd_path = Path(launchd_override).expanduser()
+        try:
+            launchd_text = launchd_path.read_text(encoding="utf-8")
+            launchd_status = "empty" if not launchd_text else "read"
+        except FileNotFoundError:
+            launchd_text, launchd_status = "", "missing"
+        except (OSError, UnicodeDecodeError):
+            launchd_text, launchd_status = "", "malformed"
+        launchd_not_loaded = "Could not find service" in launchd_text
+        launchd_input = record_input(launchd_path, status=launchd_status, rows_or_bytes=None)
+    else:
+        argv = ["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"]
+        launchd_text = ""
+        launchd_status = "missing"
+        exit_code: int | None = None
+        command_stdout = b""
+        command_stderr = b""
+        try:
+            completed = subprocess.run(argv, capture_output=True, text=False, timeout=5, check=False, shell=False)
+            exit_code = completed.returncode
+            command_stdout = completed.stdout or b""
+            command_stderr = completed.stderr or b""
+            if isinstance(command_stdout, str):
+                command_stdout = command_stdout.encode("utf-8")
+            if isinstance(command_stderr, str):
+                command_stderr = command_stderr.encode("utf-8")
+            launchd_text = (command_stdout + command_stderr).decode("utf-8", errors="replace")
+            if exit_code == 113 and "Could not find service" in launchd_text:
+                launchd_status, launchd_not_loaded = "read", True
+            elif exit_code == 0 and LABEL in launchd_text:
+                launchd_status = "read"
+            else:
+                launchd_status = "malformed"
+                command_failure = f"launchd command failed for argv {argv}: exit_code={exit_code}; unrecognized output"
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as exc:
+            command_failure = (
+                f"launchd command failed for argv {argv}: exit_code={exit_code}; {type(exc).__name__}: {exc}"
+            )
+        launchd_input = record_input(
+            None,
+            kind="command",
+            argv=argv,
+            exit_code=exit_code,
+            stdout=command_stdout,
+            stderr=command_stderr,
+            status=launchd_status,
+        )
 
     try:
         disabled_count = len(list(disabled_path.iterdir()))
@@ -185,6 +243,9 @@ def build_backups_section(
         in_section_inputs=False,
     )
     inputs = [jsonl_input, daily_input, launchd_input]
+
+    if command_failure:
+        return _unmeasurable(command_failure, inputs)
 
     for item in [*inputs, disabled_input]:
         if item.get("status") == "future":
@@ -224,7 +285,7 @@ def build_backups_section(
         freshness = "fresh"
     else:
         freshness = "unknown"
-    bootstrapped = "Could not find service" not in launchd_text and LABEL in launchd_text
+    bootstrapped = not launchd_not_loaded and LABEL in launchd_text
 
     return {
         "state": "measured",

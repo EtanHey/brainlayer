@@ -165,9 +165,15 @@ def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db, trace = _stage_db(case, tmp_path), tmp_path / "trace.json"
     monkeypatch.setattr(surface, "_stores", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
-    with pytest.raises(RuntimeError, match="boom"):
-        surface.build_document(env={"BRAINLAYER_DB": str(db), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(tmp_path / "inputs"), "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"])})  # fmt: skip
-    assert json.loads(trace.read_text()) == [str(case["inputs"]["db"])]
+    document, _ = surface.build_document(env={"BRAINLAYER_DB": str(db), "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(tmp_path / "inputs"), "BRAINLAYER_OBSERVABILITY_TRACE_PATH": str(trace), "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"])})  # fmt: skip
+    assert document["stores"] == {
+        "state": "unmeasurable",
+        "reason": "stores raised RuntimeError: boom",
+        "inputs": document["stores"]["inputs"],
+    }
+    trace_items = json.loads(trace.read_text())
+    assert trace_items[0] == str(case["inputs"]["db"])
+    assert len(trace_items) == 5
 
 
 def test_trace_only_input_is_excluded_from_recorder_section_inputs(tmp_path: Path) -> None:

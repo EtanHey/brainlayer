@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+import jsonschema
 import pytest
 
-from brainlayer import observability_backup
+from brainlayer import backup_daily, observability_backup, observability_surface
 from brainlayer.observability_backup import build_backups_section
 
 FIXTURES = Path(__file__).parent / "fixtures/observability"
@@ -272,3 +276,291 @@ def test_unbootstrapped_service_with_disabled_directory_is_measured(tmp_path: Pa
         "bootstrapped": False,
         "disabled_dir_present": True,
     }
+
+
+def test_production_defaults_are_db_relative(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    db.parent.mkdir(parents=True)
+    source = FIXTURES / "logs" / "healthy-dev"
+    logs = db.parent / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((source / name).read_bytes())
+    monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
+    disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
+    disabled.mkdir(parents=True)
+    launchd = tmp_path / "launchd.txt"
+    launchd.write_bytes((FIXTURES / "launchd" / "healthy-dev.txt").read_bytes())
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    env = {
+        "BRAINLAYER_DB": str(db),
+        "BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT": str(launchd),
+    }
+    result, _ = _build_with_env(env)
+
+    assert result["state"] == "measured"
+    assert [item["path"] for item in result["inputs"]] == [
+        str(logs / "jsonl-backup.log"),
+        str(logs / "backup-daily.log"),
+        str(launchd),
+    ]
+
+
+def test_producer_without_observability_wiring_measures_all_sections(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case = FIXTURES / "db" / "healthy-dev.sqlite"
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(case.read_bytes())
+    logs = db.parent / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((FIXTURES / "logs" / "healthy-dev" / name).read_bytes())
+    monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
+    disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
+    disabled.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    launchd_text = (FIXTURES / "launchd" / "healthy-dev.txt").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, launchd_text.encode(), b""),
+    )
+
+    document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})
+
+    for section in ("stores", "emitters", "author_unknown", "backups"):
+        assert document[section]["state"] == "measured"
+    schema = json.loads((FIXTURES / "observability-schema.v1.json").read_text(encoding="utf-8"))
+    jsonschema.validate(document, schema)
+    assert [item["path"] for item in document["backups"]["inputs"][:2]] == [
+        str(logs / "jsonl-backup.log"),
+        str(logs / "backup-daily.log"),
+    ]
+    assert document["backups"]["inputs"][2]["path"].startswith("command:launchctl print gui/")
+    assert document["backups"]["inputs"][2]["status"] == "read"
+
+
+def test_backup_daily_empty_env_does_not_fall_back_to_process_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "process-env.log"))
+
+    assert backup_daily._backup_log_path(None, db_path=db, env={}) == db.parent / "logs" / "backup-daily.log"
+
+
+def test_nonzero_unrecognized_launchd_exit_is_unmeasurable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    output = f"service = {observability_backup.LABEL}\n"
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, output.encode(), b""),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "unmeasurable"
+    assert "exit_code=1" in result["reason"]
+    assert "['launchctl', 'print', 'gui/" in result["reason"]
+
+
+def test_jsonl_writer_override_controls_reader_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    writer_path = tmp_path / "writer-jsonl.log"
+    writer_path.write_bytes((FIXTURES / "logs" / "healthy-dev" / "jsonl-backup.log").read_bytes())
+    env.pop("BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG")
+    env["BRAINLAYER_JSONL_BACKUP_LOG_PATH"] = str(writer_path)
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["inputs"][0]["path"] == str(writer_path)
+
+
+def test_backup_process_uses_db_relative_default_log(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    captured: dict[str, Path] = {}
+    monkeypatch.setenv("BRAINLAYER_DB", str(db))
+    monkeypatch.delenv("BRAINLAYER_BACKUP_LOG_PATH", raising=False)
+
+    def fake_run_backup(**kwargs):
+        captured["log_path"] = kwargs["log_path"]
+        return {"verified": True}
+
+    monkeypatch.setattr(backup_daily, "run_backup", fake_run_backup)
+
+    assert backup_daily._run_backup_process(1) == 0
+    assert captured["log_path"] == db.parent / "logs" / "backup-daily.log"
+
+
+def test_subprocess_error_keeps_document_measured_except_for_backups(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case = FIXTURES / "db" / "healthy-dev.sqlite"
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(case.read_bytes())
+    logs = db.parent / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((FIXTURES / "logs" / "healthy-dev" / name).read_bytes())
+    monkeypatch.setattr(observability_backup.jsonl_backup, "DEFAULT_LOG_PATH", logs / "jsonl-backup.log")
+    disabled = tmp_path / "Library" / "LaunchAgents" / ".disabled-retention-P0"
+    disabled.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.SubprocessError("synthetic command failure")),
+    )
+
+    document, _ = observability_surface.build_document(env={"BRAINLAYER_DB": str(db)})
+
+    assert document["backups"]["state"] == "unmeasurable"
+    assert "SubprocessError" in document["backups"]["reason"]
+    assert all(document[name]["state"] == "measured" for name in ("stores", "emitters", "author_unknown"))
+    schema = json.loads((FIXTURES / "observability-schema.v1.json").read_text(encoding="utf-8"))
+    jsonschema.validate(document, schema)
+
+
+def test_empty_jsonl_writer_override_is_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    env.pop("BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG")
+    env["BRAINLAYER_JSONL_BACKUP_LOG_PATH"] = ""
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["inputs"][0]["path"] == str(observability_backup.jsonl_backup.DEFAULT_LOG_PATH)
+
+
+def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    output = "service = com.brainlayer.jsonl-backup\n"
+
+    def run(argv, **kwargs):
+        assert kwargs["timeout"] <= 5
+        assert kwargs["shell"] is False
+        return subprocess.CompletedProcess(argv, 0, output.encode(), b"")
+
+    monkeypatch.setattr(observability_backup.subprocess, "run", run)
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    command = result["inputs"][2]
+    assert (
+        command["path"]
+        == f"command:launchctl print gui/{observability_backup.os.getuid()}/{observability_backup.LABEL}"
+    )
+    assert command["sha256_first_64kb"] == hashlib.sha256(output.encode()).hexdigest()
+    assert command["status"] == "read"
+
+
+def test_unset_launchd_command_recognizes_not_loaded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    output = f'Could not find service "{observability_backup.LABEL}" in domain for user gui: 501\n'
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 113, b"", output.encode()),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    assert result["launchd"]["bootstrapped"] is False
+    assert result["inputs"][2]["status"] == "read"
+
+
+def test_unset_launchd_command_failure_is_unmeasurable_with_argv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env, recorder = _command_env(tmp_path)
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: (_ for _ in ()).throw(FileNotFoundError("launchctl")),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "unmeasurable"
+    assert "['launchctl', 'print', 'gui/" in result["reason"]
+
+
+def test_launchd_file_override_still_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env, recorder = _command_env(tmp_path)
+    launchd = tmp_path / "override.txt"
+    launchd.write_text("service = com.brainlayer.jsonl-backup\n", encoding="utf-8")
+    env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"] = str(launchd)
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("command fallback used")),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    assert result["inputs"][2]["path"] == str(launchd)
+
+
+def _build_with_env(env: dict[str, str]) -> tuple[dict[str, object], list[str]]:
+    opened: list[str] = []
+
+    def recorder(path: Path, **kwargs: object) -> dict[str, object]:
+        opened.append(str(path))
+        return {
+            "path": str(path),
+            "status": str(kwargs.get("status", "read")),
+            "mtime": None,
+            "rows_or_bytes": kwargs.get("rows_or_bytes"),
+            "sha256_first_64kb": None,
+            "skipped_lines": kwargs.get("skipped_lines", 0),
+        }
+
+    return build_backups_section(env=env, record_input=recorder, now=NOW), opened
+
+
+def _command_env(tmp_path: Path) -> tuple[dict[str, str], object]:
+    source = FIXTURES / "logs" / "healthy-dev"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for name in ("jsonl-backup.log", "backup-daily.log"):
+        (logs / name).write_bytes((source / name).read_bytes())
+    disabled = tmp_path / "disabled"
+    disabled.mkdir()
+    env = {
+        "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(logs / "jsonl-backup.log"),
+        "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG": str(logs / "backup-daily.log"),
+        "BRAINLAYER_OBSERVABILITY_DISABLED_DIR": str(disabled),
+    }
+
+    def recorder(path: Path | None, **kwargs: object) -> dict[str, object]:
+        if kwargs.get("kind") == "command":
+            stdout = kwargs.get("stdout", b"")
+            stderr = kwargs.get("stderr", b"")
+            stdout_bytes = stdout if isinstance(stdout, bytes) else str(stdout).encode()
+            stderr_bytes = stderr if isinstance(stderr, bytes) else str(stderr).encode()
+            command_argv = kwargs["argv"]
+            return {
+                "path": "command:" + " ".join(command_argv),
+                "status": kwargs.get("status", "read"),
+                "mtime": None,
+                "rows_or_bytes": len(stdout_bytes + stderr_bytes),
+                "sha256_first_64kb": hashlib.sha256((stdout_bytes + stderr_bytes)[:65_536]).hexdigest(),
+                "skipped_lines": 0,
+            }
+        assert path is not None
+        return {
+            "path": str(path),
+            "status": str(kwargs.get("status", "read")),
+            "mtime": None,
+            "rows_or_bytes": kwargs.get("rows_or_bytes"),
+            "sha256_first_64kb": None,
+            "skipped_lines": kwargs.get("skipped_lines", 0),
+        }
+
+    return env, recorder

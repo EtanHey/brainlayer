@@ -23,7 +23,7 @@ import tempfile
 import time
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -99,10 +99,17 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def _backup_log_path(log_path: Path | None) -> Path:
+def _backup_log_path(
+    log_path: Path | None, *, db_path: Path | None = None, env: Mapping[str, str] | None = None
+) -> Path:
     if log_path is not None:
         return Path(log_path)
-    return Path(os.environ.get(BACKUP_LOG_PATH_ENV, str(DEFAULT_LOG_PATH)))
+    source = env if env is not None else os.environ
+    configured = source.get(BACKUP_LOG_PATH_ENV)
+    if configured:
+        return Path(configured)
+    resolved_db_path = db_path or get_db_path()
+    return resolved_db_path.parent / "logs" / "backup-daily.log"
 
 
 def _backup_log_provenance() -> str:
@@ -945,9 +952,9 @@ def run_backup(
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
     remove_local_after_upload: bool = True,
 ) -> dict[str, Any]:
-    resolved_date_stamp = date_stamp or _today()
-    resolved_log_path = _backup_log_path(log_path)
     resolved_db_path = db_path or get_db_path()
+    resolved_date_stamp = date_stamp or _today()
+    resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
     result: dict[str, Any] = {
         "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
         "db": str(resolved_db_path),
@@ -1041,6 +1048,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
     signal.signal(signal.SIGALRM, _raise_backup_timeout)
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
+        resolved_db_path = get_db_path()
         result = run_backup(
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
             # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH is a legacy alias before DEFAULT_FOLDER_PARTS.
@@ -1048,7 +1056,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
                 "BRAINLAYER_BACKUP_DRIVE_FOLDER",
                 os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH", "/".join(DEFAULT_FOLDER_PARTS)),
             ).split("/"),
-            log_path=Path(os.environ.get(BACKUP_LOG_PATH_ENV, str(DEFAULT_LOG_PATH))),
+            log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
         )
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
@@ -1093,8 +1101,9 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
                     os.killpg(child.pid, signal.SIGKILL)
                     child.wait()
             message = f"backup exceeded configured wall-clock timeout ({timeout_seconds}s)"
+            resolved_db_path = get_db_path()
             _append_json_log(
-                _backup_log_path(None),
+                _backup_log_path(None, db_path=resolved_db_path, env=os.environ),
                 {
                     "db": str(get_db_path()),
                     "uploaded": False,
