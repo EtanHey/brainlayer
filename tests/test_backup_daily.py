@@ -1063,6 +1063,153 @@ def test_ensure_drive_folder_chain_creates_missing_folders():
     assert ("brainlayer-db", "folder-backups") in service.files().created
 
 
+class _DriveResponse:
+    def __init__(self, status_code, *, headers=None, payload=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._payload = payload or {}
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot):
+    class FakeArtifact:
+        gzip_path = snapshot
+        uncompressed_path = None
+        sentinel_chunks = 1
+        local_retention_deleted: list[str] = []
+
+    class Credentials:
+        token = "test-token"
+
+    service = object()
+    monkeypatch.setattr(backup_daily, "create_sqlite_backup_artifact", lambda *args, **kwargs: FakeArtifact())
+    monkeypatch.setattr(backup_daily, "get_drive_credentials", lambda *args, **kwargs: Credentials())
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: service)
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", lambda *args, **kwargs: "folder-id")
+    monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
+    monkeypatch.setattr(backup_daily, "prune_local_gzip_snapshots", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_sqlite_backup_artifact",
+        lambda *args, **kwargs: {"verified": True, "verification_mode": "quick"},
+    )
+    monkeypatch.setattr(
+        backup_daily.requests,
+        "post",
+        lambda *args, **kwargs: _DriveResponse(200, headers={"Location": "https://upload.test/session"}),
+    )
+    monkeypatch.setattr(
+        backup_daily.requests,
+        "put",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("deadline-managed session required")),
+    )
+    return service
+
+
+def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    log_path = tmp_path / "backup-daily.log"
+    _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot)
+    ranges = []
+    never = threading.Event()
+
+    class BlockingSession:
+        def put(self, url, *, headers, data, timeout):  # noqa: ARG002
+            ranges.append(headers["Content-Range"])
+            never.wait()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "Session", BlockingSession)
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS", "0.02")
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND", "1000000000")
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="drive_upload_stalled"):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            date_stamp="2026-09-14",
+            upload=True,
+            log_path=log_path,
+        )
+
+    assert time.monotonic() - started < 1
+    assert any(value == "bytes */6" for value in ranges)
+    logged = json.loads(log_path.read_text(encoding="utf-8"))
+    assert logged["error_code"] == "drive_upload_stalled"
+    assert logged["bytes_confirmed"] == 0
+    assert logged["uploaded"] is False
+    assert logged["verified"] is False
+
+
+def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    service = _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot)
+    ranges = []
+    first_chunk = True
+    never = threading.Event()
+    verified = []
+
+    class StallOnceSession:
+        def put(self, url, *, headers, data, timeout):  # noqa: ARG002
+            nonlocal first_chunk
+            content_range = headers["Content-Range"]
+            ranges.append(content_range)
+            if content_range == "bytes 0-5/6" and first_chunk:
+                first_chunk = False
+                never.wait()
+            if content_range == "bytes */6":
+                return _DriveResponse(308, headers={"Range": "bytes=0-2"})
+            return _DriveResponse(
+                200,
+                payload={"id": "drive-file-id", "name": snapshot.name, "size": "6", "md5Checksum": "abc"},
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "Session", StallOnceSession)
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS", "0.02")
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND", "1000000000")
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_drive_upload",
+        lambda seen_service, **kwargs: verified.append((seen_service, kwargs)),
+    )
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-09-14",
+        upload=True,
+        remove_local_after_upload=False,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert ranges == ["bytes 0-5/6", "bytes */6", "bytes 3-5/6"]
+    assert verified == [(service, {"file_id": "drive-file-id", "expected_name": snapshot.name, "expected_size": 6})]
+    assert result["uploaded"] is True
+    assert result["verified"] is True
+
+
 class _RetentionExecute:
     def __init__(self, value):
         self.value = value
