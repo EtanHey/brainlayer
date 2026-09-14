@@ -77,6 +77,15 @@ def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn.close()
 
 
+def test_backup_retention_defaults_are_capped_and_weekly_cannot_underflow_daily():
+    from brainlayer import backup_daily
+
+    assert backup_daily.DEFAULT_DAILY_KEEP == 3
+    assert backup_daily.DEFAULT_WEEKLY_KEEP == 3
+    assert backup_daily.DEFAULT_LOCAL_UNCOMPRESSED_KEEP == 1
+    assert backup_daily.WEEKLY_RETENTION.keep_latest >= backup_daily.DAILY_RETENTION.keep_latest
+
+
 def test_create_snapshot_gzip_is_restorable(tmp_path):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 
