@@ -55,7 +55,8 @@ def _fake_launchctl_lines(
         *behavior,
         'if [ "$1" = "print" ]; then',
         '  label="${2##*/}"',
-        '  if grep -Fq "${label}.plist" "$FAKE_LAUNCHCTL_LOG"; then',
+        '  last_action="$(grep -F "${label}.plist" "$FAKE_LAUNCHCTL_LOG" | tail -1)"',
+        '  if [ "${last_action%% *}" = "bootstrap" ]; then',
         *output_commands,
         "    exit 0",
         "  fi",
@@ -1492,7 +1493,10 @@ def test_launchd_teardown_does_not_create_runtime_roots(tmp_path: Path, action: 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_launchctl = fake_bin / "launchctl"
-    fake_launchctl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_launchctl.write_text(
+        '#!/bin/sh\n[ "$1" = "print" ] && exit 1\nexit 0\n',
+        encoding="utf-8",
+    )
     fake_launchctl.chmod(0o755)
     fake_brainlayer = tmp_path / "brainlayer"
     fake_brainlayer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -1559,6 +1563,143 @@ def test_launchd_load_existing_unmarked_install_skips_spotlight_preflight(tmp_pa
     assert result.returncode == 0, result.stderr
     assert "bootstrap" in launchctl_log.read_text(encoding="utf-8")
     assert not (legacy_data / ".metadata_never_index").exists()
+
+
+def test_launchd_install_uses_named_job_wrapper_and_skips_unchanged_loaded_plist(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    launchctl_log = tmp_path / "launchctl.log"
+    loaded = tmp_path / "loaded"
+    fail_bootout_once = tmp_path / "fail-bootout-once"
+    loaded.touch()
+    fail_bootout_once.touch()
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'case "$1" in',
+                "  print-disabled) exit 0 ;;",
+                '  print) [ "${2##*/}" = "com.brainlayer.watch" ] && [ -f "$FAKE_LOADED" ] && printf "%s\\n" "state = running" "pid = 4242" && exit 0; exit 1 ;;',
+                '  bootout) if [ -f "$FAKE_FAIL_BOOTOUT_ONCE" ]; then exit 5; fi; rm -f "$FAKE_LOADED"; exit 0 ;;',
+                '  bootstrap) touch "$FAKE_LOADED"; exit 0 ;;',
+                "  unload) exit 5 ;;",
+                "  *) exit 0 ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_ENRICH_ENABLED=0\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "HOME": str(home),
+        "BRAINLAYER_BIN": sys.executable,
+        "PYTHON_BIN": sys.executable,
+        "BRAINLAYER_ENV_FILE": str(env_file),
+        "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
+        "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "0",
+        "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        "FAKE_LOADED": str(loaded),
+        "FAKE_FAIL_BOOTOUT_ONCE": str(fail_bootout_once),
+    }
+
+    for attempt, expected_returncode in enumerate((1, 1, 0, 0)):
+        result = subprocess.run(
+            [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "watch"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == expected_returncode, result.stdout + result.stderr
+        if attempt == 1:
+            fail_bootout_once.unlink()
+
+    plist = plistlib.loads((home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist").read_bytes())
+    wrapper = home / ".local" / "lib" / "brainlayer" / "BrainLayer Watcher"
+    assert plist["ProgramArguments"][0] == str(wrapper)
+    assert plist["AssociatedBundleIdentifiers"] == ["com.brainlayer.brainbar"]
+    assert os.access(wrapper, os.X_OK)
+    assert "brainlayer-env-run.sh" in wrapper.read_text(encoding="utf-8")
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert sum(command.startswith("bootout ") for command in commands) == 3
+    assert sum(command.startswith("bootstrap ") for command in commands) == 1
+    assert not (home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist.reload-pending").exists()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "remove"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert (home / "Library" / "LaunchAgents" / "com.brainlayer.watch.plist").exists()
+    assert wrapper.exists()
+
+
+def test_fleet_watchdog_rejects_unload_timeout_before_enable_or_bootstrap(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+    launchctl_log = tmp_path / "launchctl.log"
+    fake_launchctl = fake_bin / "launchctl"
+    fake_launchctl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
+                'case "$1" in',
+                "  print-disabled) exit 0 ;;",
+                '  print) printf "%s\\n" "state = running" "pid = 4242"; exit 0 ;;',
+                "  bootout) exit 5 ;;",
+                "  *) exit 0 ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_launchctl.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "fleet-watchdog"],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "BRAINLAYER_BIN": sys.executable,
+            "PYTHON_BIN": sys.executable,
+            "BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL": "1",
+            "FAKE_LAUNCHCTL_LOG": str(launchctl_log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "did not unload before replacement" in result.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()
+    assert sum(command.startswith("print gui/") for command in commands) == 16
+    assert not any(command.startswith("enable ") for command in commands)
+    assert not any(command.startswith("bootstrap ") for command in commands)
 
 
 def test_launchd_install_preflight_refusal_names_runbook_without_traceback(tmp_path: Path) -> None:
@@ -1737,7 +1878,7 @@ def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Pa
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.p0-counter.plist"
     plist = plistlib.loads(rendered.read_bytes())
     assert plist["ProgramArguments"] == [
-        str(home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"),
+        str(home / ".local" / "lib" / "brainlayer" / "BrainLayer P0 Counter"),
         sys.executable,
         "p0-counter",
     ]
@@ -1810,7 +1951,7 @@ def test_packaged_launchd_installer_installs_tier0_watchdog_without_env_runner(t
     bootstrap_command = f"bootstrap {domain} {rendered}"
     print_command = f"print {domain}/com.brainlayer.tier0-watchdog"
     assert commands.count(bootstrap_command) == 1
-    assert commands.count(print_command) == 2
+    assert commands.count(print_command) == 3
     assert commands[-1] == print_command
 
 
@@ -1859,7 +2000,8 @@ def test_packaged_launchd_installer_installs_throughput_watchdog(tmp_path: Path)
 
     rendered = home / "Library" / "LaunchAgents" / "com.brainlayer.throughput-watchdog.plist"
     plist = plistlib.loads(rendered.read_bytes())
-    assert plist["ProgramArguments"] == [str(installed_env_runner), sys.executable, str(installed_script), "--json"]
+    named_wrapper = home / ".local" / "lib" / "brainlayer" / "BrainLayer Throughput Watchdog"
+    assert plist["ProgramArguments"] == [str(named_wrapper), sys.executable, str(installed_script), "--json"]
     assert plist["EnvironmentVariables"]["HOME"] == str(home)
     assert plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] == str(env_file)
     assert plist["EnvironmentVariables"]["BRAINLAYER_LAUNCHD_SERVICE"] == "watch"
@@ -3047,6 +3189,7 @@ def test_launchd_enable_missing_service_is_retried_after_bootstrap(tmp_path: Pat
     assert result.returncode == 0, result.stdout + result.stderr
     assert [command.split()[0] for command in commands] == [
         "print-disabled",
+        "print",
         "bootout",
         "print",
         "enable",
@@ -3389,6 +3532,8 @@ def _run_keg_installer(fixture: dict[str, Path], action: str, tmp_path: Path):
             "FAKE_PS_COMMAND": f"{fixture['keg_python']} {fixture['packaged_daemon']} --interval 1.0",
         }
     )
+    if "readlink_state" in fixture:
+        env["FAKE_READLINK_STATE"] = str(fixture["readlink_state"])
     return subprocess.run(
         [str(fixture["launchd_dir"] / "install.sh"), action],
         env=env,
@@ -3397,6 +3542,28 @@ def _run_keg_installer(fixture: dict[str, Path], action: str, tmp_path: Path):
         timeout=120,
         check=False,
     )
+
+
+def test_keg_change_kickstarts_unchanged_keepalive_without_bootstrap(tmp_path: Path) -> None:
+    fixture = _build_keg_with_checkout_decoys(tmp_path)
+    readlink_state = tmp_path / "readlink.state"
+    readlink_state.write_text("/opt/homebrew/Cellar/brainlayer/1.5.27\n", encoding="utf-8")
+    fixture["readlink_state"] = readlink_state
+    fake_readlink = fixture["fake_bin"] / "readlink"
+    fake_readlink.write_text('#!/bin/sh\ncat "$FAKE_READLINK_STATE"\n', encoding="utf-8")
+    fake_readlink.chmod(0o755)
+
+    first = _run_keg_installer(fixture, "watch", tmp_path)
+    assert first.returncode == 0, first.stdout + first.stderr
+    launchctl_log = tmp_path / "launchctl.log"
+    first_command_count = len(launchctl_log.read_text(encoding="utf-8").splitlines())
+    readlink_state.write_text("/opt/homebrew/Cellar/brainlayer/1.5.28\n", encoding="utf-8")
+
+    second = _run_keg_installer(fixture, "watch", tmp_path)
+    assert second.returncode == 0, second.stdout + second.stderr
+    commands = launchctl_log.read_text(encoding="utf-8").splitlines()[first_command_count:]
+    assert f"kickstart -k gui/{os.getuid()}/com.brainlayer.watch" in commands
+    assert not any(command.startswith("bootstrap ") for command in commands)
 
 
 def _program_argument_strings(plist_path: Path) -> list[str]:
