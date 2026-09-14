@@ -90,6 +90,7 @@ def test_local_backup_cap_is_decoupled_from_drive_retention():
     assert backup_daily.DEFAULT_DRIVE_KEEP == 7
     assert backup_daily.DAILY_RETENTION.keep_latest == 7
     assert backup_daily.WEEKLY_RETENTION.keep_latest == 7
+    assert backup_daily._drive_upload_stall_max_attempts() == 3
 
 
 @pytest.mark.parametrize(

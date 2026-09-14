@@ -213,7 +213,7 @@ def _configured_positive_number(name: str, default: float) -> float:
 
 def _drive_upload_stall_max_attempts() -> int:
     value = _configured_positive_number(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV, DEFAULT_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS)
-    if not value.is_integer():
+    if value != int(value):
         raise ValueError(f"{DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV} must be an integer")
     return int(value)
 
