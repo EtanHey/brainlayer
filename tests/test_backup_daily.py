@@ -193,7 +193,15 @@ def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, 
     assert result["sentinel_verified_chunks"] == 2
 
 
-def test_prune_local_uncompressed_snapshots_keeps_two_newest(tmp_path):
+def test_daily_retention_defaults_are_capped():
+    from brainlayer import backup_daily
+
+    assert backup_daily.DEFAULT_DAILY_KEEP == 3
+    assert backup_daily.DEFAULT_WEEKLY_KEEP == 0
+    assert backup_daily.DEFAULT_LOCAL_UNCOMPRESSED_KEEP == 1
+
+
+def test_prune_local_uncompressed_snapshots_keeps_newest(tmp_path):
     from brainlayer.backup_daily import prune_local_uncompressed_snapshots
 
     for day in range(1, 5):
@@ -201,10 +209,10 @@ def test_prune_local_uncompressed_snapshots_keeps_two_newest(tmp_path):
     (tmp_path / "2026-06-04.db.gz").write_bytes(b"drive-only")
     (tmp_path / "not-a-snapshot.db").write_bytes(b"ignore")
 
-    deleted = prune_local_uncompressed_snapshots(tmp_path, keep_latest=2)
+    deleted = prune_local_uncompressed_snapshots(tmp_path, keep_latest=1)
 
-    assert deleted == ["2026-06-02.db", "2026-06-01.db"]
-    assert sorted(path.name for path in tmp_path.glob("2026-06-*.db")) == ["2026-06-03.db", "2026-06-04.db"]
+    assert deleted == ["2026-06-03.db", "2026-06-02.db", "2026-06-01.db"]
+    assert sorted(path.name for path in tmp_path.glob("2026-06-*.db")) == ["2026-06-04.db"]
     assert (tmp_path / "2026-06-04.db.gz").exists()
     assert (tmp_path / "not-a-snapshot.db").exists()
 
@@ -230,13 +238,13 @@ def test_create_snapshot_reports_no_uncompressed_path_when_current_raw_is_pruned
         out_dir,
         date_stamp="2026-06-03",
         keep_uncompressed=True,
-        local_uncompressed_keep=2,
+        local_uncompressed_keep=1,
     )
 
     assert artifact.uncompressed_path is None
-    assert artifact.local_retention_deleted == ["2026-06-03.db"]
+    assert artifact.local_retention_deleted == ["2026-06-04.db", "2026-06-03.db"]
     assert not (out_dir / "2026-06-03.db").exists()
-    assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-04.db", "2026-06-05.db"]
+    assert sorted(path.name for path in out_dir.glob("*.db")) == ["2026-06-05.db"]
 
 
 def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
