@@ -231,12 +231,18 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
         let overviewSource = try sourceSlice(
-            from: "private struct BrainBarOverviewStat",
-            throughBefore: "private struct BrainBarAgentPresencePill",
+            from: "private func overviewCard",
+            throughBefore: "// MARK: - Pipeline",
             in: dashboard
         )
+        let indexedSource = try sourceSlice(
+            from: "Text(hero.indexedInWindow)",
+            throughBefore: "Text(hero.totalIndexed)",
+            in: overviewSource
+        )
 
-        XCTAssertTrue(overviewSource.contains(".lineLimit(2)"), "Wide hero labels must wrap instead of truncating metric truth.")
+        XCTAssertTrue(overviewSource.contains("Text(hero.indexedInWindow)"))
+        XCTAssertTrue(indexedSource.contains(".fixedSize(horizontal: false, vertical: true)"), "Indexed hero truth must wrap instead of truncating.")
         XCTAssertTrue(dashboard.contains("lane.status.stateTheme"), "Chart status pills must use semantic state color, not series color.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
