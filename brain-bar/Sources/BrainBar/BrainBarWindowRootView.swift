@@ -177,6 +177,89 @@ private struct BrainBarDashboardContent: View {
     }
 }
 
+enum BrainBarHeroBackupTruth: Sendable, Equatable {
+    case measured(ObservabilityBackupStatus)
+    case unavailable(String)
+}
+
+enum BrainBarHeroHealthTone: Sendable, Equatable {
+    case green
+    case amber
+    case red
+}
+
+struct BrainBarHeroPresentation: Sendable, Equatable {
+    let healthTitle = "Health"
+    let backupsTitle = "Backups"
+    let indexedTitle = "Indexed"
+    let healthVerdict: String
+    let healthReason: String
+    let healthTone: BrainBarHeroHealthTone
+    let dbBackup: ObservabilityStatusLine
+    let transcriptBackup: ObservabilityStatusLine
+    let indexedInWindow: String
+    let totalIndexed: String
+
+    static func derive(
+        flow: DashboardFlowSummary,
+        stats: DashboardStats,
+        backupTruth: BrainBarHeroBackupTruth,
+        locale: Locale = .current
+    ) -> Self {
+        let dbBackup: ObservabilityStatusLine
+        let transcriptBackup: ObservabilityStatusLine
+        let backupFailure: String?
+        switch backupTruth {
+        case let .measured(status):
+            dbBackup = status.snapshot
+            transcriptBackup = status.upload
+            backupFailure = status.lines.first(where: { $0.tone == .red })?.text
+        case let .unavailable(reason):
+            dbBackup = .init(text: "DB snapshot unavailable — \(reason)", tone: .red)
+            transcriptBackup = .init(text: "Transcript backup unavailable — \(reason)", tone: .red)
+            backupFailure = reason
+        }
+
+        let health: (String, String, BrainBarHeroHealthTone)
+        switch flow.watcherFlowState {
+        case .offline:
+            health = ("Needs attention", "Watcher is offline.", .red)
+        case .stalled:
+            health = ("Needs attention", "Watcher is running, but pending work is not moving.", .red)
+        default:
+            if flow.ingress.status == .unavailable {
+                health = ("Needs attention", "Ingest health is unavailable.", .red)
+            } else if let backupFailure {
+                health = ("Needs attention", backupFailure, .red)
+            } else {
+                switch flow.watcherFlowState {
+                case .unknown:
+                    health = ("Check health", "Watcher health is unknown.", .amber)
+                case .runningFlowUnverified:
+                    health = ("Check health", "Watcher is running, but flow could not be verified.", .amber)
+                case .flowing:
+                    health = ("Healthy", "Watcher is flowing; DB and transcript backups are verified.", .green)
+                case .runningNoRecentFlow:
+                    health = ("Healthy", "Watcher is running with no recent work; DB and transcript backups are verified.", .green)
+                case .offline, .stalled:
+                    health = ("Needs attention", "Watcher health needs attention.", .red)
+                }
+            }
+        }
+
+        let window = flow.windowLabel.lowercased()
+        return Self(
+            healthVerdict: health.0,
+            healthReason: health.1,
+            healthTone: health.2,
+            dbBackup: dbBackup,
+            transcriptBackup: transcriptBackup,
+            indexedInWindow: "\(DashboardMetricFormatter.integerString(stats.recentWriteCount, locale: locale)) chunk rows indexed in \(window)",
+            totalIndexed: "\(DashboardMetricFormatter.integerString(stats.chunkCount, locale: locale)) chunk rows total"
+        )
+    }
+}
+
 @MainActor
 private final class BrainBarCommandBarViewModelProvider {
     private let panelState = QuickCapturePanelState()
@@ -349,12 +432,15 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRowFrame: CGRect = .zero
     @State private var vectorSignalRootFrame: CGRect = .zero
+    @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
+    @State private var observabilityReadTask: Task<Void, Never>?
     /// ONE shared timeframe for all pipeline graphs (chunk rows / agent-origin /
     /// watcher-ingested). Selecting 3h/24h re-fetches real DB history for
     /// that window via the collector and feeds every chart at once — no
     /// per-card expand.
     @State private var selectedTimeframe: PipelineTimeframe = .live
     @State private var vectorDetailHeight: CGFloat = 0
+    private let observabilityRefresh = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     /// The stats the graphs render. For the live (1h) lens this is the resting
     /// `collector.stats`; for a wider lens, if the collector has published REAL
@@ -402,6 +488,27 @@ private struct BrainBarDashboardView: View {
         )
     }
 
+    private var effectiveObservabilityResult: ObservabilityReadResult {
+        if let observabilityResult { return observabilityResult }
+        guard dbPath != nil else { return .unreadable("Database path unavailable.") }
+        return liveObservabilityResult
+    }
+
+    private var heroPresentation: BrainBarHeroPresentation {
+        let backupTruth: BrainBarHeroBackupTruth
+        switch effectiveObservabilityResult {
+        case let .readable(document):
+            backupTruth = .measured(ObservabilityPresentation.backupStatus(for: document.backups))
+        case let .unreadable(reason):
+            backupTruth = .unavailable(reason)
+        }
+        return BrainBarHeroPresentation.derive(
+            flow: flowSummary,
+            stats: collector.stats,
+            backupTruth: backupTruth
+        )
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let layout = BrainBarDashboardLayout(containerSize: proxy.size)
@@ -414,13 +521,7 @@ private struct BrainBarDashboardView: View {
                             overviewCard(layout: layout)
                             pipelinePanel(layout: layout)
                             diagnostics(layout: layout)
-                            if let observabilityResult {
-                                ObservabilityDashboardView(result: observabilityResult)
-                            } else if let dbPath {
-                                ObservabilityLiveView(dbPath: dbPath)
-                            } else {
-                                ObservabilityDashboardView(result: .unreadable("Database path unavailable."))
-                            }
+                            ObservabilityDashboardView(result: effectiveObservabilityResult)
                         }
                         .opacity(lastGoodContentOpacity)
                     }
@@ -506,26 +607,25 @@ private struct BrainBarDashboardView: View {
                 isLive: newTimeframe == .live
             )
         }
+        .onAppear(perform: reloadObservability)
+        .onReceive(observabilityRefresh) { _ in reloadObservability() }
+        .onDisappear { observabilityReadTask?.cancel() }
     }
 
     @ViewBuilder
     private func overviewCard(layout: BrainBarDashboardLayout) -> some View {
+        let hero = heroPresentation
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: layout.gridSpacing) {
-                VStack(alignment: .leading, spacing: 10) {
-                    overviewNarrative(layout: layout)
-                    heroLiveAgentsRow(layout: layout)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                overviewMetaRow(layout: layout)
-                    .frame(width: layout.overviewStatsWidth)
+                heroHealth(hero)
+                heroBackups(hero)
+                heroIndexed(hero)
             }
 
             VStack(alignment: .leading, spacing: layout.gridSpacing) {
-                overviewNarrative(layout: layout)
-                overviewMetaRow(layout: layout)
-                heroLiveAgentsRow(layout: layout)
+                heroHealth(hero)
+                heroBackups(hero)
+                heroIndexed(hero)
             }
         }
         .padding(layout.cardPadding)
@@ -540,66 +640,51 @@ private struct BrainBarDashboardView: View {
     }
 
     @ViewBuilder
-    private func heroLiveAgentsRow(layout: BrainBarDashboardLayout) -> some View {
-        let activity = collector.agentActivity
-        let anyLive = activity.totalActiveAgents > 0
-        HStack(alignment: .center, spacing: 10) {
-            Circle()
-                .fill(anyLive
-                    ? BrainBarStateTheme.active.theme.swiftUIColor
-                    : Color.brainBarTextSecondary.opacity(0.45))
-                .frame(width: 8, height: 8)
-            Text("Live agents")
-                .font(.system(size: 12, weight: .semibold))
-            Text(activity.summaryText)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            WrappingPillLayout(spacing: 6, lineSpacing: 6) {
-                ForEach(activity.presences.filter(\.isActive), id: \.family) { presence in
-                    BrainBarAgentPresencePill(presence: presence)
-                }
+    private func heroHealth(_ hero: BrainBarHeroPresentation) -> some View {
+        BrainBarHeroSection(title: hero.healthTitle) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Circle()
+                    .fill(heroColor(hero.healthTone))
+                    .frame(width: 9, height: 9)
+                Text(hero.healthVerdict)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
             }
-        }
-        .padding(.top, 4)
-    }
-
-    private func overviewNarrative(layout: BrainBarDashboardLayout) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(ingestHeadline)
-                .font(.system(size: layout.overviewTitleFontSize, weight: .bold))
+            Text(hero.healthReason)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            Text(ingestDetail)
-                .font(.system(size: layout.overviewSubtitleFontSize, weight: .medium))
-                .foregroundStyle(.secondary)
+    private func heroBackups(_ hero: BrainBarHeroPresentation) -> some View {
+        BrainBarHeroSection(title: hero.backupsTitle) {
+            ObservabilityStatusRows(
+                lines: [hero.dbBackup, hero.transcriptBackup],
+                textColor: Color.brainBarTextSecondary
+            )
+            .font(.system(size: 11, weight: .medium))
+        }
+    }
+
+    private func heroIndexed(_ hero: BrainBarHeroPresentation) -> some View {
+        BrainBarHeroSection(title: hero.indexedTitle) {
+            Text(hero.indexedInWindow)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .monospacedDigit()
                 .fixedSize(horizontal: false, vertical: true)
-
-            ViewThatFits(in: .horizontal) {
-                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
-                    overviewBadgeRow
-                }
-
-                WrappingPillLayout(spacing: 8, lineSpacing: 8) {
-                    overviewBadgeRow
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            Text(hero.totalIndexed)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Color.brainBarTextSecondary)
         }
     }
 
-    private var ingestHeadline: String {
-        switch pipelineFlowSummary.ingress.status {
-        case .live: "Memory ingestion is active"
-        case .recent: "Memory ingestion was recently active"
-        case .unavailable: "Memory ingestion is unavailable"
-        default: "Memory ingestion is idle"
+    private func heroColor(_ tone: BrainBarHeroHealthTone) -> Color {
+        switch tone {
+        case .green: .green
+        case .red: .red
+        case .amber: .orange
         }
-    }
-
-    private var ingestDetail: String {
-        let count = DashboardMetricFormatter.integerString(pipelineStats.recentWriteCount)
-        return "\(count) chunk rows landed in \(pipelineFlowSummary.windowLabel.lowercased())."
     }
 
     private var freshnessBanner: some View {
@@ -628,30 +713,14 @@ private struct BrainBarDashboardView: View {
         return "\(type) \(DashboardMetricFormatter.absoluteTimeString(updatedAt))"
     }
 
-    private var overviewBadgeRow: some View {
-        Group {
-            BrainBarHeroBadge(text: pipelineFlowSummary.windowLabel)
-            BrainBarHeroBadge(text: "Watcher \(flowSummary.watcherFlowState.label)")
-            if collector.stats.replayDebtBreakdown.deduplicatedTotal > 0 {
-                BrainBarHeroBadge(text: replayDebtBadgeText)
-            }
-        }
-    }
-
-    private var replayDebtBadgeText: String {
-        let debt = collector.stats.replayDebtBreakdown
-        let partialSuffix = debt.isPartial ? " · PARTIAL" : ""
-        return "Replay debt \(DashboardMetricFormatter.integerString(debt.deduplicatedTotal))\(partialSuffix)"
-    }
-
-    private func overviewMetaRow(layout: BrainBarDashboardLayout) -> some View {
-        let columns = Array(
-            repeating: GridItem(.flexible(minimum: 92), spacing: layout.gridSpacing, alignment: .leading),
-            count: 3
-        )
-
-        return LazyVGrid(columns: columns, spacing: layout.gridSpacing) {
-            BrainBarOverviewStat(label: "Chunk rows", value: DashboardMetricFormatter.integerString(collector.stats.chunkCount), isHero: true)
+    private func reloadObservability() {
+        guard observabilityResult == nil, let dbPath else { return }
+        let url = ObservabilityReader.url(dbPath: dbPath)
+        observabilityReadTask = ObservabilityLiveView.Loader.load(
+            replacing: observabilityReadTask,
+            url: url
+        ) {
+            liveObservabilityResult = $0
         }
     }
 
@@ -2691,89 +2760,32 @@ private struct BrainBarDiagnosticCard: View {
     }
 }
 
-private struct BrainBarHeroBadge: View {
-    let text: String
+private struct BrainBarHeroSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
 
-    var body: some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .minimumScaleFactor(0.72)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .fixedSize(horizontal: true, vertical: false)
-            .background(.white.opacity(0.18), in: Capsule())
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
     }
-}
-
-private struct BrainBarOverviewStat: View {
-    let label: String
-    let value: String
-    let isHero: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: BrainBarDesignTokens.TypeScale.label, weight: .semibold))
-                .tracking(0.66)
-                .foregroundStyle(Color.brainBarTextSecondary.opacity(0.50))
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: BrainBarDesignTokens.TypeScale.label, weight: .bold))
+                .tracking(0.7)
+                .foregroundStyle(Color.brainBarTextSecondary)
                 .textCase(.uppercase)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(value)
-                .font(.system(size: isHero ? 28 : 20, weight: .semibold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.42)
-                .monospacedDigit()
-                .foregroundStyle(isHero ? Color.brainBarTextPrimary : Color.brainBarTextSecondary)
+            content
         }
-        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+        .padding(14)
         .background(
             RoundedRectangle(cornerRadius: BrainBarDesignTokens.Radius.md, style: .continuous)
                 .fill(Color.brainBarGlassSecondary)
         )
-    }
-}
-
-private struct BrainBarAgentPresencePill: View {
-    let presence: AgentPresence
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(Color.brainBar(nsColor: presence.family.accentColor))
-                .frame(width: 8, height: 8)
-                .opacity(presence.isActive ? 1 : 0.25)
-            Text(presence.family.label)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .minimumScaleFactor(0.75)
-            Text(DashboardMetricFormatter.integerString(presence.count))
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule()
-                        .fill(Color.brainBar(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.18 : 0.08))
-                )
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            Capsule()
-                .fill(Color.brainBarGlassSecondary)
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.brainBar(nsColor: presence.family.accentColor).opacity(presence.isActive ? 0.28 : 0.1), lineWidth: 1)
-        )
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityLabel(Text(presence.accessibilityLabel))
-        .help(presence.accessibilityLabel)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("brainbar.dashboard.hero.\(title.lowercased())")
     }
 }
 

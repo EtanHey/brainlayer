@@ -109,7 +109,8 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertFalse(root.contains("brainbar.shell.tabs"))
         XCTAssertFalse(root.contains("injectionsContent"))
         XCTAssertFalse(root.contains("BrainBarInjectionTab"))
-        XCTAssertTrue(root.contains("ObservabilityLiveView(dbPath: dbPath)"))
+        XCTAssertTrue(root.contains("ObservabilityDashboardView(result: effectiveObservabilityResult)"))
+        XCTAssertTrue(root.contains("ObservabilityPresentation.backupStatus(for: document.backups)"))
     }
 
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {

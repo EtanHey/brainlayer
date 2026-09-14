@@ -38,14 +38,14 @@ final class BrainBarDashboardHeroTests: XCTestCase {
         )
         let sharedBackupStatus = ObservabilityPresentation.backupStatus(
             for: backups,
-            locale: Locale(identifier: "en_US_POSIX")
+            locale: Locale(identifier: "en_US")
         )
 
         let hero = BrainBarHeroPresentation.derive(
             flow: flow,
             stats: stats,
             backupTruth: .measured(sharedBackupStatus),
-            locale: Locale(identifier: "en_US_POSIX")
+            locale: Locale(identifier: "en_US")
         )
 
         XCTAssertEqual(hero.healthTitle, "Health")
