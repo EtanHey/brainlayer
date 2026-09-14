@@ -249,12 +249,7 @@ struct ObservabilityLiveView: View {
             url: URL,
             using operation: @escaping Operation = { ObservabilityReader.read(url: $0) }
         ) async -> ObservabilityReadResult {
-            let worker = Task.detached(priority: .utility) { await operation(url) }
-            return await withTaskCancellationHandler {
-                await worker.value
-            } onCancel: {
-                worker.cancel()
-            }
+            return await operation(url)
         }
     }
 
