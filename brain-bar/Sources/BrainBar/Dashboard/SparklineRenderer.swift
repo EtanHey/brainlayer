@@ -873,7 +873,7 @@ struct SparklineChart: View {
                                 .foregroundStyle(Color.brainBarTextSecondary)
                                 .lineLimit(1).truncationMode(.tail)
                             Spacer(minLength: 8)
-                            Text("\(row.value)")
+                            Text(DashboardMetricFormatter.integerString(row.value))
                                 .font(.system(size: 11, weight: .semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(Color.brainBarTextPrimary)

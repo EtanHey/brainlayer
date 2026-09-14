@@ -11,7 +11,7 @@ enum BrainBarSettingsActions {
     private static var windowController: NSWindowController?
     private static var closeObserver: NSObjectProtocol?
 
-    static func openSettingsWindow() {
+    static func openSettingsWindow(databasePath: String?) {
         NSApp.activate(ignoringOtherApps: true)
 
         if let controller = windowController {
@@ -20,7 +20,8 @@ enum BrainBarSettingsActions {
             return
         }
 
-        let hosting = NSHostingController(rootView: BrainBarSettingsView())
+        let resolvedDatabasePath = databasePath ?? BrainBarServer.defaultDBPath()
+        let hosting = NSHostingController(rootView: BrainBarSettingsView(databasePath: resolvedDatabasePath))
         let window = NSWindow(contentViewController: hosting)
         window.title = "BrainLayer Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
@@ -64,7 +65,7 @@ enum BrainBarSettingsActions {
     // BrainBarDaemon target is headless and never opens Settings (the file is shared
     // via symlink, but BrainBarSettingsView + its deps live only in the BrainBar target).
     // Keep the original no-op so the daemon target compiles.
-    static func openSettingsWindow() {
+    static func openSettingsWindow(databasePath _: String?) {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }

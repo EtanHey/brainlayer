@@ -278,12 +278,12 @@ struct BrainBarApp: App {
 
     var body: some Scene {
         Settings {
-            BrainBarSettingsView()
+            BrainBarSettingsView(databasePath: appDelegate.runtime.databasePath ?? BrainBarServer.defaultDBPath())
         }
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Settings...") {
-                    BrainBarSettingsActions.openSettingsWindow()
+                    BrainBarSettingsActions.openSettingsWindow(databasePath: appDelegate.runtime.databasePath)
                 }
 
                 Button("Toggle BrainBar") {

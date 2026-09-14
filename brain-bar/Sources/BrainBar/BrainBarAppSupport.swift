@@ -52,14 +52,9 @@ enum BrainBarAppSupport {
     // removed the FastAPI daemon. Pre-#312 the daemon owned the writer and the UI
     // process consumed via socket; post-#312 each consumer opens SQLite directly.
     //
-    // The heavy InjectionStore is intentionally lazy: Dashboard startup should
-    // not open an extra writable SQLite handle just because the Injections tab
-    // exists. On a missing DB, bootstrap the schema once before installing the
-    // read-only handle so fresh installs still work.
-    //
-    // The UI runtime opens read-only so the writer pidfile stays uncontended
-    // with the Python enrich supervisor + drain. InjectionStore keeps its own
-    // writable connection for ack writes.
+    // On a missing DB, bootstrap the schema once before installing the read-only
+    // handle so fresh installs still work. The UI runtime stays read-only so the
+    // writer pidfile remains uncontended with the Python enrich supervisor + drain.
     @MainActor
     static func wireRuntime(
         _ runtime: BrainBarRuntime,
@@ -88,17 +83,8 @@ enum BrainBarAppSupport {
 
         runtime.install(
             collector: collector,
-            injectionStore: nil,
             database: database,
-            databasePath: dbPath,
-            injectionStoreFactory: {
-                do {
-                    return try InjectionStore(databasePath: dbPath)
-                } catch {
-                    NSLog("[BrainBar] InjectionStore init failed: %@", String(describing: error))
-                    return nil
-                }
-            }
+            databasePath: dbPath
         )
     }
 

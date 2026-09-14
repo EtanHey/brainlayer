@@ -7,12 +7,9 @@ final class BrainBarRuntime: ObservableObject {
     let windowCoordinator: BrainBarWindowCoordinator
 
     @Published private(set) var collector: StatsCollector?
-    @Published private(set) var injectionStore: InjectionStore?
     @Published private(set) var database: BrainDatabase?
     private(set) var databasePath: String?
     @Published private(set) var requestedQuickAction: BrainBarQuickAction?
-
-    private var injectionStoreFactory: (() -> InjectionStore?)?
 
     var onToggleRequested: (() -> Void)?
     var onSearchRequested: (() -> Void)?
@@ -28,21 +25,12 @@ final class BrainBarRuntime: ObservableObject {
 
     func install(
         collector: StatsCollector,
-        injectionStore: InjectionStore?,
         database: BrainDatabase?,
-        databasePath: String? = nil,
-        injectionStoreFactory: (() -> InjectionStore?)? = nil
+        databasePath: String? = nil
     ) {
         self.collector = collector
-        self.injectionStore = injectionStore
         self.database = database
         self.databasePath = databasePath
-        self.injectionStoreFactory = injectionStoreFactory
-    }
-
-    func ensureInjectionStore() {
-        guard injectionStore == nil else { return }
-        injectionStore = injectionStoreFactory?()
     }
 
     func handleToggleRequest() {

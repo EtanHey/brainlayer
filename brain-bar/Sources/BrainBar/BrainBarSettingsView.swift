@@ -379,11 +379,20 @@ struct BrainBarSettingsView: View {
         case backend
     }
 
-    init(
-        viewModel: BrainBarSettingsViewModel = BrainBarSettingsViewModel(
-            observabilityURL: ObservabilityReader.installedURL()
-        )
-    ) {
+    static func observabilityURL(
+        databasePath: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        ObservabilityReader.url(dbPath: databasePath, environment: environment)
+    }
+
+    init(databasePath: String) {
+        _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
+            observabilityURL: Self.observabilityURL(databasePath: databasePath)
+        ))
+    }
+
+    init(viewModel: BrainBarSettingsViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 

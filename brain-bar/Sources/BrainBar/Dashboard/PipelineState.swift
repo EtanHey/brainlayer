@@ -447,17 +447,17 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
         if ingressStatus == .live && queueStatus == .stable && enrichmentStatus == .live {
             headline = "Writes are landing and enrichments are shipping"
-            detail = "\(stats.recentWriteCount) writes and \(stats.recentEnrichmentCount) enrichments in \(windowLabel.lowercased())."
+            detail = "\(DashboardMetricFormatter.integerString(stats.recentWriteCount)) writes and \(DashboardMetricFormatter.integerString(stats.recentEnrichmentCount)) enrichments in \(windowLabel.lowercased())."
         } else if ingressStatus == .live && queueStatus == .growing {
             headline = "Writes are outrunning enrichments"
-            detail = "\(backlogCount) chunks are waiting while ingress is still active."
+            detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are waiting while ingress is still active."
         } else if backlogCount > 0 &&
             (queueStatus == .draining || enrichmentStatus == .draining || enrichmentStatus == .live) {
             headline = "Enrichment is draining backlog"
-            detail = "\(backlogCount) chunks remain queued, and completions are still moving."
+            detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks remain queued, and completions are still moving."
         } else if queueStatus == .backlogged || enrichmentStatus == .queued {
             headline = "Backlog is waiting for enrichment"
-            detail = "\(backlogCount) chunks are queued with no enrichment in the live window."
+            detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are queued with no enrichment in the live window."
         } else if ingressStatus == .recent || enrichmentStatus == .recent {
             headline = "The flow is cooling down"
             detail = "Live activity is quiet, but recent movement is still visible in \(windowLabel.lowercased())."
@@ -673,9 +673,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "No chunk rows in \(windowLabel)"
         }
         if latestBucketCount > 0 || status == .live {
-            return "\(latestBucketCount) chunk rows in latest source-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) chunk rows in latest source-time bucket"
         }
-        return "\(totalEvents) chunk rows in \(windowLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) chunk rows in \(windowLabel)"
     }
 
     private static func enrichmentBurstText(stats: DashboardStats) -> String? {
@@ -692,7 +692,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
         let bucketMinutes = max(1, stats.activityWindowMinutes / max(stats.bucketCount, 1))
         let bucketLabel = DashboardMetricFormatter.shortWindowLabel(minutes: bucketMinutes)
-        return "Backlog drain burst: \(latestBucketCount) enriched in latest \(bucketLabel)"
+        return "Backlog drain burst: \(DashboardMetricFormatter.integerString(latestBucketCount)) enriched in latest \(bucketLabel)"
     }
 
     private static func storeQueueHealth(depth: Int, oldestAgeSeconds: Int?) -> DashboardStoreQueueHealth {
@@ -709,14 +709,14 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
     private static func storeDepthText(totalDepth: Int, flushDepth: Int, replayDebtDepth: Int) -> String {
         if flushDepth > 0, replayDebtDepth > 0 {
-            let flush = flushDepth == 1 ? "1 queued" : "\(flushDepth) queued"
-            let replay = replayDebtDepth == 1 ? "1 replay debt" : "\(replayDebtDepth) replay debt"
+            let flush = flushDepth == 1 ? "1 queued" : "\(DashboardMetricFormatter.integerString(flushDepth)) queued"
+            let replay = replayDebtDepth == 1 ? "1 replay debt" : "\(DashboardMetricFormatter.integerString(replayDebtDepth)) replay debt"
             return "\(flush), \(replay)"
         }
         if replayDebtDepth > 0 {
-            return replayDebtDepth == 1 ? "1 replay debt" : "\(replayDebtDepth) replay debt"
+            return replayDebtDepth == 1 ? "1 replay debt" : "\(DashboardMetricFormatter.integerString(replayDebtDepth)) replay debt"
         }
-        return totalDepth == 1 ? "1 queued" : "\(totalDepth) queued"
+        return totalDepth == 1 ? "1 queued" : "\(DashboardMetricFormatter.integerString(totalDepth)) queued"
     }
 
     private static func storeOldestAgeText(_ oldestAgeSeconds: Int?) -> String {
@@ -787,13 +787,13 @@ struct DashboardFlowSummary: Sendable, Equatable {
         case .stable:
             return backlogCount == 0
                 ? "Ingress and enrichment stayed balanced across \(windowLabel.lowercased())."
-                : "\(backlogCount) chunks queued while ingress and enrichment remain balanced."
+                : "\(DashboardMetricFormatter.integerString(backlogCount)) chunks queued while ingress and enrichment remain balanced."
         case .growing:
-            return "\(backlogCount) chunks are accumulating faster than enrichments are landing."
+            return "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are accumulating faster than enrichments are landing."
         case .draining:
-            return "\(backlogCount) chunks remain queued, but enrichments are still landing."
+            return "\(DashboardMetricFormatter.integerString(backlogCount)) chunks remain queued, but enrichments are still landing."
         case .backlogged:
-            return "\(backlogCount) chunks are queued with no enrichments in the live window."
+            return "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are queued with no enrichments in the live window."
         case .unavailable:
             return "Queue state cannot be trusted until the daemon comes back."
         }
@@ -950,9 +950,9 @@ extension DashboardFlowSummary {
             return "No agent-origin chunks in \(windowLabel)"
         }
         if latestBucketCount > 0 || status == .live {
-            return "\(latestBucketCount) agent-origin chunks in latest source-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) agent-origin chunks in latest source-time bucket"
         }
-        return "\(totalEvents) agent-origin chunks in \(windowLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) agent-origin chunks in \(windowLabel)"
     }
 
     private func jsonlWatcherStatus(flowState: WatcherFlowState) -> DashboardFlowLaneStatus {
@@ -977,9 +977,9 @@ extension DashboardFlowSummary {
             return "No watcher-ingested chunks in \(windowLabel)"
         }
         if latestBucketCount > 0 {
-            return "\(latestBucketCount) watcher-ingested chunks in latest ingest-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) watcher-ingested chunks in latest ingest-time bucket"
         }
-        return "\(totalEvents) watcher-ingested chunks in \(windowLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) watcher-ingested chunks in \(windowLabel)"
     }
 }
 

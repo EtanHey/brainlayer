@@ -1,6 +1,13 @@
 import Foundation
 
 enum DashboardMetricFormatter {
+    static func integerString(_ value: Int, locale: Locale = .current) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = locale
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
     private static let absoluteTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -57,7 +64,7 @@ enum DashboardMetricFormatter {
         totalEvents: Int,
         activityWindowMinutes: Int = 30
     ) -> String {
-        "\(max(totalEvents, 0)) in \(shortWindowLabel(minutes: activityWindowMinutes))"
+        "\(integerString(max(totalEvents, 0))) in \(shortWindowLabel(minutes: activityWindowMinutes))"
     }
 
     static func lastCompletionString(

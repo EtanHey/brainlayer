@@ -28,6 +28,30 @@ struct InjectionThreadRecipient: Equatable, Sendable {
     }
 }
 
+struct InjectionConversationSelection: Equatable {
+    static let defaultTitle = "Conversation"
+
+    var conversation: BrainDatabase.ExpandedConversation?
+    var title = defaultTitle
+    var recipient: InjectionThreadRecipient?
+
+    mutating func open(
+        _ conversation: BrainDatabase.ExpandedConversation,
+        title: String,
+        recipient: InjectionThreadRecipient? = nil
+    ) {
+        self.conversation = conversation
+        self.title = title
+        self.recipient = recipient
+    }
+
+    mutating func close() {
+        conversation = nil
+        title = Self.defaultTitle
+        recipient = nil
+    }
+}
+
 struct ChunkConversationSheet: View {
     let conversation: BrainDatabase.ExpandedConversation
     let title: String

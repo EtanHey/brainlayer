@@ -92,33 +92,6 @@ enum ObservabilityReader {
             .appendingPathComponent("observability.json")
     }
 
-    static func installedURL(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        configURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/brainlayer/brainlayer.env")
-    ) -> URL {
-        let fallback = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
-        let environmentDBPath = environment["BRAINLAYER_DB"].flatMap { value in
-            value.isEmpty ? nil : value
-        }
-        let dbPath = environmentDBPath ?? configuredDatabasePath(at: configURL) ?? fallback
-        return url(dbPath: dbPath, environment: environment)
-    }
-
-    private static func configuredDatabasePath(at url: URL) -> String? {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return text.split(separator: "\n").lazy.compactMap { raw -> String? in
-            let line = raw.trimmingCharacters(in: .whitespaces)
-                .replacingOccurrences(of: "export ", with: "", options: .anchored)
-            guard line.hasPrefix("BRAINLAYER_DB=") else { return nil }
-            let value = String(line.dropFirst("BRAINLAYER_DB=".count))
-                .trimmingCharacters(in: .whitespaces)
-            guard !value.isEmpty else { return nil }
-            return value.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
-        }.first
-    }
-
     static func read(url: URL) -> ObservabilityReadResult {
         do {
             let data = try Data(contentsOf: url)
@@ -219,7 +192,8 @@ enum ObservabilityPresentation {
     static func snapshot(
         document: ObservabilityDocument,
         now: Date,
-        cadence: ObservabilityCadence
+        cadence: ObservabilityCadence,
+        locale: Locale = .current
     ) -> ObservabilitySnapshot {
         let age = max(0, now.timeIntervalSince(document.generatedAt))
         let stale = age > cadence.interval * 2
@@ -228,13 +202,13 @@ enum ObservabilityPresentation {
             document.stores.state, document.stores.reason, stale, note: cadence.assumption
         ) {
             guard let total = document.stores.totalChunks, let recent = document.stores.inWindow?.count else { return nil }
-            let base = "\(number(total)) chunks indexed · \(number(recent)) in the last 24 h — everything BrainLayer has read, all sources"
+            let base = "\(number(total, locale: locale)) chunks indexed · \(number(recent, locale: locale)) in the last 24 h — everything BrainLayer has read, all sources"
             guard document.authorUnknown.state == "measured",
                   let never = document.authorUnknown.neverClassified else {
                 let reason = document.authorUnknown.reason.isEmpty ? "attribution unavailable" : document.authorUnknown.reason
                 return "\(base)\nAttribution unmeasurable — \(reason)"
             }
-            return "\(base)\n\(number(never.count)) chunks not yet attributed to a person or source class"
+            return "\(base)\n\(number(never.count, locale: locale)) chunks not yet attributed to a person or source class"
         }
         let stores = card(
             "Stores", "What agents wrote via brain_store",
@@ -244,7 +218,7 @@ enum ObservabilityPresentation {
             guard let mcp = emitters.first(where: { $0.emitter == "mcp" }) else {
                 return "No MCP brain_store count in this document — what agents wrote via brain_store"
             }
-            return "\(number(mcp.countInWindow)) MCP brain_store writes in the last 24 h — what agents wrote via brain_store"
+            return "\(number(mcp.countInWindow, locale: locale)) MCP brain_store writes in the last 24 h — what agents wrote via brain_store"
         }
         let emitters = card(
             "Emitters", "Where indexed memory came from",
@@ -257,21 +231,21 @@ enum ObservabilityPresentation {
             }
             let subagents = classCount("subagent") + classCount("brain-worker")
             let mcp = emitterRows.first(where: { $0.emitter == "mcp" })?.countInWindow
-            let mcpText = mcp.map { "\(number($0)) MCP brain_store writes in the last 24 h" }
+            let mcpText = mcp.map { "\(number($0, locale: locale)) MCP brain_store writes in the last 24 h" }
                 ?? "MCP brain_store count unavailable in this document"
             return [
-                "\(number(classCount("cli-agent"))) chunks from CLI agents",
+                "\(number(classCount("cli-agent"), locale: locale)) chunks from CLI agents",
                 mcpText,
-                "\(number(subagents)) chunks from subagents",
-                "\(number(classCount("desktop"))) chunks from desktop apps hidden from search",
-                "\(number(classCount("fleet-coordination"))) chunks from fleet coordination",
-                "\(number(classCount(nil))) unclassified chunks",
+                "\(number(subagents, locale: locale)) chunks from subagents",
+                "\(number(classCount("desktop"), locale: locale)) chunks from desktop apps hidden from search",
+                "\(number(classCount("fleet-coordination"), locale: locale)) chunks from fleet coordination",
+                "\(number(classCount(nil), locale: locale)) unclassified chunks",
             ].joined(separator: "\n")
         }
         let backupTone: ObservabilityCardTone = document.backups.freshness == "unknown" ||
             document.backups.retentionInvariant == "unknown" ? .neutral :
             (document.backups.freshness == "stale" || document.backups.retentionInvariant == "FAIL" ? .amber : .standard)
-        let backupStatus = backupStatus(for: document.backups)
+        let backupStatus = backupStatus(for: document.backups, locale: locale)
         let backups = card(
             "Backups", "Where copies are, when they last verified, and whether recovery is healthy",
             document.backups.state, document.backups.reason, stale, tone: backupTone,
@@ -308,20 +282,20 @@ enum ObservabilityPresentation {
         )
     }
 
-    static func number(_ value: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.locale = .current
-        return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    static func number(_ value: Int, locale: Locale = .current) -> String {
+        DashboardMetricFormatter.integerString(value, locale: locale)
     }
 
-    static func backupStatus(for backups: ObservabilityDocument.Backups) -> ObservabilityBackupStatus {
+    static func backupStatus(
+        for backups: ObservabilityDocument.Backups,
+        locale: Locale = .current
+    ) -> ObservabilityBackupStatus {
         let upload = backups.lastVerifiedUpload.map { value in
             ObservabilityStatusLine(
-                text: "\(value.verified ? "Last verified upload" : "Last upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · archive \(value.archiveId)",
+                text: "\(value.verified ? "Last verified transcript upload" : "Last transcript upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · transcript archive \(value.archiveId)",
                 tone: value.verified ? .green : .red
             )
-        } ?? .init(text: "No verified upload on record", tone: .red)
+        } ?? .init(text: "No verified transcript upload on record", tone: .red)
 
         let snapshot = backups.dbSnapshot.map { value in
             ObservabilityStatusLine(
@@ -331,39 +305,40 @@ enum ObservabilityPresentation {
         } ?? .init(text: "No verified DB snapshot on record", tone: .red)
 
         let job: ObservabilityStatusLine
+        let jobLabel = backups.launchd?.label ?? "com.brainlayer.jsonl-backup"
         if backups.launchd?.bootstrapped == true {
-            job = .init(text: "Backup job: loaded", tone: .green)
+            job = .init(text: "Transcript backup (\(jobLabel)): loaded", tone: .green)
         } else if backups.launchd?.disabledDirPresent == true {
-            job = .init(text: "Backup job: NOT loaded (parked in .disabled-retention-P0)", tone: .red)
+            job = .init(text: "Transcript backup (\(jobLabel)): NOT loaded — parked in .disabled-retention-P0", tone: .red)
         } else {
-            job = .init(text: "Backup job: NOT loaded", tone: .red)
+            job = .init(text: "Transcript backup (\(jobLabel)): NOT loaded", tone: .red)
         }
 
-        let threshold = backups.thresholdHours.map { number(Int($0)) } ?? "unknown"
+        let threshold = backups.thresholdHours.map { number(Int($0), locale: locale) } ?? "unknown"
         let freshness: ObservabilityStatusLine
         switch backups.freshness {
-        case "fresh": freshness = .init(text: "fresh (within \(threshold) h)", tone: .green)
-        case "stale": freshness = .init(text: "stale (> \(threshold) h)", tone: .red)
-        default: freshness = .init(text: "freshness unknown", tone: .red)
+        case "fresh": freshness = .init(text: "Transcript backup freshness: fresh (within \(threshold) h)", tone: .green)
+        case "stale": freshness = .init(text: "Transcript backup freshness: stale (> \(threshold) h)", tone: .red)
+        default: freshness = .init(text: "Transcript backup freshness: unknown", tone: .red)
         }
 
         let retentionValue = backups.retentionInvariant ?? "unknown"
         let retention = ObservabilityStatusLine(
-            text: "Retention invariant: \(retentionValue)",
+            text: "Transcript retention invariant: \(retentionValue)",
             tone: retentionValue == "PASS" ? .green : .red
         )
         let archives: ObservabilityStatusLine
         if let archiveCount = backups.survivingArchives30D {
             archives = .init(
-                text: "\(number(archiveCount)) verified \(archiveCount == 1 ? "archive" : "archives") in the last 30 days",
+                text: "\(number(archiveCount, locale: locale)) verified transcript \(archiveCount == 1 ? "archive" : "archives") in the last 30 days",
                 tone: archiveCount > 0 ? .green : .red
             )
         } else {
-            archives = .init(text: "Verified archives in the last 30 days: unknown", tone: .red)
+            archives = .init(text: "Verified transcript archives in the last 30 days: unknown", tone: .red)
         }
         let error = backups.errorType.flatMap { value -> ObservabilityStatusLine? in
             guard !value.isEmpty else { return nil }
-            return .init(text: errorText(value), tone: .red)
+            return .init(text: "DB backup error: \(errorText(value))", tone: .red)
         }
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,

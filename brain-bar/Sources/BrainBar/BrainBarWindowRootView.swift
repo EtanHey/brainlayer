@@ -28,6 +28,7 @@ struct BrainBarWindowRootView: View {
                 collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
                 commandBarViewModel: commandBarViewModel,
+                databasePath: runtime.databasePath,
                 showRetrievalTools: retrievalTools.isEnabled,
                 isShowingGraph: selectedTab == .graph,
                 toggleGraph: {
@@ -203,6 +204,7 @@ private struct BrainBarWindowHeader: View {
     let collector: StatsCollector?
     let hotkeyStatus: String
     let commandBarViewModel: QuickCaptureViewModel?
+    let databasePath: String?
     let showRetrievalTools: Bool
     let isShowingGraph: Bool
     let toggleGraph: () -> Void
@@ -220,7 +222,7 @@ private struct BrainBarWindowHeader: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
-                BrainBarAppControlMenu()
+                BrainBarAppControlMenu(databasePath: databasePath)
             }
 
             if !isShowingGraph,
@@ -280,13 +282,14 @@ private struct BrainBarHeaderRefreshControls: View {
 }
 
 private struct BrainBarAppControlMenu: View {
+    let databasePath: String?
     @State private var showRestartConfirmation = false
     @State private var showQuitConfirmation = false
 
     var body: some View {
         Menu {
             Button("Settings...") {
-                BrainBarSettingsActions.openSettingsWindow()
+                BrainBarSettingsActions.openSettingsWindow(databasePath: databasePath)
             }
             Divider()
             Button("Restart BrainBar") {
@@ -635,7 +638,7 @@ private struct BrainBarDashboardView: View {
     private var replayDebtBadgeText: String {
         let debt = collector.stats.replayDebtBreakdown
         let partialSuffix = debt.isPartial ? " · PARTIAL" : ""
-        return "Replay debt \(debt.deduplicatedTotal)\(partialSuffix)"
+        return "Replay debt \(DashboardMetricFormatter.integerString(debt.deduplicatedTotal))\(partialSuffix)"
     }
 
     private func overviewMetaRow(layout: BrainBarDashboardLayout) -> some View {
@@ -645,11 +648,11 @@ private struct BrainBarDashboardView: View {
         )
 
         return LazyVGrid(columns: columns, spacing: layout.gridSpacing) {
-            BrainBarOverviewStat(label: "Chunk rows", value: "\(collector.stats.chunkCount)", isHero: true)
-            BrainBarOverviewStat(label: "Enriched successfully", value: "\(collector.stats.enrichedChunkCount)", isHero: false)
-            BrainBarOverviewStat(label: "Pending", value: "\(collector.stats.pendingEnrichmentCount)", isHero: false)
-            BrainBarOverviewStat(label: "Failed", value: "\(collector.stats.failedEnrichmentCount)", isHero: false)
-            BrainBarOverviewStat(label: "Skipped", value: "\(collector.stats.skippedEnrichmentCount)", isHero: false)
+            BrainBarOverviewStat(label: "Chunk rows", value: DashboardMetricFormatter.integerString(collector.stats.chunkCount), isHero: true)
+            BrainBarOverviewStat(label: "Enriched successfully", value: DashboardMetricFormatter.integerString(collector.stats.enrichedChunkCount), isHero: false)
+            BrainBarOverviewStat(label: "Pending", value: DashboardMetricFormatter.integerString(collector.stats.pendingEnrichmentCount), isHero: false)
+            BrainBarOverviewStat(label: "Failed", value: DashboardMetricFormatter.integerString(collector.stats.failedEnrichmentCount), isHero: false)
+            BrainBarOverviewStat(label: "Skipped", value: DashboardMetricFormatter.integerString(collector.stats.skippedEnrichmentCount), isHero: false)
         }
     }
 
@@ -2099,7 +2102,7 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             unitLabel = "success-status chunk rows"
         }
 
-        accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(totalCount). Unit: \(unitLabel). Clock: \(clockLabel)."
+        accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
         tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
     }
 }
@@ -2378,7 +2381,7 @@ private struct BrainBarQueueRail: View {
                 replayDebtRow("Pending stores", component: replayDebtBreakdown.pendingStores)
                 replayDebtRow("Queue entries", component: replayDebtBreakdown.durableQueue)
                 replayDebtRow("Fallback entries", component: replayDebtBreakdown.repositoryFallback)
-                replayDebtValueRow("Deduplicated total", value: "\(replayDebtBreakdown.deduplicatedTotal)")
+                replayDebtValueRow("Deduplicated total", value: DashboardMetricFormatter.integerString(replayDebtBreakdown.deduplicatedTotal))
                 replayDebtValueRow("Unreadable inputs", value: unreadableInputsText)
                 replayDebtValueRow("Census time", value: censusText)
                 Text("Path identities are de-duplicated before the aggregate is calculated.")
@@ -2391,7 +2394,7 @@ private struct BrainBarQueueRail: View {
             HStack(spacing: 8) {
                 Text("Replay debt")
                     .font(.system(size: 11, weight: .bold))
-                Text("\(replayDebtBreakdown.deduplicatedTotal)")
+                Text(DashboardMetricFormatter.integerString(replayDebtBreakdown.deduplicatedTotal))
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 if replayDebtBreakdown.isPartial {
@@ -2421,7 +2424,10 @@ private struct BrainBarQueueRail: View {
         case .unreadable(let reason):
             readability = "unreadable · \(reason)"
         }
-        return replayDebtValueRow(label, value: "\(component.snapshot.depth) · \(readability)")
+        return replayDebtValueRow(
+            label,
+            value: "\(DashboardMetricFormatter.integerString(component.snapshot.depth)) · \(readability)"
+        )
     }
 
     private func replayDebtValueRow(_ label: String, value: String) -> some View {
@@ -2814,7 +2820,7 @@ private struct BrainBarAgentPresencePill: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .minimumScaleFactor(0.75)
-            Text("\(presence.count)")
+            Text(DashboardMetricFormatter.integerString(presence.count))
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
