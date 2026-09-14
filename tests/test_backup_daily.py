@@ -1217,7 +1217,7 @@ def test_drive_upload_resumes_from_confirmed_offset_after_one_stall(tmp_path, mo
     )
 
     assert ranges == ["bytes 0-5/6", "bytes */6", "bytes */6", "bytes 3-5/6"]
-    assert all(timeout > 0.02 for timeout in timeouts)
+    assert timeouts == pytest.approx([5.02] * 4)
     assert verified == [(service, {"file_id": "drive-file-id", "expected_name": snapshot.name, "expected_size": 6})]
     assert result["uploaded"] is True
     assert result["verified"] is True
