@@ -743,8 +743,8 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.enrichment.sparklineLabel, "Successful enrichment completions over Last 1h")
         XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
-        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2055 enriched in latest 15m")
-        XCTAssertEqual(summary.enrichment.volumeText, "2055 in 1h")
+        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2,055 enriched in latest 15m")
+        XCTAssertEqual(summary.enrichment.volumeText, "2,055 in 1h")
     }
 
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {

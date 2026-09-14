@@ -41,7 +41,7 @@ struct AgentPresence: Sendable, Equatable {
     var isActive: Bool { count > 0 }
 
     var liveProcessLabel: String {
-        count == 1 ? "1 live agent process" : "\(count) live agent processes"
+        count == 1 ? "1 live agent process" : "\(DashboardMetricFormatter.integerString(count)) live agent processes"
     }
 
     var accessibilityLabel: String {
@@ -71,7 +71,7 @@ struct AgentActivitySnapshot: Sendable, Equatable {
         case 1:
             return "1 agent process live"
         default:
-            return "\(totalActiveAgents) agent processes live"
+            return "\(DashboardMetricFormatter.integerString(totalActiveAgents)) agent processes live"
         }
     }
 }

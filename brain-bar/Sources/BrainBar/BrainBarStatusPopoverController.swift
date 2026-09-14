@@ -131,7 +131,7 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     @objc private func openSettings(_ sender: Any?) {
-        BrainBarSettingsActions.openSettingsWindow()
+        BrainBarSettingsActions.openSettingsWindow(databasePath: runtime.databasePath)
     }
 
     @objc private func quitBrainBar(_ sender: Any?) {

@@ -6,6 +6,130 @@ import XCTest
 
 @MainActor
 final class ObservabilitySnapshotTests: XCTestCase {
+    func testLiveShapedBackupFieldsDecode() throws {
+        let result = ObservabilityReader.read(
+            url: Bundle.module.url(
+                forResource: "observability-main-58849a70",
+                withExtension: "json",
+                subdirectory: "Fixtures"
+            )!
+        )
+        guard case let .readable(document) = result else { return XCTFail("Expected live-shaped fixture to decode") }
+
+        XCTAssertNil(document.backups.lastVerifiedUpload)
+        XCTAssertNotNil(document.backups.dbSnapshot)
+        XCTAssertEqual(document.backups.dbSnapshot?.destination, "2026-09-13.db.gz")
+        XCTAssertEqual(document.backups.launchd?.bootstrapped, false)
+        XCTAssertEqual(document.backups.thresholdHours, 36)
+    }
+
+    func testMeasuredCardsLabelEveryCountForHumans() throws {
+        let document = try readableDocument(named: "healthy-dev")
+        let cards = ObservabilityPresentation.snapshot(
+            document: document,
+            now: document.generatedAt,
+            cadence: .known(300),
+            locale: Locale(identifier: "en_US")
+        ).cards
+
+        XCTAssertEqual(cards.map(\.title), ["Chunks", "Stores", "Emitters", "Backups"])
+        XCTAssertTrue(cards[0].detail.contains("chunks indexed"))
+        XCTAssertTrue(cards[0].detail.contains("in the last 24 h"))
+        XCTAssertTrue(cards[0].detail.contains("everything BrainLayer has read, all sources"))
+        XCTAssertTrue(cards[0].detail.contains("chunks not yet attributed to a person or source class"))
+        XCTAssertEqual(
+            cards[1].detail,
+            "2 MCP brain_store writes in the last 24 h — what agents wrote via brain_store"
+        )
+        XCTAssertFalse(cards[1].detail.contains("27 MCP"), "Stores must never reuse stores.total_chunks.")
+        for meaning in [
+            "CLI agents", "MCP brain_store", "subagents",
+            "desktop apps hidden from search", "fleet coordination", "unclassified",
+        ] {
+            XCTAssertTrue(cards[2].detail.contains(meaning), cards[2].detail)
+        }
+        XCTAssertTrue(cards.allSatisfy { !($0.subtitle ?? "").isEmpty })
+
+        let labeledInteger = try NSRegularExpression(
+            pattern: #"\d[\d,.]*\s+(?:chunks?|MCP|CLI|subagent|desktop|fleet|unclassified|h\b|days?\b|archives?\b|verified|%|in the last)"#
+        )
+        for card in cards {
+            let dateOrIdentifier = try NSRegularExpression(
+                pattern: #"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}, \d{4} at \d{1,2}:\d{2}|[A-Za-z][A-Za-z0-9._-]*\d[A-Za-z0-9._-]*"#
+            )
+            let originalRange = NSRange(card.detail.startIndex..., in: card.detail)
+            let countText = dateOrIdentifier.stringByReplacingMatches(
+                in: card.detail, range: originalRange, withTemplate: ""
+            )
+            let range = NSRange(countText.startIndex..., in: countText)
+            let withoutLabeledIntegers = labeledInteger.stringByReplacingMatches(
+                in: countText, range: range, withTemplate: ""
+            )
+            XCTAssertNil(
+                withoutLabeledIntegers.rangeOfCharacter(from: .decimalDigits),
+                card.detail
+            )
+        }
+    }
+
+    func testLiveShapedCountsUseThousandsSeparators() throws {
+        let document = try liveShapedDocument()
+        let cards = ObservabilityPresentation.snapshot(
+            document: document,
+            now: document.generatedAt,
+            cadence: .known(300),
+            locale: Locale(identifier: "en_US")
+        ).cards
+
+        XCTAssertTrue(cards[0].detail.contains("797,727 chunks indexed"), cards[0].detail)
+        XCTAssertTrue(cards[2].detail.contains("587,430 chunks from CLI agents"), cards[2].detail)
+    }
+
+    func testBackupStatusUsesTruthfulGreenRedLogic() throws {
+        let healthy = try readableDocument(named: "healthy-dev")
+        let stale = try readableDocument(named: "backup-errors-dev")
+        let missing = try readableDocument(named: "no-op-dev")
+        let live = try liveShapedDocument()
+
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).freshness.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).snapshot.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).freshness.tone, .red)
+    }
+
+    func testMissingArchiveCountStaysUnknown() {
+        let backups = ObservabilityDocument.Backups(
+            state: "measured", reason: "", inputs: [], freshness: nil,
+            thresholdHours: nil, retentionInvariant: nil, survivingArchives30D: nil,
+            errorType: nil, lastVerifiedUpload: nil, dbSnapshot: nil, launchd: nil
+        )
+
+        let archives = ObservabilityPresentation.backupStatus(for: backups).archives
+        XCTAssertEqual(archives.text, "Verified transcript archives in the last 30 days: unknown")
+        XCTAssertEqual(archives.tone, .red)
+    }
+
+    func testBackupStatusSaysWhenWhereAndWhy() throws {
+        let live = try liveShapedDocument()
+        let status = ObservabilityPresentation.backupStatus(for: live.backups)
+
+        XCTAssertEqual(status.upload.text, "No verified transcript upload on record")
+        XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot (verified):"))
+        XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
+        XCTAssertEqual(
+            status.job.text,
+            "Transcript backup (com.brainlayer.jsonl-backup): NOT loaded — parked in .disabled-retention-P0"
+        )
+        XCTAssertFalse(status.lines.map(\.text).contains { $0.hasPrefix("Backup job") })
+        XCTAssertEqual(status.freshness.text, "Backup freshness (DB + transcript): stale (> 36 h)")
+        XCTAssertEqual(status.retention.text, "Transcript retention invariant: PASS")
+        XCTAssertEqual(status.archives.text, "0 verified transcript archives in the last 30 days")
+        XCTAssertEqual(status.error?.text, "DB backup error: Google Drive credentials missing — re-auth needed")
+    }
+
     private var fixtureRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -33,7 +157,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
                 now: document.generatedAt,
                 cadence: .known(300)
             )
-            XCTAssertEqual(snapshot.cards.map(\.title), ["Stores", "Emitters", "Author-unknown", "Backups"])
+            XCTAssertEqual(snapshot.cards.map(\.title), ["Chunks", "Stores", "Emitters", "Backups"])
             XCTAssertEqual(snapshot.cards.count, 4, fixture.id)
             XCTAssertTrue(snapshot.cards.allSatisfy { !$0.detail.isEmpty }, fixture.id)
             for section in fixture.unmeasurableSections {
@@ -73,7 +197,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
 
         XCTAssertEqual(card.tone, .neutral)
-        XCTAssertEqual(card.detail, "unknown · retention PASS · 0 archives in 30d · jsonl_backup_attempt_invalid")
+        XCTAssertTrue(card.detail.contains("No verified transcript upload on record"))
+        XCTAssertTrue(card.detail.contains("Backup freshness (DB + transcript): unknown"))
+        XCTAssertTrue(card.detail.contains("Transcript retention invariant: PASS"))
+        XCTAssertTrue(card.detail.contains("0 verified transcript archives in the last 30 days"))
+        XCTAssertTrue(card.detail.contains("Transcript backup error: Jsonl Backup Attempt Invalid"))
         XCTAssertFalse(card.detail.contains("unmeasurable"))
     }
 
@@ -83,11 +211,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
             ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
                 .cards.first { $0.title == "Backups" }
         )
-        XCTAssertTrue(card.detail.contains("FileNotFoundError"))
-        XCTAssertTrue(card.detail.contains("1 archive in 30d"))
+        XCTAssertTrue(card.detail.contains("DB backup error: Backup input file missing"))
+        XCTAssertTrue(card.detail.contains("1 verified transcript archive in the last 30 days"))
     }
 
-    func testRenderedTonesAndOpaqueBackgroundAreDistinct() throws {
+    func testRenderedCardTonesAreDistinct() throws {
         let healthy = try render(document: readableDocument(named: "healthy-dev"), named: "tone-healthy")
         let neutral = try render(document: readableDocument(named: "missing-source-class-dev"), named: "tone-neutral")
         let amber = try render(document: readableDocument(named: "backup-errors-dev"), named: "tone-amber")
@@ -95,15 +223,10 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let standardColor = try color(in: healthy, normalizedX: 0.22, normalizedY: 0.27)
         let neutralColor = try color(in: neutral, normalizedX: 0.22, normalizedY: 0.27)
         let amberColor = try color(in: amber, normalizedX: 0.72, normalizedY: 0.49)
-        let backgroundColor = try XCTUnwrap(healthy.colorAt(x: 5, y: 5))
 
         XCTAssertNotEqual(standardColor, neutralColor)
         XCTAssertNotEqual(standardColor, amberColor)
         XCTAssertNotEqual(neutralColor, amberColor)
-        XCTAssertNotEqual(standardColor, backgroundColor)
-        XCTAssertNotEqual(neutralColor, backgroundColor)
-        XCTAssertNotEqual(amberColor, backgroundColor)
-        XCTAssertEqual(backgroundColor.alphaComponent, 1, accuracy: 0.001)
     }
 
     func testSchemaVersionMismatchIsUnreadableWithReason() throws {
@@ -132,6 +255,23 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
     }
 
+    func testDashboardAndSettingsUseTheSameRuntimeDatabasePath() {
+        let environment = [
+            "BRAINLAYER_DB": "/tmp/brainlayer-override/brainlayer.db",
+            "BRAINLAYER_OBSERVABILITY_PATH": "",
+        ]
+        let databasePath = environment["BRAINLAYER_DB"]!
+
+        XCTAssertEqual(
+            BrainBarSettingsView.observabilityURL(databasePath: databasePath, environment: environment),
+            ObservabilityReader.url(dbPath: databasePath, environment: environment)
+        )
+        XCTAssertEqual(
+            BrainBarSettingsView.observabilityURL(databasePath: databasePath, environment: environment).path,
+            "/tmp/brainlayer-override/observability.json"
+        )
+    }
+
     func testMissingHealthCheckCadenceIsDisclosedOnCard() throws {
         let cadence = ObservabilityReader.healthCheckCadence(environment: [
             "BRAINLAYER_HEALTH_CHECK_PLIST_PATH": "/tmp/brainbar-missing-health-check-\(UUID().uuidString).plist",
@@ -140,11 +280,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s")
 
         let document = try readableDocument(named: "healthy-dev")
-        let stores = try XCTUnwrap(
+        let chunks = try XCTUnwrap(
             ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: cadence)
-                .cards.first { $0.title == "Stores" }
+                .cards.first { $0.title == "Chunks" }
         )
-        XCTAssertEqual(stores.note, "cadence unknown, assuming 300s")
+        XCTAssertEqual(chunks.note, "cadence unknown, assuming 300s")
     }
 
     func testStaleDocumentRendersAmberWithAge() throws {
@@ -198,6 +338,21 @@ final class ObservabilitySnapshotTests: XCTestCase {
         return document
     }
 
+    private func liveShapedDocument() throws -> ObservabilityDocument {
+        let result = ObservabilityReader.read(
+            url: Bundle.module.url(
+                forResource: "observability-main-58849a70",
+                withExtension: "json",
+                subdirectory: "Fixtures"
+            )!
+        )
+        guard case let .readable(document) = result else {
+            XCTFail("Expected live-shaped fixture")
+            throw FixtureError.unreadable("live-shaped")
+        }
+        return document
+    }
+
     private func color(
         in bitmap: NSBitmapImageRep,
         normalizedX: Double,
@@ -211,9 +366,8 @@ final class ObservabilitySnapshotTests: XCTestCase {
 
     private func title(for section: String) -> String {
         switch section {
-        case "stores": "Stores"
+        case "stores", "author_unknown": "Chunks"
         case "emitters": "Emitters"
-        case "author_unknown": "Author-unknown"
         case "backups": "Backups"
         default: section
         }

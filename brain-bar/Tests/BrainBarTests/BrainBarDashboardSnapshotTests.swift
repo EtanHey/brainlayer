@@ -38,9 +38,9 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         // content. Narrower widths stack everything vertically and run tallest.
         var size: NSSize {
             switch self {
-            case .compact: NSSize(width: 760, height: 1_900)
-            case .default: NSSize(width: 960, height: 1_820)
-            case .wide: NSSize(width: 1_280, height: 1_500)
+            case .compact: NSSize(width: 760, height: 2_500)
+            case .default: NSSize(width: 960, height: 2_650)
+            case .wide: NSSize(width: 1_280, height: 2_500)
             }
         }
     }
@@ -52,9 +52,19 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
         )
 
+        let observabilityURL = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70",
+            withExtension: "json",
+            subdirectory: "Fixtures"
+        ))
+        let observability = ObservabilityReader.read(url: observabilityURL)
+
         for breakpoint in Breakpoint.allCases {
             let collector = BrainBarDashboardFixture.makeCollector()
-            let view = BrainBarDashboardPreview.make(collector: collector)
+            let view = BrainBarDashboardPreview.make(
+                collector: collector,
+                observabilityResult: observability
+            )
             let (png, bitmap) = try renderPNG(view, size: breakpoint.size)
 
             let url = try writePNG(png, name: "dashboard-\(breakpoint.rawValue)")

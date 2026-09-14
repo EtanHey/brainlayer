@@ -64,7 +64,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         _ = controller.contentViewControllerForTesting.view
         runMainRunLoop()
 
-        runtime.install(collector: collector, injectionStore: nil, database: db)
+        runtime.install(collector: collector, database: db)
         runMainRunLoop()
 
         let anchorWindow = NSWindow(

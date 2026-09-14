@@ -54,12 +54,10 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
-    func testBrainBarTabsIncludeObservability() {
-        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .injections, .graph, .observability])
+    func testBrainBarOnlyKeepsDashboardAndOptInKnowledgeGraphSurfaces() {
+        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .graph])
         XCTAssertEqual(BrainBarTab.dashboard.title, "Dashboard")
-        XCTAssertEqual(BrainBarTab.injections.title, "Injections")
         XCTAssertEqual(BrainBarTab.graph.title, "Graph")
-        XCTAssertEqual(BrainBarTab.observability.title, "Observability")
     }
 
     @MainActor
@@ -67,13 +65,13 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertFalse(BrainBarRetrievalToolsSettings().isEnabled)
         XCTAssertEqual(
             BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: false),
-            [.dashboard, .injections, .observability]
+            [.dashboard]
         )
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
         XCTAssertEqual(
             BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: false),
-            .observability
+            .dashboard
         )
 
         XCTAssertEqual(
@@ -92,8 +90,7 @@ final class BrainBarWindowStateTests: XCTestCase {
         let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
 
-        XCTAssertTrue(root.contains("ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools))"))
-        XCTAssertTrue(root.contains("if BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
+        XCTAssertTrue(root.contains("BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
         XCTAssertTrue(app.contains("if retrievalTools.isEnabled {"))
         XCTAssertTrue(app.contains("Button(\"Search BrainLayer\")"))
         XCTAssertTrue(app.contains("Button(\"Capture Note\")"))
@@ -101,8 +98,18 @@ final class BrainBarWindowStateTests: XCTestCase {
     }
 
     @MainActor
-    func testLiveWindowDefaultsToObservability() {
-        XCTAssertEqual(BrainBarWindowRootView.defaultTab, .observability)
+    func testLiveWindowDefaultsToTheOnePageDashboard() {
+        XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)
+    }
+
+    func testDefaultWindowHasNoTabBarOrInjectionSurfaceAndFoldsObservabilityIntoDashboard() throws {
+        let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertFalse(root.contains("Picker(\"Section\""))
+        XCTAssertFalse(root.contains("brainbar.shell.tabs"))
+        XCTAssertFalse(root.contains("injectionsContent"))
+        XCTAssertFalse(root.contains("BrainBarInjectionTab"))
+        XCTAssertTrue(root.contains("ObservabilityLiveView(dbPath: dbPath)"))
     }
 
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {

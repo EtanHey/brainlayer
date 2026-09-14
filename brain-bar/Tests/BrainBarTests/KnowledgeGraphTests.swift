@@ -1752,17 +1752,6 @@ final class KGViewModelTests: XCTestCase {
     }
 }
 
-final class BrainBarInjectionsPlaceholderTests: XCTestCase {
-    deinit {}
-
-    func testInjectionsTabShowsClearMessageWhenStoreNil() {
-        let subtitle = BrainBarPlaceholderCopy.injectionFeedNotWired
-
-        XCTAssertEqual(subtitle, "Injection feed not yet wired in this build.")
-        XCTAssertFalse(subtitle.localizedCaseInsensitiveContains("unavailable"))
-    }
-}
-
 @MainActor
 final class KGCanvasSimulationTests: XCTestCase {
     var db: BrainDatabase!

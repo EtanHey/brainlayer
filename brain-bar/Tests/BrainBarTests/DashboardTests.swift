@@ -706,7 +706,7 @@ final class DashboardTests: XCTestCase {
         let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let processSource = try brainBarSourceFile("Sources/BrainBar/BrainBarProcessControl.swift")
 
-        XCTAssertTrue(rootSource.contains("BrainBarAppControlMenu()"))
+        XCTAssertTrue(rootSource.contains("BrainBarAppControlMenu(databasePath:"))
         XCTAssertTrue(rootSource.contains("Restart BrainBar"))
         XCTAssertTrue(rootSource.contains("Quit BrainBar"))
         XCTAssertTrue(processSource.contains("static func restart"))

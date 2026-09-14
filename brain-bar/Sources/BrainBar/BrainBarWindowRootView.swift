@@ -2,18 +2,13 @@ import AppKit
 import Combine
 import SwiftUI
 
-enum BrainBarPlaceholderCopy {
-    static let injectionFeedNotWired = "Injection feed not yet wired in this build."
-}
-
 struct BrainBarWindowRootView: View {
-    static let defaultTab: BrainBarTab = .observability
+    static let defaultTab: BrainBarTab = .dashboard
 
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
 
     @State private var selectedTab = BrainBarWindowRootView.defaultTab
-    @State private var hasActivatedInjectionsTab = false
     @State private var hasActivatedGraphTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
@@ -30,24 +25,20 @@ struct BrainBarWindowRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             BrainBarWindowHeader(
-                selectedTab: $selectedTab,
                 collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
                 commandBarViewModel: commandBarViewModel,
-                showRetrievalTools: retrievalTools.isEnabled
+                databasePath: runtime.databasePath,
+                showRetrievalTools: retrievalTools.isEnabled,
+                isShowingGraph: selectedTab == .graph,
+                toggleGraph: {
+                    selectedTab = selectedTab == .graph ? .dashboard : .graph
+                }
             )
 
             ZStack {
-                observabilityContent
-                    .brainBarTabVisibility(selectedTab == .observability)
-
                 dashboardContent
                     .brainBarTabVisibility(selectedTab == .dashboard)
-
-                if hasActivatedInjectionsTab || selectedTab == .injections {
-                    injectionsContent
-                        .brainBarTabVisibility(selectedTab == .injections)
-                }
 
                 if hasActivatedGraphTab || selectedTab == .graph {
                     graphContent
@@ -114,32 +105,15 @@ struct BrainBarWindowRootView: View {
     }
 
     @ViewBuilder
-    private var observabilityContent: some View {
-        if let dbPath = runtime.databasePath {
-            ObservabilityLiveView(dbPath: dbPath)
-        } else {
-            ObservabilityDashboardView(result: .unreadable("Database path unavailable."))
-        }
-    }
-
-    @ViewBuilder
     private var dashboardContent: some View {
         if let collector = runtime.collector {
             BrainBarDashboardContent(
                 collector: collector,
-                hotkeyStatus: runtime.hotkeyStatus.statusLine
+                hotkeyStatus: runtime.hotkeyStatus.statusLine,
+                dbPath: runtime.databasePath
             )
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
-        }
-    }
-
-    @ViewBuilder
-    private var injectionsContent: some View {
-        if let store = runtime.injectionStore {
-            BrainBarInjectionTab(store: store, isActive: selectedTab == .injections && windowObserver.isWindowVisible)
-        } else {
-            InjectionFeedView(disconnectedAt: Date())
         }
     }
 
@@ -175,13 +149,8 @@ struct BrainBarWindowRootView: View {
 
     private func activate(tab: BrainBarTab) {
         switch tab {
-        case .observability:
-            break
         case .dashboard:
             runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
-        case .injections:
-            runtime.ensureInjectionStore()
-            hasActivatedInjectionsTab = true
         case .graph:
             hasActivatedGraphTab = true
         }
@@ -191,6 +160,8 @@ struct BrainBarWindowRootView: View {
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
     let hotkeyStatus: String
+    var dbPath: String? = nil
+    var observabilityResult: ObservabilityReadResult? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -198,7 +169,9 @@ private struct BrainBarDashboardContent: View {
         } else {
             BrainBarDashboardView(
                 collector: collector,
-                hotkeyStatus: hotkeyStatus
+                hotkeyStatus: hotkeyStatus,
+                dbPath: dbPath,
+                observabilityResult: observabilityResult
             )
         }
     }
@@ -228,26 +201,32 @@ private extension View {
 }
 
 private struct BrainBarWindowHeader: View {
-    @Binding var selectedTab: BrainBarTab
-
     let collector: StatsCollector?
     let hotkeyStatus: String
     let commandBarViewModel: QuickCaptureViewModel?
+    let databasePath: String?
     let showRetrievalTools: Bool
+    let isShowingGraph: Bool
+    let toggleGraph: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
                 brand
                 Spacer(minLength: 12)
-                BrainBarAppControlMenu()
-            }
-            HStack(alignment: .center, spacing: 10) {
-                sectionPicker(maxWidth: .infinity)
                 refreshControls
+                if showRetrievalTools {
+                    Button(action: toggleGraph) {
+                        Label(isShowingGraph ? "Dashboard" : "Knowledge Graph", systemImage: isShowingGraph ? "gauge" : "point.3.connected.trianglepath.dotted")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                BrainBarAppControlMenu(databasePath: databasePath)
             }
 
-            if BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
+            if !isShowingGraph,
+               BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
                 BrainBarCommandBar(viewModel: commandBarViewModel)
             }
         }
@@ -273,20 +252,6 @@ private struct BrainBarWindowHeader: View {
         }
     }
 
-    private func sectionPicker(maxWidth: CGFloat) -> some View {
-        Picker("Section", selection: $selectedTab) {
-            ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools)) { tab in
-                Text(tab.title)
-                    .tag(tab)
-                    .accessibilityIdentifier("brainbar.shell.tab.\(tab.title.lowercased())")
-            }
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: maxWidth)
-        .labelsHidden()
-        .accessibilityIdentifier("brainbar.shell.tabs")
-        .focusable()
-    }
 }
 
 private struct BrainBarHeaderRefreshControls: View {
@@ -317,13 +282,14 @@ private struct BrainBarHeaderRefreshControls: View {
 }
 
 private struct BrainBarAppControlMenu: View {
+    let databasePath: String?
     @State private var showRestartConfirmation = false
     @State private var showQuitConfirmation = false
 
     var body: some View {
         Menu {
             Button("Settings...") {
-                BrainBarSettingsActions.openSettingsWindow()
+                BrainBarSettingsActions.openSettingsWindow(databasePath: databasePath)
             }
             Divider()
             Button("Restart BrainBar") {
@@ -368,6 +334,8 @@ private struct BrainBarAppControlMenu: View {
 private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
     let hotkeyStatus: String
+    var dbPath: String? = nil
+    var observabilityResult: ObservabilityReadResult? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
@@ -449,6 +417,13 @@ private struct BrainBarDashboardView: View {
                             pipelinePanel(layout: layout)
                             flowPanel(layout: layout)
                             diagnostics(layout: layout)
+                            if let observabilityResult {
+                                ObservabilityDashboardView(result: observabilityResult)
+                            } else if let dbPath {
+                                ObservabilityLiveView(dbPath: dbPath)
+                            } else {
+                                ObservabilityDashboardView(result: .unreadable("Database path unavailable."))
+                            }
                         }
                         .opacity(lastGoodContentOpacity)
                     }
@@ -663,7 +638,7 @@ private struct BrainBarDashboardView: View {
     private var replayDebtBadgeText: String {
         let debt = collector.stats.replayDebtBreakdown
         let partialSuffix = debt.isPartial ? " · PARTIAL" : ""
-        return "Replay debt \(debt.deduplicatedTotal)\(partialSuffix)"
+        return "Replay debt \(DashboardMetricFormatter.integerString(debt.deduplicatedTotal))\(partialSuffix)"
     }
 
     private func overviewMetaRow(layout: BrainBarDashboardLayout) -> some View {
@@ -673,11 +648,11 @@ private struct BrainBarDashboardView: View {
         )
 
         return LazyVGrid(columns: columns, spacing: layout.gridSpacing) {
-            BrainBarOverviewStat(label: "Chunk rows", value: "\(collector.stats.chunkCount)", isHero: true)
-            BrainBarOverviewStat(label: "Enriched successfully", value: "\(collector.stats.enrichedChunkCount)", isHero: false)
-            BrainBarOverviewStat(label: "Pending", value: "\(collector.stats.pendingEnrichmentCount)", isHero: false)
-            BrainBarOverviewStat(label: "Failed", value: "\(collector.stats.failedEnrichmentCount)", isHero: false)
-            BrainBarOverviewStat(label: "Skipped", value: "\(collector.stats.skippedEnrichmentCount)", isHero: false)
+            BrainBarOverviewStat(label: "Chunk rows", value: DashboardMetricFormatter.integerString(collector.stats.chunkCount), isHero: true)
+            BrainBarOverviewStat(label: "Enriched successfully", value: DashboardMetricFormatter.integerString(collector.stats.enrichedChunkCount), isHero: false)
+            BrainBarOverviewStat(label: "Pending", value: DashboardMetricFormatter.integerString(collector.stats.pendingEnrichmentCount), isHero: false)
+            BrainBarOverviewStat(label: "Failed", value: DashboardMetricFormatter.integerString(collector.stats.failedEnrichmentCount), isHero: false)
+            BrainBarOverviewStat(label: "Skipped", value: DashboardMetricFormatter.integerString(collector.stats.skippedEnrichmentCount), isHero: false)
         }
     }
 
@@ -2127,7 +2102,7 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             unitLabel = "success-status chunk rows"
         }
 
-        accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(totalCount). Unit: \(unitLabel). Clock: \(clockLabel)."
+        accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
         tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
     }
 }
@@ -2142,12 +2117,17 @@ struct BrainBarDashboardChartDisclosure: Equatable {
 enum BrainBarDashboardPreview {
     static func make(
         collector: StatsCollector,
-        hotkeyStatus: String = "Hotkey ⌃⌥Space ready"
+        hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
+        observabilityResult: ObservabilityReadResult? = nil
     ) -> AnyView {
         AnyView(
             ZStack {
                 BrainBarAppBackground()
-                BrainBarDashboardContent(collector: collector, hotkeyStatus: hotkeyStatus)
+                BrainBarDashboardContent(
+                    collector: collector,
+                    hotkeyStatus: hotkeyStatus,
+                    observabilityResult: observabilityResult
+                )
             }
             .environment(\.colorScheme, .dark)
             // Suppress SwiftUI animations so every value lands at its final state
@@ -2401,7 +2381,7 @@ private struct BrainBarQueueRail: View {
                 replayDebtRow("Pending stores", component: replayDebtBreakdown.pendingStores)
                 replayDebtRow("Queue entries", component: replayDebtBreakdown.durableQueue)
                 replayDebtRow("Fallback entries", component: replayDebtBreakdown.repositoryFallback)
-                replayDebtValueRow("Deduplicated total", value: "\(replayDebtBreakdown.deduplicatedTotal)")
+                replayDebtValueRow("Deduplicated total", value: DashboardMetricFormatter.integerString(replayDebtBreakdown.deduplicatedTotal))
                 replayDebtValueRow("Unreadable inputs", value: unreadableInputsText)
                 replayDebtValueRow("Census time", value: censusText)
                 Text("Path identities are de-duplicated before the aggregate is calculated.")
@@ -2414,7 +2394,7 @@ private struct BrainBarQueueRail: View {
             HStack(spacing: 8) {
                 Text("Replay debt")
                     .font(.system(size: 11, weight: .bold))
-                Text("\(replayDebtBreakdown.deduplicatedTotal)")
+                Text(DashboardMetricFormatter.integerString(replayDebtBreakdown.deduplicatedTotal))
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 if replayDebtBreakdown.isPartial {
@@ -2444,7 +2424,10 @@ private struct BrainBarQueueRail: View {
         case .unreadable(let reason):
             readability = "unreadable · \(reason)"
         }
-        return replayDebtValueRow(label, value: "\(component.snapshot.depth) · \(readability)")
+        return replayDebtValueRow(
+            label,
+            value: "\(DashboardMetricFormatter.integerString(component.snapshot.depth)) · \(readability)"
+        )
     }
 
     private func replayDebtValueRow(_ label: String, value: String) -> some View {
@@ -2639,22 +2622,6 @@ struct BrainBarDashboardLayout {
         sparklineHeight = compactCards ? 112 : 140
         panelCornerRadius = BrainBarDesignTokens.Radius.xl
         maxContentWidth = 1_280
-    }
-}
-
-private struct BrainBarInjectionTab: View {
-    let store: InjectionStore
-    let isActive: Bool
-    @State private var filterText = ""
-
-    var body: some View {
-        InjectionFeedView(store: store, filterText: $filterText)
-            .padding(16)
-            .onAppear { store.start(active: isActive) }
-            .onChange(of: isActive) { _, active in
-                store.setActive(active)
-            }
-            .onDisappear { store.setActive(false) }
     }
 }
 
@@ -2853,7 +2820,7 @@ private struct BrainBarAgentPresencePill: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .minimumScaleFactor(0.75)
-            Text("\(presence.count)")
+            Text(DashboardMetricFormatter.integerString(presence.count))
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
