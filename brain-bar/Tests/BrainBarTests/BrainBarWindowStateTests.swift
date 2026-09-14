@@ -92,8 +92,8 @@ final class BrainBarWindowStateTests: XCTestCase {
 
         XCTAssertTrue(root.contains("BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
         XCTAssertTrue(app.contains("if retrievalTools.isEnabled {"))
-        XCTAssertTrue(app.contains("Button(\"Search BrainLayer\")"))
-        XCTAssertTrue(app.contains("Button(\"Capture Note\")"))
+        XCTAssertTrue(app.contains("Button(BrainBarAppMenuCommands.searchTitle)"))
+        XCTAssertTrue(app.contains("Button(BrainBarAppMenuCommands.captureTitle)"))
         XCTAssertTrue(app.contains("guard BrainBarRetrievalToolsSettings.shared.isEnabled else { return }"))
     }
 

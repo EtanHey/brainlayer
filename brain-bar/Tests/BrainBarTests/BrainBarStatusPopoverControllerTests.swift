@@ -32,11 +32,55 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
         let itemTitles = controller.contextMenuForTesting.items.map(\.title)
 
+        XCTAssertTrue(itemTitles.contains("Toggle BrainBar"))
         XCTAssertTrue(itemTitles.contains("Settings..."))
         XCTAssertTrue(itemTitles.contains("Restart BrainBar"))
         XCTAssertFalse(itemTitles.contains("Run as App Window"))
         XCTAssertFalse(itemTitles.contains("Run as Menu Item Daemon"))
         XCTAssertTrue(itemTitles.contains("Quit BrainBar"))
+    }
+
+    func testStatusItemOwnsOneActionableSettingsMenu() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let windowController = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime,
+            dashboardPanelController: windowController
+        )
+        defer { controller.stop() }
+
+        let menu = controller.contextMenuForTesting
+        let actionableItems = menu.items.filter { !$0.isSeparatorItem }
+
+        XCTAssertNil(controller.statusItemForTesting.menu)
+        XCTAssertTrue(controller.statusItemForTesting.button?.target as? BrainBarStatusPopoverController === controller)
+        XCTAssertNotNil(controller.statusItemForTesting.button?.action)
+        XCTAssertFalse(menu === NSApp.mainMenu)
+        XCTAssertEqual(actionableItems.filter { $0.title.hasPrefix("Settings") }.count, 1)
+        XCTAssertEqual(actionableItems.map(\.title), ["Toggle BrainBar", "Settings...", "Restart BrainBar", "Quit BrainBar"])
+        for item in actionableItems {
+            XCTAssertNotNil(item.action, "\(item.title) must have an action")
+            XCTAssertTrue(item.target === controller, "\(item.title) must target the status controller")
+            if let action = item.action {
+                XCTAssertTrue(controller.responds(to: action), "\(item.title) target must respond to its action")
+            }
+        }
+    }
+
+    func testContextMenuToggleUsesTheStatusPopoverController() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let windowController = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime,
+            dashboardPanelController: windowController
+        )
+        defer { controller.stop() }
+
+        let toggle = controller.contextMenuForTesting.items.first { $0.title == "Toggle BrainBar" }
+
+        XCTAssertNotNil(toggle?.action)
+        XCTAssertTrue(toggle?.target === controller)
+        XCTAssertTrue(toggle.map { controller.responds(to: $0.action!) } ?? false)
     }
 
     func testAppSupportCollectorFactoryWiresBrainBusEvents() {

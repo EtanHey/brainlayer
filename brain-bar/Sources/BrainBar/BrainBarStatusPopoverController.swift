@@ -99,6 +99,13 @@ final class BrainBarStatusPopoverController: NSObject {
     private func configureContextMenu() {
         contextMenuForTesting.addItem(
             NSMenuItem(
+                title: "Toggle BrainBar",
+                action: #selector(toggleFromContextMenu(_:)),
+                keyEquivalent: ""
+            )
+        )
+        contextMenuForTesting.addItem(
+            NSMenuItem(
                 title: "Settings...",
                 action: #selector(openSettings(_:)),
                 keyEquivalent: ""
@@ -124,6 +131,10 @@ final class BrainBarStatusPopoverController: NSObject {
         for item in contextMenuForTesting.items where item.action != nil {
             item.target = self
         }
+    }
+
+    @objc private func toggleFromContextMenu(_ sender: Any?) {
+        toggle(sender)
     }
 
     @objc private func restartBrainBar(_ sender: Any?) {

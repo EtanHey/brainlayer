@@ -718,6 +718,32 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
     }
 
+    func testAppMainMenuHasOnlyTheSettingsSceneEntry() throws {
+        let appSource = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
+
+        XCTAssertTrue(appSource.contains("settingsSceneTitle = \"Settings…\""))
+        XCTAssertEqual(BrainBarAppMenuCommands.settingsEntryCountForTesting, 1)
+        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Settings..."))
+        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Toggle BrainBar"))
+        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings..."))
+        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings…"))
+        XCTAssertEqual(
+            appSource.components(separatedBy: "Button(\"Settings...\")").count - 1,
+            0,
+            "The Settings scene owns the app-menu Settings entry; do not add a second manual command."
+        )
+        XCTAssertEqual(
+            appSource.components(separatedBy: "Button(\"Toggle BrainBar\")").count - 1,
+            0,
+            "Toggle belongs to the status-item menu, not the floating app main menu."
+        )
+        XCTAssertEqual(
+            appSource.components(separatedBy: "Settings {").count - 1,
+            1,
+            "The app must retain exactly one SwiftUI Settings scene."
+        )
+    }
+
     @MainActor
     func testDashboardPanelUsesKeyWindowContractAndSettingsDismissSuppression() throws {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
@@ -733,6 +759,10 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
         XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
         XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
+        XCTAssertTrue(settingsSource.contains("NSApp.activate(ignoringOtherApps: true)"))
+        XCTAssertTrue(settingsSource.contains("makeKeyAndOrderFront(nil)"))
+        XCTAssertFalse(settingsSource.contains("promoteForSettings"))
+        XCTAssertFalse(settingsSource.contains("setActivationPolicy(.regular)"))
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
