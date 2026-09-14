@@ -87,6 +87,36 @@ def test_run_daemon_survives_failed_cycle_and_rate_limits_errors(tmp_path, caplo
     assert error_records[0].exc_info is not None
 
 
+def test_run_daemon_reports_cycle_error_then_recovers_health(tmp_path):
+    health_path = tmp_path / "drain-health.json"
+    outcomes = iter([RuntimeError("one bad cycle"), 2])
+    health_snapshots = []
+
+    def flaky_drain(**_kwargs):
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def capture_health(_seconds):
+        health_snapshots.append(json.loads(health_path.read_text(encoding="utf-8")))
+
+    run_daemon(
+        interval=0,
+        batch_size=10,
+        health_path=health_path,
+        drain_once_fn=flaky_drain,
+        sleep_fn=capture_health,
+        max_cycles=2,
+        replay_fallbacks_fn=lambda: None,
+    )
+
+    assert health_snapshots[0]["state"] == "drain_error"
+    assert health_snapshots[0]["reason"] == "RuntimeError: one bad cycle"
+    assert health_snapshots[1]["state"] == "ok"
+    assert health_snapshots[1]["reason"] == ""
+
+
 @pytest.mark.parametrize("signal", [KeyboardInterrupt, SystemExit])
 def test_run_daemon_does_not_swallow_process_control(signal, tmp_path):
     def stop_drain(**_kwargs):
