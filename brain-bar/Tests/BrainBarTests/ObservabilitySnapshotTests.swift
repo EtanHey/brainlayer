@@ -124,7 +124,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
             "Transcript backup (com.brainlayer.jsonl-backup): NOT loaded — parked in .disabled-retention-P0"
         )
         XCTAssertFalse(status.lines.map(\.text).contains { $0.hasPrefix("Backup job") })
-        XCTAssertEqual(status.freshness.text, "Transcript backup freshness: stale (> 36 h)")
+        XCTAssertEqual(status.freshness.text, "Backup freshness (DB + transcript): stale (> 36 h)")
         XCTAssertEqual(status.retention.text, "Transcript retention invariant: PASS")
         XCTAssertEqual(status.archives.text, "0 verified transcript archives in the last 30 days")
         XCTAssertEqual(status.error?.text, "DB backup error: Google Drive credentials missing — re-auth needed")
@@ -198,10 +198,10 @@ final class ObservabilitySnapshotTests: XCTestCase {
 
         XCTAssertEqual(card.tone, .neutral)
         XCTAssertTrue(card.detail.contains("No verified transcript upload on record"))
-        XCTAssertTrue(card.detail.contains("Transcript backup freshness: unknown"))
+        XCTAssertTrue(card.detail.contains("Backup freshness (DB + transcript): unknown"))
         XCTAssertTrue(card.detail.contains("Transcript retention invariant: PASS"))
         XCTAssertTrue(card.detail.contains("0 verified transcript archives in the last 30 days"))
-        XCTAssertTrue(card.detail.contains("DB backup error: Jsonl Backup Attempt Invalid"))
+        XCTAssertTrue(card.detail.contains("Transcript backup error: Jsonl Backup Attempt Invalid"))
         XCTAssertFalse(card.detail.contains("unmeasurable"))
     }
 
