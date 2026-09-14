@@ -95,6 +95,27 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testRestingDashboardRenderUsesFittedHeightWithoutEmptyBottomBand() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+        let width: CGFloat = 960
+        let view = BrainBarDashboardPreview.make(collector: BrainBarDashboardFixture.makeCollector())
+        let host = NSHostingController(rootView: view)
+        let fittedHeight = host.sizeThatFits(
+            in: CGSize(width: width, height: .greatestFiniteMagnitude)
+        ).height
+
+        XCTAssertGreaterThan(fittedHeight, 300)
+        XCTAssertLessThan(fittedHeight, 640)
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: width, height: fittedHeight))
+        let url = try writePNG(png, name: "dashboard-default")
+        XCTAssertTrue(bottomBandContainsForeground(in: bitmap))
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes, fitted height \(fittedHeight))")
+    }
+
+    @MainActor
     func testAllGoodStateRendersWithVerifiedBackups() throws {
         let result = try BrainBarOnePageTestFixture.healthyResult()
         let collector = BrainBarDashboardFixture.makeCollector()
@@ -518,6 +539,21 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             }
         }
         return sampled == 0 ? 1 : Double(warm) / Double(sampled)
+    }
+
+    private func bottomBandContainsForeground(in bitmap: NSBitmapImageRep) -> Bool {
+        let bandHeight = max(Int(Double(bitmap.pixelsHigh) * 0.15), 1)
+        for y in 0 ..< bandHeight {
+            for x in stride(from: 1, to: bitmap.pixelsWide, by: 2) {
+                guard let left = bitmap.colorAt(x: x - 1, y: y)?.usingColorSpace(.sRGB),
+                      let right = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let delta = abs(left.redComponent - right.redComponent)
+                    + abs(left.greenComponent - right.greenComponent)
+                    + abs(left.blueComponent - right.blueComponent)
+                if delta > 0.12 { return true }
+            }
+        }
+        return false
     }
 
     private enum RenderError: Error {

@@ -8,8 +8,9 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
         let panel = controller.panelForTesting
 
-        XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
-        XCTAssertEqual(BrainBarDashboardPanelController.minSize, NSSize(width: 760, height: 560))
+        XCTAssertEqual(BrainBarDashboardPanelController.defaultSize.width, 900)
+        XCTAssertEqual(BrainBarDashboardPanelController.minSize.width, 760)
+        XCTAssertLessThan(BrainBarDashboardPanelController.minSize.height, 560)
         XCTAssertGreaterThan(panel.maxSize.width, BrainBarDashboardPanelController.defaultSize.width)
         XCTAssertGreaterThan(panel.maxSize.height, BrainBarDashboardPanelController.defaultSize.height)
         XCTAssertEqual(panel.minSize, BrainBarDashboardPanelController.minSize)
@@ -17,6 +18,22 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertFalse(panel.hidesOnDeactivate)
         XCTAssertEqual(panel.contentViewController, controller.contentViewControllerForTesting)
         XCTAssertEqual(controller.contentViewControllerForTesting.view.frame.size, BrainBarDashboardPanelController.defaultSize)
+    }
+
+    func testDashboardPanelFitsRestingContentAndGrowsForDetails() {
+        let runtime = BrainBarRuntime()
+        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        _ = controller.contentViewControllerForTesting.view
+        runMainRunLoop(0.5)
+
+        let restingHeight = controller.panelForTesting.contentLayoutRect.height
+        XCTAssertEqual(restingHeight, controller.contentViewControllerForTesting.view.fittingSize.height, accuracy: 2)
+        XCTAssertLessThan(restingHeight, 640)
+
+        controller.setDetailsExpandedForTesting(true)
+        runMainRunLoop(0.5)
+        XCTAssertGreaterThan(controller.panelForTesting.contentLayoutRect.height, restingHeight)
     }
 
     func testDashboardPanelDoesNotOpenWithoutStatusItemAnchor() {
@@ -91,8 +108,8 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         )
     }
 
-    private func runMainRunLoop() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    private func runMainRunLoop(_ duration: TimeInterval = 0.05) {
+        RunLoop.main.run(until: Date().addingTimeInterval(duration))
     }
 
     private func findSubview<T: NSView>(ofType type: T.Type, in root: NSView) -> T? {
