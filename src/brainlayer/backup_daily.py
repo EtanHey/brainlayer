@@ -48,12 +48,13 @@ BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
+BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
-DEFAULT_DAILY_KEEP = 3
-# Daily and weekly jobs share one Drive folder, so weekly must preserve the same cap.
-DEFAULT_WEEKLY_KEEP = DEFAULT_DAILY_KEEP
+DEFAULT_LOCAL_COMPRESSED_KEEP = 3
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 1
+DEFAULT_DRIVE_KEEP = 7
+DRIVE_RETENTION_ENABLED = False
 DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
 DEFAULT_BACKUP_TIMEOUT_SECONDS = 8 * 60 * 60
 DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
@@ -71,8 +72,9 @@ class DriveRetentionPolicy:
             raise ValueError("keep_latest must be at least 1")
 
 
-DAILY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DAILY_KEEP)
-WEEKLY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_WEEKLY_KEEP)
+DAILY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DRIVE_KEEP)
+# Daily and weekly jobs share one Drive folder, so both use the same opt-in Drive cap.
+WEEKLY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DRIVE_KEEP)
 
 
 @dataclass(frozen=True)
@@ -815,7 +817,7 @@ def _verified_snapshot_names_from_log(log_path: Path) -> set[str]:
 def prune_local_gzip_snapshots(
     output_dir: Path,
     *,
-    keep_latest: int = DEFAULT_DAILY_KEEP,
+    keep_latest: int = DEFAULT_LOCAL_COMPRESSED_KEEP,
     verified_drive_names: set[str] | None = None,
 ) -> list[str]:
     """Cap local gzip snapshots without deleting an archive lacking remote coverage."""
@@ -867,6 +869,13 @@ def _decompress_gzip_to(gzip_path: Path, destination: Path) -> None:
 def _env_flag_enabled(name: str) -> bool:
     raw = os.environ.get(name, "")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _drive_retention_enabled() -> bool:
+    return DRIVE_RETENTION_ENABLED or os.environ.get(BACKUP_DRIVE_RETENTION_ENV, "").strip().lower() in {
+        "1",
+        "true",
+    }
 
 
 def _should_run_full_verify(date_stamp: str | None) -> bool:
@@ -956,7 +965,7 @@ def prune_drive_backups(
     folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
 ) -> list[str]:
-    """Keep only the latest N verified snapshots in the Drive backup folder."""
+    """Trash Drive snapshots older than the explicitly enabled retention window."""
     folder_id = ensure_drive_folder_chain(service, folder_parts)
     files: list[dict[str, str]] = []
     page_token = None
@@ -990,13 +999,17 @@ def prune_drive_backups(
     dated.sort(key=lambda pair: pair[0], reverse=True)
     keep_ids = {item["id"] for _, item in dated[: retention_policy.keep_latest]}
 
-    deleted: list[str] = []
+    trashed: list[str] = []
     for _, item in dated:
         if item["id"] in keep_ids:
             continue
-        service.files().delete(fileId=item["id"], supportsAllDrives=True).execute()
-        deleted.append(item["name"])
-    return deleted
+        service.files().update(
+            fileId=item["id"],
+            body={"trashed": True},
+            supportsAllDrives=True,
+        ).execute()
+        trashed.append(item["name"])
+    return trashed
 
 
 def run_backup(
@@ -1012,6 +1025,7 @@ def run_backup(
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
+    retention_enabled = _drive_retention_enabled()
     result: dict[str, Any] = {
         "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
         "db": str(resolved_db_path),
@@ -1021,6 +1035,10 @@ def run_backup(
         "backup_log_provenance": _backup_log_provenance(),
         "attempt_reclamation": "unknown",
         "writer_probe_error": None,
+        "drive_retention": "enabled" if retention_enabled else "disabled",
+        "retention_mode": "trash",
+        "retention_deleted": [],
+        "local_gzip_retention_deleted": [],
     }
 
     def record_reclamation_status(status: str, error: str | None) -> None:
@@ -1089,10 +1107,14 @@ def run_backup(
                     snapshot.parent,
                     verified_drive_names=verified_drive_names,
                 )
-                deleted = prune_drive_backups(
-                    service,
-                    folder_parts=folder_parts,
-                    retention_policy=retention_policy,
+                deleted = (
+                    prune_drive_backups(
+                        service,
+                        folder_parts=folder_parts,
+                        retention_policy=retention_policy,
+                    )
+                    if retention_enabled
+                    else []
                 )
             else:
                 local_gzip_deleted = []
