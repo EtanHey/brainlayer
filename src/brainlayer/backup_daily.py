@@ -12,7 +12,9 @@ import fcntl
 import gzip
 import hashlib
 import json
+import math
 import os
+import queue
 import shutil
 import signal
 import socket
@@ -20,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import uuid
@@ -49,6 +52,9 @@ BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
+DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
+DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV = "BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND"
+DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV = "BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 DEFAULT_LOCAL_COMPRESSED_KEEP = 3
@@ -59,6 +65,12 @@ DEFAULT_BACKUP_CLIENT_TIMEOUT_SECONDS = 0
 DEFAULT_BACKUP_TIMEOUT_SECONDS = 8 * 60 * 60
 DEFAULT_BACKUP_ATTEMPT_MAX_AGE_SECONDS = 24 * 60 * 60
 DEFAULT_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS = 0
+# Two minutes tolerates ordinary request latency; the throughput term stretches
+# the deadline for chunks larger than the default 8 MiB without allowing a
+# zero-window connection to occupy the eight-hour backup budget.
+DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS = 120.0
+DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
+DEFAULT_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -127,6 +139,16 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
+class DriveUploadStalledError(RuntimeError):
+    error_code = "drive_upload_stalled"
+
+    def __init__(self, *, bytes_confirmed: int, total_bytes: int, attempts: int):
+        self.bytes_confirmed = bytes_confirmed
+        super().__init__(
+            f"{self.error_code}: confirmed {bytes_confirmed}/{total_bytes} bytes after {attempts} stalled attempts"
+        )
+
+
 def _configured_backup_timeout_seconds() -> int:
     raw = os.environ.get(BACKUP_TIMEOUT_ENV)
     if raw is None or raw.strip() == "":
@@ -177,6 +199,50 @@ def _configured_sqlite_check_timeout_seconds() -> int:
     if seconds < 0:
         raise ValueError(f"{BACKUP_SQLITE_CHECK_TIMEOUT_ENV} must be zero or a positive number of seconds")
     return seconds
+
+
+def _configured_positive_number(name: str, default: float, *, maximum: float | None = None) -> float:
+    raw = os.environ.get(name)
+    try:
+        value = default if raw is None or raw.strip() == "" else float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive number") from exc
+    if not math.isfinite(value) or value <= 0 or (maximum is not None and value > maximum):
+        raise ValueError(f"{name} must be a positive number")
+    return value
+
+
+def _drive_upload_stall_max_attempts() -> int:
+    value = _configured_positive_number(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV, DEFAULT_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS)
+    if value != int(value):
+        raise ValueError(f"{DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV} must be an integer")
+    return int(value)
+
+
+class _DriveRequestDeadlineExceeded(TimeoutError):
+    pass
+
+
+def _drive_put_with_deadline(session: Any, url: str, *, headers: dict[str, str], data: bytes, deadline: float):
+    outcome: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def perform() -> None:
+        try:
+            outcome.put((True, session.put(url, headers=headers, data=data, timeout=deadline + 5)))
+        except Exception as exc:
+            outcome.put((False, exc))
+
+    threading.Thread(target=perform, daemon=True, name="brainlayer-drive-put").start()
+    try:
+        succeeded, value = outcome.get(timeout=deadline)
+    except queue.Empty as exc:
+        session.close()
+        raise _DriveRequestDeadlineExceeded(f"Drive PUT exceeded {deadline:.3f}s total deadline") from exc
+    if succeeded:
+        return value
+    if isinstance(value, requests.Timeout):
+        raise _DriveRequestDeadlineExceeded(f"Drive PUT exceeded {deadline:.3f}s total deadline") from value
+    raise value
 
 
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
@@ -722,46 +788,138 @@ def upload_file_to_drive_raw(
     upload_url = init.headers["Location"]
 
     sent = 0
-    with file_path.open("rb") as handle:
-        while sent < total:
-            handle.seek(sent)
-            expected = min(chunk_size, total - sent)
-            chunk = handle.read(expected)
-            if len(chunk) != expected:
-                raise RuntimeError(f"Backup file changed during upload: expected {expected} bytes, got {len(chunk)}")
-            start = sent
-            end = sent + len(chunk) - 1
-            headers = {
-                "Authorization": f"Bearer {credentials.token}",
-                "Content-Length": str(len(chunk)),
-                "Content-Range": f"bytes {start}-{end}/{total}",
-            }
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    response = requests.put(upload_url, headers=headers, data=chunk, timeout=120)
-                    if response.status_code in {200, 201}:
-                        return response.json()
-                    if response.status_code == 308:
-                        uploaded_range = response.headers.get("Range")
-                        if uploaded_range and "-" in uploaded_range:
-                            sent = int(uploaded_range.rsplit("-", 1)[1]) + 1
-                        else:
-                            sent = end + 1
-                        print(f"drive upload progress: {sent}/{total} bytes", flush=True)
-                        break
-                    if response.status_code in {429, 500, 502, 503, 504}:
-                        raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
-                    response.raise_for_status()
-                except Exception as exc:
-                    if attempt >= max_attempts:
-                        raise
-                    sleep_seconds = min(60, 2 ** min(attempt, 6))
-                    print(
-                        f"drive upload retry chunk={start}-{end} attempt={attempt}/{max_attempts}: {exc}; "
-                        f"sleeping {sleep_seconds}s",
-                        flush=True,
+    deadline_floor = _configured_positive_number(
+        DRIVE_UPLOAD_DEADLINE_FLOOR_ENV,
+        DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS,
+        maximum=threading.TIMEOUT_MAX,
+    )
+    minimum_rate = _configured_positive_number(
+        DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV, DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND
+    )
+    stall_limit = _drive_upload_stall_max_attempts()
+    stalled_attempts = 0
+    session = requests.Session()
+    try:
+        with file_path.open("rb") as handle:
+            while sent < total:
+                handle.seek(sent)
+                expected = min(chunk_size, total - sent)
+                chunk = handle.read(expected)
+                if len(chunk) != expected:
+                    raise RuntimeError(
+                        f"Backup file changed during upload: expected {expected} bytes, got {len(chunk)}"
                     )
-                    _sleep(sleep_seconds)
+                start = sent
+                end = sent + len(chunk) - 1
+                headers = {
+                    "Authorization": f"Bearer {credentials.token}",
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {start}-{end}/{total}",
+                }
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        deadline = max(deadline_floor, len(chunk) / minimum_rate)
+                        response = _drive_put_with_deadline(
+                            session, upload_url, headers=headers, data=chunk, deadline=deadline
+                        )
+                        if response.status_code in {200, 201}:
+                            return response.json()
+                        if response.status_code == 308:
+                            uploaded_range = response.headers.get("Range")
+                            confirmed = (
+                                int(uploaded_range.rsplit("-", 1)[1]) + 1
+                                if uploaded_range and "-" in uploaded_range
+                                else sent
+                            )
+                            if confirmed < sent or confirmed > total:
+                                raise RuntimeError(
+                                    f"Drive upload returned invalid confirmed offset {confirmed}; "
+                                    f"expected {sent}..{total}"
+                                )
+                            if confirmed == sent:
+                                raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
+                            sent = confirmed
+                            stalled_attempts = 0
+                            print(f"drive upload progress: {sent}/{total} bytes", flush=True)
+                            break
+                        if response.status_code in {429, 500, 502, 503, 504}:
+                            raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
+                        response.raise_for_status()
+                    except _DriveRequestDeadlineExceeded:
+                        previously_confirmed = sent
+                        stalled_attempts += 1
+                        query_headers = {
+                            "Authorization": f"Bearer {credentials.token}",
+                            "Content-Length": "0",
+                            "Content-Range": f"bytes */{total}",
+                        }
+                        while True:
+                            session = requests.Session()
+                            try:
+                                status = _drive_put_with_deadline(
+                                    session, upload_url, headers=query_headers, data=b"", deadline=deadline_floor
+                                )
+                                if status.status_code in {200, 201}:
+                                    return status.json()
+                                if status.status_code in {429, 500, 502, 503, 504}:
+                                    raise requests.RequestException(f"offset query HTTP {status.status_code}")
+                                if status.status_code != 308:
+                                    status.raise_for_status()
+                                uploaded_range = status.headers.get("Range")
+                                confirmed = (
+                                    int(uploaded_range.rsplit("-", 1)[1]) + 1
+                                    if uploaded_range and "-" in uploaded_range
+                                    else 0
+                                )
+                                if confirmed < sent or confirmed > total:
+                                    raise RuntimeError(
+                                        f"Drive offset query returned invalid confirmed offset {confirmed}; "
+                                        f"expected {sent}..{total}"
+                                    )
+                                sent = confirmed
+                                break
+                            except (_DriveRequestDeadlineExceeded, requests.RequestException) as query_error:
+                                session.close()
+                                stalled_attempts += 1
+                                if stalled_attempts >= stall_limit:
+                                    raise DriveUploadStalledError(
+                                        bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts
+                                    ) from query_error
+                                sleep_seconds = min(60, 2**stalled_attempts)
+                                print(
+                                    f"drive upload offset query retry attempt={stalled_attempts}/{stall_limit}: "
+                                    f"{query_error}; sleeping {sleep_seconds}s",
+                                    flush=True,
+                                )
+                                _sleep(sleep_seconds)
+                        if sent > previously_confirmed:
+                            stalled_attempts = 0
+                            print(f"drive upload progress: {sent}/{total} bytes", flush=True)
+                            break
+                        if stalled_attempts >= stall_limit:
+                            raise DriveUploadStalledError(
+                                bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts
+                            )
+                        sleep_seconds = min(60, 2**stalled_attempts)
+                        print(
+                            f"drive upload stalled; confirmed={sent}/{total} "
+                            f"attempt={stalled_attempts}/{stall_limit}; sleeping {sleep_seconds}s",
+                            flush=True,
+                        )
+                        _sleep(sleep_seconds)
+                        break
+                    except Exception as exc:
+                        if attempt >= max_attempts:
+                            raise
+                        sleep_seconds = min(60, 2 ** min(attempt, 6))
+                        print(
+                            f"drive upload retry chunk={start}-{end} attempt={attempt}/{max_attempts}: {exc}; "
+                            f"sleeping {sleep_seconds}s",
+                            flush=True,
+                        )
+                        _sleep(sleep_seconds)
+    finally:
+        session.close()
 
     raise RuntimeError("Drive upload ended without final response")
 
@@ -1129,6 +1287,14 @@ def run_backup(
             )
     except Exception as exc:
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        if isinstance(exc, DriveUploadStalledError):
+            result.update(
+                {
+                    "error_type": exc.error_code,
+                    "error_code": exc.error_code,
+                    "bytes_confirmed": exc.bytes_confirmed,
+                }
+            )
         raise
     finally:
         _append_json_log(resolved_log_path, result)
