@@ -122,6 +122,9 @@ class TestQueueStore:
             ),
             encoding="utf-8",
         )
+        heartbeat_prefix = str(heartbeat_path).rsplit("-", 1)[0]
+        for offset, content in enumerate(("null", "[]", json.dumps("x"), "{"), start=1):
+            Path(f"{heartbeat_prefix}-{blocker_pid + offset}.json").write_text(content, encoding="utf-8")
         watcher_path = enqueue_jsonl(
             {
                 "kind": "watcher_chunk",
@@ -165,6 +168,50 @@ class TestQueueStore:
             "watcher-after-lock",
         )
         conn.close()
+
+    def test_reporter_oserror_is_rate_limited_and_does_not_replay_commit(self, tmp_path, monkeypatch):
+        from brainlayer import drain
+        from brainlayer.queue_io import enqueue_jsonl
+        from brainlayer.vector_store import VectorStore
+
+        db_path = tmp_path / "reporter.db"
+        queue_dir = tmp_path / "queue"
+        log_path = tmp_path / "drain.log"
+        VectorStore(db_path).close()
+        monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+        monkeypatch.setenv("BRAINLAYER_DRAIN_BUSY_TIMEOUT_MS", "50")
+        queued = enqueue_jsonl(
+            {"kind": "watcher_chunk", "chunk_id": "reporter", "content": "preserve then commit"},
+            source="watcher",
+            queue_dir=queue_dir,
+        )
+
+        def fail_reporter(_state):
+            raise OSError("health path unwritable")
+
+        drain_args = {
+            "db_path": db_path,
+            "queue_dir": queue_dir,
+            "log_path": log_path,
+            "blocked_reporter": fail_reporter,
+        }
+        holder = apsw.Connection(str(db_path))
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            for _attempt in range(2):
+                assert drain.drain_once(**drain_args) == 0
+            assert queued.exists()
+            assert log_path.read_text(encoding="utf-8").count("drain state reporter failed") == 1
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+        assert drain.drain_once(**drain_args) == 1
+        assert not queued.exists()
+        conn = apsw.Connection(str(db_path))
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE id = 'reporter'").fetchone() == (1,)
+        conn.close()
+        assert log_path.read_text(encoding="utf-8").count("drain state reporter failed") == 2
 
     def test_queue_store_writes_jsonl(self, tmp_path):
         """_queue_store writes to the unified arbitration queue."""

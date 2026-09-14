@@ -314,6 +314,8 @@ def _blocking_writer_details(db_path: Path) -> dict[str, Any]:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             continue
+        if not isinstance(payload, dict):
+            continue
         try:
             pid = int(payload.get("executor_pid"))
         except (TypeError, ValueError):
@@ -394,8 +396,22 @@ def _record_drain_blocked(
         episode.suppressed_logs = 0
     else:
         episode.suppressed_logs += 1
-    if blocked_reporter is not None:
-        blocked_reporter(state)
+    _report_drain_state(blocked_reporter, state, log_path, log_failure=log_due)
+
+
+def _report_drain_state(reporter, state, log_path, *, log_failure=True) -> None:
+    if reporter is None:
+        return
+    try:
+        reporter(state)
+    except OSError as report_exc:
+        if log_failure:
+            message = f"drain state reporter failed: {report_exc}"
+            try:
+                _log(log_path, message)
+            except OSError:
+                pass
+            logger.warning(message, exc_info=True)
 
 
 def _record_drain_unblocked(
@@ -409,7 +425,7 @@ def _record_drain_unblocked(
         _log(log_path, f"drain_unblocked blocked_seconds={duration:.3f} busy_events={episode.busy_events}")
         logger.info("Drain resumed after %.3fs and %d busy event(s)", duration, episode.busy_events)
     if episode is not None and blocked_reporter is not None:
-        blocked_reporter({"state": "ok", "reason": ""})
+        _report_drain_state(blocked_reporter, {"state": "ok", "reason": ""}, log_path)
 
 
 def _open_connection(db_path: Path) -> apsw.Connection:
@@ -1988,6 +2004,8 @@ def run_daemon(
     drained_total = 0
     swept = False
     cycle_state: dict[str, Any] = {"state": "ok", "reason": ""}
+    last_cycle_error_log_monotonic: float | None = None
+    suppressed_cycle_errors = 0
 
     def report_state(state: dict[str, Any]) -> None:
         nonlocal cycle_state
@@ -2013,11 +2031,29 @@ def run_daemon(
                 (replay_fallbacks_fn or replay_fallbacks_on_start)()
             except Exception:
                 logger.warning("Fallback replay sweep failed at drain start; continuing to drain", exc_info=True)
-        if drain_once_fn is drain_once:
-            drained = drain_once_fn(batch_size=batch_size, blocked_reporter=report_state)
-        else:
-            drained = drain_once_fn(batch_size=batch_size)
+        try:
             cycle_state = {"state": "ok", "reason": ""}
+            if drain_once_fn is drain_once:
+                drained = drain_once_fn(batch_size=batch_size, blocked_reporter=report_state)
+            else:
+                drained = drain_once_fn(batch_size=batch_size)
+        except Exception as exc:
+            drained = 0
+            cycle_state = {"state": "drain_error", "reason": f"{type(exc).__name__}: {exc}"}
+            now_monotonic = time.monotonic()
+            if (
+                last_cycle_error_log_monotonic is None
+                or now_monotonic - last_cycle_error_log_monotonic >= _busy_log_interval_seconds()
+            ):
+                logger.exception(
+                    "drain cycle failed; continuing after %.2fs backoff (suppressed_failures=%d)",
+                    interval,
+                    suppressed_cycle_errors,
+                )
+                last_cycle_error_log_monotonic = now_monotonic
+                suppressed_cycle_errors = 0
+            else:
+                suppressed_cycle_errors += 1
         drained_total += int(drained or 0)
         drain_cycles += 1
         try:
