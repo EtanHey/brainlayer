@@ -1487,7 +1487,7 @@ def run_health_check(
         or queue_bytes >= config.queue_page_bytes
         or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
     )
-    queue_is_entirely_enrichment = queue_should_page and _queue_is_entirely_enrichment(
+    queue_is_entirely_enrichment = (pause_active or queue_should_page) and _queue_is_entirely_enrichment(
         config.queue_dir,
         queue_count,
     )
