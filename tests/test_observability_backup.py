@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from brainlayer import observability_backup, observability_surface
+from brainlayer import backup_daily, observability_backup, observability_surface
 from brainlayer.observability_backup import build_backups_section
 
 FIXTURES = Path(__file__).parent / "fixtures/observability"
@@ -334,6 +334,46 @@ def test_producer_without_observability_wiring_measures_all_sections(
         str(logs / "backup-daily.log"),
     ]
     assert document["backups"]["inputs"][2]["kind"] == "command"
+
+
+def test_backup_daily_empty_env_does_not_fall_back_to_process_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "snapshot" / "brainlayer.db"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "process-env.log"))
+
+    assert backup_daily._backup_log_path(None, db_path=db, env={}) == db.parent / "logs" / "backup-daily.log"
+
+
+def test_nonzero_unrecognized_launchd_exit_is_unmeasurable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env, recorder = _command_env(tmp_path)
+    output = f"service = {observability_backup.LABEL}\n"
+    monkeypatch.setattr(
+        observability_backup.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, output, ""),
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "unmeasurable"
+    assert "exit_code=1" in result["reason"]
+    assert "['launchctl', 'print', 'gui/" in result["reason"]
+
+
+def test_jsonl_writer_override_controls_reader_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env, recorder = _command_env(tmp_path)
+    writer_path = tmp_path / "writer-jsonl.log"
+    writer_path.write_bytes((FIXTURES / "logs" / "healthy-dev" / "jsonl-backup.log").read_bytes())
+    env["BRAINLAYER_JSONL_BACKUP_LOG_PATH"] = str(writer_path)
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["inputs"][0]["path"] == str(writer_path)
 
 
 def test_unset_launchd_input_uses_command_and_records_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
