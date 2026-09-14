@@ -309,6 +309,16 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
     )
 
+    unsafe = source.replace(
+        '    """Move old JSONL Drive archives to trash without hard-deleting them."""\n',
+        '    """Move old JSONL Drive archives to trash without hard-deleting them."""\n'
+        "    _legacy_prune = backup_daily.prune_drive_backups\n",
+        1,
+    )
+    assert "JSONL retention must not reference backup_daily.prune_drive_backups" in (
+        inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+    )
+
     mutations = (
         (
             "archive_id not in surviving_archives",
