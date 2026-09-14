@@ -302,8 +302,9 @@ def test_locked_rewind_archive_rolls_back_and_queue_file_retries(tmp_path: Path,
 
     monkeypatch.setattr(drain, "_apply_rewind_archive", busy_archive)
     assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 0
-    assert busy_attempts == 5
+    assert busy_attempts == 1
     assert queued.exists()
+    assert log_path.read_text(encoding="utf-8").count("drain_blocked") == 1
 
     monkeypatch.setattr(drain, "_apply_rewind_archive", original_apply)
     assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 1
