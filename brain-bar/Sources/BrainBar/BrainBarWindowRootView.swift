@@ -179,7 +179,35 @@ private struct BrainBarDashboardContent: View {
 
 enum BrainBarHeroBackupTruth: Sendable, Equatable {
     case measured(ObservabilityBackupStatus)
+    case stale(ObservabilityBackupStatus, ageText: String)
     case unavailable(String)
+    case checking(String)
+
+    static func derive(
+        from result: ObservabilityReadResult,
+        now: Date,
+        cadence: ObservabilityCadence
+    ) -> Self {
+        switch result {
+        case let .readable(document):
+            let snapshot = ObservabilityPresentation.snapshot(
+                document: document,
+                now: now,
+                cadence: cadence
+            )
+            guard document.backups.state == "measured" else {
+                let detail = snapshot.cards.first(where: { $0.title == "Backups" })?.detail
+                let reason = document.backups.reason.isEmpty
+                    ? "unmeasurable"
+                    : "unmeasurable — \(document.backups.reason)"
+                return .unavailable(detail ?? reason)
+            }
+            let status = ObservabilityPresentation.backupStatus(for: document.backups)
+            return snapshot.isStale ? .stale(status, ageText: snapshot.ageText) : .measured(status)
+        case let .unreadable(reason):
+            return reason == "Loading observability data." ? .checking(reason) : .unavailable(reason)
+        }
+    }
 }
 
 enum BrainBarHeroHealthTone: Sendable, Equatable {
@@ -209,15 +237,33 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
         let dbBackup: ObservabilityStatusLine
         let transcriptBackup: ObservabilityStatusLine
         let backupFailure: String?
+        let staleBackupAge: String?
+        let checkingReason: String?
         switch backupTruth {
         case let .measured(status):
             dbBackup = status.snapshot
             transcriptBackup = status.upload
             backupFailure = status.lines.first(where: { $0.tone == .red })?.text
+            staleBackupAge = nil
+            checkingReason = nil
+        case let .stale(status, ageText):
+            dbBackup = status.snapshot
+            transcriptBackup = status.upload
+            backupFailure = status.lines.first(where: { $0.tone == .red })?.text
+            staleBackupAge = ageText
+            checkingReason = nil
         case let .unavailable(reason):
-            dbBackup = .init(text: "DB snapshot unavailable — \(reason)", tone: .red)
-            transcriptBackup = .init(text: "Transcript backup unavailable — \(reason)", tone: .red)
+            dbBackup = .init(text: reason, tone: .neutral)
+            transcriptBackup = .init(text: reason, tone: .neutral)
             backupFailure = reason
+            staleBackupAge = nil
+            checkingReason = nil
+        case let .checking(reason):
+            dbBackup = .init(text: "Checking DB snapshot status", tone: .neutral)
+            transcriptBackup = .init(text: "Checking transcript backup status", tone: .neutral)
+            backupFailure = nil
+            staleBackupAge = nil
+            checkingReason = reason
         }
 
         let health: (String, String, BrainBarHeroHealthTone)
@@ -231,6 +277,14 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
                 health = ("Needs attention", "Ingest health is unavailable.", .red)
             } else if let backupFailure {
                 health = ("Needs attention", backupFailure, .red)
+            } else if let checkingReason {
+                health = ("Checking health", checkingReason, .amber)
+            } else if let staleBackupAge {
+                health = (
+                    "Check health",
+                    "Backup status is \(staleBackupAge); waiting for a fresh observability check.",
+                    .amber
+                )
             } else {
                 switch flow.watcherFlowState {
                 case .unknown:
@@ -434,6 +488,7 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
     @State private var observabilityReadTask: Task<Void, Never>?
+    private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     /// ONE shared timeframe for all pipeline graphs (chunk rows / agent-origin /
     /// watcher-ingested). Selecting 3h/24h re-fetches real DB history for
     /// that window via the collector and feeds every chart at once — no
@@ -495,13 +550,11 @@ private struct BrainBarDashboardView: View {
     }
 
     private var heroPresentation: BrainBarHeroPresentation {
-        let backupTruth: BrainBarHeroBackupTruth
-        switch effectiveObservabilityResult {
-        case let .readable(document):
-            backupTruth = .measured(ObservabilityPresentation.backupStatus(for: document.backups))
-        case let .unreadable(reason):
-            backupTruth = .unavailable(reason)
-        }
+        let backupTruth = BrainBarHeroBackupTruth.derive(
+            from: effectiveObservabilityResult,
+            now: Date(),
+            cadence: observabilityCadence
+        )
         return BrainBarHeroPresentation.derive(
             flow: flowSummary,
             stats: collector.stats,
@@ -521,7 +574,10 @@ private struct BrainBarDashboardView: View {
                             overviewCard(layout: layout)
                             pipelinePanel(layout: layout)
                             diagnostics(layout: layout)
-                            ObservabilityDashboardView(result: effectiveObservabilityResult)
+                            ObservabilityDashboardView(
+                                result: effectiveObservabilityResult,
+                                cadence: observabilityCadence
+                            )
                         }
                         .opacity(lastGoodContentOpacity)
                     }
