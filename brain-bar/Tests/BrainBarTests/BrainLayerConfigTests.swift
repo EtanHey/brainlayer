@@ -15,6 +15,17 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertTrue(reloaded.persistedValuesEqual(to: document.config))
     }
 
+    func testRetrievalToolsRequireAnExplicitTrueValue() throws {
+        for raw in ["1", "true", "TRUE", "'TrUe'", "\"1\""] {
+            let document = try BrainLayerEnvDocument(text: "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=\(raw)\n")
+            XCTAssertTrue(document.config.showRetrievalTools, raw)
+        }
+        for raw in ["", "0", "false", "FALSE", "garbage", "yes", "on", "disabled"] {
+            let document = try BrainLayerEnvDocument(text: "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=\(raw)\n")
+            XCTAssertFalse(document.config.showRetrievalTools, raw)
+        }
+    }
+
     func testProviderAvailabilityOnlyExposesRuntimeWiredChoices() {
         XCTAssertEqual(BrainLayerEnrichmentProvider.selectableCases, [.gemini])
         XCTAssertNil(BrainLayerEnrichmentProvider.gemini.unavailableReason)
