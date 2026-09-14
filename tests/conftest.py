@@ -1,17 +1,51 @@
 """Shared test fixtures for BrainLayer tests."""
 
 import functools
+import importlib
 import os
 import sqlite3
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 
-import pytest
-
 _PROTECTED_TEST_HOME = Path.home().resolve()
+
+# Some test modules import brainlayer.config during collection. Import it first while HOME points
+# at an empty directory so its production entrypoint behavior cannot load the developer's env file
+# into the pytest process or its subprocesses. A deliberately forced early plugin import (`-p
+# brainlayer.config`) happens before conftest discovery; in that shape, discard every assignment
+# named by the user env file before reloading the module under the same isolated HOME.
+_brainlayer_config = sys.modules.get("brainlayer.config")
+if _brainlayer_config is not None:
+    try:
+        _user_env_lines = (
+            (_PROTECTED_TEST_HOME / ".config" / "brainlayer" / "brainlayer.env")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except (OSError, UnicodeDecodeError):
+        _user_env_lines = []
+    for _line in _user_env_lines:
+        _assignment = _brainlayer_config._split_env_assignment(_line)
+        if _assignment is not None:
+            os.environ.pop(_assignment[0], None)
+
+_original_home = os.environ.get("HOME")
+with tempfile.TemporaryDirectory(prefix="brainlayer-pytest-import-home-") as _import_home:
+    os.environ["HOME"] = _import_home
+    if _brainlayer_config is None:
+        importlib.import_module("brainlayer.config")
+    else:
+        importlib.reload(_brainlayer_config)
+if _original_home is None:
+    os.environ.pop("HOME", None)
+else:
+    os.environ["HOME"] = _original_home
+
+import pytest
 
 # Deterministic CLI output for assertions: several tests compare CLI messages as plain
 # strings, and ANSI color escapes mid-sentence broke 3 test_installable_build assertions
