@@ -1303,6 +1303,72 @@ def test_pending_icloud_receipt_resolves_without_rebundling(tmp_path, monkeypatc
     assert json.loads(state_path.read_text())["icloud_archives"][archive_name]["status"] == "verified"
 
 
+def test_pending_icloud_receipt_still_uploading_defers_without_rebundling(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS", "1")
+    now = time.time()
+    source_root = tmp_path / "sessions"
+    source_file = _write_jsonl(source_root / "pending.jsonl", mtime=now - 3600)
+    state_path = tmp_path / "state.json"
+    icloud_dir = tmp_path / "CloudDocs"
+    clock = [0.0]
+    bundles: list[list[Path]] = []
+    drive_uploads: list[Path] = []
+    real_bundler = jsonl_backup.create_jsonl_bundle_with_digests
+
+    def track_bundle(candidates, *args, **kwargs):
+        bundles.append([candidate.path for candidate in candidates])
+        return real_bundler(candidates, *args, **kwargs)
+
+    _mock_drive_success(jsonl_backup, monkeypatch, drive_uploads)
+    monkeypatch.setattr(jsonl_backup, "_list_surviving_archives", lambda *args, **kwargs: {"drive-id": None})
+    monkeypatch.setattr(jsonl_backup, "create_jsonl_bundle_with_digests", track_bundle)
+
+    def still_uploading(*args, **kwargs):  # noqa: ARG001
+        clock[0] += 2.0
+        return _icloud_state(uploaded=False, status="current")
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", still_uploading)
+
+    first = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "first.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=icloud_dir,
+        date_stamp="2026-09-14",
+        now=now,
+        upload=True,
+    )
+    assert first["icloud_copy"]["status"] == "pending"
+
+    bundles.clear()
+    drive_uploads.clear()
+    clock[0] = 0.0
+    second = jsonl_backup.run_backup(
+        source_roots=[source_root],
+        state_path=state_path,
+        staging_dir=tmp_path / "staging",
+        log_path=tmp_path / "second.log",
+        queue_dir=tmp_path / "queue",
+        icloud_dir=icloud_dir,
+        date_stamp="2026-09-15",
+        now=now + 86400,
+        upload=True,
+    )
+
+    state = json.loads(state_path.read_text())
+    archive_name = state["files"][source_file.as_posix()]["icloud_archive"]
+    assert second["status"] == "deferred"
+    assert second["already_covered_files"] == 0
+    assert bundles == []
+    assert drive_uploads == []
+    assert state["icloud_archives"][archive_name]["status"] == "pending"
+
+
 def test_verified_icloud_copy_trashes_matching_unverified_copy(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
