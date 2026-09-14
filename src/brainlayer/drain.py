@@ -2032,13 +2032,14 @@ def run_daemon(
             except Exception:
                 logger.warning("Fallback replay sweep failed at drain start; continuing to drain", exc_info=True)
         try:
+            cycle_state = {"state": "ok", "reason": ""}
             if drain_once_fn is drain_once:
                 drained = drain_once_fn(batch_size=batch_size, blocked_reporter=report_state)
             else:
                 drained = drain_once_fn(batch_size=batch_size)
-                cycle_state = {"state": "ok", "reason": ""}
-        except Exception:
+        except Exception as exc:
             drained = 0
+            cycle_state = {"state": "drain_error", "reason": f"{type(exc).__name__}: {exc}"}
             now_monotonic = time.monotonic()
             if (
                 last_cycle_error_log_monotonic is None
