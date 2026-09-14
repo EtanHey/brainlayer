@@ -130,6 +130,20 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertEqual(status.error?.text, "DB backup error: Google Drive credentials missing — re-auth needed")
     }
 
+    func testRestoredDriveCredentialsRenderAsPendingInsteadOfCurrentError() {
+        let backups = ObservabilityDocument.Backups(
+            state: "measured", reason: "", inputs: [], freshness: "stale",
+            thresholdHours: 36, retentionInvariant: "PASS", survivingArchives30D: 0,
+            errorType: "drive_credentials_restored_backup_pending",
+            lastVerifiedUpload: nil, dbSnapshot: nil, launchd: nil
+        )
+
+        let status = ObservabilityPresentation.backupStatus(for: backups)
+
+        XCTAssertEqual(status.error?.text, "Google Drive credentials restored — next backup pending")
+        XCTAssertEqual(status.error?.tone, .neutral)
+    }
+
     private var fixtureRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
