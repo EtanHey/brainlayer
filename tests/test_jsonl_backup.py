@@ -298,7 +298,9 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
     )
 
     unsafe = source.replace(
+        '    """Move old JSONL Drive archives to trash without hard-deleting them."""\n'
         "    folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)\n",
+        '    """Move old JSONL Drive archives to trash without hard-deleting them."""\n'
         "    backup_daily.prune_drive_backups(service)\n"
         "    folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)\n",
         1,
