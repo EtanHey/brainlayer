@@ -297,6 +297,16 @@ def test_jsonl_retention_invariant_is_a_ci_guard_not_only_a_behavior_fixture():
         inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
     )
 
+    unsafe = source.replace(
+        "    folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)\n",
+        "    backup_daily.prune_drive_backups(service)\n"
+        "    folder_id = backup_daily.ensure_drive_folder_chain(service, folder_parts)\n",
+        1,
+    )
+    assert "JSONL retention must not call backup_daily.prune_drive_backups" in (
+        inspect_jsonl_retention_invariant(unsafe, backup_daily_source=backup_daily_source)
+    )
+
     mutations = (
         (
             "archive_id not in surviving_archives",
