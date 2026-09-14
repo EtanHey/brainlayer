@@ -826,11 +826,7 @@ def prune_local_gzip_snapshots(
         return []
 
     verified_names = verified_drive_names or set()
-    verified_dates = {
-        parsed
-        for name in verified_names
-        if (parsed := _parse_snapshot_date(name)) is not None
-    }
+    verified_dates = {parsed for name in verified_names if (parsed := _parse_snapshot_date(name)) is not None}
     dated: list[tuple[dt.date, Path]] = []
     for path in output_dir.iterdir():
         parsed = _parse_snapshot_date(path.name)
