@@ -1235,6 +1235,45 @@ def test_icloud_upload_still_in_progress_is_pending_not_quarantined(tmp_path, mo
     assert list(icloud_dir.glob("*.unverified")) == []
 
 
+def test_uploaded_icloud_copy_proof_hash_timeout_stays_pending_not_quarantined(tmp_path, monkeypatch):
+    from brainlayer import jsonl_backup
+
+    archive = tmp_path / "archive.tar.gz"
+    archive.write_bytes(b"locally verified bytes")
+    icloud_dir = tmp_path / "CloudDocs"
+    clock = [0.0]
+    upload_finished = [False]
+    real_sha256_file = jsonl_backup._sha256_file
+
+    def uploaded(*args, **kwargs):  # noqa: ARG001
+        upload_finished[0] = True
+        clock[0] = 2.0
+        return _icloud_state(uploaded=True, status="current")
+
+    def proof_hash_times_out(path, *, deadline=None):
+        if upload_finished[0] and Path(path).parent == icloud_dir:
+            assert deadline is not None
+            clock[0] = deadline
+        return real_sha256_file(path, deadline=deadline)
+
+    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_icloud_item_state", uploaded)
+    monkeypatch.setattr(jsonl_backup, "_sha256_file", proof_hash_times_out)
+
+    result = jsonl_backup.copy_archive_to_icloud(
+        archive,
+        icloud_dir,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    destination = Path(result["path"])
+    assert result["status"] == "pending"
+    assert destination.is_file()
+    assert destination.read_bytes() == archive.read_bytes()
+    assert list(icloud_dir.glob("*.unverified")) == []
+
+
 def test_pending_icloud_receipt_resolves_without_rebundling(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
