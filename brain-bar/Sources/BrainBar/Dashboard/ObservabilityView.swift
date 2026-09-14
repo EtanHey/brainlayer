@@ -23,9 +23,15 @@ struct ObservabilityDocument: Codable, Sendable {
         let state: String, reason: String
         let inputs: [Input]
         let byEmitter: [Emitter]?
+        let bySourceClass: [SourceClass]?
         let hiddenFromDefaultSearch: Int?
     }
     struct Emitter: Codable, Sendable { let emitter: String, countInWindow: Int }
+    struct SourceClass: Codable, Sendable {
+        let sourceClass: String?
+        let count: Int
+        let inWindow: Int
+    }
     struct AuthorUnknown: Codable, Sendable {
         let state: String, reason: String
         let inputs: [Input]
@@ -122,7 +128,7 @@ enum ObservabilityCardTone: String, Equatable, Sendable { case standard, neutral
 
 struct ObservabilitySnapshot: Sendable {
     struct Card: Sendable {
-        let title: String, detail: String
+        let title: String, subtitle: String, detail: String
         let note: String?
         let tone: ObservabilityCardTone
     }
@@ -137,29 +143,55 @@ enum ObservabilityPresentation {
     ) -> ObservabilitySnapshot {
         let age = max(0, now.timeIntervalSince(document.generatedAt))
         let stale = age > cadence.interval * 2
-        let stores = card("Stores", document.stores.state, document.stores.reason, stale, note: cadence.assumption) {
+        let stores = card(
+            "Stores", "Is memory still growing?",
+            document.stores.state, document.stores.reason, stale, note: cadence.assumption
+        ) {
             guard let total = document.stores.totalChunks, let recent = document.stores.inWindow?.count else { return nil }
-            return "\(total) total · \(recent) in 24h"
+            return "\(number(total)) chunks total (all sources, incl. archived)\n" +
+                "\(number(recent)) added in the last 24 h"
         }
-        let emitters = card("Emitters", document.emitters.state, document.emitters.reason, stale) {
-            guard let sources = document.emitters.byEmitter, let hidden = document.emitters.hiddenFromDefaultSearch else { return nil }
-            let top = sources.first.map { "\($0.emitter) \($0.countInWindow)" } ?? "none in 24h"
-            return "\(top) · \(hidden) hidden"
+        let emitters = card(
+            "Emitters", "Where is memory coming from?",
+            document.emitters.state, document.emitters.reason, stale
+        ) {
+            guard let classes = document.emitters.bySourceClass,
+                  let emitters = document.emitters.byEmitter,
+                  let hidden = document.emitters.hiddenFromDefaultSearch else { return nil }
+            func classCount(_ name: String) -> Int {
+                classes.first { $0.sourceClass == name }?.count ?? 0
+            }
+            let mcpStores = emitters.first { $0.emitter == "mcp" }?.countInWindow ?? 0
+            return [
+                "\(number(classCount("cli-agent"))) from CLI agents",
+                "\(number(mcpStores)) from MCP brain_store in the last 24 h",
+                "\(number(classCount("subagent"))) from subagents",
+                "\(number(classCount("desktop"))) desktop (hidden from search by default)",
+                "\(number(hidden)) hidden from search by default",
+            ].joined(separator: "\n")
         }
-        let authors = card("Author-unknown", document.authorUnknown.state, document.authorUnknown.reason, stale) {
+        let authors = card(
+            "Author-unknown", "Can person filters trust the provenance?",
+            document.authorUnknown.state, document.authorUnknown.reason, stale
+        ) {
             guard let never = document.authorUnknown.neverClassified,
                   let classified = document.authorUnknown.classifiedUnknown else { return nil }
-            return "\(never.count) never classified · \(classified.count) unknown"
+            return "\(number(never.count)) chunks never classified (no source/provenance yet)\n" +
+                "\(number(classified.count)) chunks classified as unknown author\n" +
+                "Why it matters: these never match a person filter"
         }
         let backupTone: ObservabilityCardTone = document.backups.freshness == "unknown" ||
             document.backups.retentionInvariant == "unknown" ? .neutral :
             (document.backups.freshness == "stale" || document.backups.retentionInvariant == "FAIL" ? .amber : .standard)
-        let backups = card("Backups", document.backups.state, document.backups.reason, stale, tone: backupTone) {
+        let backups = card(
+            "Backups", "Are recoverable copies current and running?",
+            document.backups.state, document.backups.reason, stale, tone: backupTone
+        ) {
             guard let freshness = document.backups.freshness,
                   let retention = document.backups.retentionInvariant else { return nil }
             var parts = [freshness, "retention \(retention)"]
             if let archives = document.backups.survivingArchives30D {
-                parts.append("\(archives) \(archives == 1 ? "archive" : "archives") in 30d")
+                parts.append("\(number(archives)) verified \(archives == 1 ? "archive" : "archives") in the last 30 days")
             }
             if let errorType = document.backups.errorType, !errorType.isEmpty {
                 parts.append(errorType)
@@ -175,16 +207,23 @@ enum ObservabilityPresentation {
     }
 
     private static func card(
-        _ title: String, _ state: String, _ reason: String, _ stale: Bool,
+        _ title: String, _ subtitle: String, _ state: String, _ reason: String, _ stale: Bool,
         tone: ObservabilityCardTone = .standard,
         note: String? = nil,
         measured: () -> String?
     ) -> ObservabilitySnapshot.Card {
         guard state == "measured", let detail = measured() else {
             let detail = reason.isEmpty ? "unmeasurable" : "unmeasurable — \(reason)"
-            return .init(title: title, detail: detail, note: note, tone: .neutral)
+            return .init(title: title, subtitle: subtitle, detail: detail, note: note, tone: .neutral)
         }
-        return .init(title: title, detail: detail, note: note, tone: stale ? .amber : tone)
+        return .init(title: title, subtitle: subtitle, detail: detail, note: note, tone: stale ? .amber : tone)
+    }
+
+    static func number(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = .current
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 }
 
@@ -208,6 +247,9 @@ struct ObservabilityDashboardView: View {
                     ForEach(Array(snapshot.cards.enumerated()), id: \.offset) { _, card in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(card.title).font(.headline)
+                            Text(card.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(Color.secondary)
                             Text(card.detail)
                                 .foregroundStyle(card.tone == .neutral ? Color.secondary : Color.primary)
                             if let note = card.note {
