@@ -5,6 +5,47 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
     @MainActor
+    func testSettingsReadsBackupTruthFromObservabilityDocument() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let url = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
+        ))
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            refreshStatusOnLoad: false,
+            observabilityURL: url
+        )
+
+        let status = try await waitForBackupStatus(viewModel)
+        XCTAssertEqual(status.upload.text, "No verified upload on record")
+        XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
+        XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
+        XCTAssertEqual(status.job.tone, .red)
+    }
+
+    @MainActor
+    func testSettingsPreservesReadableUnmeasurableBackupReason() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/observability/golden/missing-launchd-dev.json")
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            refreshStatusOnLoad: false,
+            observabilityURL: url
+        )
+        let reason = try await waitForBackupReason(viewModel)
+        XCTAssertEqual(
+            reason,
+            "Backup status is unmeasurable — launchd output is empty: launchd/missing-launchd-dev.txt"
+        )
+    }
+
+    @MainActor
     func testRetrievalToolsSettingPersistsEnabledState() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -281,6 +322,29 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertNotNil(fixture.viewModel.lastSaveReceipt)
         XCTAssertFalse(String(reflecting: fixture.viewModel.lastSaveReceipt).contains(secret))
         XCTAssertFalse(String(reflecting: fixture.viewModel.config.googleAPIKey).contains(secret))
+    }
+
+    @MainActor
+    private func waitForBackupStatus(
+        _ viewModel: BrainBarSettingsViewModel
+    ) async throws -> ObservabilityBackupStatus {
+        for _ in 0 ..< 100 {
+            if let status = viewModel.backupStatus { return status }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return try XCTUnwrap(viewModel.backupStatus)
+    }
+
+    @MainActor
+    private func waitForBackupReason(_ viewModel: BrainBarSettingsViewModel) async throws -> String {
+        for _ in 0 ..< 100 {
+            if let reason = viewModel.backupStatusReason,
+               reason != "Backup status unavailable." {
+                return reason
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return try XCTUnwrap(viewModel.backupStatusReason)
     }
 
     @MainActor

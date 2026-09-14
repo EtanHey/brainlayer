@@ -31,9 +31,7 @@ enum BrainBarLaunchMode: Equatable {
 
 enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
     case dashboard = 0
-    case injections = 1
-    case graph = 2
-    case observability = 3
+    case graph = 1
 
     var id: Int { rawValue }
 
@@ -41,12 +39,8 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
         switch self {
         case .dashboard:
             return "Dashboard"
-        case .injections:
-            return "Injections"
         case .graph:
             return "Graph"
-        case .observability:
-            return "Observability"
         }
     }
 }
@@ -67,7 +61,7 @@ enum BrainBarRetrievalToolsPolicy {
     }
 
     static func selectedTab(_ selectedTab: BrainBarTab, showRetrievalTools: Bool) -> BrainBarTab {
-        visibleTabs(showRetrievalTools: showRetrievalTools).contains(selectedTab) ? selectedTab : .observability
+        visibleTabs(showRetrievalTools: showRetrievalTools).contains(selectedTab) ? selectedTab : .dashboard
     }
 }
 

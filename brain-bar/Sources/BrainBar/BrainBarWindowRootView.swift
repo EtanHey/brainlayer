@@ -2,18 +2,13 @@ import AppKit
 import Combine
 import SwiftUI
 
-enum BrainBarPlaceholderCopy {
-    static let injectionFeedNotWired = "Injection feed not yet wired in this build."
-}
-
 struct BrainBarWindowRootView: View {
-    static let defaultTab: BrainBarTab = .observability
+    static let defaultTab: BrainBarTab = .dashboard
 
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
 
     @State private var selectedTab = BrainBarWindowRootView.defaultTab
-    @State private var hasActivatedInjectionsTab = false
     @State private var hasActivatedGraphTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
@@ -30,24 +25,19 @@ struct BrainBarWindowRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             BrainBarWindowHeader(
-                selectedTab: $selectedTab,
                 collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
                 commandBarViewModel: commandBarViewModel,
-                showRetrievalTools: retrievalTools.isEnabled
+                showRetrievalTools: retrievalTools.isEnabled,
+                isShowingGraph: selectedTab == .graph,
+                toggleGraph: {
+                    selectedTab = selectedTab == .graph ? .dashboard : .graph
+                }
             )
 
             ZStack {
-                observabilityContent
-                    .brainBarTabVisibility(selectedTab == .observability)
-
                 dashboardContent
                     .brainBarTabVisibility(selectedTab == .dashboard)
-
-                if hasActivatedInjectionsTab || selectedTab == .injections {
-                    injectionsContent
-                        .brainBarTabVisibility(selectedTab == .injections)
-                }
 
                 if hasActivatedGraphTab || selectedTab == .graph {
                     graphContent
@@ -114,32 +104,15 @@ struct BrainBarWindowRootView: View {
     }
 
     @ViewBuilder
-    private var observabilityContent: some View {
-        if let dbPath = runtime.databasePath {
-            ObservabilityLiveView(dbPath: dbPath)
-        } else {
-            ObservabilityDashboardView(result: .unreadable("Database path unavailable."))
-        }
-    }
-
-    @ViewBuilder
     private var dashboardContent: some View {
         if let collector = runtime.collector {
             BrainBarDashboardContent(
                 collector: collector,
-                hotkeyStatus: runtime.hotkeyStatus.statusLine
+                hotkeyStatus: runtime.hotkeyStatus.statusLine,
+                dbPath: runtime.databasePath
             )
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
-        }
-    }
-
-    @ViewBuilder
-    private var injectionsContent: some View {
-        if let store = runtime.injectionStore {
-            BrainBarInjectionTab(store: store, isActive: selectedTab == .injections && windowObserver.isWindowVisible)
-        } else {
-            InjectionFeedView(disconnectedAt: Date())
         }
     }
 
@@ -175,13 +148,8 @@ struct BrainBarWindowRootView: View {
 
     private func activate(tab: BrainBarTab) {
         switch tab {
-        case .observability:
-            break
         case .dashboard:
             runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
-        case .injections:
-            runtime.ensureInjectionStore()
-            hasActivatedInjectionsTab = true
         case .graph:
             hasActivatedGraphTab = true
         }
@@ -191,6 +159,8 @@ struct BrainBarWindowRootView: View {
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
     let hotkeyStatus: String
+    var dbPath: String? = nil
+    var observabilityResult: ObservabilityReadResult? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -198,7 +168,9 @@ private struct BrainBarDashboardContent: View {
         } else {
             BrainBarDashboardView(
                 collector: collector,
-                hotkeyStatus: hotkeyStatus
+                hotkeyStatus: hotkeyStatus,
+                dbPath: dbPath,
+                observabilityResult: observabilityResult
             )
         }
     }
@@ -228,26 +200,31 @@ private extension View {
 }
 
 private struct BrainBarWindowHeader: View {
-    @Binding var selectedTab: BrainBarTab
-
     let collector: StatsCollector?
     let hotkeyStatus: String
     let commandBarViewModel: QuickCaptureViewModel?
     let showRetrievalTools: Bool
+    let isShowingGraph: Bool
+    let toggleGraph: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
                 brand
                 Spacer(minLength: 12)
+                refreshControls
+                if showRetrievalTools {
+                    Button(action: toggleGraph) {
+                        Label(isShowingGraph ? "Dashboard" : "Knowledge Graph", systemImage: isShowingGraph ? "gauge" : "point.3.connected.trianglepath.dotted")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
                 BrainBarAppControlMenu()
             }
-            HStack(alignment: .center, spacing: 10) {
-                sectionPicker(maxWidth: .infinity)
-                refreshControls
-            }
 
-            if BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
+            if !isShowingGraph,
+               BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
                 BrainBarCommandBar(viewModel: commandBarViewModel)
             }
         }
@@ -273,20 +250,6 @@ private struct BrainBarWindowHeader: View {
         }
     }
 
-    private func sectionPicker(maxWidth: CGFloat) -> some View {
-        Picker("Section", selection: $selectedTab) {
-            ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools)) { tab in
-                Text(tab.title)
-                    .tag(tab)
-                    .accessibilityIdentifier("brainbar.shell.tab.\(tab.title.lowercased())")
-            }
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: maxWidth)
-        .labelsHidden()
-        .accessibilityIdentifier("brainbar.shell.tabs")
-        .focusable()
-    }
 }
 
 private struct BrainBarHeaderRefreshControls: View {
@@ -368,6 +331,8 @@ private struct BrainBarAppControlMenu: View {
 private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
     let hotkeyStatus: String
+    var dbPath: String? = nil
+    var observabilityResult: ObservabilityReadResult? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
@@ -449,6 +414,13 @@ private struct BrainBarDashboardView: View {
                             pipelinePanel(layout: layout)
                             flowPanel(layout: layout)
                             diagnostics(layout: layout)
+                            if let observabilityResult {
+                                ObservabilityDashboardView(result: observabilityResult)
+                            } else if let dbPath {
+                                ObservabilityLiveView(dbPath: dbPath)
+                            } else {
+                                ObservabilityDashboardView(result: .unreadable("Database path unavailable."))
+                            }
                         }
                         .opacity(lastGoodContentOpacity)
                     }
@@ -2142,12 +2114,17 @@ struct BrainBarDashboardChartDisclosure: Equatable {
 enum BrainBarDashboardPreview {
     static func make(
         collector: StatsCollector,
-        hotkeyStatus: String = "Hotkey ⌃⌥Space ready"
+        hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
+        observabilityResult: ObservabilityReadResult? = nil
     ) -> AnyView {
         AnyView(
             ZStack {
                 BrainBarAppBackground()
-                BrainBarDashboardContent(collector: collector, hotkeyStatus: hotkeyStatus)
+                BrainBarDashboardContent(
+                    collector: collector,
+                    hotkeyStatus: hotkeyStatus,
+                    observabilityResult: observabilityResult
+                )
             }
             .environment(\.colorScheme, .dark)
             // Suppress SwiftUI animations so every value lands at its final state
@@ -2639,22 +2616,6 @@ struct BrainBarDashboardLayout {
         sparklineHeight = compactCards ? 112 : 140
         panelCornerRadius = BrainBarDesignTokens.Radius.xl
         maxContentWidth = 1_280
-    }
-}
-
-private struct BrainBarInjectionTab: View {
-    let store: InjectionStore
-    let isActive: Bool
-    @State private var filterText = ""
-
-    var body: some View {
-        InjectionFeedView(store: store, filterText: $filterText)
-            .padding(16)
-            .onAppear { store.start(active: isActive) }
-            .onChange(of: isActive) { _, active in
-                store.setActive(active)
-            }
-            .onDisappear { store.setActive(false) }
     }
 }
 

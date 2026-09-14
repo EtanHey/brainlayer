@@ -11,11 +11,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var isRefreshingLaunchdStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
+    @Published private(set) var observabilityResult: ObservabilityReadResult
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
     private let runtimeStatusProvider: any BrainLayerActiveRuntimeSampling
     private let now: @Sendable () -> Date
+    private let observabilityURL: URL?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
 
     init(
@@ -24,12 +26,15 @@ final class BrainBarSettingsViewModel: ObservableObject {
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         refreshStatusOnLoad: Bool = true,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        observabilityURL: URL? = nil
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
         self.runtimeStatusProvider = runtimeStatusProvider
         self.now = now
+        self.observabilityURL = observabilityURL
+        observabilityResult = .unreadable("Backup status unavailable.")
         activeRuntimeObservation = runtimeStatusProvider.sample()
         do {
             let document = try store.loadDocument()
@@ -43,6 +48,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
         applyLaunchdStates(initialLaunchdStates)
+        refreshObservabilityStatus()
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
         }
@@ -130,6 +136,38 @@ final class BrainBarSettingsViewModel: ObservableObject {
             activeRuntimeObservation = runtimeStatusProvider.sample()
             refreshLastSaveReceiptActiveState()
             isRefreshingLaunchdStatus = false
+        }
+    }
+
+    var backupStatus: ObservabilityBackupStatus? {
+        guard case let .readable(document) = observabilityResult,
+              document.backups.state == "measured" else { return nil }
+        return ObservabilityPresentation.backupStatus(for: document.backups)
+    }
+
+    var backupStatusReason: String? {
+        switch observabilityResult {
+        case let .unreadable(value):
+            value
+        case let .readable(document):
+            if document.backups.state == "measured" { nil }
+            else if document.backups.reason.isEmpty { "Backup status is unmeasurable." }
+            else { "Backup status is unmeasurable — \(document.backups.reason)" }
+        }
+    }
+
+    func refreshAllStatus() {
+        refreshLaunchdStatus()
+        refreshObservabilityStatus()
+    }
+
+    private func refreshObservabilityStatus() {
+        guard let observabilityURL else { return }
+        Task {
+            let result = await Task.detached {
+                ObservabilityReader.read(url: observabilityURL)
+            }.value
+            observabilityResult = result
         }
     }
 
@@ -341,7 +379,11 @@ struct BrainBarSettingsView: View {
         case backend
     }
 
-    init(viewModel: BrainBarSettingsViewModel = BrainBarSettingsViewModel()) {
+    init(
+        viewModel: BrainBarSettingsViewModel = BrainBarSettingsViewModel(
+            observabilityURL: ObservabilityReader.installedURL()
+        )
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -362,6 +404,9 @@ struct BrainBarSettingsView: View {
                 }
                 BrainBarSettingsPanel(title: "Gemini API Key") {
                     secretControls
+                }
+                BrainBarSettingsPanel(title: "Backup Status") {
+                    backupStatus
                 }
                 BrainBarSettingsPanel(title: "System Jobs") {
                     jobsGrid
@@ -405,7 +450,7 @@ struct BrainBarSettingsView: View {
             }
             Spacer()
             Button {
-                viewModel.refreshLaunchdStatus()
+                viewModel.refreshAllStatus()
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
@@ -575,6 +620,23 @@ struct BrainBarSettingsView: View {
             ForEach(BrainLayerLaunchdJob.allCases) { job in
                 BrainBarJobToggle(job: job, viewModel: viewModel)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var backupStatus: some View {
+        if let status = viewModel.backupStatus {
+            VStack(alignment: .leading, spacing: 8) {
+                ObservabilityStatusRows(lines: status.lines, textColor: Color.brainBarTextSecondary)
+                    .font(.system(size: 11, weight: .medium))
+            }
+        } else {
+            Label(
+                viewModel.backupStatusReason ?? "Backup status is unmeasurable.",
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Color(nsColor: BrainBarStateTheme.error.theme.color))
         }
     }
 

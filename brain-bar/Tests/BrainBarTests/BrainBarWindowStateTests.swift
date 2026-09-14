@@ -90,7 +90,7 @@ final class BrainBarWindowStateTests: XCTestCase {
         let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
 
-        XCTAssertTrue(root.contains("if BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
+        XCTAssertTrue(root.contains("BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
         XCTAssertTrue(app.contains("if retrievalTools.isEnabled {"))
         XCTAssertTrue(app.contains("Button(\"Search BrainLayer\")"))
         XCTAssertTrue(app.contains("Button(\"Capture Note\")"))

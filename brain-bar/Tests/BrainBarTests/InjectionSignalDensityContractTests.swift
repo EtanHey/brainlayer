@@ -402,17 +402,6 @@ final class InjectionSignalDensityContractTests: XCTestCase {
         XCTAssertFalse(source.contains("docs.local/wave3-qa"))
     }
 
-    func testWindowRootRoutesUnavailableInjectionStoreToDisconnectedFeed() throws {
-        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-
-        XCTAssertTrue(source.contains("InjectionFeedView(disconnectedAt: Date())"))
-        XCTAssertFalse(
-            source.contains(
-                "BrainBarLoadingView(title: \"Injections\", subtitle: BrainBarPlaceholderCopy.injectionFeedNotWired)"
-            )
-        )
-    }
-
     @MainActor
     func testRendersOverviewExpandedEmptyAndDegradedFixtureStates() throws {
         guard let renderDirectory = ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"],

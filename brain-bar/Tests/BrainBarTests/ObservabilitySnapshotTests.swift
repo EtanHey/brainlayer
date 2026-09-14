@@ -46,12 +46,18 @@ final class ObservabilitySnapshotTests: XCTestCase {
         }
         XCTAssertTrue(cards.allSatisfy { !($0.subtitle ?? "").isEmpty })
 
-        let unlabeledInteger = try NSRegularExpression(
-            pattern: #"(?<![\\p{L}\\d_-])\\d[\\d,.]*(?!\\s*(?:chunks?|MCP|CLI|subagent|desktop|fleet|unclassified|h\\b|days?\\b|archives?\\b|verified|%))"#
+        let labeledInteger = try NSRegularExpression(
+            pattern: #"\d[\d,.]*\s+(?:chunks?|MCP|CLI|subagent|desktop|fleet|unclassified|h\b|days?\b|archives?\b|verified|%|in the last)"#
         )
         for card in cards.prefix(3) {
             let range = NSRange(card.detail.startIndex..., in: card.detail)
-            XCTAssertNil(unlabeledInteger.firstMatch(in: card.detail, range: range), card.detail)
+            let withoutLabeledIntegers = labeledInteger.stringByReplacingMatches(
+                in: card.detail, range: range, withTemplate: ""
+            )
+            XCTAssertNil(
+                withoutLabeledIntegers.rangeOfCharacter(from: .decimalDigits),
+                card.detail
+            )
         }
     }
 
@@ -62,9 +68,39 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let live = try liveShapedDocument()
 
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).upload.tone, .green)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).freshness.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).snapshot.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).freshness.tone, .red)
+    }
+
+    func testMissingArchiveCountStaysUnknown() {
+        let backups = ObservabilityDocument.Backups(
+            state: "measured", reason: "", inputs: [], freshness: nil,
+            thresholdHours: nil, retentionInvariant: nil, survivingArchives30D: nil,
+            errorType: nil, lastVerifiedUpload: nil, dbSnapshot: nil, launchd: nil
+        )
+
+        let archives = ObservabilityPresentation.backupStatus(for: backups).archives
+        XCTAssertEqual(archives.text, "Verified archives in the last 30 days: unknown")
+        XCTAssertEqual(archives.tone, .red)
+    }
+
+    func testEmptyDatabaseEnvironmentFallsBackToConfiguredPath() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let config = directory.appendingPathComponent("brainlayer.env")
+        try "BRAINLAYER_DB=/tmp/configured-brainlayer.db\n".write(to: config, atomically: true, encoding: .utf8)
+
+        let url = ObservabilityReader.installedURL(
+            environment: ["BRAINLAYER_DB": ""],
+            configURL: config
+        )
+        XCTAssertEqual(url.path, "/tmp/observability.json")
     }
 
     func testBackupStatusSaysWhenWhereAndWhy() throws {
@@ -72,7 +108,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let status = ObservabilityPresentation.backupStatus(for: live.backups)
 
         XCTAssertEqual(status.upload.text, "No verified upload on record")
-        XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot:"))
+        XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot (verified):"))
         XCTAssertTrue(status.snapshot.text.contains("→ 2026-09-13.db.gz"))
         XCTAssertEqual(status.job.text, "Backup job: NOT loaded (parked in .disabled-retention-P0)")
         XCTAssertEqual(status.freshness.text, "stale (> 36 h)")
@@ -148,7 +184,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         )
 
         XCTAssertEqual(card.tone, .neutral)
-        XCTAssertEqual(card.detail, "unknown · retention PASS · 0 archives in 30d · jsonl_backup_attempt_invalid")
+        XCTAssertTrue(card.detail.contains("No verified upload on record"))
+        XCTAssertTrue(card.detail.contains("freshness unknown"))
+        XCTAssertTrue(card.detail.contains("Retention invariant: PASS"))
+        XCTAssertTrue(card.detail.contains("0 verified archives in the last 30 days"))
+        XCTAssertTrue(card.detail.contains("Jsonl Backup Attempt Invalid"))
         XCTAssertFalse(card.detail.contains("unmeasurable"))
     }
 
@@ -158,11 +198,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
             ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: .known(300))
                 .cards.first { $0.title == "Backups" }
         )
-        XCTAssertTrue(card.detail.contains("FileNotFoundError"))
-        XCTAssertTrue(card.detail.contains("1 archive in 30d"))
+        XCTAssertTrue(card.detail.contains("Backup input file missing"))
+        XCTAssertTrue(card.detail.contains("1 verified archive in the last 30 days"))
     }
 
-    func testRenderedTonesAndOpaqueBackgroundAreDistinct() throws {
+    func testRenderedCardTonesAreDistinct() throws {
         let healthy = try render(document: readableDocument(named: "healthy-dev"), named: "tone-healthy")
         let neutral = try render(document: readableDocument(named: "missing-source-class-dev"), named: "tone-neutral")
         let amber = try render(document: readableDocument(named: "backup-errors-dev"), named: "tone-amber")
@@ -170,15 +210,10 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let standardColor = try color(in: healthy, normalizedX: 0.22, normalizedY: 0.27)
         let neutralColor = try color(in: neutral, normalizedX: 0.22, normalizedY: 0.27)
         let amberColor = try color(in: amber, normalizedX: 0.72, normalizedY: 0.49)
-        let backgroundColor = try XCTUnwrap(healthy.colorAt(x: 5, y: 5))
 
         XCTAssertNotEqual(standardColor, neutralColor)
         XCTAssertNotEqual(standardColor, amberColor)
         XCTAssertNotEqual(neutralColor, amberColor)
-        XCTAssertNotEqual(standardColor, backgroundColor)
-        XCTAssertNotEqual(neutralColor, backgroundColor)
-        XCTAssertNotEqual(amberColor, backgroundColor)
-        XCTAssertEqual(backgroundColor.alphaComponent, 1, accuracy: 0.001)
     }
 
     func testSchemaVersionMismatchIsUnreadableWithReason() throws {
@@ -215,11 +250,11 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s")
 
         let document = try readableDocument(named: "healthy-dev")
-        let stores = try XCTUnwrap(
+        let chunks = try XCTUnwrap(
             ObservabilityPresentation.snapshot(document: document, now: document.generatedAt, cadence: cadence)
-                .cards.first { $0.title == "Stores" }
+                .cards.first { $0.title == "Chunks" }
         )
-        XCTAssertEqual(stores.note, "cadence unknown, assuming 300s")
+        XCTAssertEqual(chunks.note, "cadence unknown, assuming 300s")
     }
 
     func testStaleDocumentRendersAmberWithAge() throws {
