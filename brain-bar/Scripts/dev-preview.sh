@@ -198,7 +198,6 @@ build_one() {
     fi
     BRAINBAR_DEV_APP_DIR="$app" \
         BRAINBAR_DEV_SOURCE_BRANCH="$branch" \
-        BRAINBAR_DEV_SOURCE_COMMIT="$sha" \
         BRAINBAR_DEV_SOURCE_DESCRIBE="$describe" \
         BRAINBAR_DEV_HARNESS_COMMIT="$harness_sha" \
         bash "$build_source/brain-bar/build-app.sh" \

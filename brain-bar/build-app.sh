@@ -527,11 +527,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 git_commit() {
-    if [ "$DEV_BUNDLE_BUILD" -eq 1 ] && [ -n "${BRAINBAR_DEV_SOURCE_COMMIT:-}" ]; then
-        printf '%s\n' "$BRAINBAR_DEV_SOURCE_COMMIT"
-    else
-        git -C "$PACKAGE_DIR" rev-parse HEAD
-    fi
+    git -C "$PACKAGE_DIR" rev-parse HEAD
 }
 
 git_describe() {
