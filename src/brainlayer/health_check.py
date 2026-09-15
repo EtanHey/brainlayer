@@ -110,6 +110,7 @@ class HealthIssue:
 class HealthCheckConfig:
     db_path: Path = field(default_factory=get_db_path)
     state_path: Path = field(default_factory=lambda: DEFAULT_STATE_PATH)
+    badge_state_path: Path | None = None
     socket_path: Path = DEFAULT_SOCKET_PATH
     canary_query: str = DEFAULT_CANARY_QUERY
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
@@ -1231,6 +1232,24 @@ def run_health_check(
             }
         )
 
+    def publish_badge_state() -> None:
+        if config.badge_state_path is None:
+            return
+        from .badge_state import build_badge_state_document, write_badge_state
+
+        try:
+            write_badge_state(config.badge_state_path, build_badge_state_document(result))
+        except (OSError, ValueError) as exc:
+            add_issue("badge_state_write_failed", "critical", f"badge state write failed: {exc}")
+            try:
+                config.badge_state_path.expanduser().unlink(missing_ok=True)
+            except OSError as invalidate_exc:
+                add_issue(
+                    "badge_state_invalidation_failed",
+                    "critical",
+                    f"failed badge state could not be invalidated: {invalidate_exc}",
+                )
+
     def finish_slow(stage: str, message: str) -> HealthCheckResult:
         result.slow_check = True
         result.slow_check_stage = stage
@@ -1243,6 +1262,7 @@ def run_health_check(
         state_payload["duration_seconds"] = result.duration_seconds
         _write_state(config.state_path, state_payload)
         result.ok = False
+        publish_badge_state()
         return result
 
     def deadline_reached(stage: str) -> HealthCheckResult | None:
@@ -1672,5 +1692,7 @@ def run_health_check(
     else:
         state_payload.pop("slow_check_stage", None)
     _write_state(config.state_path, state_payload)
+    result.ok = not result.issues
+    publish_badge_state()
     result.ok = not result.issues
     return result
