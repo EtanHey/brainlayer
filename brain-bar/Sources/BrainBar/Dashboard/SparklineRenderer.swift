@@ -1291,15 +1291,24 @@ enum SparklineRenderer {
         agent: [Int],
         watcher: [Int],
         enrichment: [Int],
+        badgeOn: Bool = false,
         size: NSSize = NSSize(width: 26, height: 14)
     ) -> NSImage {
         let width = max(size.width.rounded(.up), 1)
         let height = max(size.height.rounded(.up), 1)
-        let icon = MenuBarSparklineIcon(series: [
-            .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
-            .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
-            .init(values: enrichment, color: Color(nsColor: BrainBarDesignTokens.Colors.signalFTS5)),
-        ])
+        let icon = ZStack(alignment: .topTrailing) {
+            MenuBarSparklineIcon(series: [
+                .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
+                .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
+                .init(values: enrichment, color: Color(nsColor: BrainBarDesignTokens.Colors.signalFTS5)),
+            ])
+            if badgeOn {
+                Circle()
+                    .fill(Color.red)
+                    .overlay(Circle().stroke(Color.white, lineWidth: 0.75))
+                    .frame(width: 6, height: 6)
+            }
+        }
         .frame(width: width, height: height)
 
         let renderer = ImageRenderer(content: icon)

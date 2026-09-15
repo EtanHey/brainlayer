@@ -41,4 +41,29 @@ final class SparklineRendererIconTests: XCTestCase {
         XCTAssertGreaterThan(image.size.width, 0)
         save(image, "status-icon-active")
     }
+
+    func testStatusIconRendersRedBadgeWhenAttentionIsRequired() throws {
+        let image = SparklineRenderer.renderStatusBarIcon(
+            agent: Array(repeating: 0, count: 12),
+            watcher: Array(repeating: 0, count: 12),
+            enrichment: Array(repeating: 0, count: 12),
+            badgeOn: true,
+            size: NSSize(width: 26, height: 14)
+        )
+        let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        var redPixels = 0
+        for x in 0 ..< bitmap.pixelsWide {
+            for y in 0 ..< bitmap.pixelsHigh {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                if color.redComponent > 0.7,
+                   color.greenComponent < 0.4,
+                   color.blueComponent < 0.4,
+                   color.alphaComponent > 0.5 {
+                    redPixels += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(redPixels, 0)
+        save(image, "status-icon-badged")
+    }
 }
