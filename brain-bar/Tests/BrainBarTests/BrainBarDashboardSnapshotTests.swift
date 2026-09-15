@@ -179,7 +179,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
                 from: result,
                 now: BrainBarOnePageTestFixture.now,
                 cadence: .known(300)
-            )
+            ),
+            locale: BrainBarDashboardPreview.goldenLocale
         )
         let presentation = BrainBarOnePagePresentation.derive(
             snapshotFreshness: collector.snapshotFreshnessState,
@@ -188,7 +189,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             stats: collector.stats,
             agentActivity: collector.agentActivity,
             now: BrainBarOnePageTestFixture.now,
-            calendar: BrainBarOnePageTestFixture.calendar
+            calendar: BrainBarDashboardPreview.goldenCalendar,
+            locale: BrainBarDashboardPreview.goldenLocale
         )
 
         XCTAssertEqual(presentation.status.headline, "All good")
@@ -239,8 +241,16 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         )
         XCTAssertEqual(presentation.status.headline, "1 thing needs you")
         XCTAssertNil(presentation.indexedToday)
-        XCTAssertTrue(presentation.indexedTodayUnavailableText?.contains("observability as of") == true)
-        XCTAssertTrue(presentation.agentWritesText.contains("observability as of"))
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "Indexed today unavailable: observability as of 20:50"
+        )
+        XCTAssertEqual(
+            presentation.agentWritesText,
+            "brain_store writes unavailable: observability as of 20:50"
+        )
+        XCTAssertTrue(presentation.backupLines[0].text.hasSuffix("18:50"))
+        XCTAssertTrue(presentation.backupLines[1].text.hasSuffix("19:50"))
         XCTAssertGreaterThan(png.count, 5_000, "stale-observability PNG looks empty")
         XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "stale-observability render is too flat")
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
@@ -554,7 +564,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         let hero = BrainBarHeroPresentation.derive(
             flow: flow,
             stats: collector.stats,
-            backupTruth: BrainBarHeroBackupTruth.derive(from: result, now: now, cadence: .known(300))
+            backupTruth: BrainBarHeroBackupTruth.derive(from: result, now: now, cadence: .known(300)),
+            locale: BrainBarDashboardPreview.goldenLocale
         )
         return BrainBarOnePagePresentation.derive(
             snapshotFreshness: collector.snapshotFreshnessState,
@@ -563,7 +574,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             stats: collector.stats,
             agentActivity: collector.agentActivity,
             now: now,
-            calendar: BrainBarOnePageTestFixture.calendar,
+            calendar: BrainBarDashboardPreview.goldenCalendar,
+            locale: BrainBarDashboardPreview.goldenLocale,
             observabilityCadence: .known(300)
         )
     }

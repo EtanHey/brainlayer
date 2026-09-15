@@ -978,6 +978,11 @@ def health_check_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Run the lightweight BrainLayer stability health-check."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        stream=sys.stderr,
+    )
     from ..health_check import HealthCheckConfig, run_health_check
 
     result = run_health_check(

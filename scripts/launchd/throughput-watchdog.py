@@ -14,16 +14,21 @@ import sqlite3
 import subprocess
 import sys
 import time
-import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from brainlayer.notification_policy import by_design_reason
 from brainlayer.wal_checkpoint import checkpoint_guard
 
+try:
+    from brainlayer.notification_policy import by_design_reason
+except ImportError:
+
+    def by_design_reason(_condition: str) -> str:
+        return "notification policy unavailable"
+
+
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
-DEFAULT_NOTIFY_ENDPOINT = "http://localhost:3847/notify"
 # Alert-framing (orc law, stalker postmortem): after a wedge episode is paged once,
 # the operator is re-notified for the NEXT episode only — i.e. after this many
 # consecutive healthy (progressing) ticks clear the latch. Prevents a chronic
@@ -53,7 +58,6 @@ class Config:
     drain_health_path: Path | None = None
     dry_run: bool = False
     log_path: Path = Path("~/.local/share/brainlayer/logs/throughput-watchdog.log").expanduser()
-    notify_endpoint: str = DEFAULT_NOTIFY_ENDPOINT
 
 
 @dataclass(frozen=True)
@@ -521,56 +525,21 @@ def _restart_watch(
 
 
 def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
+    # True means the incident was persisted to the log. The existing episode
+    # latches now deduplicate log records; no paging or delivery channel exists.
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
-    if result.action == "stalled" and (reason := by_design_reason("watcher_stopped")):
-        print(
-            f"INFO throughput-watchdog notification suppressed by design reason={reason}",
-            file=sys.stderr,
-        )
-        return False
-    if result.action == "checkpoint_deferral_alert":
-        body = (
-            "Watcher recovery is blocked because the WAL checkpoint guard remains held across "
-            f"{result.checkpoint_deferred_ticks} attempts; operator intervention is required."
-        )
+    if result.action == "stalled":
+        condition = "watcher_stopped"
     else:
-        body = (
-            "Watcher has registry-tracked JSONL bytes pending but realtime_watcher chunks are flat; "
-            "automatic recovery is starting."
-        )
-    # Same guard as brainlayer.health_check: a desktop popup and an alert POST are side effects on
-    # a real person's screen and a real channel, so a test must never be able to reach either.
-    if os.environ.get("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION") == "1":
-        return False
-    delivered = False
-    try:
-        completed = subprocess.run(
-            [
-                "/usr/bin/osascript",
-                "-e",
-                f'display notification "{body}" with title "BrainLayer throughput watchdog"',
-            ],
-            capture_output=True,
-            timeout=3,
-            check=False,
-        )
-        delivered = completed.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        pass
-    request = urllib.request.Request(
-        config.notify_endpoint,
-        data=json.dumps({"title": "BrainLayer throughput watchdog", "body": body, "source": "alerts"}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        condition = result.action
+    reason = by_design_reason(condition) or "condition logged without an active suppression reason"
+    print(
+        f"INFO throughput-watchdog incident logged condition={condition} reason={reason}",
+        file=sys.stderr,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=3):
-            delivered = True
-    except Exception:
-        pass
-    return delivered
+    return True
 
 
 def run_once(
@@ -858,7 +827,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-source-files", type=_positive_int, default=100_000)
     parser.add_argument("--max-scan-seconds", type=float, default=20.0)
     parser.add_argument("--log", type=Path, default=home / ".local/share/brainlayer/logs/throughput-watchdog.log")
-    parser.add_argument("--notify-endpoint", default=DEFAULT_NOTIFY_ENDPOINT)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--now-epoch", type=int)
@@ -884,7 +852,6 @@ def _config_from_args(args: argparse.Namespace) -> Config:
         max_scan_seconds=args.max_scan_seconds,
         dry_run=args.dry_run,
         log_path=args.log,
-        notify_endpoint=args.notify_endpoint,
     )
 
 
