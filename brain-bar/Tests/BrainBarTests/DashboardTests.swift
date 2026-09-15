@@ -716,6 +716,19 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(interaction.showsKeyboardFocusRing)
     }
 
+    func testDisclosureFocusChangeKeepsRingForKeyboardOnly() {
+        var interaction = BrainBarDisclosureInteractionState()
+
+        interaction.registerFocusChange(isFocused: true, source: .pointer)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+
+        interaction.registerFocusChange(isFocused: true, source: .keyboard)
+        XCTAssertTrue(interaction.showsKeyboardFocusRing)
+
+        interaction.registerFocusChange(isFocused: false, source: .keyboard)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+    }
+
     @MainActor
     func testDisclosureActivationClassifiesMouseAsPointerAndKeysAsKeyboard() throws {
         let pointerEvent = try XCTUnwrap(NSEvent.mouseEvent(
