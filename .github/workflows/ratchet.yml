@@ -17,7 +17,6 @@ name: Ratchet
 
 on:
   pull_request:
-    branches: [main]
     # `labeled` is here so the `ratchet:signatures` opt-in works the moment it is applied, instead
     # of waiting for the next push. The other three are GitHub's defaults, listed back explicitly
     # because naming `types` at all replaces them.
