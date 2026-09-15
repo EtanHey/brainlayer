@@ -471,29 +471,53 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
-    func testDashboardReplayDebtDisclosureRendersExpanded() throws {
+    func testDashboardDetailsDisclosureRendersExpandedInteractionState() throws {
         try XCTSkipIf(
             shouldSkipDisplayDependentRenderInCI,
             "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
         )
 
-        let view = BrainBarPipelinePanelPreview.make(
-            stats: BrainBarDashboardFixture.partialReplayDebtStats,
-            containerSize: CGSize(width: 1_120, height: 1_420),
-            fetchedAt: BrainBarDashboardFixture.fetchedAt,
-            signalCoverageExpanded: false,
-            replayDebtExpanded: true
+        let panelState = BrainBarDashboardPanelState()
+        var interaction = BrainBarDisclosureInteractionState()
+        panelState.detailsExpanded = interaction.activate(isExpanded: false, source: .pointer)
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(.partialReplayDebt),
+            panelState: panelState
         )
-        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_700))
-        let url = try writePNG(png, name: "dashboard-replay-debt-expanded")
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: 1_200))
+        let url = try writePNG(png, name: "dashboard-details-expanded-state")
 
-        XCTAssertGreaterThan(png.count, 5_000, "expanded replay-debt PNG looks empty")
+        XCTAssertTrue(panelState.detailsExpanded, "The modeled pointer interaction must expand Details.")
+        XCTAssertFalse(interaction.showsKeyboardFocusRing, "Modeled pointer activation must not leave a focus ring.")
+        XCTAssertGreaterThan(png.count, 5_000, "expanded Details PNG looks empty")
         XCTAssertGreaterThan(
             distinctSampledColorCount(in: bitmap),
             16,
-            "expanded replay-debt render is too flat"
+            "expanded Details render is too flat"
         )
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
+    func testDashboardDisclosureKeyboardFocusRingActuallyDraws() throws {
+        let size = NSSize(width: 320, height: 64)
+        let (keyboardPNG, keyboardBitmap) = try renderPNG(
+            BrainBarDisclosureRowPreview.make(focusSource: .keyboard),
+            size: size
+        )
+        let (pointerPNG, pointerBitmap) = try renderPNG(
+            BrainBarDisclosureRowPreview.make(focusSource: .pointer),
+            size: size
+        )
+        let url = try writePNG(keyboardPNG, name: "dashboard-disclosure-keyboard-focus-ring")
+
+        XCTAssertNotEqual(keyboardPNG, pointerPNG, "Keyboard focus must change the rendered disclosure pixels.")
+        XCTAssertGreaterThan(
+            differingPixelCount(keyboardBitmap, pointerBitmap),
+            200,
+            "The actual disclosure component must draw a visible keyboard focus ring."
+        )
+        print("[brainbar-render] wrote \(url.path) (\(keyboardPNG.count) bytes)")
     }
 
     @MainActor
@@ -673,6 +697,24 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
                     + abs(a.blueComponent - b.blueComponent) > 0.12
             }
         }
+    }
+
+    private func differingPixelCount(_ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep) -> Int {
+        guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else { return .max }
+        var count = 0
+        for y in 0 ..< lhs.pixelsHigh {
+            for x in 0 ..< lhs.pixelsWide {
+                guard let a = lhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let b = rhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                else { continue }
+                let delta = abs(a.redComponent - b.redComponent)
+                    + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent)
+                    + abs(a.alphaComponent - b.alphaComponent)
+                if delta > 0.05 { count += 1 }
+            }
+        }
+        return count
     }
 
     private enum RenderError: Error {
