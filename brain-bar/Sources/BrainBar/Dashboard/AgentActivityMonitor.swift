@@ -51,10 +51,28 @@ struct AgentPresence: Sendable, Equatable {
 
 struct AgentActivitySnapshot: Sendable, Equatable {
     let presences: [AgentPresence]
+    let measurement: MetricEvidenceReadability
+
+    init(
+        presences: [AgentPresence],
+        measurement: MetricEvidenceReadability = .readable
+    ) {
+        self.presences = presences
+        self.measurement = measurement
+    }
 
     static let empty = AgentActivitySnapshot(
         presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) }
     )
+
+    static func unavailable(_ reason: String) -> AgentActivitySnapshot {
+        AgentActivitySnapshot(
+            presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) },
+            measurement: .unreadable(reason)
+        )
+    }
+
+    var isMeasured: Bool { measurement.isReadable }
 
     var totalActiveAgents: Int {
         presences.reduce(0) { $0 + $1.count }
@@ -65,6 +83,9 @@ struct AgentActivitySnapshot: Sendable, Equatable {
     }
 
     var summaryText: String {
+        if case let .unreadable(reason) = measurement {
+            return "Agent activity unavailable: \(reason)"
+        }
         switch totalActiveAgents {
         case 0:
             return "No agent processes live"
@@ -84,7 +105,7 @@ final class AgentActivityMonitor {
     }
 
     func sample() -> AgentActivitySnapshot {
-        guard let snapshot = snapshotProvider() else { return .empty }
+        guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
         return Self.parse(snapshot)
     }
 
