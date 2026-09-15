@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import plistlib
 import shutil
@@ -224,6 +225,7 @@ exit 0
     )
     (tool_dir / "plistbuddy").write_text(
         """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${BRAINBAR_FAKE_PLISTBUDDY_LOG:-/dev/null}"
 if [[ "$2" == "Print :GitCommit" && -f "$3" ]]; then
   awk '
     found { gsub(/^[[:space:]]*<string>|<\\/string>[[:space:]]*$/, ""); print; exit }
@@ -1143,6 +1145,150 @@ def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_p
 
     assert result.returncode == 0
     assert str(home / "Applications" / "BrainBar-DEV-feat-space-case.app") in result.stdout
+
+
+def test_canonical_bundle_identifier_remains_production_identity() -> None:
+    info_plist = Path(__file__).resolve().parents[1] / "brain-bar" / "bundle" / "Info.plist"
+
+    plist_data = plistlib.loads(info_plist.read_bytes())
+
+    assert plist_data["CFBundleIdentifier"] == "com.brainlayer.brainbar"
+    assert "BrainBarDevPreview" not in plist_data
+
+
+def test_dev_build_stamps_unique_preview_identity_without_daemon_payload(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/UI_Guards")
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    plistbuddy_log = tmp_path / "plistbuddy.log"
+    preview_app = home / "Applications" / "BrainBar DEV" / "BrainBar DEV · feat-UI_Guards.app"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_DEV_APP_DIR": str(preview_app),
+            "BRAINBAR_FAKE_PLISTBUDDY_LOG": str(plistbuddy_log),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"Done: {preview_app}" in result.stdout
+    plist_calls = plistbuddy_log.read_text(encoding="utf-8")
+    assert 'CFBundleIdentifier string "com.brainlayer.brainbar.dev.feat-ui-guards-' in plist_calls
+    assert "Add :BrainBarDevPreview bool true" in plist_calls
+    assert 'BrainBarDevBranch string "feat/UI_Guards"' in plist_calls
+    assert not (preview_app / "Contents" / "MacOS" / "BrainBarDaemon").exists()
+    assert not (preview_app / "Contents" / "Resources" / "LaunchAgents").exists()
+
+
+def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_path: Path) -> None:
+    repo, build_script = _prepare_build_repo(
+        tmp_path,
+        "brainlayer-worktree",
+        branch="feat/a",
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+
+    source_wrapper = Path(__file__).resolve().parents[1] / "brain-bar" / "Scripts" / "dev-preview.sh"
+    wrapper = repo / "brain-bar" / "Scripts" / "dev-preview.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy2(source_wrapper, wrapper)
+
+    open_log = tmp_path / "open.log"
+    open_stub = tmp_path / "open"
+    open_stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$BRAINBAR_TEST_OPEN_LOG"\n')
+    open_stub.chmod(0o755)
+    preview_root = home / "Applications" / "BrainBar DEV"
+    slash_hash = hashlib.sha256(b"feat/a").hexdigest()[:8]
+    dash_hash = hashlib.sha256(b"feat-a").hexdigest()[:8]
+    slash_app = preview_root / f"BrainBar DEV · feat-a-{slash_hash}.app"
+    dash_app = preview_root / f"BrainBar DEV · feat-a-{dash_hash}.app"
+    env = {
+        **_clean_git_env(),
+        **_fake_build_env(tmp_path, tool_dir, bin_dir),
+        "HOME": str(home),
+        "BRAINBAR_CANONICAL_REPO_ROOT": str(tmp_path / "canonical"),
+        "BRAINBAR_BREW_BIN": str(repo / "no-such-brew"),
+        "BRAINBAR_DEV_PREVIEW_ROOT": str(preview_root),
+        "BRAINBAR_DEV_OPEN_BIN": str(open_stub),
+        "BRAINBAR_PLIST_BUDDY": "/usr/libexec/PlistBuddy",
+        "BRAINBAR_TEST_OPEN_LOG": str(open_log),
+    }
+
+    built = subprocess.run(
+        ["/bin/bash", str(wrapper), "feat/a"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert built.returncode == 0, built.stdout + built.stderr
+    assert "PREVIEW\tfeat/a\t" in built.stdout
+    assert open_log.read_text().strip() == f"-n {slash_app}"
+
+    _git(repo, "checkout", "-b", "feat-a")
+    collision_build = subprocess.run(
+        ["/bin/bash", str(wrapper), str(repo)],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert collision_build.returncode == 0, collision_build.stdout + collision_build.stderr
+    assert slash_app.is_dir()
+    assert dash_app.is_dir()
+    assert slash_app != dash_app
+
+    plist_path = dash_app / "Contents" / "Info.plist"
+    plist_data = plistlib.loads(plist_path.read_bytes())
+    plist_data["CFBundleIdentifier"] = "com.brainlayer.brainbar"
+    plist_path.write_bytes(plistlib.dumps(plist_data))
+    build_script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    build_script.chmod(0o755)
+    refused = subprocess.run(
+        ["/bin/bash", str(wrapper), str(repo)],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert refused.returncode != 0
+    assert "unsafe or stale DEV bundle stamp" in refused.stderr
+    assert open_log.read_text().count("\n") == 2
+
+    legacy = home / "Applications" / "BrainBar-DEV-legacy.app"
+    production = home / "Applications" / "BrainBar.app"
+    backup = home / "Applications" / "BrainBar.app.bak-safe"
+    for app in (legacy, production, backup):
+        app.mkdir(parents=True)
+
+    cleaned = subprocess.run(
+        ["/bin/bash", str(wrapper), "--clean"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert cleaned.returncode == 0, cleaned.stdout + cleaned.stderr
+    assert not slash_app.exists()
+    assert not dash_app.exists()
+    assert not legacy.exists()
+    assert production.is_dir()
+    assert backup.is_dir()
 
 
 def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) -> None:

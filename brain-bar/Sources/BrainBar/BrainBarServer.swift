@@ -102,6 +102,7 @@ final class BrainBarServer: @unchecked Sendable {
     private let providedDatabase: BrainDatabase?
     private let databaseRecoveryPolicy: DatabaseRecoveryPolicy
     private let instanceLockPath: String
+    private let processInfoDictionary: [String: Any]?
     private static let queueKey = DispatchSpecificKey<UUID>()
     private let queue = DispatchQueue(label: BrainBarServer.requestQueueLabel, qos: .userInitiated)
     private let backupToolQueue = DispatchQueue(
@@ -190,7 +191,8 @@ final class BrainBarServer: @unchecked Sendable {
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         enableHybridSearchHelper: Bool = true,
         databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy(),
-        instanceLockPath: String? = nil
+        instanceLockPath: String? = nil,
+        processInfoDictionary: [String: Any]? = Bundle.main.infoDictionary
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
@@ -199,6 +201,7 @@ final class BrainBarServer: @unchecked Sendable {
         self.enableHybridSearchHelper = enableHybridSearchHelper
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
         self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
+        self.processInfoDictionary = processInfoDictionary
         queue.setSpecific(key: Self.queueKey, value: queueID)
     }
 
@@ -223,7 +226,16 @@ final class BrainBarServer: @unchecked Sendable {
         "\(socketPath).lock"
     }
 
+    static func serverStartAllowed(infoDictionary: [String: Any]? = Bundle.main.infoDictionary) -> Bool {
+        infoDictionary?["BrainBarDevPreview"] as? Bool != true
+    }
+
     func start() {
+        guard Self.serverStartAllowed(infoDictionary: processInfoDictionary) else {
+            NSLog("[BrainBar] Server start rejected inside a DEV preview process.")
+            onStartRejected?("DEV preview processes are UI-only")
+            return
+        }
         queue.async { [weak self] in
             self?.startOnQueue()
         }

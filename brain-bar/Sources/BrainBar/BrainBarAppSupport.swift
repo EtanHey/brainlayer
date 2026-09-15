@@ -59,7 +59,8 @@ enum BrainBarAppSupport {
     static func wireRuntime(
         _ runtime: BrainBarRuntime,
         dbPath: String,
-        collector: StatsCollector
+        collector: StatsCollector,
+        bootstrapMissingDatabase: Bool = true
     ) {
         let database = BrainDatabase(
             path: dbPath,
@@ -68,7 +69,9 @@ enum BrainBarAppSupport {
         if !database.isOpen {
             database.reopenIfNeeded()
         }
-        if !database.isOpen, !FileManager.default.fileExists(atPath: dbPath) {
+        if bootstrapMissingDatabase,
+           !database.isOpen,
+           !FileManager.default.fileExists(atPath: dbPath) {
             let bootstrapDatabase = BrainDatabase(path: dbPath)
             bootstrapDatabase.close()
             database.reopenIfNeeded()

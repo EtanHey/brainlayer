@@ -22,6 +22,8 @@ DRY_RUN=0
 FORCE_WORKTREE_BUILD=0
 FORCE_DIRTY=0
 DEV_BUNDLE_BUILD=0
+DEV_BRANCH_NAME=""
+DEV_BUNDLE_SLUG=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -102,6 +104,12 @@ resolve_branch_name() {
 
 sanitize_branch_name() {
     printf '%s' "$1" | sed 's#[[:space:]/]#-#g; s/[^A-Za-z0-9._-]/-/g'
+}
+
+sanitize_bundle_slug() {
+    printf '%s' "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9.-]/-/g; s/--*/-/g; s/^[^a-z0-9][^a-z0-9]*/branch-/; s/[^a-z0-9]*$//'
 }
 
 dev_bundle_apps_dir() {
@@ -469,8 +477,11 @@ fi
 
 if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
     DEV_BUNDLE_BUILD=1
-    SAFE_BRANCH_NAME="$(sanitize_branch_name "$(resolve_branch_name)")"
-    APP_DIR="$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app"
+    DEV_BRANCH_NAME="$(resolve_branch_name)"
+    SAFE_BRANCH_NAME="$(sanitize_branch_name "$DEV_BRANCH_NAME")"
+    DEV_BRANCH_HASH="$(printf '%s' "$DEV_BRANCH_NAME" | shasum -a 256 | cut -c1-8)"
+    DEV_BUNDLE_SLUG="$(sanitize_bundle_slug "$DEV_BRANCH_NAME")-$DEV_BRANCH_HASH"
+    APP_DIR="${BRAINBAR_DEV_APP_DIR:-$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app}"
 else
     APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 fi
@@ -570,6 +581,15 @@ plist_set_string() {
     else
         "$PLIST_BUDDY" -c "Add :$key string \"$value\"" "$plist_path"
     fi
+}
+
+plist_set_bool() {
+    local plist_path="$1"
+    local key="$2"
+    local value="$3"
+
+    "$PLIST_BUDDY" -c "Delete :$key" "$plist_path" >/dev/null 2>&1 || true
+    "$PLIST_BUDDY" -c "Add :$key bool $value" "$plist_path"
 }
 
 check_brainlayer_package_installed() {
@@ -785,9 +805,12 @@ else
     echo "[build-app] DEV worktree build: preserving canonical LaunchAgent and socket"
 fi
 
-echo "[build-app] Building BrainBar and BrainBarDaemon (release)..."
+echo "[build-app] Building BrainBar (release)..."
 swift build -c release --package-path "$PACKAGE_DIR" --product BrainBar
-swift build -c release --package-path "$PACKAGE_DIR" --product BrainBarDaemon
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    echo "[build-app] Building BrainBarDaemon (release)..."
+    swift build -c release --package-path "$PACKAGE_DIR" --product BrainBarDaemon
+fi
 
 # Find the built binary
 BIN_DIR="$(swift build -c release --package-path "$PACKAGE_DIR" --show-bin-path)"
@@ -797,7 +820,7 @@ if [ ! -f "$BINARY" ]; then
     echo "[build-app] ERROR: Binary not found at $BINARY"
     exit 1
 fi
-if [ ! -f "$DAEMON_BINARY" ]; then
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ] && [ ! -f "$DAEMON_BINARY" ]; then
     echo "[build-app] ERROR: Daemon binary not found at $DAEMON_BINARY"
     exit 1
 fi
@@ -811,15 +834,19 @@ fi
 echo "[build-app] Creating .app bundle at $APP_DIR..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
-mkdir -p "$APP_DIR/Contents/Resources/LaunchAgents"
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    mkdir -p "$APP_DIR/Contents/Resources/LaunchAgents"
+fi
 mkdir -p "$BRAINLAYER_LOG_DIR"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$APP_ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
-cp "$DAEMON_BINARY" "$APP_DIR/Contents/MacOS/BrainBarDaemon"
-cp "$UI_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$UI_PLIST_FILENAME"
-cp "$DAEMON_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$DAEMON_PLIST_FILENAME"
+if [ "$DEV_BUNDLE_BUILD" -eq 0 ]; then
+    cp "$DAEMON_BINARY" "$APP_DIR/Contents/MacOS/BrainBarDaemon"
+    cp "$UI_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$UI_PLIST_FILENAME"
+    cp "$DAEMON_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$DAEMON_PLIST_FILENAME"
+fi
 
 COMMIT_SHA="$(git_commit)"
 DESCRIBE_REF="$(git_describe)"
@@ -829,6 +856,20 @@ if ! RELEASE_VERSION="$(release_version)"; then
     exit 1
 fi
 stamp_info_plist "$APP_DIR/Contents/Info.plist" "$COMMIT_SHA" "$DESCRIBE_REF" "$BUILD_UTC" "$RELEASE_VERSION" "$BUILD_NUMBER"
+if [ "$DEV_BUNDLE_BUILD" -eq 1 ]; then
+    PREVIEW_REVISION="${COMMIT_SHA:0:8}"
+    if [[ "$DESCRIBE_REF" == *-dirty ]]; then
+        PREVIEW_REVISION="$PREVIEW_REVISION-dirty"
+    fi
+    plist_set_string "$APP_DIR/Contents/Info.plist" "CFBundleIdentifier" "com.brainlayer.brainbar.dev.$DEV_BUNDLE_SLUG"
+    plist_set_string "$APP_DIR/Contents/Info.plist" "CFBundleName" "BrainBar DEV"
+    plist_set_string "$APP_DIR/Contents/Info.plist" "CFBundleDisplayName" "BrainBar DEV · $SAFE_BRANCH_NAME"
+    plist_set_bool "$APP_DIR/Contents/Info.plist" "BrainBarDevPreview" "true"
+    plist_set_string "$APP_DIR/Contents/Info.plist" "BrainBarDevBranch" "$DEV_BRANCH_NAME"
+    "$PLIST_BUDDY" -c "Delete :CFBundleURLTypes" "$APP_DIR/Contents/Info.plist" >/dev/null 2>&1 || true
+    echo "  BundleIdentifier=com.brainlayer.brainbar.dev.$DEV_BUNDLE_SLUG"
+    echo "  PreviewTitle=DEV · $DEV_BRANCH_NAME · $PREVIEW_REVISION"
+fi
 echo "[build-app] Stamped Info.plist:"
 echo "  ReleaseVersion=$RELEASE_VERSION"
 echo "  BundleShortVersion=$(bundle_short_version "$RELEASE_VERSION")"
