@@ -2,6 +2,13 @@ import XCTest
 @testable import BrainBar
 
 final class AgentActivityMonitorTests: XCTestCase {
+    func testFailedProcessSnapshotIsUnmeasuredInsteadOfQuiet() {
+        let activity = AgentActivityMonitor(snapshotProvider: { nil }).sample()
+
+        XCTAssertFalse(activity.isMeasured)
+        XCTAssertEqual(activity.summaryText, "Agent activity unavailable: ps capture failed")
+    }
+
     func testParseSnapshotCountsEachAgentFamilyAndSkipsHelperNoise() {
         let snapshot = """
          2918 2.1.114 claude --dangerously-skip-permissions --resume 3679128a-f371-445f-82ba-b3946e2f20b6
@@ -32,6 +39,7 @@ final class AgentActivityMonitorTests: XCTestCase {
         XCTAssertEqual(activity.count(for: .cursor), 0)
         XCTAssertEqual(activity.count(for: .gemini), 0)
         XCTAssertEqual(activity.totalActiveAgents, 0)
+        XCTAssertTrue(activity.isMeasured)
         XCTAssertEqual(activity.summaryText, "No agent processes live")
     }
 

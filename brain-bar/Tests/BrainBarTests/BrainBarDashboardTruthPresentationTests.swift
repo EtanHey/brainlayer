@@ -5,6 +5,29 @@ import XCTest
 final class BrainBarDashboardTruthPresentationTests: XCTestCase {
     deinit {}
 
+    func testMissingAgentBucketsFailClosedInsteadOfCopyingAllChunks() {
+        let stats = DashboardStats(
+            chunkCount: 1,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [1, 2, 3],
+            recentEnrichmentBuckets: [0, 0, 0]
+        )
+
+        XCTAssertEqual(stats.recentAgentWriteBuckets, [0, 0, 0])
+        XCTAssertEqual(
+            stats.agentWriteReadability,
+            .unreadable("agent-origin flow evidence not supplied")
+        )
+        XCTAssertEqual(
+            DashboardFlowSummary.derive(daemon: nil, stats: stats).lane(for: .agentStores).status,
+            .unavailable
+        )
+    }
+
     func testDashboardShipLabelsMatchTheApprovedMetricAndWatcherTruth() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
@@ -260,6 +283,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(dashboardView.contains("indexed today"))
         XCTAssertTrue(onePageSource.contains("writes via brain_store"))
         XCTAssertTrue(dashboardView.contains("Quiet: no agents active"))
+        XCTAssertTrue(dashboardView.contains("Agent activity unavailable"))
         XCTAssertTrue(dashboardView.contains("get: { displayedTimeframe }"))
         XCTAssertTrue(dashboardView.contains("selectedTimeframe = $0"))
         XCTAssertTrue(dashboardView.contains("if selectedTimeframe == $0"))
@@ -279,6 +303,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertFalse(activity.contains("(\"Window\","))
         XCTAssertTrue(activity.contains("flowSummary.allCommits.volumeText"))
         XCTAssertFalse(observability.contains("indexed chunks total · \\(row.inWindow)"))
+        XCTAssertTrue(observability.contains("of indexed chunks"))
     }
 
     private func sourceSlice(from start: String, throughBefore end: String, in source: String) throws -> String {

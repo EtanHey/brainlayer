@@ -81,6 +81,9 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             stats: BrainBarDashboardFixture.stats,
             now: BrainBarDashboardFixture.fetchedAt
         )
+        let seriesValues = [PipelineSeries.allCommits, .agentStores, .jsonlWatcher].map {
+            summary.lane(for: $0).values
+        }
         let maxima = [PipelineSeries.allCommits, .agentStores, .jsonlWatcher].map {
             SparklineChartPresentation(
                 label: summary.lane(for: $0).sparklineLabel,
@@ -91,17 +94,27 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             ).maxValue
         }
         XCTAssertEqual(maxima.count, 3)
+        XCTAssertNotEqual(seriesValues[0], seriesValues[1])
+        XCTAssertNotEqual(seriesValues[0], seriesValues[2])
+        XCTAssertNotEqual(seriesValues[1], seriesValues[2])
+        XCTAssertTrue(zip(seriesValues[1], seriesValues[0]).allSatisfy { $0.0 <= $0.1 })
+        XCTAssertTrue(zip(seriesValues[1], seriesValues[0]).contains { $0.0 < $0.1 })
+        XCTAssertNotEqual(maxima[0], maxima[1], "Each small multiple must derive its own y-scale.")
         XCTAssertNotEqual(maxima[0], maxima[2], "Each small multiple must derive its own y-scale.")
+        XCTAssertNotEqual(maxima[1], maxima[2], "Each small multiple must derive its own y-scale.")
     }
 
     @MainActor
     func testDashboardRendersAtAllBreakpoints() throws {
-        let observabilityURL = try XCTUnwrap(Bundle.module.url(
-            forResource: "observability-main-58849a70",
-            withExtension: "json",
-            subdirectory: "Fixtures"
-        ))
-        let observability = ObservabilityReader.read(url: observabilityURL)
+        let indexedInLiveWindow = BrainBarDashboardFixture.stats.recentActivityBuckets.reduce(0, +)
+        let observability = try BrainBarOnePageTestFixture.dashboardResult(indexedToday: indexedInLiveWindow)
+        guard case let .readable(document) = observability else {
+            return XCTFail("dashboard observability fixture must be readable")
+        }
+        XCTAssertGreaterThanOrEqual(
+            document.stores.inWindow?.byHour?.reduce(0) { $0 + $1.count } ?? -1,
+            indexedInLiveWindow
+        )
 
         for breakpoint in Breakpoint.allCases {
             let collector = BrainBarDashboardFixture.makeCollector()
@@ -109,6 +122,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             let view = BrainBarDashboardPreview.make(
                 collector: collector,
                 observabilityResult: observability,
+                now: BrainBarOnePageTestFixture.now,
                 panelState: panelState
             )
             var size = breakpoint.size
@@ -141,7 +155,9 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testAllGoodStateRendersWithVerifiedBackups() throws {
-        let result = try BrainBarOnePageTestFixture.healthyResult()
+        let result = try BrainBarOnePageTestFixture.dashboardResult(
+            indexedToday: BrainBarDashboardFixture.stats.recentActivityBuckets.reduce(0, +)
+        )
         let collector = BrainBarDashboardFixture.makeCollector()
         let view = BrainBarDashboardPreview.make(
             collector: collector,
@@ -170,6 +186,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             hero: hero,
             observability: result,
             stats: collector.stats,
+            agentActivity: collector.agentActivity,
             now: BrainBarOnePageTestFixture.now,
             calendar: BrainBarOnePageTestFixture.calendar
         )
@@ -179,6 +196,53 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertEqual(presentation.backupLines.map(\.tone), [.green, .green])
         XCTAssertGreaterThan(png.count, 5_000, "all-good PNG looks empty")
         XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "all-good render is too flat")
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
+    func testDashboardQuietFleetRendersMeasuredQuietState() throws {
+        let collector = BrainBarDashboardFixture.makeCollector(agentActivity: .empty)
+        let result = try BrainBarOnePageTestFixture.dashboardResult(
+            indexedToday: collector.stats.recentActivityBuckets.reduce(0, +)
+        )
+        let view = BrainBarDashboardPreview.make(
+            collector: collector,
+            observabilityResult: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let (png, bitmap) = try renderPNG(view, size: Breakpoint.default.size)
+        let url = try writePNG(png, name: "dashboard-quiet")
+
+        XCTAssertTrue(collector.agentActivity.isMeasured)
+        XCTAssertEqual(collector.agentActivity.totalActiveAgents, 0)
+        XCTAssertGreaterThan(png.count, 5_000, "quiet-state PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "quiet-state render is too flat")
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
+    func testDashboardStaleObservabilityRendersUnavailableCounts() throws {
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let result = try BrainBarOnePageTestFixture.staleResult()
+        let view = BrainBarDashboardPreview.make(
+            collector: collector,
+            observabilityResult: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let (png, bitmap) = try renderPNG(view, size: Breakpoint.default.size)
+        let url = try writePNG(png, name: "dashboard-observability-stale")
+
+        let presentation = try makeOnePagePresentation(
+            collector: collector,
+            result: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertTrue(presentation.indexedTodayUnavailableText?.contains("observability as of") == true)
+        XCTAssertTrue(presentation.agentWritesText.contains("observability as of"))
+        XCTAssertGreaterThan(png.count, 5_000, "stale-observability PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "stale-observability render is too flat")
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
 
@@ -479,6 +543,30 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     // MARK: - Render helpers
+
+    @MainActor
+    private func makeOnePagePresentation(
+        collector: StatsCollector,
+        result: ObservabilityReadResult,
+        now: Date
+    ) throws -> BrainBarOnePagePresentation {
+        let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now)
+        let hero = BrainBarHeroPresentation.derive(
+            flow: flow,
+            stats: collector.stats,
+            backupTruth: BrainBarHeroBackupTruth.derive(from: result, now: now, cadence: .known(300))
+        )
+        return BrainBarOnePagePresentation.derive(
+            snapshotFreshness: collector.snapshotFreshnessState,
+            hero: hero,
+            observability: result,
+            stats: collector.stats,
+            agentActivity: collector.agentActivity,
+            now: now,
+            calendar: BrainBarOnePageTestFixture.calendar,
+            observabilityCadence: .known(300)
+        )
+    }
 
     @MainActor
     private func renderPNG(_ view: some View, size: NSSize) throws -> (Data, NSBitmapImageRep) {

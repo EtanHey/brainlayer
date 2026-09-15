@@ -355,6 +355,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
     let backupLines: [ObservabilityStatusLine]
     let totalIndexedChunks: Int?
     let indexedToday: Int?
+    let indexedTodayUnavailableText: String?
     let agentWritesText: String
 
     static func derive(
@@ -362,9 +363,11 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         hero: BrainBarHeroPresentation,
         observability: ObservabilityReadResult,
         stats: DashboardStats,
+        agentActivity: AgentActivitySnapshot,
         now: Date,
         calendar: Calendar = .current,
-        locale: Locale = .current
+        locale: Locale = .current,
+        observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence
     ) -> Self {
         let status: BrainBarOnePageStatus
         if case .unreadable("Loading observability data.") = observability {
@@ -386,15 +389,24 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                     tone: .amber
                 )
             case .live:
-                status = hero.healthTone == .green
-                    ? .init(headline: "All good", reason: nil, tone: .green)
-                    : .init(headline: "1 thing needs you", reason: hero.healthReason, tone: .amber)
+                if !agentActivity.isMeasured {
+                    status = .init(
+                        headline: "1 thing needs you",
+                        reason: "Agent activity could not be measured.",
+                        tone: .amber
+                    )
+                } else {
+                    status = hero.healthTone == .green
+                        ? .init(headline: "All good", reason: nil, tone: .green)
+                        : .init(headline: "1 thing needs you", reason: hero.healthReason, tone: .amber)
+                }
             }
         }
 
         let backupLines: [ObservabilityStatusLine]
         let totalIndexedChunks: Int?
         let indexedToday: Int?
+        let indexedTodayUnavailableText: String?
         if case let .readable(document) = observability, document.backups.state == "measured" {
             let snapshot = document.backups.dbSnapshot
             let upload = document.backups.lastVerifiedUpload
@@ -417,22 +429,31 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
 
         if case let .readable(document) = observability, document.stores.state == "measured" {
             totalIndexedChunks = document.stores.totalChunks ?? stats.chunkCount
-            if let buckets = document.stores.inWindow?.byHour {
-                let midnight = calendar.startOfDay(for: now)
+            let midnight = calendar.startOfDay(for: now)
+            if !observabilityIsCurrent(document, now: now, midnight: midnight, cadence: observabilityCadence) {
+                indexedToday = nil
+                indexedTodayUnavailableText = "Indexed today unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
+            } else if let buckets = document.stores.inWindow?.byHour {
                 indexedToday = buckets
                     .filter { $0.hour >= midnight && $0.hour <= now }
                     .reduce(0) { $0 + $1.count }
+                indexedTodayUnavailableText = nil
             } else {
                 indexedToday = nil
+                indexedTodayUnavailableText = "Indexed today unavailable: hourly observability missing"
             }
         } else {
             totalIndexedChunks = stats.chunkCount
             indexedToday = nil
+            indexedTodayUnavailableText = "Indexed today unavailable: observability unmeasurable"
         }
 
         let agentWritesText: String
         if case let .readable(document) = observability {
-            if document.emitters.state == "measured" {
+            let midnight = calendar.startOfDay(for: now)
+            if !observabilityIsCurrent(document, now: now, midnight: midnight, cadence: observabilityCadence) {
+                agentWritesText = "brain_store writes unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
+            } else if document.emitters.state == "measured" {
                 if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
                     agentWritesText = "\(DashboardMetricFormatter.integerString(mcp.countInWindow, locale: locale)) writes via brain_store in \(document.windowHours) h"
                 } else {
@@ -451,8 +472,28 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             backupLines: backupLines,
             totalIndexedChunks: totalIndexedChunks,
             indexedToday: indexedToday,
+            indexedTodayUnavailableText: indexedTodayUnavailableText,
             agentWritesText: agentWritesText
         )
+    }
+
+    private static func observabilityIsCurrent(
+        _ document: ObservabilityDocument,
+        now: Date,
+        midnight: Date,
+        cadence: ObservabilityCadence
+    ) -> Bool {
+        document.generatedAt >= midnight
+            && max(0, now.timeIntervalSince(document.generatedAt)) <= cadence.interval * 2
+    }
+
+    private static func shortTime(_ date: Date, calendar: Calendar, locale: Locale) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     private static func ageText(_ seconds: Int) -> String {
@@ -712,6 +753,7 @@ private struct BrainBarDashboardView: View {
             hero: heroPresentation,
             observability: effectiveObservabilityResult,
             stats: collector.stats,
+            agentActivity: collector.agentActivity,
             now: currentNow
         )
     }
@@ -885,6 +927,8 @@ private struct BrainBarDashboardView: View {
                 Text("\(DashboardMetricFormatter.integerString(total)) indexed chunks total")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
             } else {
                 Text("Indexed chunk total unavailable")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -895,9 +939,10 @@ private struct BrainBarDashboardView: View {
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextSecondary)
             } else {
-                Text("Indexed today unavailable")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                Text(counts.indexedTodayUnavailableText ?? "Indexed today unavailable")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Divider().overlay(Color.brainBarBorderSoft)
             Text("AGENT WRITES")
@@ -931,7 +976,12 @@ private struct BrainBarDashboardView: View {
                 isLoading: collector.isWindowedBucketsLoading,
                 loadError: collector.windowedBucketsError
             )
-            if collector.agentActivity.totalActiveAgents == 0 {
+            if !collector.agentActivity.isMeasured {
+                Text("Agent activity unavailable")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .lineLimit(1)
+            } else if collector.agentActivity.totalActiveAgents == 0 {
                 Text("Quiet: no agents active")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(Color.brainBarTextSecondary)

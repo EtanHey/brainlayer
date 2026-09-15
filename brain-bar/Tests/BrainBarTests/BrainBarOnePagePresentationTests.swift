@@ -18,7 +18,57 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertFalse(presentation.backupLines.map(\.text).joined().contains("iCloud"))
         XCTAssertEqual(presentation.totalIndexedChunks, 797_727)
         XCTAssertEqual(presentation.indexedToday, 7)
+        XCTAssertNil(presentation.indexedTodayUnavailableText)
         XCTAssertEqual(presentation.agentWritesText, "175 writes via brain_store in 24 h")
+    }
+
+    @MainActor
+    func testStaleObservabilityNeverReportsZeroTodayOrCurrentAgentWrites() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.staleResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "Indexed today unavailable: observability as of 23:50"
+        )
+        XCTAssertEqual(
+            presentation.agentWritesText,
+            "brain_store writes unavailable: observability as of 23:50"
+        )
+    }
+
+    @MainActor
+    func testSameDayObservabilityPastCadenceIsUnavailable() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.staleSameDayResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "Indexed today unavailable: observability as of 14:45"
+        )
+        XCTAssertEqual(
+            presentation.agentWritesText,
+            "brain_store writes unavailable: observability as of 14:45"
+        )
+    }
+
+    @MainActor
+    func testUnmeasuredAgentActivityRaisesTopStripAlert() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.healthyResult(),
+            now: BrainBarOnePageTestFixture.now,
+            agentActivity: .unavailable("ps capture failed")
+        )
+
+        XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+        XCTAssertEqual(presentation.status.reason, "Agent activity could not be measured.")
+        XCTAssertEqual(presentation.status.tone, .amber)
     }
 
     @MainActor
@@ -68,7 +118,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     @MainActor
     private func makePresentation(
         result: ObservabilityReadResult,
-        now: Date
+        now: Date,
+        agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity
     ) throws -> BrainBarOnePagePresentation {
         let collector = BrainBarDashboardFixture.makeCollector()
         let flow = DashboardFlowSummary.derive(
@@ -91,9 +142,11 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             hero: hero,
             observability: result,
             stats: collector.stats,
+            agentActivity: agentActivity,
             now: now,
             calendar: BrainBarOnePageTestFixture.calendar,
-            locale: Locale(identifier: "en_US")
+            locale: Locale(identifier: "en_US"),
+            observabilityCadence: .known(300)
         )
     }
 }
@@ -114,6 +167,10 @@ enum BrainBarOnePageTestFixture {
         ]))
     }
 
+    static func dashboardResult(indexedToday: Int) throws -> ObservabilityReadResult {
+        .readable(try document(byHour: [.init(hour: now, count: indexedToday)]))
+    }
+
     static func todayBoundaryResult() throws -> ObservabilityReadResult {
         .readable(try document(byHour: [
             .init(hour: Date(timeIntervalSince1970: 1_789_329_600), count: 11),
@@ -130,8 +187,23 @@ enum BrainBarOnePageTestFixture {
         .readable(try document(byHour: [], backupsVerified: false))
     }
 
+    static func staleResult() throws -> ObservabilityReadResult {
+        .readable(try document(
+            byHour: [],
+            generatedAt: Date(timeIntervalSince1970: 1_789_332_600)
+        ))
+    }
+
+    static func staleSameDayResult() throws -> ObservabilityReadResult {
+        .readable(try document(
+            byHour: [.init(hour: now.addingTimeInterval(-900), count: 99)],
+            generatedAt: now.addingTimeInterval(-900)
+        ))
+    }
+
     private static func document(
         byHour: [ObservabilityDocument.HourBucket]?,
+        generatedAt: Date = now,
         backupsVerified: Bool = true
     ) throws -> ObservabilityDocument {
         let url = try XCTUnwrap(Bundle.module.url(
@@ -144,7 +216,7 @@ enum BrainBarOnePageTestFixture {
         }
         return ObservabilityDocument(
             schemaVersion: base.schemaVersion,
-            generatedAt: now,
+            generatedAt: generatedAt,
             dbPath: base.dbPath,
             windowHours: base.windowHours,
             stores: .init(
@@ -173,13 +245,13 @@ enum BrainBarOnePageTestFixture {
                 survivingArchives30D: 3,
                 errorType: nil,
                 lastVerifiedUpload: .init(
-                    at: now.addingTimeInterval(-3_600),
+                    at: generatedAt.addingTimeInterval(-3_600),
                     ageHours: 1,
                     archiveId: "transcripts-verified",
                     verified: backupsVerified
                 ),
                 dbSnapshot: .init(
-                    lastAt: now.addingTimeInterval(-7_200),
+                    lastAt: generatedAt.addingTimeInterval(-7_200),
                     destination: "brainlayer-verified.db.gz",
                     verified: backupsVerified
                 ),

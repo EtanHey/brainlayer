@@ -472,7 +472,7 @@ struct ObservabilityTechnicalDetailsView: View {
                     detail("\(row.sourceClass ?? "unclassified") · \(window)", "\(row.inWindow) indexed chunks")
                 }
                 if let unknown = document.authorUnknown.neverClassified {
-                    detail("Unattributed · total", "\(unknown.count) indexed chunks · \(percent(unknown.share))")
+                    detail("Unattributed · total", "\(unknown.count) indexed chunks · \(percent(unknown.share)) of indexed chunks")
                 }
 
                 Divider()
