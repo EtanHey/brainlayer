@@ -1074,6 +1074,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     @Binding var isExpanded: Bool
     let accessibilityIdentifier: String
     let accessibilityLabel: String
+    var focusRingVisibilityOverride: Bool? = nil
     @ViewBuilder let content: () -> Content
     @ViewBuilder let label: () -> Label
 
@@ -1109,7 +1110,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(Color.accentColor, lineWidth: 2)
-                    .opacity(interaction.showsKeyboardFocusRing && isFocused ? 1 : 0)
+                    .opacity(focusRingIsVisible ? 1 : 0)
             }
             .onChange(of: isFocused) { _, focused in
                 interaction.registerFocusChange(isFocused: focused, source: .current())
@@ -1124,6 +1125,31 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var focusRingIsVisible: Bool {
+        focusRingVisibilityOverride ?? (interaction.showsKeyboardFocusRing && isFocused)
+    }
+}
+
+enum BrainBarDisclosureRowPreview {
+    @MainActor
+    static func make(focusRingVisible: Bool) -> some View {
+        BrainBarDisclosureRow(
+            isExpanded: .constant(false),
+            accessibilityIdentifier: "brainbar.preview.disclosure",
+            accessibilityLabel: "Details",
+            focusRingVisibilityOverride: focusRingVisible
+        ) {
+            EmptyView()
+        } label: {
+            Text("Details")
+                .font(.system(size: 14, weight: .semibold))
+        }
+        .padding(12)
+        .frame(width: 320, height: 64)
+        .background(Color(red: 0.08, green: 0.10, blue: 0.15))
+        .environment(\.colorScheme, .dark)
     }
 }
 

@@ -393,6 +393,33 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testDashboardDisclosureKeyboardFocusRingActuallyDraws() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Disclosure PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let size = NSSize(width: 320, height: 64)
+        let (keyboardPNG, keyboardBitmap) = try renderPNG(
+            BrainBarDisclosureRowPreview.make(focusRingVisible: true),
+            size: size
+        )
+        let (pointerPNG, pointerBitmap) = try renderPNG(
+            BrainBarDisclosureRowPreview.make(focusRingVisible: false),
+            size: size
+        )
+        let url = try writePNG(keyboardPNG, name: "dashboard-disclosure-keyboard-focus-ring")
+
+        XCTAssertNotEqual(keyboardPNG, pointerPNG, "Keyboard focus must change the rendered disclosure pixels.")
+        XCTAssertGreaterThan(
+            differingPixelCount(keyboardBitmap, pointerBitmap),
+            200,
+            "The actual disclosure component must draw a visible keyboard focus ring."
+        )
+        print("[brainbar-render] wrote \(url.path) (\(keyboardPNG.count) bytes)")
+    }
+
+    @MainActor
     func testOperatorStateFixturesStayIsolatedFromProductionDatabaseAndProcessServices() throws {
         let collector = BrainBarDashboardFixture.makeCollector()
         let fields = Dictionary(uniqueKeysWithValues: Mirror(reflecting: collector).children.compactMap { child in
@@ -543,6 +570,24 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
                     + abs(a.blueComponent - b.blueComponent) > 0.12
             }
         }
+    }
+
+    private func differingPixelCount(_ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep) -> Int {
+        guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else { return .max }
+        var count = 0
+        for y in 0 ..< lhs.pixelsHigh {
+            for x in 0 ..< lhs.pixelsWide {
+                guard let a = lhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let b = rhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                else { continue }
+                let delta = abs(a.redComponent - b.redComponent)
+                    + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent)
+                    + abs(a.alphaComponent - b.alphaComponent)
+                if delta > 0.05 { count += 1 }
+            }
+        }
+        return count
     }
 
     private enum RenderError: Error {
