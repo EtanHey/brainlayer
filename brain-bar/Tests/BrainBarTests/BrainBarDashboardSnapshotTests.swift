@@ -394,18 +394,13 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testDashboardDisclosureKeyboardFocusRingActuallyDraws() throws {
-        try XCTSkipIf(
-            shouldSkipDisplayDependentRenderInCI,
-            "Disclosure PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
-        )
-
         let size = NSSize(width: 320, height: 64)
         let (keyboardPNG, keyboardBitmap) = try renderPNG(
-            BrainBarDisclosureRowPreview.make(focusRingVisible: true),
+            BrainBarDisclosureRowPreview.make(focusSource: .keyboard),
             size: size
         )
         let (pointerPNG, pointerBitmap) = try renderPNG(
-            BrainBarDisclosureRowPreview.make(focusRingVisible: false),
+            BrainBarDisclosureRowPreview.make(focusSource: .pointer),
             size: size
         )
         let url = try writePNG(keyboardPNG, name: "dashboard-disclosure-keyboard-focus-ring")

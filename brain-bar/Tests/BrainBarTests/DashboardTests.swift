@@ -691,7 +691,7 @@ final class DashboardTests: XCTestCase {
             "The native pointer focus effect must be disabled so it cannot outline the container."
         )
         XCTAssertTrue(
-            source.contains("interaction.showsKeyboardFocusRing && isFocused"),
+            source.contains("interaction.showsKeyboardFocusRing && (focusStateOverride ?? isFocused)"),
             "A custom focus indicator must remain available for keyboard navigation only."
         )
         XCTAssertFalse(

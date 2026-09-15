@@ -1074,13 +1074,31 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     @Binding var isExpanded: Bool
     let accessibilityIdentifier: String
     let accessibilityLabel: String
-    var focusRingVisibilityOverride: Bool? = nil
+    let focusStateOverride: Bool?
     @ViewBuilder let content: () -> Content
     @ViewBuilder let label: () -> Label
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
-    @State private var interaction = BrainBarDisclosureInteractionState()
+    @State private var interaction: BrainBarDisclosureInteractionState
+
+    init(
+        isExpanded: Binding<Bool>,
+        accessibilityIdentifier: String,
+        accessibilityLabel: String,
+        focusStateOverride: Bool? = nil,
+        initialInteraction: BrainBarDisclosureInteractionState = .init(),
+        @ViewBuilder content: @escaping () -> Content,
+        @ViewBuilder label: @escaping () -> Label
+    ) {
+        _isExpanded = isExpanded
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.accessibilityLabel = accessibilityLabel
+        self.focusStateOverride = focusStateOverride
+        _interaction = State(initialValue: initialInteraction)
+        self.content = content
+        self.label = label
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1128,18 +1146,21 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     }
 
     private var focusRingIsVisible: Bool {
-        focusRingVisibilityOverride ?? (interaction.showsKeyboardFocusRing && isFocused)
+        interaction.showsKeyboardFocusRing && (focusStateOverride ?? isFocused)
     }
 }
 
 enum BrainBarDisclosureRowPreview {
     @MainActor
-    static func make(focusRingVisible: Bool) -> some View {
-        BrainBarDisclosureRow(
+    static func make(focusSource: BrainBarDisclosureActivationSource) -> some View {
+        var interaction = BrainBarDisclosureInteractionState()
+        interaction.registerFocusChange(isFocused: true, source: focusSource)
+        return BrainBarDisclosureRow(
             isExpanded: .constant(false),
             accessibilityIdentifier: "brainbar.preview.disclosure",
             accessibilityLabel: "Details",
-            focusRingVisibilityOverride: focusRingVisible
+            focusStateOverride: true,
+            initialInteraction: interaction
         ) {
             EmptyView()
         } label: {
