@@ -20,6 +20,7 @@ OPEN_BIN="${BRAINBAR_DEV_OPEN_BIN:-/usr/bin/open}"
 TRASH_DIR="${BRAINBAR_DEV_TRASH_DIR:-$HOME/.Trash}"
 OVERLAY_WORKTREE=""
 OVERLAY_TEMP_ROOT=""
+STAGED_APP=""
 
 cleanup_overlay() {
     if [ -n "$OVERLAY_WORKTREE" ]; then
@@ -29,6 +30,10 @@ cleanup_overlay() {
     if [ -n "$OVERLAY_TEMP_ROOT" ] && [ -d "$OVERLAY_TEMP_ROOT" ]; then
         rmdir "$OVERLAY_TEMP_ROOT" >/dev/null 2>&1 || true
         OVERLAY_TEMP_ROOT=""
+    fi
+    if [ -n "$STAGED_APP" ] && [ -e "$STAGED_APP" ]; then
+        rm -rf "$STAGED_APP"
+        STAGED_APP=""
     fi
 }
 
@@ -120,19 +125,22 @@ preview_bundle_paths() {
 }
 
 refuse_duplicate_bundle_id() {
-    local app="$1"
+    local app="$1" ignored_app="${2:-}"
     local plist="$app/Contents/Info.plist"
     local bundle_id candidate candidate_id matches=0
     bundle_id="$($PLIST_BUDDY -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || true)"
     while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
+        if [ "$candidate" = "$app" ] || { [ -n "$ignored_app" ] && [ "$candidate" = "$ignored_app" ]; }; then
+            continue
+        fi
         candidate_id="$($PLIST_BUDDY -c 'Print :CFBundleIdentifier' "$candidate/Contents/Info.plist" 2>/dev/null || true)"
         if [ -n "$bundle_id" ] && [ "$candidate_id" = "$bundle_id" ]; then
             matches=$((matches + 1))
         fi
     done < <(preview_bundle_paths)
-    if [ "$matches" -ne 1 ]; then
-        echo "[dev-preview] ERROR: bundle identifier '$bundle_id' appears in $matches DEV bundles; run --clean before opening" >&2
+    if [ "$matches" -ne 0 ]; then
+        echo "[dev-preview] ERROR: bundle identifier '$bundle_id' appears in $((matches + 1)) DEV bundles; run --clean before opening" >&2
         return 1
     fi
 }
@@ -198,18 +206,26 @@ build_one() {
     branch_hash="$(printf '%s' "$branch" | shasum -a 256 | cut -c1-8)"
     app="$PREVIEW_ROOT/BrainBar DEV · $safe-$branch_hash.app"
     mkdir -p "$PREVIEW_ROOT"
+    STAGED_APP="$PREVIEW_ROOT/.$(basename "$app").staging.$$"
 
     build_source="$worktree"
     if ! grep -q 'BrainBarDevHarnessCommit' "$worktree/brain-bar/build-app.sh"; then
         prepare_overlay_worktree "$worktree" "$sha"
         build_source="$OVERLAY_WORKTREE"
     fi
-    BRAINBAR_DEV_APP_DIR="$app" \
+    BRAINBAR_DEV_APP_DIR="$STAGED_APP" \
         BRAINBAR_DEV_SOURCE_BRANCH="$branch" \
         BRAINBAR_DEV_SOURCE_DESCRIBE="$describe" \
         BRAINBAR_DEV_HARNESS_COMMIT="$harness_sha" \
         bash "$build_source/brain-bar/build-app.sh" \
         --force-worktree-build --force-dirty
+    verify_preview_bundle "$STAGED_APP" "$branch" "$sha" "$harness_sha"
+    refuse_duplicate_bundle_id "$STAGED_APP" "$app"
+    if [ -d "$app" ]; then
+        trash_preview_bundle "$app"
+    fi
+    mv "$STAGED_APP" "$app"
+    STAGED_APP=""
     verify_preview_bundle "$app" "$branch" "$sha" "$harness_sha"
     refuse_duplicate_bundle_id "$app"
     cleanup_overlay
@@ -219,7 +235,7 @@ build_one() {
 
 build_all() {
     local repo number branch has_brainbar worktree built=0
-    repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+    repo="$(cd "$REPO_ROOT" && gh repo view --json nameWithOwner --jq .nameWithOwner)"
     while IFS=$'\t' read -r number branch; do
         [ -n "$number" ] || continue
         has_brainbar="$(gh pr view "$number" --repo "$repo" --json files --jq \

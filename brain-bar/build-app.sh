@@ -162,6 +162,18 @@ app_dir_targets_protected_resident() {
     [ "$(canonical_compare_path "$APP_DIR")" = "$(canonical_compare_path "$(protected_resident_app_path)")" ]
 }
 
+refuse_dev_production_app_dir() {
+    [ "$DEV_BUNDLE_BUILD" -eq 1 ] || return 0
+    local requested production_candidate
+    requested="$(canonical_compare_path "$APP_DIR")"
+    for production_candidate in "$HOME/Applications/BrainBar.app" "$(protected_resident_app_path)"; do
+        if [ "$requested" = "$(canonical_compare_path "$production_candidate")" ]; then
+            echo "[build-app] ERROR: refusing DEV bundle at production app path: $APP_DIR" >&2
+            exit 1
+        fi
+    done
+}
+
 brew_bin() {
     # An explicit setting is authoritative, but an unusable value is uncertainty,
     # not evidence that the protected resident app is unmanaged.
@@ -491,11 +503,12 @@ if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
     SAFE_BRANCH_NAME="$(sanitize_branch_name "$DEV_BRANCH_NAME")"
     DEV_BRANCH_HASH="$(printf '%s' "$DEV_BRANCH_NAME" | shasum -a 256 | cut -c1-8)"
     DEV_BUNDLE_SLUG="$(sanitize_bundle_slug "$DEV_BRANCH_NAME")-$DEV_BRANCH_HASH"
-    APP_DIR="${BRAINBAR_DEV_APP_DIR:-$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app}"
+    APP_DIR="${BRAINBAR_DEV_APP_DIR:-$HOME/Applications/BrainBar-DEV-$DEV_BUNDLE_SLUG.app}"
 else
     APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 fi
 normalize_app_dir_path
+refuse_dev_production_app_dir
 refuse_brew_managed_app_dir
 
 DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain --untracked-files=all)"

@@ -182,6 +182,9 @@ done
 if [[ -n "${BRAINBAR_FAKE_SWIFT_HEAD_LOG:-}" && -n "$package_path" ]]; then
   git -C "$package_path" rev-parse HEAD >> "$BRAINBAR_FAKE_SWIFT_HEAD_LOG"
 fi
+if [[ "${BRAINBAR_FAKE_SWIFT_FAIL:-0}" == "1" ]]; then
+  exit 42
+fi
 if [[ "$*" == *"--show-bin-path"* ]]; then
   printf '%s\n' "$BRAINBAR_FAKE_BIN_DIR"
 fi
@@ -1146,8 +1149,32 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar-DEV-feat-ui-guards.app") in result.stdout
+    branch_hash = hashlib.sha256(b"feat/ui-guards").hexdigest()[:8]
+    assert str(home / "Applications" / f"BrainBar-DEV-feat-ui-guards-{branch_hash}.app") in result.stdout
     assert "LaunchAgents: skipped for DEV worktree build" in result.stdout
+
+
+def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
+    home = tmp_path / "home"
+    production_app = home / "Applications" / "BrainBar.app"
+    marker = production_app / "Contents" / "production-marker"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("keep", encoding="utf-8")
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "brainlayer-canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={"BRAINBAR_DEV_APP_DIR": str(production_app)},
+    )
+
+    assert result.returncode != 0
+    assert "refusing DEV bundle at production app path" in result.stderr
+    assert marker.read_text(encoding="utf-8") == "keep"
 
 
 def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) -> None:
@@ -1202,7 +1229,8 @@ def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_p
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar-DEV-feat-space-case.app") in result.stdout
+    branch_hash = hashlib.sha256(b"feat/space-case").hexdigest()[:8]
+    assert str(home / "Applications" / f"BrainBar-DEV-feat-space-case-{branch_hash}.app") in result.stdout
 
 
 def test_canonical_bundle_identifier_remains_production_identity() -> None:
@@ -1301,6 +1329,20 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     assert built.returncode == 0, built.stdout + built.stderr
     assert "PREVIEW\tfeat/a\t" in built.stdout
     assert open_log.read_text().strip() == f"-n {slash_app}"
+
+    marker = slash_app / "Contents" / "last-good-build"
+    marker.write_text("keep", encoding="utf-8")
+    failed_env = {**env, "BRAINBAR_FAKE_SWIFT_FAIL": "1"}
+    failed_rebuild = subprocess.run(
+        ["/bin/bash", str(wrapper), "feat/a"],
+        cwd=repo,
+        env=failed_env,
+        capture_output=True,
+        text=True,
+    )
+    assert failed_rebuild.returncode != 0
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert open_log.read_text().count("\n") == 1
 
     duplicate_app = preview_root / "BrainBar DEV old-generation.app"
     shutil.copytree(slash_app, duplicate_app)
