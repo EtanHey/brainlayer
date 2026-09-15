@@ -206,7 +206,7 @@ build_one() {
     branch_hash="$(printf '%s' "$branch" | shasum -a 256 | cut -c1-8)"
     app="$PREVIEW_ROOT/BrainBar DEV · $safe-$branch_hash.app"
     mkdir -p "$PREVIEW_ROOT"
-    STAGED_APP="$PREVIEW_ROOT/.$(basename "$app").staging.$$"
+    STAGED_APP="${app%.app}.building.$$.app"
 
     build_source="$worktree"
     if ! grep -q 'BrainBarDevHarnessCommit' "$worktree/brain-bar/build-app.sh"; then
@@ -235,7 +235,7 @@ build_one() {
 
 build_all() {
     local repo number branch has_brainbar worktree built=0
-    repo="$(cd "$REPO_ROOT" && gh repo view --json nameWithOwner --jq .nameWithOwner)"
+    repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
     while IFS=$'\t' read -r number branch; do
         [ -n "$number" ] || continue
         has_brainbar="$(gh pr view "$number" --repo "$repo" --json files --jq \

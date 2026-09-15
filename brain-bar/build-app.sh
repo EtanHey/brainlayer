@@ -164,14 +164,42 @@ app_dir_targets_protected_resident() {
 
 refuse_dev_production_app_dir() {
     [ "$DEV_BUNDLE_BUILD" -eq 1 ] || return 0
-    local requested production_candidate
+    local requested production_candidate existing_bundle_id app_basename
     requested="$(canonical_compare_path "$APP_DIR")"
-    for production_candidate in "$HOME/Applications/BrainBar.app" "$(protected_resident_app_path)"; do
+    app_basename="$(basename "$APP_DIR")"
+
+    if [ -n "${BRAINBAR_DEV_APP_DIR:-}" ]; then
+        case "$app_basename" in
+            "BrainBar DEV · "*.app|BrainBar-DEV-*.app) ;;
+            *)
+                echo "[build-app] ERROR: refusing DEV bundle outside the DEV app naming contract: $APP_DIR" >&2
+                exit 1
+                ;;
+        esac
+    fi
+
+    for production_candidate in \
+        "$HOME/Applications/BrainBar.app" \
+        "$(protected_resident_app_path)" \
+        "${BRAINBAR_APP_DIR:-}"; do
+        [ -n "$production_candidate" ] || continue
         if [ "$requested" = "$(canonical_compare_path "$production_candidate")" ]; then
             echo "[build-app] ERROR: refusing DEV bundle at production app path: $APP_DIR" >&2
             exit 1
         fi
     done
+
+    if [ -f "$APP_DIR/Contents/Info.plist" ]; then
+        existing_bundle_id="$("$PLIST_BUDDY" -c 'Print :CFBundleIdentifier' "$APP_DIR/Contents/Info.plist" 2>/dev/null || true)"
+        if [ "$existing_bundle_id" = "com.brainlayer.brainbar" ]; then
+            echo "[build-app] ERROR: refusing DEV bundle over an existing production bundle identifier: $APP_DIR" >&2
+            exit 1
+        fi
+    fi
+    if [ -e "$APP_DIR/Contents/MacOS/BrainBarDaemon" ]; then
+        echo "[build-app] ERROR: refusing DEV bundle over an existing BrainBarDaemon: $APP_DIR" >&2
+        exit 1
+    fi
 }
 
 brew_bin() {
@@ -503,7 +531,7 @@ if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
     SAFE_BRANCH_NAME="$(sanitize_branch_name "$DEV_BRANCH_NAME")"
     DEV_BRANCH_HASH="$(printf '%s' "$DEV_BRANCH_NAME" | shasum -a 256 | cut -c1-8)"
     DEV_BUNDLE_SLUG="$(sanitize_bundle_slug "$DEV_BRANCH_NAME")-$DEV_BRANCH_HASH"
-    APP_DIR="${BRAINBAR_DEV_APP_DIR:-$HOME/Applications/BrainBar-DEV-$DEV_BUNDLE_SLUG.app}"
+    APP_DIR="${BRAINBAR_DEV_APP_DIR:-$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app}"
 else
     APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
 fi

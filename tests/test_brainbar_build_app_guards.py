@@ -194,6 +194,9 @@ exit 0
     (tool_dir / "codesign").write_text(
         """#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${BRAINBAR_FAKE_CODESIGN_LOG:-/dev/null}"
+if [[ "${BRAINBAR_FAKE_CODESIGN_FAIL:-0}" == "1" ]]; then
+  exit 42
+fi
 if [[ "$*" == *"-dv"* ]]; then
   printf 'Authority=%s\n' "${BRAINBAR_CODESIGN_IDENTITY:-Developer ID Application: Etan Heyman (PPN23G925Y)}"
 fi
@@ -1149,18 +1152,38 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
     )
 
     assert result.returncode == 0
-    branch_hash = hashlib.sha256(b"feat/ui-guards").hexdigest()[:8]
-    assert str(home / "Applications" / f"BrainBar-DEV-feat-ui-guards-{branch_hash}.app") in result.stdout
+    assert str(home / "Applications" / "BrainBar-DEV-feat-ui-guards.app") in result.stdout
     assert "LaunchAgents: skipped for DEV worktree build" in result.stdout
 
 
-def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "requested_path",
+    ["home", "home-trailing", "home-relative", "home-symlink", "home-case", "protected"],
+)
+def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, requested_path: str) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
     home = tmp_path / "home"
     production_app = home / "Applications" / "BrainBar.app"
-    marker = production_app / "Contents" / "production-marker"
-    marker.parent.mkdir(parents=True)
-    marker.write_text("keep", encoding="utf-8")
+    protected_app = tmp_path / "protected" / "BrainBar.app"
+    target_app = protected_app if requested_path == "protected" else production_app
+    daemon = target_app / "Contents" / "MacOS" / "BrainBarDaemon"
+    daemon.parent.mkdir(parents=True)
+    daemon.write_text("production daemon", encoding="utf-8")
+    plist_path = target_app / "Contents" / "Info.plist"
+    plist_path.write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.brainlayer.brainbar"}))
+
+    if requested_path == "home-trailing":
+        requested = f"{production_app}/"
+    elif requested_path == "home-relative":
+        requested = str(home / "Applications" / ".." / "Applications" / "BrainBar.app")
+    elif requested_path == "home-symlink":
+        linked_apps = tmp_path / "linked-apps"
+        linked_apps.symlink_to(home / "Applications", target_is_directory=True)
+        requested = str(linked_apps / "BrainBar.app")
+    elif requested_path == "home-case":
+        requested = str(home / "Applications" / "Brainbar.app")
+    else:
+        requested = str(target_app)
 
     result = _run_build_script(
         repo,
@@ -1169,12 +1192,77 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path) ->
         home=home,
         dry_run=False,
         extra_args=["--force-worktree-build"],
-        extra_env={"BRAINBAR_DEV_APP_DIR": str(production_app)},
+        extra_env={
+            "BRAINBAR_DEV_APP_DIR": requested,
+            "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(tmp_path / "protected"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "refusing DEV bundle" in result.stderr
+    assert plistlib.loads(plist_path.read_bytes())["CFBundleIdentifier"] == "com.brainlayer.brainbar"
+    assert daemon.read_text(encoding="utf-8") == "production daemon"
+
+
+@pytest.mark.parametrize("production_payload", ["bundle-id", "daemon"])
+def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path, production_payload: str) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
+    home = tmp_path / "home"
+    app = home / "Applications" / "BrainBar-DEV-disguised.app"
+    plist_path = app / "Contents" / "Info.plist"
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleIdentifier": (
+                    "com.brainlayer.brainbar"
+                    if production_payload == "bundle-id"
+                    else "com.brainlayer.brainbar.dev.disguised"
+                )
+            }
+        )
+    )
+    daemon = app / "Contents" / "MacOS" / "BrainBarDaemon"
+    if production_payload == "daemon":
+        daemon.parent.mkdir(parents=True)
+        daemon.write_text("production daemon", encoding="utf-8")
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "brainlayer-canonical",
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build"],
+        extra_env={"BRAINBAR_DEV_APP_DIR": str(app)},
+    )
+
+    assert result.returncode != 0
+    assert "refusing DEV bundle over an existing" in result.stderr
+    assert plist_path.is_file()
+    if production_payload == "daemon":
+        assert daemon.read_text(encoding="utf-8") == "production daemon"
+
+
+def test_dev_build_refuses_path_reserved_by_production_override(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
+    home = tmp_path / "home"
+    reserved_app = home / "Applications" / "BrainBar-DEV-reserved.app"
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "brainlayer-canonical",
+        home=home,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            "BRAINBAR_DEV_APP_DIR": str(reserved_app),
+            "BRAINBAR_APP_DIR": str(reserved_app),
+        },
     )
 
     assert result.returncode != 0
     assert "refusing DEV bundle at production app path" in result.stderr
-    assert marker.read_text(encoding="utf-8") == "keep"
 
 
 def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) -> None:
@@ -1229,8 +1317,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_p
     )
 
     assert result.returncode == 0
-    branch_hash = hashlib.sha256(b"feat/space-case").hexdigest()[:8]
-    assert str(home / "Applications" / f"BrainBar-DEV-feat-space-case-{branch_hash}.app") in result.stdout
+    assert str(home / "Applications" / "BrainBar-DEV-feat-space-case.app") in result.stdout
 
 
 def test_canonical_bundle_identifier_remains_production_identity() -> None:
@@ -1332,7 +1419,9 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
 
     marker = slash_app / "Contents" / "last-good-build"
     marker.write_text("keep", encoding="utf-8")
-    failed_env = {**env, "BRAINBAR_FAKE_SWIFT_FAIL": "1"}
+    old_binary = slash_app / "Contents" / "MacOS" / "BrainBar"
+    old_binary.write_text("known working preview", encoding="utf-8")
+    failed_env = {**env, "BRAINBAR_FAKE_CODESIGN_FAIL": "1"}
     failed_rebuild = subprocess.run(
         ["/bin/bash", str(wrapper), "feat/a"],
         cwd=repo,
@@ -1342,6 +1431,7 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     )
     assert failed_rebuild.returncode != 0
     assert marker.read_text(encoding="utf-8") == "keep"
+    assert old_binary.read_text(encoding="utf-8") == "known working preview"
     assert open_log.read_text().count("\n") == 1
 
     duplicate_app = preview_root / "BrainBar DEV old-generation.app"
