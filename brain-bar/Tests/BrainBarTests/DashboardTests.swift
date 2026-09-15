@@ -652,7 +652,7 @@ final class DashboardTests: XCTestCase {
             "The hoisted Vector detail needs a high zIndex above every sibling pipeline card."
         )
         XCTAssertTrue(
-            diagnosticsSource.contains("DisclosureGroup(isExpanded: $detailsExpanded)") &&
+            diagnosticsSource.contains("DisclosureGroup(isExpanded: $panelState.detailsExpanded)") &&
                 diagnosticsSource.contains("signalCoveragePanel(layout: layout)"),
             "Signal coverage should stay inside the one-page Details disclosure while its float mounts at the root."
         )

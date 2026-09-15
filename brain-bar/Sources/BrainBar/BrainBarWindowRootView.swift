@@ -7,6 +7,7 @@ struct BrainBarWindowRootView: View {
 
     @ObservedObject var runtime: BrainBarRuntime
     private let managesWindowFrame: Bool
+    @ObservedObject private var panelState: BrainBarDashboardPanelState
 
     @State private var selectedTab = BrainBarWindowRootView.defaultTab
     @State private var hasActivatedGraphTab = false
@@ -14,9 +15,11 @@ struct BrainBarWindowRootView: View {
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 
-    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true) {
+    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
+         panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()) {
         self.runtime = runtime
         self.managesWindowFrame = managesWindowFrame
+        self.panelState = panelState
         _windowObserver = StateObject(
             wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
         )
@@ -35,6 +38,9 @@ struct BrainBarWindowRootView: View {
                     selectedTab = selectedTab == .graph ? .dashboard : .graph
                 }
             )
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: BrainBarHeaderHeightKey.self, value: proxy.size.height)
+            })
 
             ZStack {
                 dashboardContent
@@ -52,22 +58,21 @@ struct BrainBarWindowRootView: View {
                 // non-empty search query that hasn't been dismissed.
                 BrainBarCommandBarResultsOverlay(
                     viewModel: commandBarViewModel,
-                    isOnActiveTab: selectedTab == .dashboard
+                    isOnActiveTab: selectedTab == .dashboard,
+                    panelState: panelState
                 )
             }
         }
         .frame(
             minWidth: 760,
             idealWidth: 900,
-            maxWidth: .infinity,
-            minHeight: 560,
-            idealHeight: 640,
-            maxHeight: .infinity
+            maxWidth: .infinity
         )
         .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
         .background(BrainBarAppBackground())
         .environment(\.colorScheme, .dark)
         .background(windowAttachment)
+        .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
             activate(tab: selectedTab)
             if let action = runtime.requestedQuickAction {
@@ -75,6 +80,7 @@ struct BrainBarWindowRootView: View {
             }
         }
         .onChange(of: selectedTab) { _, newTab in
+            panelState.graphPresented = newTab == .graph
             activate(tab: newTab)
         }
         .onChange(of: retrievalTools.isEnabled) { _, enabled in
@@ -110,7 +116,8 @@ struct BrainBarWindowRootView: View {
             BrainBarDashboardContent(
                 collector: collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                dbPath: runtime.databasePath
+                dbPath: runtime.databasePath,
+                panelState: panelState
             )
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
@@ -157,12 +164,19 @@ struct BrainBarWindowRootView: View {
     }
 }
 
+private struct BrainBarHeaderHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
+    @StateObject private var standalonePanelState = BrainBarDashboardPanelState()
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    var panelState: BrainBarDashboardPanelState? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -173,7 +187,8 @@ private struct BrainBarDashboardContent: View {
                 hotkeyStatus: hotkeyStatus,
                 dbPath: dbPath,
                 observabilityResult: observabilityResult,
-                referenceNow: referenceNow
+                referenceNow: referenceNow,
+                panelState: panelState ?? standalonePanelState
             )
         }
     }
@@ -614,11 +629,11 @@ private struct BrainBarDashboardView: View {
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
     @State private var allCommitPulseRevision = 0
-    @State private var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
     @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRootFrame: CGRect = .zero
@@ -692,6 +707,9 @@ private struct BrainBarDashboardView: View {
                     .frame(maxWidth: layout.maxContentWidth, alignment: .topLeading)
                     .frame(maxWidth: .infinity, alignment: .top)
                     .focusSection()
+                    .background(GeometryReader { proxy in
+                        Color.clear.preference(key: BrainBarDashboardHeightKey.self, value: proxy.size.height)
+                    })
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .accessibilityIdentifier("brainbar.dashboard.scroll")
@@ -733,6 +751,9 @@ private struct BrainBarDashboardView: View {
                     }
                 }
             }
+        }
+        .onPreferenceChange(BrainBarDashboardHeightKey.self) { height in
+            panelState.dashboardHeight = height
         }
         .onAppear {
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
@@ -965,7 +986,7 @@ private struct BrainBarDashboardView: View {
         )
 
         VStack(alignment: .leading, spacing: 12) {
-            DisclosureGroup(isExpanded: $detailsExpanded) {
+            DisclosureGroup(isExpanded: $panelState.detailsExpanded) {
                 VStack(alignment: .leading, spacing: layout.gridSpacing) {
                     if layout.diagnosticColumns == 2 {
                         HStack(alignment: .top, spacing: layout.gridSpacing) {
@@ -1008,6 +1029,11 @@ private struct BrainBarDashboardView: View {
             activityWindowMinutes: collector.stats.activityWindowMinutes
         )
     }
+}
+
+private struct BrainBarDashboardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct BrainBarSnapshotFreshnessBanner: View {
@@ -2159,7 +2185,8 @@ enum BrainBarDashboardPreview {
         collector: StatsCollector,
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
-        now: Date? = nil
+        now: Date? = nil,
+        panelState: BrainBarDashboardPanelState? = nil
     ) -> AnyView {
         AnyView(
             ZStack {
@@ -2168,7 +2195,8 @@ enum BrainBarDashboardPreview {
                     collector: collector,
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
-                    referenceNow: now
+                    referenceNow: now,
+                    panelState: panelState
                 )
             }
             .environment(\.colorScheme, .dark)

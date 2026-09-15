@@ -72,11 +72,22 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
         for breakpoint in Breakpoint.allCases {
             let collector = BrainBarDashboardFixture.makeCollector()
+            let panelState = BrainBarDashboardPanelState()
             let view = BrainBarDashboardPreview.make(
                 collector: collector,
-                observabilityResult: observability
+                observabilityResult: observability,
+                panelState: panelState
             )
-            let (png, bitmap) = try renderPNG(view, size: breakpoint.size)
+            var size = breakpoint.size
+            if breakpoint == .default {
+                let host = NSHostingController(rootView: view)
+                host.view.frame = NSRect(origin: .zero, size: size)
+                host.view.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+                size.height = panelState.dashboardHeight
+                XCTAssertLessThan(size.height, 640)
+            }
+            let (png, bitmap) = try renderPNG(view, size: size)
 
             let url = try writePNG(png, name: "dashboard-\(breakpoint.rawValue)")
             XCTAssertGreaterThan(png.count, 5_000, "dashboard-\(breakpoint.rawValue) PNG looks empty")
@@ -89,6 +100,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
                 0.12,
                 "dashboard-\(breakpoint.rawValue) regressed to the old brown-card layout"
             )
+            if breakpoint == .default { XCTAssertTrue(bottomBandContainsForeground(in: bitmap)) }
             // Surface the path in the test log so an agent knows what to Read.
             print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
         }
@@ -518,6 +530,17 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             }
         }
         return sampled == 0 ? 1 : Double(warm) / Double(sampled)
+    }
+
+    private func bottomBandContainsForeground(in bitmap: NSBitmapImageRep) -> Bool {
+        let bandHeight = max(Int(Double(bitmap.pixelsHigh) * 0.15), 1)
+        return (0 ..< bandHeight).contains { y in
+            (1 ..< bitmap.pixelsWide).contains { x in
+                guard let a = bitmap.colorAt(x: x - 1, y: y), let b = bitmap.colorAt(x: x, y: y) else { return false }
+                return abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent) > 0.12
+            }
+        }
     }
 
     private enum RenderError: Error {
