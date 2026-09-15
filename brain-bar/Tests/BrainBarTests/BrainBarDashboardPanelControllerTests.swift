@@ -21,6 +21,31 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         )
     }
 
+    func testEveryDashboardDisclosureUsesTheSharedContainerAndWindowDriver() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let details = try XCTUnwrap(source.range(of: "private func diagnostics"))
+        let detailsEnd = try XCTUnwrap(source.range(of: "private var daemonSummary", range: details.upperBound..<source.endIndex))
+        XCTAssertTrue(String(source[details.lowerBound..<detailsEnd.lowerBound]).contains("BrainBarDisclosureRow("))
+
+        let signal = try XCTUnwrap(source.range(of: "private struct BrainBarSignalCoveragePanel"))
+        let signalEnd = try XCTUnwrap(source.range(of: "private struct BrainBarSignalCoverageRow", range: signal.upperBound..<source.endIndex))
+        XCTAssertTrue(String(source[signal.lowerBound..<signalEnd.lowerBound]).contains("BrainBarDisclosureRow("))
+        let controllerSource = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarDashboardPanelController.swift"),
+            encoding: .utf8
+        )
+        let fit = try XCTUnwrap(controllerSource.range(of: "private func fitPanelToContent()"))
+        let fitEnd = try XCTUnwrap(controllerSource.range(of: "private static func makePanel", range: fit.upperBound..<controllerSource.endIndex))
+        XCTAssertEqual(
+            String(controllerSource[fit.lowerBound..<fitEnd.lowerBound])
+                .components(separatedBy: "panel.setContentSize(").count - 1,
+            1
+        )
+    }
+
     func testDisclosureAnimationCouplesContainerAndWindowAtInteriorProgress() {
         let collapsedContainerHeight: CGFloat = 44
         let expandedContainerHeight: CGFloat = 612
@@ -103,6 +128,29 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let expandedHeight = controller.panelForTesting.contentLayoutRect.height
         XCTAssertGreaterThan(expandedHeight, restingHeight)
         XCTAssertLessThanOrEqual(controller.measuredContentHeightForTesting, expandedHeight + 1)
+    }
+
+    func testSignalCoverageUsesTheSameWindowHeightDriverInBothDirections() {
+        let runtime = BrainBarRuntime()
+        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        _ = controller.contentViewControllerForTesting.view
+        controller.setDetailsExpandedForTesting(true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let collapsedSignalHeight = controller.panelForTesting.contentLayoutRect.height
+
+        controller.setSignalCoverageExpandedForTesting(true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let expandedSignalHeight = controller.panelForTesting.contentLayoutRect.height
+        XCTAssertGreaterThan(expandedSignalHeight, collapsedSignalHeight)
+
+        controller.setSignalCoverageExpandedForTesting(false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(
+            controller.panelForTesting.contentLayoutRect.height,
+            collapsedSignalHeight,
+            accuracy: 1
+        )
     }
 
     func testSearchOverlayDoesNotShrinkExpandedDetailsAndVerticalSizeIsPinned() {
@@ -247,6 +295,13 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
 
     private func runMainRunLoop() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    private func packageRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 
     private func assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(

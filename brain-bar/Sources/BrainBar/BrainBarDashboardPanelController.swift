@@ -81,6 +81,7 @@ final class BrainBarDashboardPanel: NSPanel {
 @MainActor
 final class BrainBarDashboardPanelState: ObservableObject {
     @Published var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
+    @Published var signalCoverageExpanded = false
     @Published var dashboardHeight: CGFloat = 0
     @Published var headerHeight: CGFloat = 0
     @Published var searchOverlayPresented = false
@@ -216,6 +217,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
+    func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
 
     private func fitPanelToContent() {

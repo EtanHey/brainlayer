@@ -125,9 +125,15 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         let panel = String(source[start.lowerBound..<end.lowerBound])
         XCTAssertEqual(panel.components(separatedBy: "brainbar.dashboard.signal-coverage-disclosure").count - 1, 1)
         XCTAssertFalse(panel.contains("disclosureChevron"))
-        XCTAssertTrue(panel.contains("Image(systemName: \"chevron.right\")"))
-        XCTAssertTrue(panel.contains("rotationEffect(.degrees(isExpanded ? 90 : 0))"))
-        XCTAssertTrue(panel.contains(".focusEffectDisabled()"))
+        XCTAssertTrue(panel.contains("BrainBarDisclosureRow("))
+        XCTAssertTrue(panel.contains("chevronPlacement: .trailing"))
+
+        let rowStart = try XCTUnwrap(source.range(of: "private struct BrainBarDisclosureRow"))
+        let rowEnd = try XCTUnwrap(source.range(of: "private struct BrainBarDisclosureContentLayout", range: rowStart.upperBound..<source.endIndex))
+        let row = String(source[rowStart.lowerBound..<rowEnd.lowerBound])
+        XCTAssertTrue(row.contains("Image(systemName: \"chevron.right\")"))
+        XCTAssertTrue(row.contains("rotationEffect(.degrees(isExpanded ? 90 : 0))"))
+        XCTAssertTrue(row.contains(".focusEffectDisabled()"))
     }
 
     func testDashboardHasNoFocusableNonControlContainer() throws {

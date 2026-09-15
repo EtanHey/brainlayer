@@ -893,7 +893,6 @@ private struct BrainBarDashboardView: View {
     @State private var writePulseRevision = 0
     @State private var watcherPulseRevision = 0
     @State private var selectedTimeframe: PipelineTimeframe = .live
-    @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
@@ -995,7 +994,12 @@ private struct BrainBarDashboardView: View {
                         Color.clear.preference(key: BrainBarDashboardHeightKey.self, value: proxy.size.height)
                     })
                     .background(
-                        BrainBarDashboardScrollResetter(disclosureExpanded: panelState.detailsExpanded)
+                        BrainBarDashboardScrollResetter(
+                            disclosureState: BrainBarDashboardDisclosureState(
+                                detailsExpanded: panelState.detailsExpanded,
+                                signalCoverageExpanded: panelState.signalCoverageExpanded
+                            )
+                        )
                             .frame(width: 0, height: 0)
                     )
                 }
@@ -1009,7 +1013,7 @@ private struct BrainBarDashboardView: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if signalCoverageExpanded, vectorSignalDetailExpanded, vectorSignalRootFrame != .zero {
+                if panelState.signalCoverageExpanded, vectorSignalDetailExpanded, vectorSignalRootFrame != .zero {
                     BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)
                         .frame(width: vectorDetailWidth(layout: layout), alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1330,8 +1334,9 @@ private struct BrainBarDashboardView: View {
         BrainBarSignalCoveragePanel(
             stats: collector.stats,
             compact: layout.compactCards,
-            isExpanded: $signalCoverageExpanded,
-            isVectorDetailExpanded: $vectorSignalDetailExpanded
+            isExpanded: $panelState.signalCoverageExpanded,
+            isVectorDetailExpanded: $vectorSignalDetailExpanded,
+            onAnimationCompleted: panelState.disclosureAnimationDidComplete
         )
     }
 
@@ -1541,20 +1546,25 @@ enum BrainBarDashboardScrollPosition {
     }
 }
 
+private struct BrainBarDashboardDisclosureState: Equatable {
+    let detailsExpanded: Bool
+    let signalCoverageExpanded: Bool
+}
+
 private struct BrainBarDashboardScrollResetter: NSViewRepresentable {
-    let disclosureExpanded: Bool
+    let disclosureState: BrainBarDashboardDisclosureState
 
     final class Coordinator {
-        var previousExpansion: Bool?
+        var previousState: BrainBarDashboardDisclosureState?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        let previousExpansion = context.coordinator.previousExpansion
-        context.coordinator.previousExpansion = disclosureExpanded
-        guard previousExpansion != nil, previousExpansion != disclosureExpanded else { return }
+        let previousState = context.coordinator.previousState
+        context.coordinator.previousState = disclosureState
+        guard previousState != nil, previousState != disclosureState else { return }
 
         DispatchQueue.main.async {
             guard let scrollView = nsView.enclosingScrollView,
@@ -1576,6 +1586,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     @Binding var isExpanded: Bool
     let accessibilityIdentifier: String
     let accessibilityLabel: String
+    let chevronPlacement: BrainBarDisclosureChevronPlacement
     let focusStateOverride: Bool?
     let onAnimationCompleted: () -> Void
     @ViewBuilder let content: () -> Content
@@ -1591,6 +1602,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         isExpanded: Binding<Bool>,
         accessibilityIdentifier: String,
         accessibilityLabel: String,
+        chevronPlacement: BrainBarDisclosureChevronPlacement = .leading,
         focusStateOverride: Bool? = nil,
         initialInteraction: BrainBarDisclosureInteractionState = .init(),
         onAnimationCompleted: @escaping () -> Void = {},
@@ -1600,6 +1612,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         _isExpanded = isExpanded
         self.accessibilityIdentifier = accessibilityIdentifier
         self.accessibilityLabel = accessibilityLabel
+        self.chevronPlacement = chevronPlacement
         self.focusStateOverride = focusStateOverride
         self.onAnimationCompleted = onAnimationCompleted
         _interaction = State(initialValue: initialInteraction)
@@ -1618,11 +1631,9 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
                 beginExpansionTransition(to: nextExpansion)
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .frame(width: 12, height: 12)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    if chevronPlacement == .leading { disclosureChevron }
                     label()
+                    if chevronPlacement == .trailing { disclosureChevron }
                 }
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1666,6 +1677,13 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         interaction.showsKeyboardFocusRing && (focusStateOverride ?? isFocused)
     }
 
+    private var disclosureChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 9, weight: .bold))
+            .frame(width: 12, height: 12)
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+    }
+
     private func beginExpansionTransition(to expanded: Bool) {
         guard !isAnimatingExpansion else { return }
 
@@ -1692,6 +1710,11 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
             }
         }
     }
+}
+
+enum BrainBarDisclosureChevronPlacement {
+    case leading
+    case trailing
 }
 
 private struct BrainBarDisclosureContentLayout: Layout {
@@ -1966,10 +1989,9 @@ private struct BrainBarSignalCoveragePanel: View {
     let compact: Bool
     @Binding var isExpanded: Bool
     @Binding var isVectorDetailExpanded: Bool
+    var onAnimationCompleted: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var revealedSignalIDs: Set<String> = []
-    @FocusState private var disclosureIsFocused: Bool
-    @State private var disclosureInteraction = BrainBarDisclosureInteractionState()
 
     private var signals: [BrainBarSignalCoverage] {
         [
@@ -2019,45 +2041,16 @@ private struct BrainBarSignalCoveragePanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 12) {
-            disclosureControl
-            if isExpanded {
-                signalBars
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onExitCommand {
-            if isVectorDetailExpanded { setVectorDetail(false) }
-        }
-        .onAppear { updateRevealedSignals(animated: false) }
-        .onChange(of: isExpanded) { _, _ in updateRevealedSignals(animated: true) }
-    }
-
-    private func signalChip(for signal: BrainBarSignalCoverage) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(signal.accentColor)
-                .frame(width: 7, height: 7)
-            Text(signal.name)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.brainBarTextSecondary)
-            Text(signal.percentText)
-                .font(.system(size: 12, weight: .bold))
-                .monospacedDigit()
-                .foregroundStyle(Color.brainBarTextPrimary)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var disclosureControl: some View {
-        Button {
-            let next = disclosureInteraction.activate(isExpanded: isExpanded, source: .current())
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
-                isExpanded = next
-                if !next { isVectorDetailExpanded = false }
-            }
+        BrainBarDisclosureRow(
+            isExpanded: $isExpanded,
+            accessibilityIdentifier: "brainbar.dashboard.signal-coverage-disclosure",
+            accessibilityLabel: "Signal coverage",
+            chevronPlacement: .trailing,
+            onAnimationCompleted: onAnimationCompleted
+        ) {
+            signalBars
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.top, compact ? 10 : 12)
         } label: {
             HStack(spacing: 10) {
                 Text("Signal coverage")
@@ -2077,27 +2070,33 @@ private struct BrainBarSignalCoveragePanel: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.brainBarTextSecondary)
                     .lineLimit(1)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .frame(width: 12, height: 12)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: isExpanded)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .focused($disclosureIsFocused)
-        .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(Color.accentColor, lineWidth: 2)
-                .opacity(disclosureInteraction.showsKeyboardFocusRing && disclosureIsFocused ? 1 : 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onExitCommand {
+            if isVectorDetailExpanded { setVectorDetail(false) }
         }
-        .onChange(of: disclosureIsFocused) { _, focused in
-            disclosureInteraction.registerFocusChange(isFocused: focused, source: .current())
+        .onAppear { updateRevealedSignals(animated: false) }
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded { setVectorDetail(false) }
+            updateRevealedSignals(animated: true)
         }
-        .help("Show retrieval signal coverage")
-        .accessibilityIdentifier("brainbar.dashboard.signal-coverage-disclosure")
+    }
+
+    private func signalChip(for signal: BrainBarSignalCoverage) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(signal.accentColor)
+                .frame(width: 7, height: 7)
+            Text(signal.name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
+            Text(signal.percentText)
+                .font(.system(size: 12, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(Color.brainBarTextPrimary)
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder

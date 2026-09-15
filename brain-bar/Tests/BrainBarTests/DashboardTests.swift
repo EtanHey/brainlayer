@@ -748,8 +748,9 @@ final class DashboardTests: XCTestCase {
             "The disclosure interaction must have exactly one panel-height writer."
         )
         XCTAssertTrue(
-            rootSource.contains("BrainBarDashboardScrollResetter(disclosureExpanded: panelState.detailsExpanded)"),
-            "Disclosure height changes must explicitly clear the enclosing NSScrollView offset that clipped the banner."
+            rootSource.contains("detailsExpanded: panelState.detailsExpanded")
+                && rootSource.contains("signalCoverageExpanded: panelState.signalCoverageExpanded"),
+            "Every disclosure height change must explicitly clear the enclosing NSScrollView offset that clipped the banner."
         )
     }
 
