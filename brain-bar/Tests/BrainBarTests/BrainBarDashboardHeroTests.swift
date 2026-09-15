@@ -41,6 +41,7 @@ final class BrainBarDashboardHeroTests: XCTestCase {
             windowLabel: baseline.windowLabel,
             allCommits: baseline.allCommits,
             ingress: ingress,
+            agentWriteReadability: baseline.agentWriteReadability,
             queue: baseline.queue,
             enrichment: baseline.enrichment,
             watcherFlowState: state,

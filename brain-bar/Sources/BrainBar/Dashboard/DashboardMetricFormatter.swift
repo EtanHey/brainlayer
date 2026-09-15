@@ -14,12 +14,17 @@ enum DashboardMetricFormatter {
         return formatter
     }()
 
-    static func axisTickString(_ value: Int) -> String {
+    static func axisTickString(_ value: Int, locale: Locale = .current) -> String {
         if value >= 1000 {
             let thousands = Double(value) / 1000
-            return thousands >= 10 ? "\(Int(thousands.rounded()))k" : String(format: "%.1fk", thousands)
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.locale = locale
+            formatter.minimumFractionDigits = thousands >= 10 ? 0 : 1
+            formatter.maximumFractionDigits = thousands >= 10 ? 0 : 1
+            return "\(formatter.string(from: NSNumber(value: thousands)) ?? String(thousands))k"
         }
-        return "\(value)"
+        return integerString(value, locale: locale)
     }
 
     private static let shortAbsoluteTimeFormatter: DateFormatter = {

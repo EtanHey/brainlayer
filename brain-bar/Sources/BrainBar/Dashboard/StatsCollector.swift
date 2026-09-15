@@ -316,7 +316,7 @@ final class StatsCollector: ObservableObject {
             signalEligibleChunkCount: 0,
             signalCoverageIsAvailable: false
         )
-        self.agentActivity = .empty
+        self.agentActivity = .unavailable("not sampled yet")
         self.state = .degraded
         self.lastFetchError = nil
         self.snapshotFreshnessState = .loading

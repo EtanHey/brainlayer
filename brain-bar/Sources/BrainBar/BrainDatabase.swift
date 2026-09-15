@@ -134,6 +134,7 @@ final class BrainDatabase: @unchecked Sendable {
         let databaseSizeBytes: Int64
         let recentActivityBuckets: [Int]
         let recentAgentWriteBuckets: [Int]
+        let agentWriteReadability: MetricEvidenceReadability
         let recentWatcherWriteBuckets: [Int]
         let recentEnrichmentBuckets: [Int]
         let recentWriteFiveMinuteCount: Int
@@ -169,6 +170,7 @@ final class BrainDatabase: @unchecked Sendable {
             databaseSizeBytes: Int64,
             recentActivityBuckets: [Int],
             recentAgentWriteBuckets: [Int]? = nil,
+            agentWriteReadability: MetricEvidenceReadability? = nil,
             recentWatcherWriteBuckets: [Int]? = nil,
             recentEnrichmentBuckets: [Int],
             recentWriteFiveMinuteCount: Int = 0,
@@ -202,7 +204,10 @@ final class BrainDatabase: @unchecked Sendable {
             self.enrichmentRatePerMinute = enrichmentRatePerMinute
             self.databaseSizeBytes = databaseSizeBytes
             self.recentActivityBuckets = recentActivityBuckets
-            self.recentAgentWriteBuckets = recentAgentWriteBuckets ?? recentActivityBuckets
+            self.recentAgentWriteBuckets = recentAgentWriteBuckets
+                ?? Array(repeating: 0, count: recentActivityBuckets.count)
+            self.agentWriteReadability = agentWriteReadability
+                ?? (recentAgentWriteBuckets == nil ? .unreadable("agent-origin flow evidence not supplied") : .readable)
             self.recentWatcherWriteBuckets = recentWatcherWriteBuckets ?? Array(repeating: 0, count: recentActivityBuckets.count)
             self.recentEnrichmentBuckets = recentEnrichmentBuckets
             self.recentWriteFiveMinuteCount = recentWriteFiveMinuteCount
@@ -341,6 +346,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: buckets.allWriteBuckets,
                 recentAgentWriteBuckets: buckets.agentWriteBuckets,
+                agentWriteReadability: buckets.agentWriteReadability,
                 recentWatcherWriteBuckets: buckets.watcherWriteBuckets,
                 recentEnrichmentBuckets: buckets.enrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -379,6 +385,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -417,6 +424,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -455,6 +463,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -611,6 +620,7 @@ final class BrainDatabase: @unchecked Sendable {
         let bucketCount: Int
         let allWriteBuckets: [Int]
         let agentWriteBuckets: [Int]
+        let agentWriteReadability: MetricEvidenceReadability = .readable
         let watcherWriteBuckets: [Int]
         let enrichmentBuckets: [Int]
         let watcherFlowReadability: MetricEvidenceReadability

@@ -147,7 +147,7 @@ enum BrainBarDashboardFixture {
             enrichmentRatePerMinute: 11.4,
             databaseSizeBytes: 8_120_000_000,
             recentActivityBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
-            recentAgentWriteBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
+            recentAgentWriteBuckets: [1, 2, 0, 3, 2, 1, 4, 3, 1, 2, 3, 1].map { $0 * windowScale },
             recentWatcherWriteBuckets: watcherBuckets,
             recentEnrichmentBuckets: [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6].map { $0 * windowScale },
             recentWriteFiveMinuteCount: 18,
@@ -204,7 +204,10 @@ enum BrainBarDashboardFixture {
 
     /// A `StatsCollector` pre-loaded with the fixture state and no live wiring
     /// (no DB, no observers, no timers — `start()` is never called).
-    static func makeCollector(_ operatorState: OperatorState = .live) -> StatsCollector {
+    static func makeCollector(
+        _ operatorState: OperatorState = .live,
+        agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity
+    ) -> StatsCollector {
         let fixtureStats: DashboardStats
         switch operatorState {
         case .partialReplayDebt:

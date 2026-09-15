@@ -376,6 +376,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let windowLabel: String
     let allCommits: DashboardFlowLane
     let ingress: DashboardFlowLane
+    let agentWriteReadability: MetricEvidenceReadability
     let queue: DashboardQueueSummary
     let enrichment: DashboardFlowLane
     let watcherFlowState: WatcherFlowState
@@ -543,6 +544,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 tertiarySeriesLabel: nil,
                 tertiaryAccentColor: nil
             ),
+            agentWriteReadability: stats.agentWriteReadability,
             queue: DashboardQueueSummary(
                 status: queueStatus,
                 backlogCount: backlogCount,
@@ -833,7 +835,9 @@ extension DashboardFlowSummary {
         case .agentStores:
             let agentValues = ingress.values
             let agentTotal = agentValues.reduce(0, +)
-            let agentStatus = agentStoreStatus(values: agentValues)
+            let agentStatus = agentWriteReadability.isReadable
+                ? agentStoreStatus(values: agentValues)
+                : .unavailable
             return DashboardFlowLane(
                 name: "Agent-origin chunks",
                 status: agentStatus,
@@ -946,6 +950,9 @@ extension DashboardFlowSummary {
         latestBucketCount: Int,
         windowLabel: String
     ) -> String {
+        if status == .unavailable {
+            return "Agent-origin flow evidence unavailable"
+        }
         if totalEvents == 0 {
             return "No agent-origin chunks in \(windowLabel)"
         }

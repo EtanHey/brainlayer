@@ -559,6 +559,38 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(watcherLane.statusText, "OFFLINE")
     }
 
+    func testUnreadableSourceSeriesNeverPresentZeroBucketsAsMeasuredActivity() {
+        let stats = DashboardStats(
+            chunkCount: 0,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4
+        )
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats)
+
+        for series in [PipelineSeries.agentStores, .jsonlWatcher] {
+            let lane = summary.lane(for: series)
+            let presentation = BrainBarIngestSeriesPresentation(lane: lane)
+            let disclosure = BrainBarDashboardChartDisclosure(
+                series: series,
+                lane: lane,
+                timeframe: .live
+            )
+
+            XCTAssertEqual(lane.status, .unavailable)
+            XCTAssertEqual(presentation.metricText, "Unavailable")
+            XCTAssertFalse(presentation.showsSparkline)
+            XCTAssertFalse(disclosure.accessibilitySummary.contains("Count: 0"))
+            XCTAssertEqual(disclosure.tooltipDisclosure, "Evidence unavailable")
+        }
+    }
+
     func testWatcherFlowStateMatrixUsesProcessRecentDistinctFlowAndPendingEvidence() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let running = WatcherProcessProbeResult.running(pid: 4242)
