@@ -1165,7 +1165,7 @@ def _report_queue_backlog(
             f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
             timestamp=now.isoformat(),
         )
-    return None
+    return signature
 
 
 def _record_queue_notice(state_payload: dict[str, Any], signature: dict[str, Any] | None) -> None:

@@ -525,6 +525,8 @@ def _restart_watch(
 
 
 def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
+    # True means the incident was persisted to the log. The existing episode
+    # latches now deduplicate log records; no paging or delivery channel exists.
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")

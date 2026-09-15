@@ -1783,7 +1783,7 @@ def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path
     assert "action=kickstart:com.brainlayer.drain" in queue_page
 
 
-def test_pause_explained_backlog_stays_quiet_until_pause_lifts(tmp_path, monkeypatch):
+def test_pause_explained_backlog_logs_once_per_signature_until_pause_lifts(tmp_path, monkeypatch):
     config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=False)
     (queue_dir / "enrichment-one.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     pause_path.write_text(
@@ -1797,15 +1797,15 @@ def test_pause_explained_backlog_stays_quiet_until_pause_lifts(tmp_path, monkeyp
 
     run()
     run()
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
     (queue_dir / "enrichment-two.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     run()
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 3
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
 
     pause_path.unlink()
     run()
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 4
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 3
 
 
 @pytest.mark.parametrize(
@@ -1865,7 +1865,7 @@ def test_disabled_enrichment_backlog_pages_immediately_after_reenable(tmp_path, 
     _run_queue_backlog_health(config, runner)
 
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
-    assert "queue_backlog_notice" not in json.loads(state_path.read_text(encoding="utf-8"))
+    assert "queue_backlog_notice" in json.loads(state_path.read_text(encoding="utf-8"))
 
     monkeypatch.delenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED")
     _run_queue_backlog_health(config, runner)
