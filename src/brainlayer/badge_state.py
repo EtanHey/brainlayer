@@ -111,44 +111,68 @@ def build_pending_first_run_document(now: datetime) -> dict[str, Any]:
     }
 
 
+def _temporary_badge_state(destination: Path, document: Mapping[str, Any]) -> Path:
+    with NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        json.dump(document, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return temporary
+
+
+def _fsync_parent(path: Path) -> None:
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def write_badge_state(path: Path, document: Mapping[str, Any]) -> None:
     """Atomically replace the consumed badge document."""
 
     destination = path.expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary: Path | None = None
+    temporary = _temporary_badge_state(destination, document)
     try:
-        with NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=destination.parent,
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-            json.dump(document, handle, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
         os.replace(temporary, destination)
-        directory = os.open(destination.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        _fsync_parent(destination)
     finally:
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def write_badge_state_if_missing(path: Path, document: Mapping[str, Any]) -> bool:
+    """Create the initial badge document without replacing measured state."""
+
+    destination = path.expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _temporary_badge_state(destination, document)
+    try:
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            return False
+        _fsync_parent(destination)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
     from .paths import get_db_path
 
-    write_badge_state(
+    write_badge_state_if_missing(
         badge_state_path(get_db_path()),
         build_pending_first_run_document(datetime.now(UTC)),
     )
