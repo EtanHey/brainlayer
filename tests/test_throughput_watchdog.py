@@ -7,12 +7,13 @@ import plistlib
 import sqlite3
 import subprocess
 import sys
-from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+import brainlayer.notification_policy as notification_policy
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "launchd" / "throughput-watchdog.py"
@@ -129,78 +130,25 @@ def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path
     assert commands == []
 
 
-def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path: Path, monkeypatch) -> None:
+def test_watchdog_incidents_are_logged_without_delivery(tmp_path: Path, monkeypatch, capsys) -> None:
     module = _load_module()
     config = _config(module, tmp_path)
-    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
     marker = tmp_path / "by-design-notifications.json"
     marker.write_text(
         '{"conditions":{"watcher_stopped":"planned watcher maintenance"}}',
         encoding="utf-8",
     )
     monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(marker))
-    subprocess_calls: list[object] = []
-    urlopen_calls: list[object] = []
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: (subprocess_calls.append((args, kwargs)), SimpleNamespace(returncode=0))[1],
-    )
-    monkeypatch.setattr(
-        module.urllib.request,
-        "urlopen",
-        lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
-    )
 
     result = _stalled_result(module)
-    assert module._best_effort_alert(config, result) is False
-
-    assert subprocess_calls == []
-    assert urlopen_calls == []
-
+    assert module._best_effort_alert(config, result) is True
     assert module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert")) is True
 
-    assert len(subprocess_calls) == 1
-    assert len(urlopen_calls) == 1
-
-
-def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypatch) -> None:
-    module = _load_module()
-    config = _config(module, tmp_path)
-    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
-    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
-    subprocess_calls: list[object] = []
-    urlopen_calls: list[object] = []
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: (subprocess_calls.append((args, kwargs)), SimpleNamespace(returncode=0))[1],
-    )
-    monkeypatch.setattr(
-        module.urllib.request,
-        "urlopen",
-        lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
-    )
-
-    module._best_effort_alert(config, _stalled_result(module))
-
-    assert len(subprocess_calls) == 1
-    assert len(urlopen_calls) == 1
-
-
-def test_alert_delivery_failure_does_not_latch_as_delivered(tmp_path: Path, monkeypatch) -> None:
-    module = _load_module()
-    config = _config(module, tmp_path)
-    monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
-    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
-    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=1))
-
-    def fail_urlopen(*_args, **_kwargs):
-        raise OSError("notify endpoint unavailable")
-
-    monkeypatch.setattr(module.urllib.request, "urlopen", fail_urlopen)
-
-    assert module._best_effort_alert(config, _stalled_result(module)) is False
+    stderr = capsys.readouterr().err
+    assert "condition=watcher_stopped reason=planned watcher maintenance" in stderr
+    assert "condition=checkpoint_deferral_alert" in stderr
+    log_lines = config.log_path.read_text(encoding="utf-8").splitlines()
+    assert len(log_lines) == 2
 
 
 def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_threshold(tmp_path: Path) -> None:
@@ -262,6 +210,34 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
         f"command:launchctl kickstart -k gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
     ]
+
+
+def test_missing_policy_symbol_fails_closed_without_blocking_recovery(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delattr(notification_policy, "by_design_reason")
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1, progress_slo_seconds=60)
+    command_events: list[str] = []
+    command_runner = _successful_recovery_runner(command_events)
+    evidence = module.SourceEvidence(2, 120, 3, 999.0)
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+    )
+    recovered = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+    )
+
+    assert module.by_design_reason("watcher_stopped") == "notification policy unavailable"
+    assert recovered.action == "kickstart:com.example.brainlayer.watch"
+    assert any(event.startswith("command:launchctl kickstart -k ") for event in command_events)
 
 
 def test_recovery_does_not_sigkill_a_pid_that_changed_during_validation(tmp_path: Path) -> None:

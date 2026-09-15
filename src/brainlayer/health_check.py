@@ -31,7 +31,6 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
-from .notification_policy import by_design_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .watcher import default_watch_roots
@@ -335,44 +334,11 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
         pass
 
 
-# A desktop notification is a side effect on a REAL person's screen, so it is guarded the same
-# way a 2.5 GB model load is: an env check at the site, because that is the only guard that
-# survives a process boundary. tests/conftest.py arms it for every test. Without it, running
-# tests/test_stability_health_check.py fired real macOS popups built from fixture data -- fake
-# pids and pytest tmp db_paths -- into the developer's Notification Center, indistinguishable
-# from a production alert.
-FORBID_DESKTOP_NOTIFICATION_ENV = "BRAINLAYER_FORBID_DESKTOP_NOTIFICATION"
 logger = logging.getLogger(__name__)
 
 
-def desktop_notifications_forbidden() -> bool:
-    return os.environ.get(FORBID_DESKTOP_NOTIFICATION_ENV) == "1"
-
-
-def _push_notification(title: str, message: str) -> None:
-    if desktop_notifications_forbidden():
-        return
-    try:
-        subprocess.run(
-            [
-                "osascript",
-                "-e",
-                f'display notification "{message[:180]}" with title "{title[:80]}"',
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=2,
-        )
-    except Exception:
-        pass
-
-
-def _push_notification_for_condition(title: str, message: str, *, condition: str) -> None:
-    if reason := by_design_reason(condition):
-        logger.info("desktop notification suppressed by design condition=%s reason=%s", condition, reason)
-        return
-    _push_notification(title, message)
+def _log_health_event(condition: str, message: str, *, timestamp: str) -> None:
+    logger.info("health event timestamp=%s condition=%s message=%s", timestamp, condition, message)
 
 
 def _parse_backlog_batch(command: str) -> int:
@@ -765,11 +731,7 @@ def _apply_heals(
                     if details
                     else f"{label} {issue_code} failed repeatedly"
                 )
-                _push_notification_for_condition(
-                    "BrainLayer heal escalation",
-                    message,
-                    condition=f"heal:{issue_code}",
-                )
+                _log_health_event(f"heal:{issue_code}", message, timestamp=result.checked_at)
             continue
         if consecutive_failures >= threshold:
             if issue_code in bootstrap_issue_codes:
@@ -799,7 +761,7 @@ def _apply_heals(
                 heal_failures.pop(key, None)
             if action not in result.actions:
                 print(
-                    f"heal action label={label} issue={issue_code} "
+                    f"timestamp={result.checked_at} heal action label={label} issue={issue_code} "
                     f"consecutive_failures={consecutive_failures} action={action}",
                     file=sys.stderr,
                 )
@@ -814,10 +776,10 @@ def _apply_heals(
                         **details,
                     }
                 )
-                _push_notification_for_condition(
-                    "BrainLayer heal action",
+                _log_health_event(
+                    f"heal:{issue_code}",
                     _heal_notification_message(action, issue_code, details),
-                    condition=f"heal:{issue_code}",
+                    timestamp=result.checked_at,
                 )
     return heal_failures, tripped
 
@@ -1198,23 +1160,11 @@ def _report_queue_backlog(
     }
     if pause_explanation is None or state.get("queue_backlog_notice") != signature:
         condition = "enrichment_backlog" if queue_is_entirely_enrichment else "queue_backlog"
-        reason = by_design_reason(
+        _log_health_event(
             condition,
-            now=now,
-            pause_sentinel_path=config.pause_sentinel_path,
+            f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
+            timestamp=now.isoformat(),
         )
-        if reason is not None:
-            logger.info(
-                "desktop notification suppressed by design condition=%s reason=%s",
-                condition,
-                reason,
-            )
-            return None
-        else:
-            _push_notification(
-                "BrainLayer queue backlog",
-                f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
-            )
     return signature
 
 
@@ -1469,11 +1419,7 @@ def run_health_check(
         add_issue(
             "pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten"
         )
-        _push_notification_for_condition(
-            "BrainLayer pause expired",
-            "pause.sentinel is stale",
-            condition="pause_expired",
-        )
+        _log_health_event("pause_expired", "pause.sentinel is stale", timestamp=now.isoformat())
         if config.heal:
             try:
                 config.pause_sentinel_path.expanduser().unlink()
@@ -1644,10 +1590,10 @@ def run_health_check(
                     **holder_details,
                 }
             )
-            _push_notification_for_condition(
-                "BrainLayer lock-holder wedge",
+            _log_health_event(
+                "heal:lock_holder_wedge",
                 _holder_message(holder),
-                condition="heal:lock_holder_wedge",
+                timestamp=now.isoformat(),
             )
             holder_label = _known_lock_holder_label(holder, config, command_runner)
             if holder_label:

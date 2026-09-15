@@ -5,17 +5,11 @@ set -u
 
 TIER0_LAUNCHCTL=${TIER0_LAUNCHCTL:-/bin/launchctl}
 TIER0_STAT=${TIER0_STAT:-/usr/bin/stat}
-TIER0_OSASCRIPT=${TIER0_OSASCRIPT:-/usr/bin/osascript}
-TIER0_CURL=${TIER0_CURL:-/usr/bin/curl}
 TIER0_DATE=${TIER0_DATE:-/bin/date}
 TIER0_ID=${TIER0_ID:-/usr/bin/id}
-TIER0_SLEEP=${TIER0_SLEEP:-/bin/sleep}
 TIER0_DIRNAME=${TIER0_DIRNAME:-/usr/bin/dirname}
 TIER0_MKDIR=${TIER0_MKDIR:-/bin/mkdir}
 TIER0_GREP=${TIER0_GREP:-/usr/bin/grep}
-TIER0_RM=${TIER0_RM:-/bin/rm}
-TIER0_NOTIFICATION_POLICY_PYTHON=${TIER0_NOTIFICATION_POLICY_PYTHON:-/opt/homebrew/opt/brainlayer/libexec/venv/bin/python}
-TIER0_ENV_RUN=${TIER0_ENV_RUN:-$HOME/.local/lib/brainlayer/brainlayer-env-run.sh}
 
 TIER0_LABEL=${TIER0_LABEL:-com.brainlayer.health-check}
 if [ -z "${TIER0_DOMAIN:-}" ]; then
@@ -32,12 +26,9 @@ TIER0_HEALTH_PLIST_PATH=${TIER0_HEALTH_PLIST_PATH:-$HOME/Library/LaunchAgents/co
 TIER0_LOG_PATH=${TIER0_LOG_PATH:-$HOME/.local/share/brainlayer/logs/tier0-watchdog.log}
 TIER0_ALERT_STATE_PATH=${TIER0_ALERT_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-alert-state}
 TIER0_RUN_STATE_PATH=${TIER0_RUN_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-last-run}
-TIER0_NOTIFY_ENDPOINT=${TIER0_NOTIFY_ENDPOINT:-http://localhost:3847/notify}
 TIER0_STALE_SECONDS=${TIER0_STALE_SECONDS:-900}
 TIER0_REPEAT_ALERT_SECONDS=${TIER0_REPEAT_ALERT_SECONDS:-1800}
 TIER0_MISSED_RUN_GRACE_SECONDS=${TIER0_MISSED_RUN_GRACE_SECONDS:-600}
-TIER0_ALERT_TIMEOUT_SECONDS=${TIER0_ALERT_TIMEOUT_SECONDS:-3}
-TIER0_NOTIFY_TIMEOUT_SECONDS=${TIER0_NOTIFY_TIMEOUT_SECONDS:-3}
 
 require_positive_integer() {
     variable_name=$1
@@ -64,8 +55,6 @@ require_epoch() {
 require_positive_integer TIER0_STALE_SECONDS "$TIER0_STALE_SECONDS"
 require_positive_integer TIER0_REPEAT_ALERT_SECONDS "$TIER0_REPEAT_ALERT_SECONDS"
 require_positive_integer TIER0_MISSED_RUN_GRACE_SECONDS "$TIER0_MISSED_RUN_GRACE_SECONDS"
-require_positive_integer TIER0_ALERT_TIMEOUT_SECONDS "$TIER0_ALERT_TIMEOUT_SECONDS"
-require_positive_integer TIER0_NOTIFY_TIMEOUT_SECONDS "$TIER0_NOTIFY_TIMEOUT_SECONDS"
 
 if [ -n "${TIER0_NOW_EPOCH:-}" ]; then
     now_epoch=$TIER0_NOW_EPOCH
@@ -99,111 +88,9 @@ record_own_run() {
     printf '%s\n' "$now_epoch" > "$TIER0_RUN_STATE_PATH"
 }
 
-wait_for_children() {
-    remaining=$1
-    shift
-    timed_out=0
-    child_status=0
-
-    while [ "$remaining" -gt 0 ]; do
-        any_running=0
-        for child_pid in "$@"; do
-            if kill -0 "$child_pid" 2>/dev/null; then
-                any_running=1
-            fi
-        done
-        if [ "$any_running" -eq 0 ]; then
-            break
-        fi
-        if ! "$TIER0_SLEEP" 1 2>/dev/null; then
-            remaining=0
-            break
-        fi
-        remaining=$((remaining - 1))
-    done
-
-    for child_pid in "$@"; do
-        if kill -0 "$child_pid" 2>/dev/null; then
-            timed_out=1
-            kill "$child_pid" 2>/dev/null || :
-        fi
-    done
-    if [ "$timed_out" -ne 0 ]; then
-        "$TIER0_SLEEP" 1 2>/dev/null || :
-        for child_pid in "$@"; do
-            if kill -0 "$child_pid" 2>/dev/null; then
-                kill -KILL "$child_pid" 2>/dev/null || :
-            fi
-        done
-    fi
-    for child_pid in "$@"; do
-        wait_status=0
-        wait "$child_pid" 2>/dev/null || wait_status=$?
-        if [ "$child_status" -eq 0 ] && [ "$wait_status" -ne 0 ]; then
-            child_status=$wait_status
-        fi
-    done
-    [ "$timed_out" -eq 0 ] || return 124
-    return "$child_status"
-}
-
-wait_for_alerts() {
-    wait_for_children "$TIER0_ALERT_TIMEOUT_SECONDS" "$@" || :
-}
-
-alert_all_channels() {
+log_incident() {
     reason=$1
-    notify_payload='{"title":"BrainLayer Tier-0 alert","body":"Health-check is unavailable or stale; see the Tier-0 log.","source":"alerts"}'
-
-    (
-        log_dir=$($TIER0_DIRNAME "$TIER0_LOG_PATH" 2>/dev/null) || exit 1
-        "$TIER0_MKDIR" -p "$log_dir" 2>/dev/null || exit 1
-        printf 'epoch=%s label=%s reason=%s\n' "$now_epoch" "$TIER0_LABEL" "$reason" >> "$TIER0_LOG_PATH"
-    ) &
-    log_pid=$!
-
-    by_design_reason=
-    policy_output="${TIER0_RUN_STATE_PATH}.policy-output.$$"
-    BRAINLAYER_SKIP_DISABLE_GATES=1 "$TIER0_ENV_RUN" "$TIER0_NOTIFICATION_POLICY_PYTHON" \
-        -m brainlayer.notification_policy "tier0:$failure_key" > "$policy_output" 2>/dev/null &
-    policy_pid=$!
-    policy_status=0
-    if wait_for_children "$TIER0_ALERT_TIMEOUT_SECONDS" "$policy_pid"; then
-        IFS= read -r by_design_reason < "$policy_output" || by_design_reason=
-    else
-        policy_status=$?
-        if [ "$policy_status" -eq 124 ]; then
-            log_tier0_event "notification_policy_timeout_fail_open condition=tier0:$failure_key" || :
-        else
-            log_tier0_event "notification_policy_failed_fail_open condition=tier0:$failure_key status=$policy_status" || :
-        fi
-    fi
-    "$TIER0_RM" -f "$policy_output" 2>/dev/null || :
-
-    if [ "$policy_status" -eq 0 ] && [ -n "$by_design_reason" ]; then
-        log_safe_reason=$(printf '%s' "$by_design_reason" | tr '[:space:]' '_')
-        log_tier0_event "notification_suppressed_by_design condition=tier0:$failure_key reason=$log_safe_reason" || :
-        wait_for_alerts "$log_pid"
-        return 2
-    fi
-    if [ "$policy_status" -eq 0 ] && [ -z "$by_design_reason" ]; then
-        log_tier0_event "notification_policy_empty_fail_open condition=tier0:$failure_key" || :
-    fi
-
-    "$TIER0_OSASCRIPT" \
-        -e 'display notification "Health-check is unavailable or stale; see the Tier-0 log." with title "BrainLayer Tier-0 watchdog"' \
-        >/dev/null 2>&1 &
-    osascript_pid=$!
-
-    "$TIER0_CURL" -fsS \
-        --max-time "$TIER0_NOTIFY_TIMEOUT_SECONDS" \
-        -X POST "$TIER0_NOTIFY_ENDPOINT" \
-        -H 'Content-Type: application/json' \
-        --data "$notify_payload" \
-        >/dev/null 2>&1 &
-    curl_pid=$!
-
-    wait_for_alerts "$log_pid" "$osascript_pid" "$curl_pid"
+    log_tier0_event "$reason"
 }
 
 should_alert() {
@@ -318,11 +205,9 @@ if [ "$failure_key" = state_stale ] && [ "$own_run_recorded" -eq 1 ] \
     exit 0
 fi
 
-# Detection and all due alert attempts intentionally precede every recovery command.
+# Detection and every due incident log intentionally precede every recovery command.
 if should_alert "$failure_key"; then
-    alert_status=0
-    alert_all_channels "$failure_reason" || alert_status=$?
-    if [ "$alert_status" -ne 2 ]; then
+    if log_incident "$failure_reason"; then
         record_alert "$failure_key" || :
     fi
 fi
