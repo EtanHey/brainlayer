@@ -353,19 +353,15 @@ struct BrainBarOnePageStatus: Sendable, Equatable {
 struct BrainBarOnePagePresentation: Sendable, Equatable {
     let status: BrainBarOnePageStatus
     let backupLines: [ObservabilityStatusLine]
-    let totalMemories: Int?
-    let newToday: Int?
-    let ingestRateText: String
-    let ingestVolumeText: String
-    let ingestChartLabel: String
-    let ingestAccessibilitySummary: String
+    let totalIndexedChunks: Int?
+    let indexedToday: Int?
+    let agentWritesText: String
 
     static func derive(
         snapshotFreshness: SnapshotFreshnessState,
         hero: BrainBarHeroPresentation,
         observability: ObservabilityReadResult,
         stats: DashboardStats,
-        ingest: DashboardFlowLane,
         now: Date,
         calendar: Calendar = .current,
         locale: Locale = .current
@@ -397,8 +393,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         }
 
         let backupLines: [ObservabilityStatusLine]
-        let totalMemories: Int?
-        let newToday: Int?
+        let totalIndexedChunks: Int?
+        let indexedToday: Int?
         if case let .readable(document) = observability, document.backups.state == "measured" {
             let snapshot = document.backups.dbSnapshot
             let upload = document.backups.lastVerifiedUpload
@@ -420,38 +416,42 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         }
 
         if case let .readable(document) = observability, document.stores.state == "measured" {
-            totalMemories = document.stores.totalChunks ?? stats.chunkCount
+            totalIndexedChunks = document.stores.totalChunks ?? stats.chunkCount
             if let buckets = document.stores.inWindow?.byHour {
                 let midnight = calendar.startOfDay(for: now)
-                newToday = buckets
+                indexedToday = buckets
                     .filter { $0.hour >= midnight && $0.hour <= now }
                     .reduce(0) { $0 + $1.count }
             } else {
-                newToday = nil
+                indexedToday = nil
             }
         } else {
-            totalMemories = stats.chunkCount
-            newToday = nil
+            totalIndexedChunks = stats.chunkCount
+            indexedToday = nil
         }
 
-        let count = ingest.values.reduce(0, +)
-        let window = ingest.activityWindowMinutes.isMultiple(of: 60)
-            ? "\(ingest.activityWindowMinutes / 60) h"
-            : "\(ingest.activityWindowMinutes) min"
-        let rate = ingest.rateText.hasSuffix("/min")
-            ? String(ingest.rateText.dropLast(4)) + " memories/min"
-            : "\(ingest.rateText) memories/min"
-        let volume = "\(DashboardMetricFormatter.integerString(count, locale: locale)) new memories in \(window)"
+        let agentWritesText: String
+        if case let .readable(document) = observability {
+            if document.emitters.state == "measured" {
+                if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
+                    agentWritesText = "\(DashboardMetricFormatter.integerString(mcp.countInWindow, locale: locale)) writes via brain_store in \(document.windowHours) h"
+                } else {
+                    agentWritesText = "brain_store writes unavailable: no MCP count in observability"
+                }
+            } else {
+                let reason = document.emitters.reason.isEmpty ? "emitter measurement unavailable" : document.emitters.reason
+                agentWritesText = "brain_store writes unavailable: \(reason)"
+            }
+        } else {
+            agentWritesText = "brain_store writes unavailable: observability document unreadable"
+        }
 
         return Self(
             status: status,
             backupLines: backupLines,
-            totalMemories: totalMemories,
-            newToday: newToday,
-            ingestRateText: rate,
-            ingestVolumeText: volume,
-            ingestChartLabel: "NEW MEMORIES",
-            ingestAccessibilitySummary: "\(volume); \(rate)"
+            totalIndexedChunks: totalIndexedChunks,
+            indexedToday: indexedToday,
+            agentWritesText: agentWritesText
         )
     }
 
@@ -633,13 +633,38 @@ private struct BrainBarDashboardView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
+    @State private var previousWriteBuckets: [Int] = []
+    @State private var previousWatcherBuckets: [Int] = []
     @State private var allCommitPulseRevision = 0
+    @State private var writePulseRevision = 0
+    @State private var watcherPulseRevision = 0
+    @State private var selectedTimeframe: PipelineTimeframe = .live
     @State private var signalCoverageExpanded = false
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     @State private var vectorDetailHeight: CGFloat = 0
+
+    private var pipelineStats: BrainDatabase.DashboardStats {
+        guard selectedTimeframe != .live,
+              let buckets = collector.windowedBuckets,
+              collector.windowedBucketsWindowMinutes == selectedTimeframe.windowMinutes else {
+            return collector.stats
+        }
+        return collector.stats.withWindowedPipelineBuckets(buckets)
+    }
+
+    private var displayedTimeframe: PipelineTimeframe {
+        PipelineTimeframe.truthfulDisplay(
+            selected: selectedTimeframe,
+            loadedWindowMinutes: collector.windowedBucketsWindowMinutes
+        )
+    }
+
+    private var pipelineFlowSummary: DashboardFlowSummary {
+        DashboardFlowSummary.derive(daemon: collector.daemon, stats: pipelineStats, now: currentNow)
+    }
 
     private var flowSummary: DashboardFlowSummary {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: currentNow)
@@ -687,7 +712,6 @@ private struct BrainBarDashboardView: View {
             hero: heroPresentation,
             observability: effectiveObservabilityResult,
             stats: collector.stats,
-            ingest: flowSummary.allCommits,
             now: currentNow
         )
     }
@@ -757,16 +781,44 @@ private struct BrainBarDashboardView: View {
         }
         .onAppear {
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
+            previousWriteBuckets = collector.stats.recentAgentWriteBuckets
+            previousWatcherBuckets = collector.stats.recentWatcherWriteBuckets
         }
         .onChange(of: collector.stats.recentActivityBuckets) { _, newBuckets in
             if BrainBarPipelinePulseGate.shouldPulse(
                 previous: previousAllCommitBuckets,
                 current: newBuckets,
-                timeframe: .live
+                timeframe: selectedTimeframe
             ) {
                 allCommitPulseRevision += 1
             }
             previousAllCommitBuckets = newBuckets
+        }
+        .onChange(of: collector.stats.recentAgentWriteBuckets) { _, newBuckets in
+            if BrainBarPipelinePulseGate.shouldPulse(
+                previous: previousWriteBuckets,
+                current: newBuckets,
+                timeframe: selectedTimeframe
+            ) {
+                writePulseRevision += 1
+            }
+            previousWriteBuckets = newBuckets
+        }
+        .onChange(of: collector.stats.recentWatcherWriteBuckets) { _, newBuckets in
+            if BrainBarPipelinePulseGate.shouldPulse(
+                previous: previousWatcherBuckets,
+                current: newBuckets,
+                timeframe: selectedTimeframe
+            ) {
+                watcherPulseRevision += 1
+            }
+            previousWatcherBuckets = newBuckets
+        }
+        .onChange(of: selectedTimeframe) { _, timeframe in
+            collector.selectTimeframe(
+                windowMinutes: timeframe.windowMinutes,
+                isLive: timeframe == .live
+            )
         }
         .task(id: dbPath) {
             guard observabilityResult == nil, let dbPath else { return }
@@ -811,18 +863,11 @@ private struct BrainBarDashboardView: View {
 
     @ViewBuilder
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
-        let tileHeight: CGFloat = 172
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: layout.gridSpacing) {
-                backupTile(height: tileHeight)
-                memoryTile(height: tileHeight)
-                ingestTile(height: tileHeight)
-            }
-            VStack(alignment: .leading, spacing: layout.gridSpacing) {
-                backupTile(height: tileHeight)
-                memoryTile(height: tileHeight)
-                ingestTile(height: tileHeight)
-            }
+        let tileHeight: CGFloat = 190
+        HStack(alignment: .top, spacing: layout.gridSpacing) {
+            backupTile(height: tileHeight)
+            memoryTile(height: tileHeight)
+            ingestTile(height: tileHeight)
         }
     }
 
@@ -835,38 +880,87 @@ private struct BrainBarDashboardView: View {
 
     private func memoryTile(height: CGFloat) -> some View {
         let counts = onePagePresentation
-        return summaryTile(title: "Memory", identifier: "memory", height: height) {
-            if let total = counts.totalMemories {
-                Text("\(DashboardMetricFormatter.integerString(total)) memories total")
+        return summaryTile(title: "Indexed", identifier: "memory", height: height) {
+            if let total = counts.totalIndexedChunks {
+                Text("\(DashboardMetricFormatter.integerString(total)) indexed chunks total")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .monospacedDigit()
             } else {
-                Text("Memory total unavailable")
+                Text("Indexed chunk total unavailable")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
-            if let newToday = counts.newToday {
-                Text("\(DashboardMetricFormatter.integerString(newToday)) new today")
+            if let indexedToday = counts.indexedToday {
+                Text("\(DashboardMetricFormatter.integerString(indexedToday)) indexed today")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextSecondary)
             } else {
-                Text("New today unavailable")
+                Text("Indexed today unavailable")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.orange)
             }
+            Divider().overlay(Color.brainBarBorderSoft)
+            Text("AGENT WRITES")
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(0.65)
+                .foregroundStyle(Color.brainBarTextSecondary.opacity(0.7))
+            Text(counts.agentWritesText)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func ingestTile(height: CGFloat) -> some View {
-        let lane = flowSummary.allCommits
-        let presentation = onePagePresentation
         let fetchedAt = collector.lastDataFetchedAt ?? Date()
         return summaryTile(title: "Ingest", identifier: "ingest", height: height) {
-            Text(presentation.ingestRateText)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .monospacedDigit()
+            BrainBarSharedTimeframeSelector(
+                selection: Binding(
+                    get: { displayedTimeframe },
+                    set: { selectedTimeframe = $0 }
+                ),
+                isLoading: collector.isWindowedBucketsLoading,
+                loadError: collector.windowedBucketsError
+            )
+            if collector.agentActivity.totalActiveAgents == 0 {
+                Text("Quiet: no agents active")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .lineLimit(1)
+            }
+            HStack(alignment: .top, spacing: 7) {
+                ingestSeriesRow(.allCommits, pulseRevision: allCommitPulseRevision, fetchedAt: fetchedAt)
+                ingestSeriesRow(.agentStores, pulseRevision: writePulseRevision, fetchedAt: fetchedAt)
+                ingestSeriesRow(.jsonlWatcher, pulseRevision: watcherPulseRevision, fetchedAt: fetchedAt)
+            }
+            Text("Source-time charts count chunk rows; watcher counts unique chunk IDs by ingest time.")
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func ingestSeriesRow(
+        _ series: PipelineSeries,
+        pulseRevision: Int,
+        fetchedAt: Date
+    ) -> some View {
+        let lane = pipelineFlowSummary.lane(for: series)
+        let disclosure = BrainBarDashboardChartDisclosure(
+            series: series,
+            lane: lane,
+            timeframe: displayedTimeframe
+        )
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(ingestSeriesTitle(series))
+                .font(.system(size: 7.5, weight: .semibold))
+                .tracking(0.35)
+                .foregroundStyle(Color.brainBarTextSecondary.opacity(0.75))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
             BrainBarHeroSparkline(
-                label: presentation.ingestChartLabel,
+                label: lane.sparklineLabel,
                 values: lane.values,
                 secondaryValues: [],
                 primarySeriesLabel: nil,
@@ -879,15 +973,28 @@ private struct BrainBarDashboardView: View {
                 tertiaryAccentColor: nil,
                 activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
-                pulseRevision: allCommitPulseRevision,
+                pulseRevision: pulseRevision,
                 referenceValue: nil,
-                metricDisclosure: nil,
-                accessibilitySummary: presentation.ingestAccessibilitySummary
+                metricDisclosure: disclosure.tooltipDisclosure,
+                accessibilitySummary: disclosure.accessibilitySummary
             )
-            .frame(height: 92)
-            Text(presentation.ingestVolumeText)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.brainBarTextSecondary)
+            .frame(height: 42)
+            Text("\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +))) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0))")
+                .font(.system(size: 8, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Color.brainBar(nsColor: lane.accentColor).opacity(0.9))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier(disclosure.accessibilityIdentifier)
+    }
+
+    private func ingestSeriesTitle(_ series: PipelineSeries) -> String {
+        switch series {
+        case .allCommits: "ALL CHUNKS"
+        case .agentStores: "AGENT"
+        case .jsonlWatcher: "WATCHER"
+        case .enrichment: "ENRICHED"
         }
     }
 
@@ -963,9 +1070,9 @@ private struct BrainBarDashboardView: View {
         let flowCard = BrainBarDiagnosticCard(
             title: "Activity",
             rows: [
-                ("Writes", flowSummary.ingress.statusText),
-                ("Window", flowSummary.windowLabel),
-                ("DB", ByteCountFormatter.string(
+                ("Indexed chunks", flowSummary.allCommits.volumeText),
+                ("Agent writes", onePagePresentation.agentWritesText),
+                ("DB size", ByteCountFormatter.string(
                     fromByteCount: collector.stats.databaseSizeBytes,
                     countStyle: .file
                 )),

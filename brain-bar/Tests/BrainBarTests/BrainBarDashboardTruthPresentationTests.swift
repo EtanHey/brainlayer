@@ -233,12 +233,50 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         )
 
         XCTAssertTrue(tilesSource.contains("title: \"Backups\""))
-        XCTAssertTrue(tilesSource.contains("title: \"Memory\""))
+        XCTAssertTrue(tilesSource.contains("title: \"Indexed\""))
         XCTAssertTrue(tilesSource.contains("title: \"Ingest\""))
         XCTAssertTrue(tilesSource.contains("minHeight: height, maxHeight: height"), "All primary tiles must use one equal height.")
         XCTAssertTrue(dashboard.contains("lane.status.stateTheme"), "Chart status pills must use semantic state color, not series color.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
+    }
+
+    func testOnePageNeverCallsIndexedChunksMemoriesAndKeepsBrainStoreWritesSeparate() throws {
+        let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let onePageSource = try sourceSlice(
+            from: "struct BrainBarOnePagePresentation",
+            throughBefore: "@MainActor\nprivate final class BrainBarCommandBarViewModelProvider",
+            in: dashboard
+        )
+        let dashboardView = try sourceSlice(
+            from: "private struct BrainBarDashboardView",
+            throughBefore: "private struct BrainBarSnapshotFreshnessBanner",
+            in: dashboard
+        )
+
+        XCTAssertFalse(onePageSource.localizedCaseInsensitiveContains("memories"))
+        XCTAssertFalse(dashboardView.localizedCaseInsensitiveContains("memories total"))
+        XCTAssertTrue(dashboardView.contains("indexed chunks total"))
+        XCTAssertTrue(dashboardView.contains("indexed today"))
+        XCTAssertTrue(onePageSource.contains("writes via brain_store"))
+        XCTAssertTrue(dashboardView.contains("Quiet: no agents active"))
+        XCTAssertTrue(dashboardView.contains("get: { displayedTimeframe }"))
+        XCTAssertTrue(dashboardView.contains("set: { selectedTimeframe = $0 }"))
+    }
+
+    func testActivityAndProvenanceRowsPutOneMeasuredWindowInEachValueSlot() throws {
+        let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let activity = try sourceSlice(
+            from: "private func diagnostics",
+            throughBefore: "private var daemonSummary",
+            in: dashboard
+        )
+        let observability = try sourceFile("Sources/BrainBar/Dashboard/ObservabilityView.swift")
+
+        XCTAssertFalse(activity.contains("flowSummary.ingress.statusText"))
+        XCTAssertFalse(activity.contains("(\"Window\","))
+        XCTAssertTrue(activity.contains("flowSummary.allCommits.volumeText"))
+        XCTAssertFalse(observability.contains("indexed chunks total · \\(row.inWindow)"))
     }
 
     private func sourceSlice(from start: String, throughBefore end: String, in source: String) throws -> String {

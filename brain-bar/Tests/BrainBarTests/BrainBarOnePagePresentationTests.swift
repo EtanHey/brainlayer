@@ -4,7 +4,7 @@ import XCTest
 
 final class BrainBarOnePagePresentationTests: XCTestCase {
     @MainActor
-    func testHealthyPresentationNamesBackupFactsAndEveryIngestNumber() throws {
+    func testHealthyPresentationNamesIndexedChunksAndSeparatesAgentWrites() throws {
         let now = BrainBarOnePageTestFixture.now
         let result = try BrainBarOnePageTestFixture.healthyResult()
         let presentation = try makePresentation(result: result, now: now)
@@ -16,10 +16,9 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertTrue(presentation.backupLines[0].text.hasPrefix("Database · Drive · last good today"))
         XCTAssertTrue(presentation.backupLines[1].text.hasPrefix("Transcripts · Drive · last good today"))
         XCTAssertFalse(presentation.backupLines.map(\.text).joined().contains("iCloud"))
-        XCTAssertEqual(presentation.ingestRateText, "1.1 memories/min")
-        XCTAssertEqual(presentation.ingestVolumeText, "67 new memories in 1 h")
-        XCTAssertEqual(presentation.ingestChartLabel, "NEW MEMORIES")
-        XCTAssertFalse(presentation.ingestAccessibilitySummary.contains("chunk"))
+        XCTAssertEqual(presentation.totalIndexedChunks, 797_727)
+        XCTAssertEqual(presentation.indexedToday, 7)
+        XCTAssertEqual(presentation.agentWritesText, "175 writes via brain_store in 24 h")
     }
 
     @MainActor
@@ -29,7 +28,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             now: BrainBarOnePageTestFixture.now
         )
 
-        XCTAssertEqual(presentation.newToday, 7)
+        XCTAssertEqual(presentation.indexedToday, 7)
     }
 
     @MainActor
@@ -39,7 +38,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             now: BrainBarOnePageTestFixture.now
         )
 
-        XCTAssertNil(presentation.newToday)
+        XCTAssertNil(presentation.indexedToday)
     }
 
     @MainActor
@@ -92,7 +91,6 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             hero: hero,
             observability: result,
             stats: collector.stats,
-            ingest: flow.allCommits,
             now: now,
             calendar: BrainBarOnePageTestFixture.calendar,
             locale: Locale(identifier: "en_US")
@@ -156,7 +154,14 @@ enum BrainBarOnePageTestFixture {
                 totalChunks: 797_727,
                 inWindow: .init(count: 18, byHour: byHour)
             ),
-            emitters: base.emitters,
+            emitters: .init(
+                state: "measured",
+                reason: "",
+                inputs: [],
+                byEmitter: [.init(emitter: "mcp", countInWindow: 175)],
+                bySourceClass: base.emitters.bySourceClass,
+                hiddenFromDefaultSearch: base.emitters.hiddenFromDefaultSearch
+            ),
             authorUnknown: base.authorUnknown,
             backups: .init(
                 state: "measured",

@@ -62,6 +62,39 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testOnePageIngestAreaRendersThreeIndependentlyScaledSmallMultiples() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "private func ingestTile"))
+        let end = try XCTUnwrap(source.range(of: "private func summaryTile", range: start.upperBound..<source.endIndex))
+        let ingestTile = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(ingestTile.contains("BrainBarSharedTimeframeSelector"))
+        XCTAssertTrue(ingestTile.contains("ingestSeriesRow(.allCommits"))
+        XCTAssertTrue(ingestTile.contains("ingestSeriesRow(.agentStores"))
+        XCTAssertTrue(ingestTile.contains("ingestSeriesRow(.jsonlWatcher"))
+
+        let summary = DashboardFlowSummary.derive(
+            daemon: nil,
+            stats: BrainBarDashboardFixture.stats,
+            now: BrainBarDashboardFixture.fetchedAt
+        )
+        let maxima = [PipelineSeries.allCommits, .agentStores, .jsonlWatcher].map {
+            SparklineChartPresentation(
+                label: summary.lane(for: $0).sparklineLabel,
+                values: summary.lane(for: $0).values,
+                activityWindowMinutes: summary.lane(for: $0).activityWindowMinutes,
+                latestBucketName: summary.lane(for: $0).latestBucketName,
+                fetchedAt: BrainBarDashboardFixture.fetchedAt
+            ).maxValue
+        }
+        XCTAssertEqual(maxima.count, 3)
+        XCTAssertNotEqual(maxima[0], maxima[2], "Each small multiple must derive its own y-scale.")
+    }
+
+    @MainActor
     func testDashboardRendersAtAllBreakpoints() throws {
         let observabilityURL = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
@@ -137,7 +170,6 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             hero: hero,
             observability: result,
             stats: collector.stats,
-            ingest: flow.allCommits,
             now: BrainBarOnePageTestFixture.now,
             calendar: BrainBarOnePageTestFixture.calendar
         )
