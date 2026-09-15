@@ -10,13 +10,13 @@ import shlex
 import socket
 import sqlite3
 import subprocess
-import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
@@ -335,6 +335,36 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
 
 
 logger = logging.getLogger(__name__)
+
+
+class UTCISOFormatter(logging.Formatter):
+    """Format log record creation times as ISO-8601 UTC with milliseconds."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        del datefmt
+        return datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
+
+
+@contextmanager
+def health_event_logging(stream: Any) -> Iterator[None]:
+    """Temporarily install the deterministic stderr handler used by the CLI."""
+    previous_handlers = list(logger.handlers)
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(UTCISOFormatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        yield
+    finally:
+        logger.handlers.clear()
+        logger.handlers.extend(previous_handlers)
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
+        handler.close()
 
 
 def _log_health_event(condition: str, message: str, *, timestamp: str) -> None:
@@ -760,11 +790,6 @@ def _apply_heals(
                 tripped.discard(key)
                 heal_failures.pop(key, None)
             if action not in result.actions:
-                print(
-                    f"timestamp={result.checked_at} heal action label={label} issue={issue_code} "
-                    f"consecutive_failures={consecutive_failures} action={action}",
-                    file=sys.stderr,
-                )
                 result.actions.append(action)
                 _emit_heal_event(
                     {
@@ -778,7 +803,9 @@ def _apply_heals(
                 )
                 _log_health_event(
                     f"heal:{issue_code}",
-                    _heal_notification_message(action, issue_code, details),
+                    f"heal action label={label} issue={issue_code} "
+                    f"consecutive_failures={consecutive_failures} action={action}; "
+                    f"{_heal_notification_message(action, issue_code, details)}",
                     timestamp=result.checked_at,
                 )
     return heal_failures, tripped

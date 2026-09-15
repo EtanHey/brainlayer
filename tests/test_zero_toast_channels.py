@@ -36,6 +36,13 @@ def test_tier0_install_no_longer_requires_notification_policy_environment() -> N
     assert "__PYTHON_BIN__" not in tier0_installer
 
 
+def test_clustering_import_does_not_preconfigure_process_logging() -> None:
+    source = (REPO_ROOT / "src/brainlayer/clustering.py").read_text(encoding="utf-8")
+    import_time_source = source.split('if __name__ == "__main__":', 1)[0]
+
+    assert "logging.basicConfig(" not in import_time_source
+
+
 def test_health_check_command_actually_emits_timestamped_incident_log() -> None:
     probe = """
 from typer.testing import CliRunner
@@ -67,7 +74,7 @@ raise SystemExit(result.exit_code)
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO", completed.stderr)
+    assert re.search(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00 INFO", completed.stderr)
     assert "2026-09-15" in completed.stderr
     assert "condition=heal:watcher_stalled" in completed.stderr
     assert "com.brainlayer.watch failed repeatedly" in completed.stderr
