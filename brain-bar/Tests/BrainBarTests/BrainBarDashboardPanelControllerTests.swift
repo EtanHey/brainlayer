@@ -113,6 +113,25 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertFalse(controller.isShownForTesting)
     }
 
+    func testDevPreviewPanelUsesIdentifyingTitleAndCanOpenWithoutStatusItem() {
+        let title = "DEV · wt/badge-state-contract · 17e1ec37"
+        let controller = BrainBarDashboardPanelController(
+            runtime: BrainBarRuntime(),
+            standaloneTitle: title
+        )
+        defer { controller.dismiss() }
+
+        XCTAssertEqual(controller.panelForTesting.title, title)
+        XCTAssertEqual(controller.panelForTesting.titleVisibility, .visible)
+
+        controller.show()
+        XCTAssertTrue(controller.isShownForTesting)
+
+        controller.setShownAtForTesting(.distantPast)
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        XCTAssertTrue(controller.isShownForTesting, "DEV previews must remain visible side by side")
+    }
+
     func testDashboardLayoutReflowsAtMinFloorAndLargeWindowSizes() {
         let floorLayout = BrainBarDashboardLayout(containerSize: CGSize(width: 760, height: 560))
         XCTAssertEqual(floorLayout.chartColumns, 1)
