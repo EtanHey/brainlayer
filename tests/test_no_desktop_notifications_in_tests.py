@@ -72,7 +72,7 @@ def test_push_notification_skips_osascript_for_explicit_by_design_condition(monk
     assert spawned == []
 
 
-def test_condition_without_by_design_marker_still_calls_osascript(monkeypatch, tmp_path):
+def test_condition_without_by_design_marker_is_log_only(monkeypatch, tmp_path):
     monkeypatch.delenv(GUARD_ENV, raising=False)
     monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
     spawned: list[list[str]] = []
@@ -82,6 +82,21 @@ def test_condition_without_by_design_marker_still_calls_osascript(monkeypatch, t
         "BrainLayer heal action",
         "watcher stalled",
         condition="heal:watcher_stalled",
+    )
+
+    assert spawned == []
+
+
+def test_allow_listed_data_loss_condition_calls_osascript(monkeypatch, tmp_path):
+    monkeypatch.delenv(GUARD_ENV, raising=False)
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **_kwargs: spawned.append(args))
+
+    health_check._push_notification_for_condition(
+        "BrainLayer backup verification failed",
+        "latest backup attempt was not verified",
+        condition="jsonl_backup_attempt_failed",
     )
 
     assert len(spawned) == 1

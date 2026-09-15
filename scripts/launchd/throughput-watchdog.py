@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from brainlayer.notification_policy import by_design_reason
+from brainlayer.notification_policy import may_notify
 from brainlayer.wal_checkpoint import checkpoint_guard
 
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
@@ -524,9 +524,11 @@ def _best_effort_alert(config: Config, result: WatchdogResult) -> bool:
     config.log_path.expanduser().parent.mkdir(parents=True, exist_ok=True)
     with config.log_path.expanduser().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(result), sort_keys=True) + "\n")
-    if result.action == "stalled" and (reason := by_design_reason("watcher_stopped")):
+    condition = "checkpoint_deferral_alert" if result.action == "checkpoint_deferral_alert" else "watcher_stopped"
+    allowed, reason = may_notify(condition)
+    if not allowed:
         print(
-            f"INFO throughput-watchdog notification suppressed by design reason={reason}",
+            f"INFO throughput-watchdog notification suppressed condition={condition} reason={reason}",
             file=sys.stderr,
         )
         return False

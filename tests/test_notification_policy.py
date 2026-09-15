@@ -5,7 +5,41 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from brainlayer.notification_policy import by_design_reason
+from brainlayer.notification_policy import by_design_reason, main, may_notify
+
+
+def test_notification_policy_denies_unknown_conditions_by_default() -> None:
+    assert may_notify("watcher_stopped", env={}) == (
+        False,
+        "condition is not allow-listed for desktop notification",
+    )
+
+
+def test_notification_policy_allows_only_explicit_data_loss_conditions() -> None:
+    assert may_notify("jsonl_backup_attempt_failed", env={}) == (True, "backup verification failed")
+    assert may_notify("backup_daily_verification_failed", env={}) == (True, "backup verification failed")
+
+
+def test_explicit_marker_can_suppress_but_not_enable_notification(tmp_path: Path) -> None:
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text(
+        '{"conditions":{"jsonl_backup_attempt_failed":"maintenance",'
+        '"watcher_stopped":"wrongly marked enabled"}}',
+        encoding="utf-8",
+    )
+    env = {"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)}
+
+    assert may_notify("jsonl_backup_attempt_failed", env=env) == (False, "maintenance")
+    assert may_notify("watcher_stopped", env=env) == (False, "wrongly marked enabled")
+
+
+def test_cli_contract_keeps_zero_for_suppress_and_one_for_alert(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(tmp_path / "missing.json"))
+
+    assert main(["watcher_stopped"]) == 0
+    assert "not allow-listed" in capsys.readouterr().out
+    assert main(["jsonl_backup_attempt_failed"]) == 1
+    assert capsys.readouterr().out == ""
 
 
 def test_paused_enrichment_only_suppresses_enrichment_backlog(tmp_path: Path) -> None:
@@ -23,7 +57,9 @@ def test_paused_enrichment_only_suppresses_enrichment_backlog(tmp_path: Path) ->
     env = {"BRAINLAYER_PAUSE_SENTINEL_PATH": str(sentinel)}
 
     assert "enrichment" in (by_design_reason("enrichment_backlog", env=env) or "")
-    assert by_design_reason("watcher_stopped", env=env) is None
+    assert by_design_reason("watcher_stopped", env=env) == (
+        "condition is not allow-listed for desktop notification"
+    )
 
 
 def test_disabled_enrichment_suppresses_only_enrichment_backlog() -> None:
@@ -33,7 +69,9 @@ def test_disabled_enrichment_suppresses_only_enrichment_backlog() -> None:
             assert by_design_reason("enrichment_backlog", env=env) == (
                 f"enrichment is disabled by configuration ({variable})"
             )
-            assert by_design_reason("watcher_stopped", env=env) is None
+            assert by_design_reason("watcher_stopped", env=env) == (
+                "condition is not allow-listed for desktop notification"
+            )
 
 
 def test_parked_backup_suppresses_backup_freshness_only(tmp_path: Path) -> None:
@@ -43,7 +81,9 @@ def test_parked_backup_suppresses_backup_freshness_only(tmp_path: Path) -> None:
     env = {"BRAINLAYER_BY_DESIGN_DISABLED_DIR": str(disabled_dir)}
 
     assert by_design_reason("backup_freshness", env=env) == "backup-daily is parked on P0"
-    assert by_design_reason("watcher_stopped", env=env) is None
+    assert by_design_reason("watcher_stopped", env=env) == (
+        "condition is not allow-listed for desktop notification"
+    )
 
 
 def test_explicit_reason_file_is_condition_scoped(tmp_path: Path) -> None:
@@ -55,10 +95,12 @@ def test_explicit_reason_file_is_condition_scoped(tmp_path: Path) -> None:
     env = {"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)}
 
     assert by_design_reason("tier0:state_stale", env=env) == "planned health-check maintenance"
-    assert by_design_reason("tier0:label_unloaded", env=env) is None
+    assert by_design_reason("tier0:label_unloaded", env=env) == (
+        "condition is not allow-listed for desktop notification"
+    )
 
 
-def test_malformed_explicit_reason_file_fails_open_to_alert(tmp_path: Path) -> None:
+def test_malformed_explicit_reason_file_still_fails_closed(tmp_path: Path) -> None:
     marker = tmp_path / "by-design-notifications.json"
     marker.write_text("not json", encoding="utf-8")
 
@@ -67,11 +109,11 @@ def test_malformed_explicit_reason_file_fails_open_to_alert(tmp_path: Path) -> N
             "tier0:state_stale",
             env={"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)},
         )
-        is None
+        == "condition is not allow-listed for desktop notification"
     )
 
 
-def test_non_utf8_explicit_reason_file_fails_open_to_alert(tmp_path: Path) -> None:
+def test_non_utf8_explicit_reason_file_still_fails_closed(tmp_path: Path) -> None:
     marker = tmp_path / "by-design-notifications.json"
     marker.write_bytes(b"\xff\xfe")
 
@@ -80,11 +122,11 @@ def test_non_utf8_explicit_reason_file_fails_open_to_alert(tmp_path: Path) -> No
             "tier0:state_stale",
             env={"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)},
         )
-        is None
+        == "condition is not allow-listed for desktop notification"
     )
 
 
-def test_deeply_nested_reason_file_fails_open_to_alert(tmp_path: Path) -> None:
+def test_deeply_nested_reason_file_still_fails_closed(tmp_path: Path) -> None:
     marker = tmp_path / "by-design-notifications.json"
     marker.write_text("[" * 9_999, encoding="utf-8")
 
@@ -93,11 +135,11 @@ def test_deeply_nested_reason_file_fails_open_to_alert(tmp_path: Path) -> None:
             "tier0:state_stale",
             env={"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)},
         )
-        is None
+        == "condition is not allow-listed for desktop notification"
     )
 
 
-def test_fifo_reason_marker_fails_open_without_blocking(tmp_path: Path) -> None:
+def test_fifo_reason_marker_fails_closed_without_blocking(tmp_path: Path) -> None:
     marker = tmp_path / "by-design-notifications.json"
     os.mkfifo(marker)
 
@@ -106,5 +148,5 @@ def test_fifo_reason_marker_fails_open_without_blocking(tmp_path: Path) -> None:
             "tier0:state_stale",
             env={"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)},
         )
-        is None
+        == "condition is not allow-listed for desktop notification"
     )

@@ -158,13 +158,13 @@ def test_explicit_by_design_watcher_condition_skips_alert_side_effects(tmp_path:
     assert subprocess_calls == []
     assert urlopen_calls == []
 
-    assert module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert")) is True
+    assert module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert")) is False
 
-    assert len(subprocess_calls) == 1
-    assert len(urlopen_calls) == 1
+    assert subprocess_calls == []
+    assert urlopen_calls == []
 
 
-def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypatch) -> None:
+def test_watcher_condition_without_marker_is_log_only(tmp_path: Path, monkeypatch) -> None:
     module = _load_module()
     config = _config(module, tmp_path)
     monkeypatch.delenv("BRAINLAYER_FORBID_DESKTOP_NOTIFICATION", raising=False)
@@ -182,10 +182,10 @@ def test_watcher_condition_without_marker_still_alerts(tmp_path: Path, monkeypat
         lambda *args, **kwargs: (urlopen_calls.append((args, kwargs)), nullcontext())[1],
     )
 
-    module._best_effort_alert(config, _stalled_result(module))
+    assert module._best_effort_alert(config, _stalled_result(module)) is False
 
-    assert len(subprocess_calls) == 1
-    assert len(urlopen_calls) == 1
+    assert subprocess_calls == []
+    assert urlopen_calls == []
 
 
 def test_alert_delivery_failure_does_not_latch_as_delivered(tmp_path: Path, monkeypatch) -> None:

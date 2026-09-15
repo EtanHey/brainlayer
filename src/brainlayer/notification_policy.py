@@ -1,4 +1,4 @@
-"""Condition-scoped policy for suppressing notifications that are noisy by design.
+"""Fail-closed policy for the small set of conditions allowed to notify a person.
 
 Python callers use :func:`by_design_reason`. Shell callers use
 ``python -m brainlayer.notification_policy <condition>``; exit 0 means suppress and
@@ -10,8 +10,8 @@ Leads can mark an additional exact condition in
 
     {"conditions": {"tier0:state_stale": "planned health-check maintenance"}}
 
-The marker deliberately has no wildcard. Invalid or unreadable markers fail open to
-notification rather than hiding a real incident.
+The marker deliberately has no wildcard. It can only suppress an allow-listed
+notification; malformed policy input never widens the allow-list.
 """
 
 from __future__ import annotations
@@ -32,6 +32,14 @@ ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 BACKUP_DAILY_PLIST = "com.brainlayer.backup-daily.plist"
 MAX_REASON_FILE_BYTES = 64 * 1024
 FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
+ALLOWED_NOTIFICATION_CONDITIONS = frozenset(
+    {
+        "backup_daily_verification_failed",
+        "jsonl_backup_attempt_failed",
+    }
+)
+DEFAULT_DENY_REASON = "condition is not allow-listed for desktop notification"
+BACKUP_VERIFICATION_FAILED_REASON = "backup verification failed"
 
 
 def _path_from_env(env: Mapping[str, str], name: str, default: Path) -> Path:
@@ -57,7 +65,7 @@ def _explicit_reason(condition: str, env: Mapping[str, str]) -> str | None:
     return reason.strip() if isinstance(reason, str) and reason.strip() else None
 
 
-def _enrichment_pause_reason(env: Mapping[str, str], now: datetime) -> str | None:
+def enrichment_pause_reason(env: Mapping[str, str], now: datetime) -> str | None:
     for variable in ("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "BRAINLAYER_ENRICH_ENABLED"):
         value = env.get(variable)
         if value is not None and value.strip().lower() in FALSE_VALUES:
@@ -79,15 +87,34 @@ def by_design_reason(
     now: datetime | None = None,
     pause_sentinel_path: Path | None = None,
 ) -> str | None:
-    """Return why ``condition`` is intentional, or ``None`` when it must alert."""
+    """Return why ``condition`` is log-only, or ``None`` when it may alert."""
+
+    allowed, reason = may_notify(
+        condition,
+        env=env,
+        now=now,
+        pause_sentinel_path=pause_sentinel_path,
+    )
+    return None if allowed else reason
+
+
+def may_notify(
+    condition: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    now: datetime | None = None,
+    pause_sentinel_path: Path | None = None,
+) -> tuple[bool, str]:
+    """Return an affirmative notification decision and an auditable reason."""
 
     resolved_env = os.environ if env is None else env
     if reason := _explicit_reason(condition, resolved_env):
-        return reason
+        return False, reason
     if condition == "enrichment_backlog":
         if pause_sentinel_path is not None:
             resolved_env = {**resolved_env, "BRAINLAYER_PAUSE_SENTINEL_PATH": str(pause_sentinel_path)}
-        return _enrichment_pause_reason(resolved_env, now or datetime.now(UTC))
+        if reason := enrichment_pause_reason(resolved_env, now or datetime.now(UTC)):
+            return False, reason
     if condition == "backup_freshness":
         disabled_dir = _path_from_env(
             resolved_env,
@@ -95,8 +122,10 @@ def by_design_reason(
             DEFAULT_DISABLED_DIR,
         )
         if (disabled_dir / BACKUP_DAILY_PLIST).is_file():
-            return "backup-daily is parked on P0"
-    return None
+            return False, "backup-daily is parked on P0"
+    if condition in ALLOWED_NOTIFICATION_CONDITIONS:
+        return True, BACKUP_VERIFICATION_FAILED_REASON
+    return False, DEFAULT_DENY_REASON
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -172,10 +172,12 @@ alert_all_channels() {
         IFS= read -r by_design_reason < "$policy_output" || by_design_reason=
     else
         policy_status=$?
-        if [ "$policy_status" -eq 124 ]; then
-            log_tier0_event "notification_policy_timeout_fail_open condition=tier0:$failure_key" || :
+        if [ "$policy_status" -eq 1 ]; then
+            log_tier0_event "policy_says_alert condition=tier0:$failure_key" || :
+        elif [ "$policy_status" -eq 124 ]; then
+            log_tier0_event "notification_policy_timeout_fail_closed condition=tier0:$failure_key" || :
         else
-            log_tier0_event "notification_policy_failed_fail_open condition=tier0:$failure_key status=$policy_status" || :
+            log_tier0_event "notification_policy_error_fail_closed condition=tier0:$failure_key status=$policy_status" || :
         fi
     fi
     "$TIER0_RM" -f "$policy_output" 2>/dev/null || :
@@ -187,7 +189,13 @@ alert_all_channels() {
         return 2
     fi
     if [ "$policy_status" -eq 0 ] && [ -z "$by_design_reason" ]; then
-        log_tier0_event "notification_policy_empty_fail_open condition=tier0:$failure_key" || :
+        log_tier0_event "notification_policy_empty_fail_closed condition=tier0:$failure_key" || :
+        wait_for_alerts "$log_pid"
+        return 2
+    fi
+    if [ "$policy_status" -ne 1 ]; then
+        wait_for_alerts "$log_pid"
+        return 2
     fi
 
     "$TIER0_OSASCRIPT" \

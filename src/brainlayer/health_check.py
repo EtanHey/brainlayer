@@ -31,7 +31,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
-from .notification_policy import by_design_reason
+from .notification_policy import by_design_reason, enrichment_pause_reason
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .watcher import default_watch_roots
@@ -1460,8 +1460,17 @@ def run_health_check(
         if issue_code == "drain_unloaded":
             drain_loaded = loaded
         if loaded is False:
-            add_issue(issue_code, "critical", message)
-            heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
+            if issue_code == "enrichment_unloaded" and (
+                reason := enrichment_pause_reason(
+                    {**os.environ, "BRAINLAYER_PAUSE_SENTINEL_PATH": str(config.pause_sentinel_path)},
+                    now,
+                )
+            ):
+                add_issue(issue_code, "info", f"{message}; {reason}")
+                logger.info("enrichment launchd label is intentionally unloaded reason=%s", reason)
+            else:
+                add_issue(issue_code, "critical", message)
+                heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
     if slow_result := deadline_reached("launchd_status"):
         return slow_result
 
@@ -1726,5 +1735,5 @@ def run_health_check(
     else:
         state_payload.pop("slow_check_stage", None)
     _write_state(config.state_path, state_payload)
-    result.ok = not result.issues
+    result.ok = not any(issue.severity != "info" for issue in result.issues)
     return result

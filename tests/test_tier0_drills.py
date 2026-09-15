@@ -58,6 +58,7 @@ def _run_drill(
     by_design_reason_file: Path | None = None,
     policy_hangs: bool = False,
     policy_returns_empty: bool = False,
+    policy_exit_status: int | None = None,
 ) -> DrillResult:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -157,6 +158,9 @@ def _run_drill(
     elif policy_returns_empty:
         policy_python = fake_bin / "policy-python"
         _write_executable(policy_python, "#!/bin/sh\nexit 0\n")
+    elif policy_exit_status is not None:
+        policy_python = fake_bin / "policy-python"
+        _write_executable(policy_python, f"#!/bin/sh\nexit {policy_exit_status}\n")
 
     env = {
         **os.environ,
@@ -224,22 +228,22 @@ def _assert_alert_contract(result: DrillResult) -> None:
     assert '"source":"alerts"' in curl_event
 
 
-def test_d1_unloaded_label_alerts_before_bootstrap_and_kickstart(tmp_path: Path) -> None:
+def test_d1_unloaded_label_is_log_only_before_bootstrap_and_kickstart(tmp_path: Path) -> None:
     result = _run_drill(tmp_path, label_loaded=False, state_mtime=NOW_EPOCH - 60)
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
-    _assert_alert_contract(result)
     bootstrap_index = _event_index(
         result.events,
         f"launchctl:bootstrap {DOMAIN} {tmp_path / 'com.example.brainlayer-health-check.plist'}",
     )
     kickstart_index = _event_index(result.events, f"launchctl:kickstart -k {DOMAIN}/{LABEL}")
-    assert _event_index(result.events, "osascript:") < bootstrap_index < kickstart_index
-    assert _event_index(result.events, "curl:") < bootstrap_index
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert bootstrap_index < kickstart_index
     assert "label_unloaded" in result.tier0_log
 
 
-def test_d2_stale_state_alerts_before_direct_kickstart(tmp_path: Path) -> None:
+def test_d2_stale_state_is_log_only_before_direct_kickstart(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
         label_loaded=True,
@@ -247,11 +251,13 @@ def test_d2_stale_state_alerts_before_direct_kickstart(tmp_path: Path) -> None:
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
-    _assert_alert_contract(result)
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert any(event.startswith(f"launchctl:kickstart -k {DOMAIN}/{LABEL}") for event in result.events)
     assert not any(event.startswith("launchctl:bootstrap ") for event in result.events)
     assert f"state_stale age={STALE_SECONDS + 1}s threshold={STALE_SECONDS}s" in result.tier0_log
-    assert "notification_policy_failed_fail_open" in result.tier0_log
-    assert result.alert_state == f"{NOW_EPOCH}\tstate_stale\n"
+    assert "notification_suppressed_by_design" in result.tier0_log
+    assert result.alert_state == ""
 
 
 def test_explicit_by_design_stale_state_logs_without_notification(tmp_path: Path) -> None:
@@ -276,7 +282,7 @@ def test_explicit_by_design_stale_state_logs_without_notification(tmp_path: Path
     assert result.alert_state == ""
 
 
-def test_hung_notification_policy_fails_open_to_alert_and_heal(tmp_path: Path) -> None:
+def test_hung_notification_policy_fails_closed_but_still_heals(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
         label_loaded=True,
@@ -286,11 +292,13 @@ def test_hung_notification_policy_fails_open_to_alert_and_heal(tmp_path: Path) -
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
-    _assert_alert_contract(result)
-    assert "notification_policy_timeout_fail_open" in result.tier0_log
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert any(event.startswith(f"launchctl:kickstart -k {DOMAIN}/{LABEL}") for event in result.events)
+    assert "notification_policy_timeout_fail_closed" in result.tier0_log
 
 
-def test_empty_notification_policy_result_fails_open_to_alert_and_heal(tmp_path: Path) -> None:
+def test_empty_notification_policy_result_fails_closed_but_still_heals(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
         label_loaded=True,
@@ -300,8 +308,37 @@ def test_empty_notification_policy_result_fails_open_to_alert_and_heal(tmp_path:
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
-    _assert_alert_contract(result)
-    assert "notification_policy_empty_fail_open" in result.tier0_log
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert any(event.startswith(f"launchctl:kickstart -k {DOMAIN}/{LABEL}") for event in result.events)
+    assert "notification_policy_empty_fail_closed" in result.tier0_log
+
+
+def test_notification_policy_error_fails_closed_but_still_heals(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        policy_exit_status=2,
+    )
+
+    assert not any(event.startswith("osascript:") for event in result.events)
+    assert not any(event.startswith("curl:") for event in result.events)
+    assert any(event.startswith(f"launchctl:kickstart -k {DOMAIN}/{LABEL}") for event in result.events)
+    assert "notification_policy_error_fail_closed" in result.tier0_log
+
+
+def test_notification_policy_exit_one_is_logged_as_alert_decision(tmp_path: Path) -> None:
+    result = _run_drill(
+        tmp_path,
+        label_loaded=True,
+        state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
+        policy_exit_status=1,
+    )
+
+    assert any(event.startswith("osascript:") for event in result.events)
+    assert any(event.startswith("curl:") for event in result.events)
+    assert "policy_says_alert" in result.tier0_log
 
 
 def test_repeat_stale_alert_is_suppressed_during_cooldown_but_recovery_still_runs(tmp_path: Path) -> None:
@@ -328,6 +365,7 @@ def test_d3_hanging_notify_endpoint_cannot_suppress_local_alert_or_heal(tmp_path
         state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
         curl_hangs=True,
         alert_timeout_seconds=1,
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -362,7 +400,7 @@ def test_fresh_state_resets_prior_incident_alert_cooldown(tmp_path: Path) -> Non
 
 
 def test_missing_state_alerts_and_kickstarts_without_bootstrap(tmp_path: Path) -> None:
-    result = _run_drill(tmp_path, label_loaded=True, state_mtime=None)
+    result = _run_drill(tmp_path, label_loaded=True, state_mtime=None, policy_exit_status=1)
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
     _assert_alert_contract(result)
@@ -372,7 +410,9 @@ def test_missing_state_alerts_and_kickstarts_without_bootstrap(tmp_path: Path) -
 
 
 def test_future_state_mtime_alerts_and_kickstarts(tmp_path: Path) -> None:
-    result = _run_drill(tmp_path, label_loaded=True, state_mtime=NOW_EPOCH + 60)
+    result = _run_drill(
+        tmp_path, label_loaded=True, state_mtime=NOW_EPOCH + 60, policy_exit_status=1
+    )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
     _assert_alert_contract(result)
@@ -386,6 +426,7 @@ def test_fresh_slow_check_state_alerts_and_kickstarts(tmp_path: Path) -> None:
         label_loaded=True,
         state_mtime=NOW_EPOCH - 60,
         state_contents='{"slow_check": true, "slow_check_stage": "missing_embeddings"}\n',
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -404,6 +445,7 @@ def test_alert_fanout_uses_one_shared_deadline(tmp_path: Path) -> None:
         osascript_hangs=True,
         use_fake_wait_sleep=True,
         alert_timeout_seconds=1,
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -476,13 +518,14 @@ def test_withheld_stale_alert_leaves_a_real_incident_cooldown_untouched(tmp_path
     assert result.alert_state == f"{NOW_EPOCH - 300}\tstate_stale\n"
 
 
-def test_stale_state_still_alerts_when_the_watchdog_ran_on_schedule(tmp_path: Path) -> None:
+def test_stale_state_can_alert_when_policy_allows_and_watchdog_ran_on_schedule(tmp_path: Path) -> None:
     """A genuinely dead health-check on an awake machine must still alert."""
     result = _run_drill(
         tmp_path,
         label_loaded=True,
         state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
         last_run_epoch=NOW_EPOCH - 300,
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -490,12 +533,13 @@ def test_stale_state_still_alerts_when_the_watchdog_ran_on_schedule(tmp_path: Pa
     assert f"state_stale age={STALE_SECONDS + 1}s threshold={STALE_SECONDS}s" in result.tier0_log
 
 
-def test_first_ever_run_with_no_recorded_history_still_alerts_on_stale_state(tmp_path: Path) -> None:
+def test_first_ever_run_can_alert_on_stale_state_when_policy_allows(tmp_path: Path) -> None:
     result = _run_drill(
         tmp_path,
         label_loaded=True,
         state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
         last_run_epoch=None,
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -511,6 +555,7 @@ def test_missed_runs_never_withhold_a_failure_that_is_not_a_function_of_elapsed_
         label_loaded=False,
         state_mtime=NOW_EPOCH - SLEPT_SECONDS,
         last_run_epoch=NOW_EPOCH - SLEPT_SECONDS,
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
@@ -535,7 +580,7 @@ def test_watchdog_records_its_own_run_epoch_on_every_path(tmp_path: Path) -> Non
         assert result.run_state == f"{NOW_EPOCH}\n", kwargs
 
 
-def test_unwritable_run_state_fails_closed_and_still_alerts(tmp_path: Path) -> None:
+def test_unwritable_run_state_skips_sleep_grace_and_can_alert(tmp_path: Path) -> None:
     """Withholding is only safe while the watchdog can advance its own mark.
 
     If the run state cannot be written the recorded epoch freezes, every later gap looks
@@ -548,6 +593,7 @@ def test_unwritable_run_state_fails_closed_and_still_alerts(tmp_path: Path) -> N
         state_mtime=NOW_EPOCH - SLEPT_SECONDS,
         last_run_epoch=None,
         run_state_unwritable=True,
+        policy_exit_status=1,
     )
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
