@@ -7,6 +7,7 @@ import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -97,16 +98,25 @@ def write_badge_state(path: Path, document: Mapping[str, Any]) -> None:
 
     destination = path.expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    temporary: Path | None = None
     try:
-        with temporary.open("w", encoding="utf-8") as handle:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
             json.dump(document, handle, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, destination)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
