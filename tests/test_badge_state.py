@@ -125,8 +125,10 @@ def test_unknown_critical_issue_fails_visible() -> None:
     assert [item["code"] for item in document["alerts"]["active"]] == ["new_unclassified_failure"]
 
 
-def test_badge_state_write_is_atomic_and_round_trips(tmp_path: Path) -> None:
+def test_badge_state_write_is_atomic_and_round_trips(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "state" / "badge-state.json"
+    synced: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda descriptor: synced.append(descriptor))
     expected = build_badge_state_document(
         _result(HealthIssue("jsonl_backup_attempt_failed", "critical", "backup verification failed"))
     )
@@ -134,6 +136,7 @@ def test_badge_state_write_is_atomic_and_round_trips(tmp_path: Path) -> None:
     write_badge_state(path, expected)
 
     assert json.loads(path.read_text(encoding="utf-8")) == expected
+    assert len(synced) == 2
     assert not list(path.parent.glob(".*.tmp"))
 
 
