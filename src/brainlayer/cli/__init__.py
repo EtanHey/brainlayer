@@ -975,6 +975,12 @@ def health_check_command(
         "--watcher-health-path",
         help="Watcher health JSON path.",
     ),
+    badge_state_path: Optional[Path] = typer.Option(
+        None,
+        "--badge-state-path",
+        envvar="BRAINLAYER_BADGE_STATE_PATH",
+        help="BrainBar badge state path; defaults beside the resolved database.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Run the lightweight BrainLayer stability health-check."""
@@ -983,12 +989,20 @@ def health_check_command(
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stderr,
     )
+    from ..badge_state import badge_state_path as resolve_badge_state_path
     from ..health_check import HealthCheckConfig, run_health_check
+
+    resolved_db_path = db or get_db_path()
 
     result = run_health_check(
         HealthCheckConfig(
-            db_path=db or get_db_path(),
+            db_path=resolved_db_path,
             state_path=state_path.expanduser(),
+            badge_state_path=(
+                badge_state_path.expanduser()
+                if badge_state_path is not None
+                else resolve_badge_state_path(resolved_db_path)
+            ),
             socket_path=socket_path.expanduser(),
             canary_query=canary_query,
             watch_label=watch_label,
