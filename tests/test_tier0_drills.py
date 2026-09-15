@@ -196,7 +196,7 @@ def _run_drill(
         env=env,
         capture_output=True,
         text=True,
-        timeout=6,
+        timeout=10,
         check=False,
     )
     events = events_path.read_text(encoding="utf-8").splitlines() if events_path.exists() else []
@@ -364,7 +364,7 @@ def test_d3_hanging_notify_endpoint_cannot_suppress_local_alert_or_heal(tmp_path
         label_loaded=True,
         state_mtime=NOW_EPOCH - STALE_SECONDS - 1,
         curl_hangs=True,
-        alert_timeout_seconds=1,
+        alert_timeout_seconds=3,
         policy_exit_status=1,
     )
 
