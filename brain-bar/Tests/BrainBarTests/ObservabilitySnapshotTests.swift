@@ -316,28 +316,62 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber })
     }
 
-    func testCancelledLiveWatcherDoesNotApplySupersededResult() async {
-        let cancellation = AsyncStream<Bool>.makeStream()
+    func testCancelledLiveWatcherFinishesWithoutApplyingSupersededResult() async {
+        let finished = expectation(description: "cancelled watcher stream finishes")
         var applied: [String] = []
         let url = URL(fileURLWithPath: "/tmp/unused")
         let watcher = Task {
-            await ObservabilityLiveView.Reader.watch(url: url, every: .seconds(1), using: { _ in
-                do {
-                    try await Task.sleep(for: .seconds(1))
-                    cancellation.continuation.yield(false)
-                } catch {
-                    cancellation.continuation.yield(Task.isCancelled)
+            for await result in ObservabilityLiveView.Reader.watch(
+                url: url,
+                every: .seconds(1),
+                using: { _ in
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return .unreadable("old")
                 }
-                cancellation.continuation.finish()
-                return .unreadable("old")
-            }, apply: { if case let .unreadable(value) = $0 { applied.append(value) } })
+            ) {
+                if case let .unreadable(value) = result {
+                    applied.append(value)
+                }
+            }
+            finished.fulfill()
         }
-        await Task.yield()
+
+        await fulfillment(of: [finished], timeout: 1)
         watcher.cancel()
         await watcher.value
-        var events = cancellation.stream.makeAsyncIterator()
-        let workerWasCancelled = await events.next()
-        XCTAssertEqual(workerWasCancelled, true)
+        XCTAssertTrue(applied.isEmpty)
+    }
+
+    func testCancellingLiveWatcherCancelsProducerWithoutApplyingSupersededResult() async {
+        let operationStarted = expectation(description: "watch operation starts")
+        let producerCancelled = expectation(description: "watch producer is cancelled")
+        var applied: [String] = []
+        let url = URL(fileURLWithPath: "/tmp/unused")
+        let watcher = Task {
+            for await result in ObservabilityLiveView.Reader.watch(
+                url: url,
+                every: .seconds(1),
+                using: { _ in
+                    operationStarted.fulfill()
+                    do {
+                        try await Task.sleep(for: .seconds(10))
+                    } catch {
+                        XCTAssertTrue(Task.isCancelled)
+                        producerCancelled.fulfill()
+                    }
+                    return .unreadable("old")
+                }
+            ) {
+                if case let .unreadable(value) = result {
+                    applied.append(value)
+                }
+            }
+        }
+
+        await fulfillment(of: [operationStarted], timeout: 1)
+        watcher.cancel()
+        await fulfillment(of: [producerCancelled], timeout: 1)
+        await watcher.value
         XCTAssertTrue(applied.isEmpty)
     }
 
@@ -360,7 +394,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
         observed.expectedFulfillmentCount = 3
         var results: [ObservabilityReadResult] = []
         let watch = Task {
-            await ObservabilityLiveView.Reader.watch(url: url, every: .milliseconds(10)) { result in
+            for await result in ObservabilityLiveView.Reader.watch(url: url, every: .milliseconds(10)) {
                 results.append(result)
                 switch results.count {
                 case 1:
