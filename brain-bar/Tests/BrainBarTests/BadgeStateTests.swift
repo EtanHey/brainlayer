@@ -40,21 +40,29 @@ final class BadgeStateTests: XCTestCase {
         XCTAssertFalse(BadgeStateReader.read(url: url, now: now, cadence: cadence).badgeOn)
         XCTAssertTrue(BadgeStateReader.read(url: url, now: now.addingTimeInterval(601), cadence: cadence).badgeOn)
 
-        var history = BadgeReadHistory()
-        _ = history.pendingFirstRunGrace(now: now, cadence: cadence)
+        let history = BadgeReadHistory()
+        _ = BadgeStateReader.read(url: url, now: now, cadence: cadence, history: history)
         let wake = now.addingTimeInterval(3_600)
-        let grace = history.pendingFirstRunGrace(now: wake, cadence: cadence)
-        XCTAssertFalse(
-            BadgeStateReader.read(url: url, now: wake, cadence: cadence, pendingFirstRunGraceUntil: grace).badgeOn
-        )
+        XCTAssertFalse(BadgeStateReader.read(url: url, now: wake, cadence: cadence, history: history).badgeOn)
         let awake = wake.addingTimeInterval(301)
+        XCTAssertTrue(BadgeStateReader.read(url: url, now: awake, cadence: cadence, history: history).badgeOn)
         XCTAssertTrue(
-            BadgeStateReader.read(
-                url: url,
-                now: awake,
-                cadence: cadence,
-                pendingFirstRunGraceUntil: history.pendingFirstRunGrace(now: awake, cadence: cadence)
-            ).badgeOn
+            BadgeStateReader.read(url: url, now: awake.addingTimeInterval(1_200), cadence: cadence, history: history)
+                .badgeOn
+        )
+
+        let healthyURL = try mutatedFixture {
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["badge_on"] = false
+            alerts["active"] = []
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: healthyURL) }
+        let healthyHistory = BadgeReadHistory()
+        XCTAssertFalse(BadgeStateReader.read(url: healthyURL, now: now, cadence: cadence, history: healthyHistory).badgeOn)
+        XCTAssertFalse(BadgeStateReader.read(url: healthyURL, now: wake, cadence: cadence, history: healthyHistory).badgeOn)
+        XCTAssertTrue(
+            BadgeStateReader.read(url: healthyURL, now: awake, cadence: cadence, history: healthyHistory).badgeOn
         )
     }
 

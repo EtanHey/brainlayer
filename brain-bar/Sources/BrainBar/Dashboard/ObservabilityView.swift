@@ -35,19 +35,25 @@ struct BadgeStatePresentation: Equatable, Sendable {
     }
 }
 
-struct BadgeReadHistory {
+final class BadgeReadHistory {
     private var previousReadAt: Date?
-    private var pendingGraceUntil: Date?
+    private var gracedDocumentAt: Date?
+    private var graceUntil: Date?
 
-    mutating func pendingFirstRunGrace(now: Date, cadence: ObservabilityCadence) -> Date? {
+    func missedPreviousRead(now: Date, cadence: ObservabilityCadence) -> Bool {
         defer { previousReadAt = now }
-        if let previousReadAt,
-           now < previousReadAt || now.timeIntervalSince(previousReadAt) >= cadence.interval * 2 {
-            pendingGraceUntil = now.addingTimeInterval(cadence.interval)
-        } else if let pendingGraceUntil, now > pendingGraceUntil {
-            self.pendingGraceUntil = nil
+        guard let previousReadAt else { return false }
+        return now < previousReadAt || now.timeIntervalSince(previousReadAt) >= cadence.interval * 2
+    }
+
+    func sleepGrace(now: Date, cadence: ObservabilityCadence, documentGeneratedAt: Date, missedPreviousRead: Bool) -> Date? {
+        if missedPreviousRead, gracedDocumentAt != documentGeneratedAt {
+            gracedDocumentAt = documentGeneratedAt
+            graceUntil = now.addingTimeInterval(cadence.interval)
+        } else if let graceUntil, now > graceUntil {
+            self.graceUntil = nil
         }
-        return pendingGraceUntil
+        return gracedDocumentAt == documentGeneratedAt ? graceUntil : nil
     }
 }
 
@@ -67,8 +73,9 @@ enum BadgeStateReader {
         url: URL,
         now: Date,
         cadence: ObservabilityCadence,
-        pendingFirstRunGraceUntil: Date? = nil
+        history: BadgeReadHistory? = nil
     ) -> BadgeStatePresentation {
+        let missedPreviousRead = history?.missedPreviousRead(now: now, cadence: cadence) ?? false
         if let assumption = cadence.assumption {
             return .failVisible("Badge freshness unknown: \(assumption).")
         }
@@ -94,18 +101,26 @@ enum BadgeStateReader {
                 )
             }
             let document = try decoder.decode(BadgeStateDocument.self, from: data)
+            let graceUntil = history?.sleepGrace(
+                now: now, cadence: cadence, documentGeneratedAt: document.generatedAt,
+                missedPreviousRead: missedPreviousRead)
+            let sleepGraceApplies = graceUntil.map { now <= $0 } == true
             if document.alerts.state == "pending_first_run" {
                 guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
                     return .failVisible("Badge pending_first_run state is invalid.")
                 }
-                if now <= expected || pendingFirstRunGraceUntil.map({ now <= $0 }) == true {
+                if now <= expected || sleepGraceApplies {
                     return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])
                 }
                 return .failVisible("Badge producer missed expected_first_run_by.")
             }
             let age = now.timeIntervalSince(document.generatedAt)
-            guard age >= 0 else { return .failVisible("Badge state timestamp is in the future.") }
-            guard age <= cadence.interval * 2 else { return .failVisible("Badge state is stale.") }
+            guard age >= 0 || sleepGraceApplies else {
+                return .failVisible("Badge state timestamp is in the future.")
+            }
+            guard age <= cadence.interval * 2 || sleepGraceApplies else {
+                return .failVisible("Badge state is stale.")
+            }
             guard document.alerts.state == "measured", document.alerts.reason.isEmpty else {
                 let reason = document.alerts.reason.isEmpty ? "Badge alert state is unknown." : document.alerts.reason
                 return .failVisible(reason)

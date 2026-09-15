@@ -82,7 +82,7 @@ final class BrainBarStatusPopoverController: NSObject {
             url: BadgeStateReader.url(dbPath: dbPath),
             now: now,
             cadence: cadence,
-            pendingFirstRunGraceUntil: badgeReadHistory.pendingFirstRunGrace(now: now, cadence: cadence)
+            history: badgeReadHistory
         )
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
