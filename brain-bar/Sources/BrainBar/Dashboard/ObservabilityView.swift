@@ -2,6 +2,149 @@ import Combine
 import Foundation
 import SwiftUI
 
+struct BadgeStateDocument: Codable, Sendable {
+    let schemaVersion: Int
+    let generatedAt: Date
+    let alerts: Alerts
+
+    struct Alerts: Codable, Sendable {
+        let state: String
+        let reason: String
+        let inputs: [Input]
+        let expectedFirstRunBy: Date?
+        let badgeOn: Bool?
+        let active: [Issue]?
+        let suppressed: [Issue]?
+    }
+
+    struct Input: Codable, Sendable {}
+    struct Issue: Codable, Sendable {
+        let code: String
+        let severity: String
+        let message: String
+    }
+}
+
+struct BadgeStatePresentation: Equatable, Sendable {
+    let badgeOn: Bool
+    let reason: String
+    let activeCodes: [String]
+
+    static func failVisible(_ reason: String) -> Self {
+        .init(badgeOn: true, reason: reason, activeCodes: [])
+    }
+}
+
+final class BadgeReadHistory {
+    private var previousReadAt: Date?
+    private var gracedDocumentAt: Date?
+    private var graceUntil: Date?
+
+    func missedPreviousRead(now: Date, cadence: ObservabilityCadence) -> Bool {
+        defer { previousReadAt = now }
+        guard let previousReadAt else { return false }
+        return now < previousReadAt || now.timeIntervalSince(previousReadAt) >= cadence.interval * 2
+    }
+
+    func sleepGrace(now: Date, cadence: ObservabilityCadence, documentGeneratedAt: Date, missedPreviousRead: Bool) -> Date? {
+        if missedPreviousRead, gracedDocumentAt != documentGeneratedAt {
+            gracedDocumentAt = documentGeneratedAt
+            graceUntil = now.addingTimeInterval(cadence.interval)
+        } else if let graceUntil, now > graceUntil {
+            self.graceUntil = nil
+        }
+        return gracedDocumentAt == documentGeneratedAt ? graceUntil : nil
+    }
+}
+
+enum BadgeStateReader {
+    static func url(
+        dbPath: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let override = environment["BRAINLAYER_BADGE_STATE_PATH"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return URL(fileURLWithPath: dbPath).deletingLastPathComponent()
+            .appendingPathComponent("badge-state.json")
+    }
+
+    static func read(
+        url: URL,
+        now: Date,
+        cadence: ObservabilityCadence,
+        history: BadgeReadHistory? = nil
+    ) -> BadgeStatePresentation {
+        let missedPreviousRead = history?.missedPreviousRead(now: now, cadence: cadence) ?? false
+        if let assumption = cadence.assumption {
+            return .failVisible("Badge freshness unknown: \(assumption).")
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return .failVisible("Badge state missing without a pending_first_run marker.")
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            let envelope = try JSONDecoder().decode(BadgeSchemaEnvelope.self, from: data)
+            guard envelope.schemaVersion == 1 else {
+                return .failVisible("Unsupported badge schema_version \(envelope.schemaVersion); expected 1.")
+            }
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            decoder.dateDecodingStrategy = .custom { value in
+                let raw = try value.singleValueContainer().decode(String.self)
+                let fractional = ISO8601DateFormatter()
+                fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) { return date }
+                throw DecodingError.dataCorruptedError(
+                    in: try value.singleValueContainer(),
+                    debugDescription: "Invalid badge date-time"
+                )
+            }
+            let document = try decoder.decode(BadgeStateDocument.self, from: data)
+            let graceUntil = history?.sleepGrace(
+                now: now, cadence: cadence, documentGeneratedAt: document.generatedAt,
+                missedPreviousRead: missedPreviousRead)
+            let sleepGraceApplies = graceUntil.map { now <= $0 } == true
+            if document.alerts.state == "pending_first_run" {
+                guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
+                    return .failVisible("Badge pending_first_run state is invalid.")
+                }
+                if now <= expected || sleepGraceApplies {
+                    return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])
+                }
+                return .failVisible("Badge producer missed expected_first_run_by.")
+            }
+            let age = now.timeIntervalSince(document.generatedAt)
+            guard age >= 0 || sleepGraceApplies else {
+                return .failVisible("Badge state timestamp is in the future.")
+            }
+            guard age <= cadence.interval * 2 || sleepGraceApplies else {
+                return .failVisible("Badge state is stale.")
+            }
+            guard document.alerts.state == "measured", document.alerts.reason.isEmpty else {
+                let reason = document.alerts.reason.isEmpty ? "Badge alert state is unknown." : document.alerts.reason
+                return .failVisible(reason)
+            }
+            guard let badgeOn = document.alerts.badgeOn, let active = document.alerts.active,
+                  badgeOn == !active.isEmpty else {
+                return .failVisible("Badge alert state is internally inconsistent.")
+            }
+            return .init(
+                badgeOn: badgeOn,
+                reason: badgeOn ? active.map(\.message).joined(separator: "; ") : "",
+                activeCodes: active.map(\.code)
+            )
+        } catch {
+            return .failVisible("Badge state unreadable: \(error.localizedDescription)")
+        }
+    }
+}
+
+private struct BadgeSchemaEnvelope: Decodable {
+    let schemaVersion: Int
+    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version" }
+}
+
 struct ObservabilityDocument: Codable, Sendable {
     let schemaVersion: Int
     let generatedAt: Date
