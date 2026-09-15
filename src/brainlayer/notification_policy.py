@@ -1,8 +1,8 @@
-"""Condition-scoped policy for suppressing notifications that are noisy by design.
+"""Condition-scoped explanations for incidents that are noisy by design.
 
-Python callers use :func:`by_design_reason`. Shell callers use
-``python -m brainlayer.notification_policy <condition>``; exit 0 means suppress and
-stdout is the reason, while exit 1 means alert normally.
+Python callers use :func:`by_design_reason` to annotate logged incidents. The
+module CLI remains as a compatibility surface for older installed callers: exit
+0 means a reason exists and stdout carries it; exit 1 means no reason exists.
 
 Leads can mark an additional exact condition in
 ``~/.local/share/brainlayer/by-design-notifications.json`` (override with
@@ -10,8 +10,8 @@ Leads can mark an additional exact condition in
 
     {"conditions": {"tier0:state_stale": "planned health-check maintenance"}}
 
-The marker deliberately has no wildcard. Invalid or unreadable markers fail open to
-notification rather than hiding a real incident.
+The marker deliberately has no wildcard. Invalid or unreadable markers yield no
+explanation rather than hiding a real incident.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def by_design_reason(
     now: datetime | None = None,
     pause_sentinel_path: Path | None = None,
 ) -> str | None:
-    """Return why ``condition`` is intentional, or ``None`` when it must alert."""
+    """Return why ``condition`` is intentional, or ``None`` when unexplained."""
 
     resolved_env = os.environ if env is None else env
     if reason := _explicit_reason(condition, resolved_env):

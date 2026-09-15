@@ -181,9 +181,21 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
             DashboardMetricFormatter.integerString(797_727, locale: Locale(identifier: "en_US")),
             "797,727"
         )
+        XCTAssertEqual(
+            DashboardMetricFormatter.axisTickString(1_260, locale: Locale(identifier: "en_US")),
+            "1.3k"
+        )
+        XCTAssertEqual(
+            DashboardMetricFormatter.axisTickString(1_260, locale: Locale(identifier: "fr_FR")),
+            "1,3k"
+        )
 
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+        XCTAssertTrue(dashboard.contains("integerString(total, locale: locale)"))
+        XCTAssertTrue(dashboard.contains("integerString(indexedToday, locale: locale)"))
+        XCTAssertTrue(dashboard.contains("BrainBarIngestSeriesPresentation(lane: lane, locale: locale)"))
+        XCTAssertTrue(dashboard.contains("axisTickString(lane.values.max() ?? 0, locale: locale)"))
         for rawInterpolation in [
             "\\(collector.stats.chunkCount)",
             "\\(collector.stats.enrichedChunkCount)",

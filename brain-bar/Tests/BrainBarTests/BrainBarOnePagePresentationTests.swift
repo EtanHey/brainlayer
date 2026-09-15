@@ -59,6 +59,83 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testGeneratedAtTrustMatrixNeverRendersUntrustworthyValues() throws {
+        let now = Date(timeIntervalSince1970: 1_789_419_780) // 2026-09-15 00:03:00 Asia/Jerusalem
+        let missing = try BrainBarOnePageTestFixture.invalidGeneratedAtResult(.missing)
+        let null = try BrainBarOnePageTestFixture.invalidGeneratedAtResult(.null)
+        let unparseable = try BrainBarOnePageTestFixture.invalidGeneratedAtResult(.unparseable)
+        let cases: [(
+            name: String,
+            result: ObservabilityReadResult,
+            reachabilityNote: String,
+            indexedReason: String,
+            agentWritesText: String
+        )] = [
+            (
+                "stale",
+                try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-901)),
+                "A decoded document can exceed the two-cadence age bound.",
+                "observability as of 23:47",
+                "brain_store writes unavailable: observability as of 23:47"
+            ),
+            (
+                "future-dated",
+                try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(300)),
+                "Clock skew can decode to a generated_at later than now.",
+                "observability generated_at is in the future",
+                "brain_store writes unavailable: observability generated_at is in the future"
+            ),
+            (
+                "missing",
+                missing.result,
+                "The non-optional Date cannot be constructed; ObservabilityReader returns unreadable.",
+                missing.reason,
+                "brain_store writes unavailable: \(missing.reason)"
+            ),
+            (
+                "null",
+                null.result,
+                "The non-optional Date cannot decode null; ObservabilityReader returns unreadable.",
+                null.reason,
+                "brain_store writes unavailable: \(null.reason)"
+            ),
+            (
+                "unparseable",
+                unparseable.result,
+                "The custom ISO-8601 decoder rejects invalid text before a document exists.",
+                unparseable.reason,
+                "brain_store writes unavailable: \(unparseable.reason)"
+            ),
+            (
+                "epoch-sentinel",
+                try BrainBarOnePageTestFixture.result(generatedAt: Date(timeIntervalSince1970: 0)),
+                "A syntactically valid epoch sentinel can decode but is not trustworthy evidence.",
+                "observability generated_at is zero or epoch sentinel",
+                "brain_store writes unavailable: observability generated_at is zero or epoch sentinel"
+            ),
+            (
+                "pre-midnight-today-scope",
+                try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-300)),
+                "Fresh evidence from 23:58 is outside the 00:03 today window but valid for rolling 24 h.",
+                "observability as of 23:58",
+                "175 writes via brain_store in 24 h"
+            ),
+        ]
+
+        for item in cases {
+            let context = "\(item.name): \(item.reachabilityNote)"
+            let presentation = try makePresentation(result: item.result, now: now)
+            XCTAssertNil(presentation.indexedToday, context)
+            XCTAssertEqual(
+                presentation.indexedTodayUnavailableText,
+                "Indexed today unavailable: \(item.indexedReason)",
+                context
+            )
+            XCTAssertEqual(presentation.agentWritesText, item.agentWritesText, context)
+        }
+    }
+
+    @MainActor
     func testUnmeasuredAgentActivityRaisesTopStripAlert() throws {
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.healthyResult(),
@@ -163,6 +240,20 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testIndexedTodayOverflowIsUnavailableInsteadOfTrapping() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.overflowingTodayResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "Indexed today unavailable: hourly observability count overflow"
+        )
+    }
+
+    @MainActor
     func testUnverifiedBackupTimestampIsNotCalledLastGood() throws {
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.unverifiedResult(),
@@ -225,6 +316,16 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
 }
 
 enum BrainBarOnePageTestFixture {
+    enum InvalidGeneratedAtShape {
+        case missing
+        case null
+        case unparseable
+    }
+
+    private enum FixtureError: Error {
+        case expectedUnreadableGeneratedAt
+    }
+
     static let now = Date(timeIntervalSince1970: 1_789_387_200) // 2026-09-14 12:00:00Z
     static var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
@@ -242,6 +343,13 @@ enum BrainBarOnePageTestFixture {
 
     static func dashboardResult(indexedToday: Int) throws -> ObservabilityReadResult {
         .readable(try document(byHour: [.init(hour: now, count: indexedToday)]))
+    }
+
+    static func overflowingTodayResult() throws -> ObservabilityReadResult {
+        .readable(try document(byHour: [
+            .init(hour: now.addingTimeInterval(-60), count: Int.max),
+            .init(hour: now, count: 1),
+        ]))
     }
 
     static func todayBoundaryResult() throws -> ObservabilityReadResult {
@@ -272,6 +380,43 @@ enum BrainBarOnePageTestFixture {
             byHour: [.init(hour: now.addingTimeInterval(-900), count: 99)],
             generatedAt: now.addingTimeInterval(-900)
         ))
+    }
+
+    static func result(generatedAt: Date) throws -> ObservabilityReadResult {
+        .readable(try document(
+            byHour: [.init(hour: generatedAt, count: 9)],
+            generatedAt: generatedAt
+        ))
+    }
+
+    static func invalidGeneratedAtResult(
+        _ shape: InvalidGeneratedAtShape
+    ) throws -> (result: ObservabilityReadResult, reason: String) {
+        let sourceURL = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70",
+            withExtension: "json",
+            subdirectory: "Fixtures"
+        ))
+        let source = try Data(contentsOf: sourceURL)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: source) as? [String: Any])
+        switch shape {
+        case .missing:
+            object.removeValue(forKey: "generated_at")
+        case .null:
+            object["generated_at"] = NSNull()
+        case .unparseable:
+            object["generated_at"] = "not-a-date"
+        }
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-generated-at-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        let result = ObservabilityReader.read(url: url)
+        guard case let .unreadable(reason) = result else {
+            throw FixtureError.expectedUnreadableGeneratedAt
+        }
+        return (result, reason)
     }
 
     private static func document(

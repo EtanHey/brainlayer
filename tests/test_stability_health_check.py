@@ -964,6 +964,25 @@ def test_lock_holder_stale_pidfile_is_ignored_without_false_wedge(
     assert saved["lock_holder_held_ticks"] == 0
 
 
+def test_heal_action_log_includes_the_health_check_timestamp(tmp_path, capsys):
+    result = health_check.HealthCheckResult(
+        checked_at="2026-09-15T07:15:00+00:00",
+        ok=False,
+        issues=[health_check.HealthIssue("watcher_stalled", "critical", "stalled")],
+    )
+
+    health_check._apply_heals(
+        result=result,
+        issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
+        previous_failures={},
+        previous_tripped=set(),
+        config=health_check.HealthCheckConfig(heal=True, heal_min_consecutive_failures=1),
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert "timestamp=2026-09-15T07:15:00+00:00 heal action label=com.example.watch" in capsys.readouterr().err
+
+
 def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_breaker(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
@@ -978,10 +997,12 @@ def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_
     _write_writer_pidfile(pidfile_dir, db_path, pid=holder_pid, start_time="holder-start")
     monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
     monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "holder-start"))
-    notifications: list[tuple[str, str]] = []
+    health_events: list[tuple[str, str]] = []
     events: list[dict] = []
     monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
+        health_check,
+        "_log_health_event",
+        lambda condition, message, **_kwargs: health_events.append((condition, message)),
     )
     monkeypatch.setattr(health_check, "_emit_heal_event", events.append)
 
@@ -1035,7 +1056,10 @@ def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_
     assert "com.brainlayer.index" in " ".join(kickstarts[0])
     assert "com.brainlayer.drain" not in " ".join(kickstarts[0])
     assert "kickstart:com.brainlayer.index" in result.actions
-    assert any(str(holder_pid) in message and "brainlayer index" in message for _title, message in notifications)
+    assert any(
+        condition == "heal:lock_holder_wedge" and str(holder_pid) in message and "brainlayer index" in message
+        for condition, message in health_events
+    )
     assert any(
         event.get("_type") == "heal" and event.get("lock_holder", {}).get("pid") == holder_pid for event in events
     )
@@ -1606,7 +1630,11 @@ def _capture_queue_notifications(monkeypatch) -> list[tuple[str, str]]:
     monkeypatch.delenv("BRAINLAYER_ENRICH_ENABLED", raising=False)
     notifications: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
+        health_check,
+        "_log_health_event",
+        lambda condition, message, **_kwargs: notifications.append(
+            ("BrainLayer queue backlog" if condition in {"queue_backlog", "enrichment_backlog"} else condition, message)
+        ),
     )
     return notifications
 
@@ -1669,7 +1697,7 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
     assert "heal=skipped" in queue_issue.message and "heal_failures=85" in queue_issue.message
     assert "enrichment lane paused since 2026-08-04" in queue_issue.message
     assert "drain restart would be a no-op" in queue_issue.message
-    assert not any(title == "BrainLayer queue backlog" for title, _message in notifications)
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert "com.brainlayer.drain:queue_backed_up" not in saved["heal_failures"]
@@ -1755,7 +1783,7 @@ def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path
     assert "action=kickstart:com.brainlayer.drain" in queue_page
 
 
-def test_pause_explained_backlog_stays_quiet_until_pause_lifts(tmp_path, monkeypatch):
+def test_pause_explained_backlog_logs_once_per_signature_until_pause_lifts(tmp_path, monkeypatch):
     config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=False)
     (queue_dir / "enrichment-one.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     pause_path.write_text(
@@ -1769,15 +1797,15 @@ def test_pause_explained_backlog_stays_quiet_until_pause_lifts(tmp_path, monkeyp
 
     run()
     run()
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 0
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
     (queue_dir / "enrichment-two.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     run()
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 0
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
 
     pause_path.unlink()
     run()
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 3
 
 
 @pytest.mark.parametrize(
@@ -1836,13 +1864,13 @@ def test_disabled_enrichment_backlog_pages_immediately_after_reenable(tmp_path, 
 
     _run_queue_backlog_health(config, runner)
 
-    assert not any(title == "BrainLayer queue backlog" for title, _message in notifications)
-    assert "queue_backlog_notice" not in json.loads(state_path.read_text(encoding="utf-8"))
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
+    assert "queue_backlog_notice" in json.loads(state_path.read_text(encoding="utf-8"))
 
     monkeypatch.delenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED")
     _run_queue_backlog_health(config, runner)
 
-    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
 
 
 def test_old_paused_queue_below_auto_heal_count_does_not_page(tmp_path, monkeypatch):
@@ -1854,7 +1882,7 @@ def test_old_paused_queue_below_auto_heal_count_does_not_page(tmp_path, monkeypa
 
     _run_queue_backlog_health(config, lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""))
 
-    assert not any(title == "BrainLayer queue backlog" for title, _message in notifications)
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
 
 def test_success_tick_clears_heal_breaker_state(tmp_path):

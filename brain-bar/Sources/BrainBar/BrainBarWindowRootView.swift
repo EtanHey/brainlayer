@@ -176,6 +176,8 @@ private struct BrainBarDashboardContent: View {
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    var calendar: Calendar = .current
+    var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
 
     var body: some View {
@@ -188,6 +190,8 @@ private struct BrainBarDashboardContent: View {
                 dbPath: dbPath,
                 observabilityResult: observabilityResult,
                 referenceNow: referenceNow,
+                calendar: calendar,
+                locale: locale,
                 panelState: panelState ?? standalonePanelState
             )
         }
@@ -441,11 +445,11 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             let upload = document.backups.lastVerifiedUpload
             backupLines = [
                 .init(
-                    text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar) : nil } ?? "no verified copy")",
+                    text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
                     tone: snapshot?.verified == true ? .green : .red
                 ),
                 .init(
-                    text: "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar) : nil } ?? "no verified copy")",
+                    text: "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
                     tone: upload?.verified == true ? .green : .red
                 ),
             ]
@@ -459,14 +463,32 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if case let .readable(document) = observability, document.stores.state == "measured" {
             totalIndexedChunks = document.stores.totalChunks ?? stats.chunkCount
             let midnight = calendar.startOfDay(for: now)
-            if !observabilityIsCurrent(document, now: now, midnight: midnight, cadence: observabilityCadence) {
+            let trust = generatedAtTrust(
+                document,
+                now: now,
+                cadence: observabilityCadence,
+                sameDayBoundary: midnight,
+                calendar: calendar,
+                locale: locale
+            )
+            if case let .untrustworthy(reason) = trust {
                 indexedToday = nil
-                indexedTodayUnavailableText = "Indexed today unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
+                indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else if let buckets = document.stores.inWindow?.byHour {
-                indexedToday = buckets
+                let todayCount = buckets
                     .filter { $0.hour >= midnight && $0.hour <= now }
-                    .reduce(0) { $0 + $1.count }
-                indexedTodayUnavailableText = nil
+                    .reduce(Int?.some(0)) { total, bucket in
+                        guard let total else { return nil }
+                        let (sum, overflow) = total.addingReportingOverflow(bucket.count)
+                        return overflow ? nil : sum
+                    }
+                if let todayCount {
+                    indexedToday = todayCount
+                    indexedTodayUnavailableText = nil
+                } else {
+                    indexedToday = nil
+                    indexedTodayUnavailableText = "Indexed today unavailable: hourly observability count overflow"
+                }
             } else {
                 indexedToday = nil
                 indexedTodayUnavailableText = "Indexed today unavailable: hourly observability missing"
@@ -474,14 +496,25 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         } else {
             totalIndexedChunks = stats.chunkCount
             indexedToday = nil
-            indexedTodayUnavailableText = "Indexed today unavailable: observability unmeasurable"
+            if case let .unreadable(reason) = observability {
+                indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
+            } else {
+                indexedTodayUnavailableText = "Indexed today unavailable: observability unmeasurable"
+            }
         }
 
         let agentWritesText: String
         if case let .readable(document) = observability {
-            let midnight = calendar.startOfDay(for: now)
-            if !observabilityIsCurrent(document, now: now, midnight: midnight, cadence: observabilityCadence) {
-                agentWritesText = "brain_store writes unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
+            let trust = generatedAtTrust(
+                document,
+                now: now,
+                cadence: observabilityCadence,
+                sameDayBoundary: nil,
+                calendar: calendar,
+                locale: locale
+            )
+            if case let .untrustworthy(reason) = trust {
+                agentWritesText = "brain_store writes unavailable: \(reason)"
             } else if document.emitters.state == "measured" {
                 if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
                     agentWritesText = "\(DashboardMetricFormatter.integerString(mcp.countInWindow, locale: locale)) writes via brain_store in \(document.windowHours) h"
@@ -492,6 +525,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 let reason = document.emitters.reason.isEmpty ? "emitter measurement unavailable" : document.emitters.reason
                 agentWritesText = "brain_store writes unavailable: \(reason)"
             }
+        } else if case let .unreadable(reason) = observability {
+            agentWritesText = "brain_store writes unavailable: \(reason)"
         } else {
             agentWritesText = "brain_store writes unavailable: observability document unreadable"
         }
@@ -506,14 +541,33 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         )
     }
 
-    private static func observabilityIsCurrent(
+    private enum GeneratedAtTrust: Equatable {
+        case trustworthy
+        case untrustworthy(String)
+    }
+
+    private static func generatedAtTrust(
         _ document: ObservabilityDocument,
         now: Date,
-        midnight: Date,
-        cadence: ObservabilityCadence
-    ) -> Bool {
-        document.generatedAt >= midnight
-            && max(0, now.timeIntervalSince(document.generatedAt)) <= cadence.interval * 2
+        cadence: ObservabilityCadence,
+        sameDayBoundary: Date?,
+        calendar: Calendar,
+        locale: Locale
+    ) -> GeneratedAtTrust {
+        let generatedAt = document.generatedAt
+        if generatedAt <= Date(timeIntervalSince1970: 0) {
+            return .untrustworthy("observability generated_at is zero or epoch sentinel")
+        }
+        if generatedAt > now {
+            return .untrustworthy("observability generated_at is in the future")
+        }
+        if now.timeIntervalSince(generatedAt) > cadence.interval * 2 {
+            return .untrustworthy("observability as of \(shortTime(generatedAt, calendar: calendar, locale: locale))")
+        }
+        if let sameDayBoundary, generatedAt < sameDayBoundary {
+            return .untrustworthy("observability as of \(shortTime(generatedAt, calendar: calendar, locale: locale))")
+        }
+        return .trustworthy
     }
 
     private static func shortTime(_ date: Date, calendar: Calendar, locale: Locale) -> String {
@@ -531,11 +585,16 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         return "\(seconds / 3_600) h"
     }
 
-    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar) -> String {
+    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
         if calendar.isDate(date, inSameDayAs: now) {
-            return "last good today \(date.formatted(date: .omitted, time: .shortened))"
+            return "last good today \(shortTime(date, calendar: calendar, locale: locale))"
         }
-        return "last good \(date.formatted(date: .abbreviated, time: .shortened))"
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "MMM d 'at' HH:mm"
+        return "last good \(formatter.string(from: date))"
     }
 }
 
@@ -699,6 +758,8 @@ private struct BrainBarDashboardView: View {
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    var calendar: Calendar = .current
+    var locale: Locale = .current
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -770,7 +831,8 @@ private struct BrainBarDashboardView: View {
         return BrainBarHeroPresentation.derive(
             flow: flowSummary,
             stats: collector.stats,
-            backupTruth: backupTruth
+            backupTruth: backupTruth,
+            locale: locale
         )
     }
 
@@ -783,7 +845,9 @@ private struct BrainBarDashboardView: View {
             observability: effectiveObservabilityResult,
             stats: collector.stats,
             agentActivity: collector.agentActivity,
-            now: currentNow
+            now: currentNow,
+            calendar: calendar,
+            locale: locale
         )
     }
 
@@ -894,8 +958,8 @@ private struct BrainBarDashboardView: View {
         .task(id: dbPath) {
             guard observabilityResult == nil, let dbPath else { return }
             let url = ObservabilityReader.url(dbPath: dbPath)
-            await ObservabilityLiveView.Reader.watch(url: url) {
-                liveObservabilityResult = $0
+            for await next in ObservabilityLiveView.Reader.watch(url: url) {
+                liveObservabilityResult = next
             }
         }
     }
@@ -953,7 +1017,7 @@ private struct BrainBarDashboardView: View {
         let counts = onePagePresentation
         return summaryTile(title: "Indexed", identifier: "memory", height: height) {
             if let total = counts.totalIndexedChunks {
-                Text("\(DashboardMetricFormatter.integerString(total)) indexed chunks total")
+                Text("\(DashboardMetricFormatter.integerString(total, locale: locale)) indexed chunks total")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
@@ -963,7 +1027,7 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
             if let indexedToday = counts.indexedToday {
-                Text("\(DashboardMetricFormatter.integerString(indexedToday)) indexed today")
+                Text("\(DashboardMetricFormatter.integerString(indexedToday, locale: locale)) indexed today")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextSecondary)
@@ -1035,6 +1099,7 @@ private struct BrainBarDashboardView: View {
         fetchedAt: Date
     ) -> some View {
         let lane = pipelineFlowSummary.lane(for: series)
+        let presentation = BrainBarIngestSeriesPresentation(lane: lane, locale: locale)
         let disclosure = BrainBarDashboardChartDisclosure(
             series: series,
             lane: lane,
@@ -1047,27 +1112,35 @@ private struct BrainBarDashboardView: View {
                 .foregroundStyle(Color.brainBarTextSecondary.opacity(0.75))
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
-            BrainBarHeroSparkline(
-                label: lane.sparklineLabel,
-                values: lane.values,
-                secondaryValues: [],
-                primarySeriesLabel: nil,
-                secondarySeriesLabel: nil,
-                tertiaryValues: [],
-                tertiarySeriesLabel: nil,
-                latestBucketName: lane.latestBucketName,
-                accentColor: lane.accentColor,
-                secondaryAccentColor: nil,
-                tertiaryAccentColor: nil,
-                activityWindowMinutes: lane.activityWindowMinutes,
-                fetchedAt: fetchedAt,
-                pulseRevision: pulseRevision,
-                referenceValue: nil,
-                metricDisclosure: disclosure.tooltipDisclosure,
-                accessibilitySummary: disclosure.accessibilitySummary
-            )
-            .frame(height: 42)
-            Text("\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +))) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0))")
+            if presentation.showsSparkline {
+                BrainBarHeroSparkline(
+                    label: lane.sparklineLabel,
+                    values: lane.values,
+                    secondaryValues: [],
+                    primarySeriesLabel: nil,
+                    secondarySeriesLabel: nil,
+                    tertiaryValues: [],
+                    tertiarySeriesLabel: nil,
+                    latestBucketName: lane.latestBucketName,
+                    accentColor: lane.accentColor,
+                    secondaryAccentColor: nil,
+                    tertiaryAccentColor: nil,
+                    activityWindowMinutes: lane.activityWindowMinutes,
+                    fetchedAt: fetchedAt,
+                    pulseRevision: pulseRevision,
+                    referenceValue: nil,
+                    metricDisclosure: disclosure.tooltipDisclosure,
+                    accessibilitySummary: disclosure.accessibilitySummary
+                )
+                .frame(height: 42)
+            } else {
+                Text("Evidence unavailable")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .frame(maxWidth: .infinity, minHeight: 42, alignment: .center)
+                    .accessibilityLabel(disclosure.accessibilitySummary)
+            }
+            Text(presentation.metricText)
                 .font(.system(size: 8, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(Color.brainBar(nsColor: lane.accentColor).opacity(0.9))
@@ -2318,6 +2391,22 @@ private struct BrainBarPipelineSeriesCard: View {
     }
 }
 
+struct BrainBarIngestSeriesPresentation: Equatable {
+    let metricText: String
+    let showsSparkline: Bool
+
+    init(lane: DashboardFlowLane, locale: Locale = .current) {
+        guard lane.status != .unavailable else {
+            metricText = "Unavailable"
+            showsSparkline = false
+            return
+        }
+
+        metricText = "\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale)) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0, locale: locale))"
+        showsSparkline = true
+    }
+}
+
 struct BrainBarDashboardChartDisclosure: Equatable {
     let subtitle: String
     let visibleDetail: String?
@@ -2363,8 +2452,13 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             unitLabel = "success-status chunk rows"
         }
 
-        accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
-        tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
+        if lane.status == .unavailable {
+            accessibilitySummary = "\(lane.name). Evidence unavailable. Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
+            tooltipDisclosure = "Evidence unavailable"
+        } else {
+            accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
+            tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
+        }
     }
 }
 
@@ -2376,11 +2470,22 @@ struct BrainBarDashboardChartDisclosure: Equatable {
 /// selects the layout breakpoint: compact < 920 ≤ default < 1040 ≤ wide.
 @MainActor
 enum BrainBarDashboardPreview {
+    static var goldenCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = goldenLocale
+        return calendar
+    }
+
+    static let goldenLocale = Locale(identifier: "en_US")
+
     static func make(
         collector: StatsCollector,
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
         now: Date? = nil,
+        calendar: Calendar = goldenCalendar,
+        locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil
     ) -> AnyView {
         AnyView(
@@ -2391,6 +2496,8 @@ enum BrainBarDashboardPreview {
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
                     referenceNow: now,
+                    calendar: calendar,
+                    locale: locale,
                     panelState: panelState
                 )
             }
