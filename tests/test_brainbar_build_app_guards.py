@@ -1158,14 +1158,25 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
 
 @pytest.mark.parametrize(
     "requested_path",
-    ["home", "home-trailing", "home-relative", "home-symlink", "home-case", "protected"],
+    [
+        "home",
+        "home-trailing",
+        "home-relative",
+        "home-symlink",
+        "home-case",
+        "protected",
+        "home-nested",
+        "protected-nested",
+    ],
 )
 def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, requested_path: str) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
     home = tmp_path / "home"
+    _prepare_bundle_inputs(repo)
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
     production_app = home / "Applications" / "BrainBar.app"
     protected_app = tmp_path / "protected" / "BrainBar.app"
-    target_app = protected_app if requested_path == "protected" else production_app
+    target_app = protected_app if requested_path in {"protected", "protected-nested"} else production_app
     daemon = target_app / "Contents" / "MacOS" / "BrainBarDaemon"
     daemon.parent.mkdir(parents=True)
     daemon.write_text("production daemon", encoding="utf-8")
@@ -1182,8 +1193,11 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, re
         requested = str(linked_apps / "BrainBar.app")
     elif requested_path == "home-case":
         requested = str(home / "Applications" / "Brainbar.app")
+    elif requested_path in {"home-nested", "protected-nested"}:
+        requested = str(target_app / "Contents" / "Resources" / "BrainBar-DEV-nested.app")
     else:
         requested = str(target_app)
+    before_files = sorted(path.relative_to(target_app) for path in target_app.rglob("*"))
 
     result = _run_build_script(
         repo,
@@ -1191,8 +1205,9 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, re
         canonical_root=tmp_path / "brainlayer-canonical",
         home=home,
         dry_run=False,
-        extra_args=["--force-worktree-build"],
+        extra_args=["--force-worktree-build", "--force-dirty"],
         extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_DEV_APP_DIR": requested,
             "BRAINBAR_PROTECTED_APPLICATIONS_DIR": str(tmp_path / "protected"),
         },
@@ -1202,12 +1217,14 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, re
     assert "refusing DEV bundle" in result.stderr
     assert plistlib.loads(plist_path.read_bytes())["CFBundleIdentifier"] == "com.brainlayer.brainbar"
     assert daemon.read_text(encoding="utf-8") == "production daemon"
+    assert sorted(path.relative_to(target_app) for path in target_app.rglob("*")) == before_files
 
 
 @pytest.mark.parametrize("production_payload", ["bundle-id", "daemon"])
 def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path, production_payload: str) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
     home = tmp_path / "home"
+    _prepare_bundle_inputs(repo)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
     app = home / "Applications" / "BrainBar-DEV-disguised.app"
     plist_path = app / "Contents" / "Info.plist"
@@ -1227,6 +1244,9 @@ def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path,
     if production_payload == "daemon":
         daemon.parent.mkdir(parents=True)
         daemon.write_text("production daemon", encoding="utf-8")
+    marker = app / "Contents" / "production-marker"
+    marker.write_text("keep", encoding="utf-8")
+    original_plist = plist_path.read_bytes()
 
     result = _run_build_script(
         repo,
@@ -1234,7 +1254,7 @@ def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path,
         canonical_root=tmp_path / "brainlayer-canonical",
         home=home,
         dry_run=False,
-        extra_args=["--force-worktree-build"],
+        extra_args=["--force-worktree-build", "--force-dirty"],
         extra_env={
             **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_DEV_APP_DIR": str(app),
@@ -1243,7 +1263,8 @@ def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path,
 
     assert result.returncode != 0
     assert "refusing DEV bundle over an existing" in result.stderr
-    assert plist_path.is_file()
+    assert plist_path.read_bytes() == original_plist
+    assert marker.read_text(encoding="utf-8") == "keep"
     if production_payload == "daemon":
         assert daemon.read_text(encoding="utf-8") == "production daemon"
 

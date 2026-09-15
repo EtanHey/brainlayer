@@ -164,7 +164,7 @@ app_dir_targets_protected_resident() {
 
 refuse_dev_production_app_dir() {
     [ "$DEV_BUNDLE_BUILD" -eq 1 ] || return 0
-    local requested production_candidate existing_bundle_id app_basename
+    local requested production_candidate canonical_candidate existing_bundle_id app_basename
     requested="$(canonical_compare_path "$APP_DIR")"
     app_basename="$(basename "$APP_DIR")"
 
@@ -183,11 +183,17 @@ refuse_dev_production_app_dir() {
         "$(protected_resident_app_path)" \
         "${BRAINBAR_APP_DIR:-}"; do
         [ -n "$production_candidate" ] || continue
-        if [ "$requested" = "$(canonical_compare_path "$production_candidate")" ]; then
+        canonical_candidate="$(canonical_compare_path "$production_candidate")"
+        if [ "$requested" = "$canonical_candidate" ] || [[ "$requested" == "$canonical_candidate"/* ]]; then
             echo "[build-app] ERROR: refusing DEV bundle at production app path: $APP_DIR" >&2
             exit 1
         fi
     done
+
+    if [[ "$requested" == *.app/* ]]; then
+        echo "[build-app] ERROR: refusing DEV bundle nested inside another app bundle: $APP_DIR" >&2
+        exit 1
+    fi
 
     if [ -f "$APP_DIR/Contents/Info.plist" ]; then
         if ! existing_bundle_id="$("$PLIST_BUDDY" -c 'Print :CFBundleIdentifier' "$APP_DIR/Contents/Info.plist" 2>/dev/null)"; then
