@@ -869,6 +869,10 @@ private struct BrainBarDashboardView: View {
                     .background(GeometryReader { proxy in
                         Color.clear.preference(key: BrainBarDashboardHeightKey.self, value: proxy.size.height)
                     })
+                    .background(
+                        BrainBarDashboardScrollResetter(disclosureExpanded: panelState.detailsExpanded)
+                            .frame(width: 0, height: 0)
+                    )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .accessibilityIdentifier("brainbar.dashboard.scroll")
@@ -1257,7 +1261,8 @@ private struct BrainBarDashboardView: View {
             BrainBarDisclosureRow(
                 isExpanded: $panelState.detailsExpanded,
                 accessibilityIdentifier: "brainbar.dashboard.runtime-disclosure",
-                accessibilityLabel: "Details"
+                accessibilityLabel: "Details",
+                onAnimationCompleted: panelState.disclosureAnimationDidComplete
             ) {
                 VStack(alignment: .leading, spacing: layout.gridSpacing) {
                     if layout.diagnosticColumns == 2 {
@@ -1338,17 +1343,65 @@ struct BrainBarDisclosureInteractionState {
     }
 }
 
+enum BrainBarDashboardScrollPosition {
+    static func topOrigin(
+        documentBounds: CGRect,
+        viewportHeight: CGFloat,
+        documentIsFlipped: Bool,
+        currentX: CGFloat
+    ) -> CGPoint {
+        let y = documentIsFlipped
+            ? documentBounds.minY
+            : max(documentBounds.maxY - viewportHeight, documentBounds.minY)
+        return CGPoint(x: currentX, y: y)
+    }
+}
+
+private struct BrainBarDashboardScrollResetter: NSViewRepresentable {
+    let disclosureExpanded: Bool
+
+    final class Coordinator {
+        var previousExpansion: Bool?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let previousExpansion = context.coordinator.previousExpansion
+        context.coordinator.previousExpansion = disclosureExpanded
+        guard previousExpansion != nil, previousExpansion != disclosureExpanded else { return }
+
+        DispatchQueue.main.async {
+            guard let scrollView = nsView.enclosingScrollView,
+                  let documentView = scrollView.documentView else { return }
+            let clipView = scrollView.contentView
+            let origin = BrainBarDashboardScrollPosition.topOrigin(
+                documentBounds: documentView.bounds,
+                viewportHeight: clipView.bounds.height,
+                documentIsFlipped: documentView.isFlipped,
+                currentX: clipView.bounds.origin.x
+            )
+            clipView.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clipView)
+        }
+    }
+}
+
 private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     @Binding var isExpanded: Bool
     let accessibilityIdentifier: String
     let accessibilityLabel: String
     let focusStateOverride: Bool?
+    let onAnimationCompleted: () -> Void
     @ViewBuilder let content: () -> Content
     @ViewBuilder let label: () -> Label
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
     @State private var interaction: BrainBarDisclosureInteractionState
+    @State private var expansionProgress: CGFloat
+    @State private var isAnimatingExpansion = false
 
     init(
         isExpanded: Binding<Bool>,
@@ -1356,6 +1409,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         accessibilityLabel: String,
         focusStateOverride: Bool? = nil,
         initialInteraction: BrainBarDisclosureInteractionState = .init(),
+        onAnimationCompleted: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder label: @escaping () -> Label
     ) {
@@ -1363,7 +1417,9 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         self.accessibilityIdentifier = accessibilityIdentifier
         self.accessibilityLabel = accessibilityLabel
         self.focusStateOverride = focusStateOverride
+        self.onAnimationCompleted = onAnimationCompleted
         _interaction = State(initialValue: initialInteraction)
+        _expansionProgress = State(initialValue: isExpanded.wrappedValue ? 1 : 0)
         self.content = content
         self.label = label
     }
@@ -1375,9 +1431,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
                     isExpanded: isExpanded,
                     source: .current()
                 )
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                    isExpanded = nextExpansion
-                }
+                beginExpansionTransition(to: nextExpansion)
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.right")
@@ -1406,15 +1460,93 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
             .accessibilityHint(isExpanded ? "Collapse" : "Expand")
             .accessibilityIdentifier(accessibilityIdentifier)
 
-            if isExpanded {
+            if isExpanded, !isAnimatingExpansion {
                 content()
+            } else if isAnimatingExpansion {
+                BrainBarDisclosureContentLayout(progress: expansionProgress) {
+                    content()
+                }
+                .clipped()
+                .allowsHitTesting(isExpanded)
+                .accessibilityHidden(!isExpanded)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: isExpanded) { _, expanded in
+            guard !isAnimatingExpansion else { return }
+            expansionProgress = expanded ? 1 : 0
+        }
     }
 
     private var focusRingIsVisible: Bool {
         interaction.showsKeyboardFocusRing && (focusStateOverride ?? isFocused)
+    }
+
+    private func beginExpansionTransition(to expanded: Bool) {
+        guard !isAnimatingExpansion else { return }
+
+        let direction: BrainBarDisclosureAnimation.Direction = expanded ? .open : .close
+        let animation = BrainBarDisclosureAnimation.animation(for: direction, reduceMotion: reduceMotion)
+        let targetProgress: CGFloat = expanded ? 1 : 0
+
+        guard animation != nil else {
+            isExpanded = expanded
+            expansionProgress = targetProgress
+            onAnimationCompleted()
+            return
+        }
+
+        isAnimatingExpansion = true
+        expansionProgress = expanded ? 0 : 1
+        DispatchQueue.main.async {
+            withAnimation(animation, completionCriteria: .logicallyComplete) {
+                isExpanded = expanded
+                expansionProgress = targetProgress
+            } completion: {
+                isAnimatingExpansion = false
+                onAnimationCompleted()
+            }
+        }
+    }
+}
+
+private struct BrainBarDisclosureContentLayout: Layout {
+    var progress: CGFloat
+    nonisolated var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let expandedSize = subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(
+            width: proposal.width ?? expandedSize.width,
+            height: BrainBarDisclosureAnimation.containerHeight(
+                progress: progress,
+                collapsedContainerHeight: 0,
+                expandedContainerHeight: expandedSize.height
+            )
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        let expandedSize = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        subview.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: expandedSize.height)
+        )
     }
 }
 

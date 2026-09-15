@@ -704,6 +704,55 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testDetailsDisclosureAnimationRetainsContentAndHasOneWindowHeightWriter() throws {
+        let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let controllerSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
+        let rowRange = try XCTUnwrap(rootSource.range(of: "private struct BrainBarDisclosureRow"))
+        let rowEnd = try XCTUnwrap(rootSource[rowRange.upperBound...].range(of: "enum BrainBarDisclosureRowPreview"))
+        let rowSource = String(rootSource[rowRange.lowerBound..<rowEnd.lowerBound])
+        let fitRange = try XCTUnwrap(controllerSource.range(of: "private func fitPanelToContent()"))
+        let fitEnd = try XCTUnwrap(controllerSource[fitRange.upperBound...].range(of: "private static func makePanel"))
+        let fitSource = String(controllerSource[fitRange.lowerBound..<fitEnd.lowerBound])
+        let animationRange = try XCTUnwrap(controllerSource.range(of: "enum BrainBarDisclosureAnimation"))
+        let animationEnd = try XCTUnwrap(controllerSource[animationRange.upperBound...].range(of: "final class BrainBarDashboardPanel"))
+        let animationSource = String(controllerSource[animationRange.lowerBound..<animationEnd.lowerBound])
+        let panelStateRange = try XCTUnwrap(controllerSource.range(of: "final class BrainBarDashboardPanelState"))
+        let panelStateEnd = try XCTUnwrap(controllerSource[panelStateRange.upperBound...].range(of: "final class BrainBarDashboardPanelController"))
+        let panelStateSource = String(controllerSource[panelStateRange.lowerBound..<panelStateEnd.lowerBound])
+
+        XCTAssertFalse(
+            rowSource.contains("if isExpanded {\n                content()\n            }"),
+            "The content must remain mounted while its height interpolates; conditional removal recreates the one-frame blank state."
+        )
+        XCTAssertTrue(rowSource.contains("BrainBarDisclosureAnimation.containerHeight("))
+        XCTAssertTrue(rowSource.contains("BrainBarDisclosureAnimation.animation("))
+        XCTAssertTrue(
+            rowSource.contains(
+                "private func beginExpansionTransition(to expanded: Bool) {\n"
+                    + "        guard !isAnimatingExpansion else { return }"
+            ),
+            "A second activation must not race the active transition completion."
+        )
+        XCTAssertEqual(
+            animationSource.components(separatedBy: "0.25").count - 1,
+            1,
+            "The disclosure duration must have exactly one definition site."
+        )
+        XCTAssertTrue(
+            panelStateSource.contains("BrainBarDisclosureAnimation.windowHeight("),
+            "The panel driver must consume the same coupling model as the disclosure container."
+        )
+        XCTAssertEqual(
+            fitSource.components(separatedBy: "panel.setContentSize(").count - 1,
+            1,
+            "The disclosure interaction must have exactly one panel-height writer."
+        )
+        XCTAssertTrue(
+            rootSource.contains("BrainBarDashboardScrollResetter(disclosureExpanded: panelState.detailsExpanded)"),
+            "Disclosure height changes must explicitly clear the enclosing NSScrollView offset that clipped the banner."
+        )
+    }
+
     func testPointerDisclosureActivationTogglesWithoutLeavingFocusRing() {
         var interaction = BrainBarDisclosureInteractionState()
 

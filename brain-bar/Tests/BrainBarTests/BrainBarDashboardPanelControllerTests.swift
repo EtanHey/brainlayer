@@ -4,6 +4,73 @@ import XCTest
 
 @MainActor
 final class BrainBarDashboardPanelControllerTests: XCTestCase {
+    func testDisclosureAnimationUsesOneTimingInBothDirectionsAndReduceMotionIsInstant() {
+        let opening = BrainBarDisclosureAnimation.timing(for: .open, reduceMotion: false)
+        let closing = BrainBarDisclosureAnimation.timing(for: .close, reduceMotion: false)
+
+        XCTAssertEqual(opening, closing)
+        XCTAssertEqual(opening.duration, 0.25)
+        XCTAssertEqual(opening.curve, .easeInOut)
+        XCTAssertEqual(
+            BrainBarDisclosureAnimation.timing(for: .open, reduceMotion: true).duration,
+            0
+        )
+        XCTAssertEqual(
+            BrainBarDisclosureAnimation.timing(for: .close, reduceMotion: true).duration,
+            0
+        )
+    }
+
+    func testDisclosureAnimationCouplesContainerAndWindowAtInteriorProgress() {
+        let collapsedContainerHeight: CGFloat = 44
+        let expandedContainerHeight: CGFloat = 612
+        let chromeAndSurroundingContentHeight: CGFloat = 188
+        let samples: [CGFloat] = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
+
+        let layouts = samples.map {
+            BrainBarDisclosureAnimation.layout(
+                progress: $0,
+                collapsedContainerHeight: collapsedContainerHeight,
+                expandedContainerHeight: expandedContainerHeight,
+                chromeAndSurroundingContentHeight: chromeAndSurroundingContentHeight
+            )
+        }
+
+        for layout in layouts {
+            XCTAssertEqual(
+                layout.windowHeight - chromeAndSurroundingContentHeight,
+                layout.containerHeight,
+                accuracy: 0.001
+            )
+        }
+        XCTAssertEqual(layouts.first?.containerHeight, collapsedContainerHeight)
+        XCTAssertEqual(layouts.last?.containerHeight, expandedContainerHeight)
+        XCTAssertTrue(layouts.dropFirst().dropLast().allSatisfy {
+            $0.containerHeight > collapsedContainerHeight && $0.containerHeight < expandedContainerHeight
+        })
+    }
+
+    func testDisclosureChangeResetsAStaleDashboardScrollOffsetToTop() {
+        XCTAssertEqual(
+            BrainBarDashboardScrollPosition.topOrigin(
+                documentBounds: CGRect(x: 0, y: 0, width: 900, height: 1_200),
+                viewportHeight: 600,
+                documentIsFlipped: true,
+                currentX: 12
+            ),
+            CGPoint(x: 12, y: 0)
+        )
+        XCTAssertEqual(
+            BrainBarDashboardScrollPosition.topOrigin(
+                documentBounds: CGRect(x: 0, y: 40, width: 900, height: 1_200),
+                viewportHeight: 600,
+                documentIsFlipped: false,
+                currentX: 4
+            ),
+            CGPoint(x: 4, y: 640)
+        )
+    }
+
     func testDashboardPanelUsesResizableMenuBarWindowContract() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
         let panel = controller.panelForTesting
