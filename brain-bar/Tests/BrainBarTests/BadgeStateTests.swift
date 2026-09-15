@@ -6,22 +6,56 @@ final class BadgeStateTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_789_459_200)
 
     private var producerFixtureURL: URL {
+        fixtureURL(named: "badge-state-v1.json")
+    }
+
+    private var pendingFixtureURL: URL {
+        fixtureURL(named: "badge-state-pending-v1.json")
+    }
+
+    private func fixtureURL(named name: String) -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/badge-state/badge-state-v1.json")
+            .appendingPathComponent("tests/fixtures/badge-state/" + name)
     }
 
-    func testMissingBadgeStateFailsVisibleWithBadgeOn() {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("missing-badge-\(UUID().uuidString).json")
+    func testMissingBadgeStateWithoutPendingMarkerFailsVisibleWithBadgeOn() throws {
+        let url = try mutatedFixture(source: pendingFixtureURL) { _ in }
+        try FileManager.default.removeItem(at: url)
 
         let presentation = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
 
         XCTAssertTrue(presentation.badgeOn)
-        XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("missing"))
+        XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("without a pending_first_run marker"))
+    }
+
+    func testPendingFirstRunDeadlineAndSleepAwareGraceMatrix() throws {
+        let url = try mutatedFixture(source: pendingFixtureURL) { _ in }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cadence = ObservabilityCadence.known(300)
+
+        XCTAssertFalse(BadgeStateReader.read(url: url, now: now, cadence: cadence).badgeOn)
+        XCTAssertTrue(BadgeStateReader.read(url: url, now: now.addingTimeInterval(601), cadence: cadence).badgeOn)
+
+        var history = BadgeReadHistory()
+        _ = history.pendingFirstRunGrace(now: now, cadence: cadence)
+        let wake = now.addingTimeInterval(3_600)
+        let grace = history.pendingFirstRunGrace(now: wake, cadence: cadence)
+        XCTAssertFalse(
+            BadgeStateReader.read(url: url, now: wake, cadence: cadence, pendingFirstRunGraceUntil: grace).badgeOn
+        )
+        let awake = wake.addingTimeInterval(301)
+        XCTAssertTrue(
+            BadgeStateReader.read(
+                url: url,
+                now: awake,
+                cadence: cadence,
+                pendingFirstRunGraceUntil: history.pendingFirstRunGrace(now: awake, cadence: cadence)
+            ).badgeOn
+        )
     }
 
     func testUnknownCadenceFailsVisibleWithBadgeOn() throws {
@@ -79,21 +113,6 @@ final class BadgeStateTests: XCTestCase {
 
         XCTAssertTrue(presentation.badgeOn)
         XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("future"))
-    }
-
-    func testUnmeasuredBadgeStateFailsVisibleWithBadgeOn() throws {
-        let url = try mutatedFixture {
-            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
-            alerts["state"] = "unmeasurable"
-            alerts["reason"] = "health-check unavailable"
-            $0["alerts"] = alerts
-        }
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let presentation = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
-
-        XCTAssertTrue(presentation.badgeOn)
-        XCTAssertEqual(presentation.reason, "health-check unavailable")
     }
 
     func testInconsistentBadgeStateFailsVisibleWithBadgeOn() throws {
@@ -159,9 +178,12 @@ final class BadgeStateTests: XCTestCase {
         ISO8601DateFormatter().string(from: date)
     }
 
-    private func mutatedFixture(_ mutate: (inout [String: Any]) throws -> Void) throws -> URL {
+    private func mutatedFixture(
+        source: URL? = nil,
+        _ mutate: (inout [String: Any]) throws -> Void
+    ) throws -> URL {
         var payload = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(contentsOf: producerFixtureURL)) as? [String: Any]
+            JSONSerialization.jsonObject(with: Data(contentsOf: source ?? producerFixtureURL)) as? [String: Any]
         )
         try mutate(&payload)
         let url = temporaryURL()

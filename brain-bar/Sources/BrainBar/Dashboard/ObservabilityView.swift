@@ -11,9 +11,10 @@ struct BadgeStateDocument: Codable, Sendable {
         let state: String
         let reason: String
         let inputs: [Input]
-        let badgeOn: Bool
-        let active: [Issue]
-        let suppressed: [Issue]
+        let expectedFirstRunBy: Date?
+        let badgeOn: Bool?
+        let active: [Issue]?
+        let suppressed: [Issue]?
     }
 
     struct Input: Codable, Sendable {}
@@ -34,6 +35,22 @@ struct BadgeStatePresentation: Equatable, Sendable {
     }
 }
 
+struct BadgeReadHistory {
+    private var previousReadAt: Date?
+    private var pendingGraceUntil: Date?
+
+    mutating func pendingFirstRunGrace(now: Date, cadence: ObservabilityCadence) -> Date? {
+        defer { previousReadAt = now }
+        if let previousReadAt,
+           now < previousReadAt || now.timeIntervalSince(previousReadAt) >= cadence.interval * 2 {
+            pendingGraceUntil = now.addingTimeInterval(cadence.interval)
+        } else if let pendingGraceUntil, now > pendingGraceUntil {
+            self.pendingGraceUntil = nil
+        }
+        return pendingGraceUntil
+    }
+}
+
 enum BadgeStateReader {
     static func url(
         dbPath: String,
@@ -46,12 +63,17 @@ enum BadgeStateReader {
             .appendingPathComponent("badge-state.json")
     }
 
-    static func read(url: URL, now: Date, cadence: ObservabilityCadence) -> BadgeStatePresentation {
+    static func read(
+        url: URL,
+        now: Date,
+        cadence: ObservabilityCadence,
+        pendingFirstRunGraceUntil: Date? = nil
+    ) -> BadgeStatePresentation {
         if let assumption = cadence.assumption {
             return .failVisible("Badge freshness unknown: \(assumption).")
         }
         guard FileManager.default.fileExists(atPath: url.path) else {
-            return .failVisible("Badge state missing.")
+            return .failVisible("Badge state missing without a pending_first_run marker.")
         }
         do {
             let data = try Data(contentsOf: url)
@@ -72,6 +94,15 @@ enum BadgeStateReader {
                 )
             }
             let document = try decoder.decode(BadgeStateDocument.self, from: data)
+            if document.alerts.state == "pending_first_run" {
+                guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
+                    return .failVisible("Badge pending_first_run state is invalid.")
+                }
+                if now <= expected || pendingFirstRunGraceUntil.map({ now <= $0 }) == true {
+                    return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])
+                }
+                return .failVisible("Badge producer missed expected_first_run_by.")
+            }
             let age = now.timeIntervalSince(document.generatedAt)
             guard age >= 0 else { return .failVisible("Badge state timestamp is in the future.") }
             guard age <= cadence.interval * 2 else { return .failVisible("Badge state is stale.") }
@@ -79,13 +110,14 @@ enum BadgeStateReader {
                 let reason = document.alerts.reason.isEmpty ? "Badge alert state is unknown." : document.alerts.reason
                 return .failVisible(reason)
             }
-            guard document.alerts.badgeOn == !document.alerts.active.isEmpty else {
+            guard let badgeOn = document.alerts.badgeOn, let active = document.alerts.active,
+                  badgeOn == !active.isEmpty else {
                 return .failVisible("Badge alert state is internally inconsistent.")
             }
             return .init(
-                badgeOn: document.alerts.badgeOn,
-                reason: document.alerts.badgeOn ? document.alerts.active.map(\.message).joined(separator: "; ") : "",
-                activeCodes: document.alerts.active.map(\.code)
+                badgeOn: badgeOn,
+                reason: badgeOn ? active.map(\.message).joined(separator: "; ") : "",
+                activeCodes: active.map(\.code)
             )
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")

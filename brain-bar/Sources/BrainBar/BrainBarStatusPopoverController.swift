@@ -13,6 +13,7 @@ final class BrainBarStatusPopoverController: NSObject {
     private let dashboardPanelController: BrainBarDashboardPanelController
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
+    private var badgeReadHistory = BadgeReadHistory()
 
     init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
         self.runtime = runtime
@@ -75,10 +76,13 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state: PipelineState, dbPath: String) {
+        let now = Date()
+        let cadence = ObservabilityReader.installedHealthCheckCadence
         let badge = BadgeStateReader.read(
             url: BadgeStateReader.url(dbPath: dbPath),
-            now: Date(),
-            cadence: ObservabilityReader.installedHealthCheckCadence
+            now: now,
+            cadence: cadence,
+            pendingFirstRunGraceUntil: badgeReadHistory.pendingFirstRunGrace(now: now, cadence: cadence)
         )
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
