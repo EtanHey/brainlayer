@@ -52,6 +52,26 @@ enum BrainBarDuplicateInstanceAction: Equatable {
     }
 }
 
+enum BrainBarLaunchDecision: Equatable {
+    case refuse
+    case replaceExistingPreview
+    case production
+
+    static func resolve(
+        isDevPreview: Bool,
+        previewConfiguration: BrainBarDevPreviewConfiguration?,
+        bundleIdentifier: String?
+    ) -> Self {
+        guard isDevPreview else { return .production }
+        guard previewConfiguration != nil,
+              BrainBarDevPreviewConfiguration.hasSafePreviewIdentity(bundleIdentifier: bundleIdentifier)
+        else {
+            return .refuse
+        }
+        return .replaceExistingPreview
+    }
+}
+
 enum BrainBarPreviewReplacement {
     static func replaceExisting(
         terminate: () -> Bool,

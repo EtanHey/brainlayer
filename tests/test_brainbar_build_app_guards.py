@@ -1255,7 +1255,7 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     plist_data = plistlib.loads(plist_path.read_bytes())
     plist_data["CFBundleIdentifier"] = "com.brainlayer.brainbar"
     plist_path.write_bytes(plistlib.dumps(plist_data))
-    build_script.write_text("#!/usr/bin/env bash\nexit 0\n")
+    build_script.write_text("#!/usr/bin/env bash\n# BrainBarDevHarnessCommit\nexit 0\n")
     build_script.chmod(0o755)
     refused = subprocess.run(
         ["/bin/bash", str(wrapper), str(repo)],
@@ -1289,6 +1289,84 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     assert not legacy.exists()
     assert production.is_dir()
     assert backup.is_dir()
+
+
+def test_dev_preview_wrapper_refuses_canonical_root_before_invoking_build(tmp_path: Path) -> None:
+    repo, build_script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    source_wrapper = Path(__file__).resolve().parents[1] / "brain-bar" / "Scripts" / "dev-preview.sh"
+    wrapper = repo / "brain-bar" / "Scripts" / "dev-preview.sh"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_wrapper, wrapper)
+    teardown_log = tmp_path / "production-teardown.log"
+    socket_stand_in = tmp_path / "brainbar.sock"
+    socket_stand_in.write_text("fleet socket stand-in\n")
+    build_script.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "killall BrainBar\\nbootout LaunchAgent\\n" >> "$BRAINBAR_TEST_TEARDOWN_LOG"\n'
+        'rm -f "$BRAINBAR_SOCKET_PATH"\n'
+        "exit 0\n"
+    )
+    build_script.chmod(0o755)
+    symlink_root = tmp_path / "canonical-link"
+    symlink_root.symlink_to(repo, target_is_directory=True)
+    env = {
+        **_clean_git_env(),
+        "HOME": str(tmp_path / "home"),
+        "BRAINBAR_CANONICAL_REPO_ROOT": str(symlink_root),
+        "BRAINBAR_TEST_TEARDOWN_LOG": str(teardown_log),
+        "BRAINBAR_SOCKET_PATH": str(socket_stand_in),
+    }
+
+    result = subprocess.run(
+        ["/bin/bash", str(wrapper), str(symlink_root)],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "refusing canonical repo root" in result.stderr
+    assert not teardown_log.exists(), "wrapper must refuse before invoking the target build script"
+    assert socket_stand_in.exists(), "wrapper refusal must preserve the fleet socket"
+
+
+def test_build_app_rejects_dev_intent_at_canonical_root_before_teardown(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
+    home = tmp_path / "home"
+    home.mkdir()
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    teardown_log = tmp_path / "production-teardown.log"
+    socket_stand_in = tmp_path / "brainbar.sock"
+    socket_stand_in.write_text("fleet socket stand-in\n")
+    for tool in ("killall", "launchctl"):
+        stub = tool_dir / tool
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "{tool} %s\\n" "$*" >> "$BRAINBAR_TEST_TEARDOWN_LOG"\n'
+            "exit 0\n"
+        )
+        stub.chmod(0o755)
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=repo,
+        home=home,
+        dry_run=False,
+        extra_args=["--force-worktree-build", "--force-dirty"],
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_DEV_APP_DIR": str(tmp_path / "BrainBar DEV.app"),
+            "BRAINBAR_TEST_TEARDOWN_LOG": str(teardown_log),
+            "BRAINBAR_SOCKET_PATH": str(socket_stand_in),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "refusing DEV preview intent from the canonical repo root" in result.stderr
+    assert not teardown_log.exists(), "DEV intent must fail before bootout or killall"
+    assert socket_stand_in.exists(), "DEV intent refusal must preserve the fleet socket"
 
 
 def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) -> None:

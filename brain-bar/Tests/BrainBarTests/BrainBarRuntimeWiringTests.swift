@@ -102,6 +102,41 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         )
     }
 
+    func testLaunchDecisionRefusesDevStampWithProductionBundleIdentifier() throws {
+        let configuration = try XCTUnwrap(
+            BrainBarDevPreviewConfiguration.resolve(infoDictionary: [
+                "BrainBarDevPreview": true,
+                "BrainBarDevBranch": "wt/example",
+                "GitCommit": "1234567890abcdef",
+            ])
+        )
+
+        XCTAssertEqual(
+            BrainBarLaunchDecision.resolve(
+                isDevPreview: true,
+                previewConfiguration: configuration,
+                bundleIdentifier: "com.brainlayer.brainbar"
+            ),
+            .refuse
+        )
+        XCTAssertEqual(
+            BrainBarLaunchDecision.resolve(
+                isDevPreview: true,
+                previewConfiguration: configuration,
+                bundleIdentifier: "com.brainlayer.brainbar.dev.wt-example-deadbeef"
+            ),
+            .replaceExistingPreview
+        )
+        XCTAssertEqual(
+            BrainBarLaunchDecision.resolve(
+                isDevPreview: false,
+                previewConfiguration: nil,
+                bundleIdentifier: "com.brainlayer.brainbar"
+            ),
+            .production
+        )
+    }
+
     func testPreviewReplacementFailsClosedWhenTerminateRequestIsRefused() {
         let replaced = BrainBarPreviewReplacement.replaceExisting(
             terminate: { false },

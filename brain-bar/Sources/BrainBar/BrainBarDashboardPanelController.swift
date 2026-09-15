@@ -145,6 +145,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
+    func setShownAtForTesting(_ date: Date) { shownAt = date }
 
     private func fitPanelToContent() {
         let width = panel.contentLayoutRect.width

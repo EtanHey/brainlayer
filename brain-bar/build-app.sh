@@ -22,7 +22,7 @@ DRY_RUN=0
 FORCE_WORKTREE_BUILD=0
 FORCE_DIRTY=0
 DEV_BUNDLE_BUILD=0
-DEV_BRANCH_NAME=""
+DEV_BRANCH_NAME="${BRAINBAR_DEV_SOURCE_BRANCH:-}"
 DEV_BUNDLE_SLUG=""
 
 while [ "$#" -gt 0 ]; do
@@ -92,6 +92,14 @@ if [ -z "$CURRENT_REPO_ROOT" ]; then
     exit 1
 fi
 CURRENT_REPO_ROOT="$(cd "$CURRENT_REPO_ROOT" && pwd -P)"
+
+# BRAINBAR_DEV_APP_DIR is an explicit request for an isolated preview. It must
+# never fall through to the canonical production install path, whose lifecycle
+# deliberately stops LaunchAgents, running binaries, and the fleet socket.
+if [ -n "${BRAINBAR_DEV_APP_DIR:-}" ] && [ "$CURRENT_REPO_ROOT" = "$CANONICAL_REPO_ROOT" ]; then
+    echo "[build-app] ERROR: refusing DEV preview intent from the canonical repo root: $CURRENT_REPO_ROOT" >&2
+    exit 1
+fi
 
 resolve_branch_name() {
     local branch
@@ -477,7 +485,9 @@ fi
 
 if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
     DEV_BUNDLE_BUILD=1
-    DEV_BRANCH_NAME="$(resolve_branch_name)"
+    if [ -z "$DEV_BRANCH_NAME" ]; then
+        DEV_BRANCH_NAME="$(resolve_branch_name)"
+    fi
     SAFE_BRANCH_NAME="$(sanitize_branch_name "$DEV_BRANCH_NAME")"
     DEV_BRANCH_HASH="$(printf '%s' "$DEV_BRANCH_NAME" | shasum -a 256 | cut -c1-8)"
     DEV_BUNDLE_SLUG="$(sanitize_bundle_slug "$DEV_BRANCH_NAME")-$DEV_BRANCH_HASH"
@@ -517,11 +527,19 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 git_commit() {
-    git -C "$PACKAGE_DIR" rev-parse HEAD
+    if [ "$DEV_BUNDLE_BUILD" -eq 1 ] && [ -n "${BRAINBAR_DEV_SOURCE_COMMIT:-}" ]; then
+        printf '%s\n' "$BRAINBAR_DEV_SOURCE_COMMIT"
+    else
+        git -C "$PACKAGE_DIR" rev-parse HEAD
+    fi
 }
 
 git_describe() {
-    git -C "$PACKAGE_DIR" describe --always --dirty
+    if [ "$DEV_BUNDLE_BUILD" -eq 1 ] && [ -n "${BRAINBAR_DEV_SOURCE_DESCRIBE:-}" ]; then
+        printf '%s\n' "$BRAINBAR_DEV_SOURCE_DESCRIBE"
+    else
+        git -C "$PACKAGE_DIR" describe --always --dirty
+    fi
 }
 
 build_time_utc() {
@@ -866,6 +884,9 @@ if [ "$DEV_BUNDLE_BUILD" -eq 1 ]; then
     plist_set_string "$APP_DIR/Contents/Info.plist" "CFBundleDisplayName" "BrainBar DEV · $SAFE_BRANCH_NAME"
     plist_set_bool "$APP_DIR/Contents/Info.plist" "BrainBarDevPreview" "true"
     plist_set_string "$APP_DIR/Contents/Info.plist" "BrainBarDevBranch" "$DEV_BRANCH_NAME"
+    if [ -n "${BRAINBAR_DEV_HARNESS_COMMIT:-}" ]; then
+        plist_set_string "$APP_DIR/Contents/Info.plist" "BrainBarDevHarnessCommit" "$BRAINBAR_DEV_HARNESS_COMMIT"
+    fi
     "$PLIST_BUDDY" -c "Delete :CFBundleURLTypes" "$APP_DIR/Contents/Info.plist" >/dev/null 2>&1 || true
     echo "  BundleIdentifier=com.brainlayer.brainbar.dev.$DEV_BUNDLE_SLUG"
     echo "  PreviewTitle=DEV · $DEV_BRANCH_NAME · $PREVIEW_REVISION"

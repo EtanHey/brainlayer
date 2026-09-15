@@ -127,6 +127,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         controller.show()
         XCTAssertTrue(controller.isShownForTesting)
 
+        controller.setShownAtForTesting(.distantPast)
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
         XCTAssertTrue(controller.isShownForTesting, "DEV previews must remain visible side by side")
     }

@@ -35,10 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let bundleIdentifier = Bundle.main.bundleIdentifier
-        guard !isDevPreview || (
-            devPreview != nil
-                && BrainBarDevPreviewConfiguration.hasSafePreviewIdentity(bundleIdentifier: bundleIdentifier)
-        ) else {
+        let launchDecision = BrainBarLaunchDecision.resolve(
+            isDevPreview: isDevPreview,
+            previewConfiguration: devPreview,
+            bundleIdentifier: bundleIdentifier
+        )
+        guard launchDecision != .refuse else {
             NSLog("[BrainBar] Malformed DEV preview identity; refusing to launch with production behavior.")
             NSApp.terminate(nil)
             return
@@ -61,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withBundleIdentifier: bundleIdentifier ?? "com.brainlayer.BrainBar"
         )
         let otherInstances = runningInstances.filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        if isDevPreview {
+        if launchDecision == .replaceExistingPreview {
             for existingInstance in otherInstances {
                 NSLog(
                     "[BrainBar] Replacing existing DEV preview PID %d before launching the rebuilt bundle.",
