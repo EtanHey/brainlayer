@@ -1167,6 +1167,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
         "protected",
         "home-nested",
         "protected-nested",
+        "protected-nested-contents",
     ],
 )
 def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, requested_path: str) -> None:
@@ -1176,7 +1177,11 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, re
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
     production_app = home / "Applications" / "BrainBar.app"
     protected_app = tmp_path / "protected" / "BrainBar.app"
-    target_app = protected_app if requested_path in {"protected", "protected-nested"} else production_app
+    target_app = (
+        protected_app
+        if requested_path in {"protected", "protected-nested", "protected-nested-contents"}
+        else production_app
+    )
     daemon = target_app / "Contents" / "MacOS" / "BrainBarDaemon"
     daemon.parent.mkdir(parents=True)
     daemon.write_text("production daemon", encoding="utf-8")
@@ -1195,6 +1200,8 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, re
         requested = str(home / "Applications" / "Brainbar.app")
     elif requested_path in {"home-nested", "protected-nested"}:
         requested = str(target_app / "Contents" / "Resources" / "BrainBar-DEV-nested.app")
+    elif requested_path == "protected-nested-contents":
+        requested = str(target_app / "Contents" / "BrainBar DEV · nested.app")
     else:
         requested = str(target_app)
     before_files = sorted(path.relative_to(target_app) for path in target_app.rglob("*"))
