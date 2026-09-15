@@ -35,7 +35,7 @@ struct BadgeStatePresentation: Equatable, Sendable {
     }
 }
 
-final class BadgeReadHistory {
+final class BadgeReadHistory: @unchecked Sendable {
     private var previousReadAt: Date?
     private var gracedDocumentAt: Date?
     private var graceUntil: Date?

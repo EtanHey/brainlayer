@@ -2292,7 +2292,7 @@ final class DashboardTests: XCTestCase {
                 lastEventAt: now.addingTimeInterval(-(14 * 24 * 3600)),
                 now: now
             ),
-            "2d ago"
+            "2d+ ago"
         )
     }
 

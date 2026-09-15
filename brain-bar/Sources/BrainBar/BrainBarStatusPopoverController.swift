@@ -13,7 +13,11 @@ final class BrainBarStatusPopoverController: NSObject {
     private let dashboardPanelController: BrainBarDashboardPanelController
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
-    private var badgeReadHistory = BadgeReadHistory()
+    private let badgeReadQueue = DispatchQueue(label: "com.brainlayer.brainbar.badge-read", qos: .utility)
+    private var badgeReadGeneration = UUID()
+    private var badgePresentation = BadgeStatePresentation.failVisible("Badge state has not been read yet.")
+    private var latestStats: BrainDatabase.DashboardStats?
+    private var latestState: PipelineState?
 
     init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
         self.runtime = runtime
@@ -41,6 +45,8 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     func stop() {
+        collectorCancellables.removeAll()
+        badgeReadGeneration = UUID()
         close(nil)
         NSStatusBar.system.removeStatusItem(statusItemForTesting)
     }
@@ -65,25 +71,53 @@ final class BrainBarStatusPopoverController: NSObject {
 
     private func bindCollector(_ collector: StatsCollector?) {
         collectorCancellables.removeAll()
+        badgeReadGeneration = UUID()
+        latestStats = nil
+        latestState = nil
         guard let collector else { return }
 
         Publishers.CombineLatest(collector.$stats, collector.$state)
             .receive(on: RunLoop.main)
             .sink { [weak self] stats, state in
-                self?.renderStatusIcon(stats: stats, state: state, dbPath: collector.databasePathForObservability)
+                self?.latestStats = stats
+                self?.latestState = state
+                self?.renderStatusIcon(stats: stats, state: state)
+            }
+            .store(in: &collectorCancellables)
+
+        let cadence = ObservabilityReader.installedHealthCheckCadence
+        let generation = badgeReadGeneration
+        let history = BadgeReadHistory()
+        let badgeURL = BadgeStateReader.url(dbPath: collector.databasePathForObservability)
+        refreshBadge(url: badgeURL, cadence: cadence, history: history, generation: generation)
+        Timer.publish(every: max(cadence.interval, 1), on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.refreshBadge(url: badgeURL, cadence: cadence, history: history, generation: generation)
             }
             .store(in: &collectorCancellables)
     }
 
-    private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state: PipelineState, dbPath: String) {
-        let now = Date()
-        let cadence = ObservabilityReader.installedHealthCheckCadence
-        let badge = BadgeStateReader.read(
-            url: BadgeStateReader.url(dbPath: dbPath),
-            now: now,
-            cadence: cadence,
-            history: badgeReadHistory
-        )
+    private func refreshBadge(
+        url: URL,
+        cadence: ObservabilityCadence,
+        history: BadgeReadHistory,
+        generation: UUID
+    ) {
+        badgeReadQueue.async { [weak self] in
+            let badge = BadgeStateReader.read(url: url, now: Date(), cadence: cadence, history: history)
+            Task { @MainActor [weak self] in
+                guard let self, self.badgeReadGeneration == generation else { return }
+                self.badgePresentation = badge
+                if let stats = self.latestStats, let state = self.latestState {
+                    self.renderStatusIcon(stats: stats, state: state)
+                }
+            }
+        }
+    }
+
+    private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state _: PipelineState) {
+        let badge = badgePresentation
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
         // fullscreen menu bar instead of the old single gray line that vanished.

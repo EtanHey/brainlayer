@@ -102,6 +102,29 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
         XCTAssertEqual(eventSource.streamRequestCount, 1)
     }
+
+    func testBadgeReadsAreCadencedOffTheMainThreadAndIconRenderingUsesTheCache() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarStatusPopoverController.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("DispatchQueue(label: \"com.brainlayer.brainbar.badge-read\", qos: .utility)"))
+        XCTAssertTrue(source.contains("Timer.publish(every: max(cadence.interval, 1)"))
+        XCTAssertTrue(source.contains("badgeReadQueue.async"))
+
+        let renderStart = try XCTUnwrap(source.range(of: "private func renderStatusIcon"))
+        let renderEnd = try XCTUnwrap(source.range(of: "@objc private func toggleFromStatusItem", range: renderStart.upperBound..<source.endIndex))
+        let render = String(source[renderStart.lowerBound..<renderEnd.lowerBound])
+        XCTAssertTrue(render.contains("let badge = badgePresentation"))
+        XCTAssertFalse(render.contains("BadgeStateReader.read"), "UI emissions must not perform badge file I/O.")
+    }
+
+    private func packageRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }
 
 private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecked Sendable {
