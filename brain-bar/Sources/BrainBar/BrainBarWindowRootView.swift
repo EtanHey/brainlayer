@@ -917,7 +917,16 @@ private struct BrainBarDashboardView: View {
             BrainBarSharedTimeframeSelector(
                 selection: Binding(
                     get: { displayedTimeframe },
-                    set: { selectedTimeframe = $0 }
+                    set: {
+                        if selectedTimeframe == $0 {
+                            collector.selectTimeframe(
+                                windowMinutes: $0.windowMinutes,
+                                isLive: $0 == .live
+                            )
+                        } else {
+                            selectedTimeframe = $0
+                        }
+                    }
                 ),
                 isLoading: collector.isWindowedBucketsLoading,
                 loadError: collector.windowedBucketsError

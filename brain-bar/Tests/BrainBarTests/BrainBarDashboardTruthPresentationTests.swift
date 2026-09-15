@@ -261,7 +261,9 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(onePageSource.contains("writes via brain_store"))
         XCTAssertTrue(dashboardView.contains("Quiet: no agents active"))
         XCTAssertTrue(dashboardView.contains("get: { displayedTimeframe }"))
-        XCTAssertTrue(dashboardView.contains("set: { selectedTimeframe = $0 }"))
+        XCTAssertTrue(dashboardView.contains("selectedTimeframe = $0"))
+        XCTAssertTrue(dashboardView.contains("if selectedTimeframe == $0"))
+        XCTAssertTrue(dashboardView.contains("collector.selectTimeframe("))
     }
 
     func testActivityAndProvenanceRowsPutOneMeasuredWindowInEachValueSlot() throws {
