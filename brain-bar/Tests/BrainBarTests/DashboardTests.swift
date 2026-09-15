@@ -652,7 +652,8 @@ final class DashboardTests: XCTestCase {
             "The hoisted Vector detail needs a high zIndex above every sibling pipeline card."
         )
         XCTAssertTrue(
-            diagnosticsSource.contains("DisclosureGroup(isExpanded: $panelState.detailsExpanded)") &&
+            diagnosticsSource.contains("BrainBarDisclosureRow(") &&
+                diagnosticsSource.contains("isExpanded: $panelState.detailsExpanded") &&
                 diagnosticsSource.contains("signalCoveragePanel(layout: layout)"),
             "Signal coverage should stay inside the one-page Details disclosure while its float mounts at the root."
         )
@@ -672,6 +673,91 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(source.contains("@State private var isFloatLifted"))
         XCTAssertFalse(source.contains("DispatchQueue.main.asyncAfter(deadline: .now() + 0.27)"))
         XCTAssertTrue(source.contains(".zIndex(vectorSignalDetailExpanded ? 30 : 0)"))
+    }
+
+    func testDashboardDisclosureRowsUseFullWidthButtonHitTargetAndKeyboardOnlyFocusRing() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(
+            source.contains("private struct BrainBarDisclosureRow"),
+            "Dashboard disclosures need one shared interaction contract."
+        )
+        XCTAssertTrue(
+            source.contains(".padding(.vertical, 4)\n                .frame(maxWidth: .infinity, alignment: .leading)\n                .contentShape(Rectangle())"),
+            "The label, caret, and padded row must all belong to the button hit target."
+        )
+        XCTAssertTrue(
+            source.contains(".focusEffectDisabled()"),
+            "The native pointer focus effect must be disabled so it cannot outline the container."
+        )
+        XCTAssertTrue(
+            source.contains("interaction.showsKeyboardFocusRing && (focusStateOverride ?? isFocused)"),
+            "A custom focus indicator must remain available for keyboard navigation only."
+        )
+        XCTAssertFalse(
+            source.contains("DisclosureGroup(isExpanded: $panelState.detailsExpanded)"),
+            "Details must use the full-row disclosure control instead of the caret-only native style."
+        )
+        XCTAssertFalse(
+            source.contains("DisclosureGroup(isExpanded: $replayDebtExpanded)"),
+            "Replay debt must use the full-row disclosure control instead of the caret-only native style."
+        )
+    }
+
+    func testPointerDisclosureActivationTogglesWithoutLeavingFocusRing() {
+        var interaction = BrainBarDisclosureInteractionState()
+
+        let pointerExpansion = interaction.activate(isExpanded: false, source: .pointer)
+        XCTAssertTrue(pointerExpansion)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+
+        let keyboardExpansion = interaction.activate(isExpanded: pointerExpansion, source: .keyboard)
+        XCTAssertFalse(keyboardExpansion)
+        XCTAssertTrue(interaction.showsKeyboardFocusRing)
+    }
+
+    func testDisclosureFocusChangeKeepsRingForKeyboardOnly() {
+        var interaction = BrainBarDisclosureInteractionState()
+
+        interaction.registerFocusChange(isFocused: true, source: .pointer)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+
+        interaction.registerFocusChange(isFocused: true, source: .keyboard)
+        XCTAssertTrue(interaction.showsKeyboardFocusRing)
+
+        interaction.registerFocusChange(isFocused: false, source: .keyboard)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+    }
+
+    @MainActor
+    func testDisclosureActivationClassifiesMouseAsPointerAndKeysAsKeyboard() throws {
+        let pointerEvent = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 0
+        ))
+        let keyEvent = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: " ",
+            charactersIgnoringModifiers: " ",
+            isARepeat: false,
+            keyCode: 49
+        ))
+
+        XCTAssertEqual(BrainBarDisclosureActivationSource.current(event: pointerEvent), .pointer)
+        XCTAssertEqual(BrainBarDisclosureActivationSource.current(event: keyEvent), .keyboard)
+        XCTAssertEqual(BrainBarDisclosureActivationSource.current(event: nil), .keyboard)
     }
 
     func testDashboardCardTopHighlightIsClippedInsideRoundedCorners() throws {
