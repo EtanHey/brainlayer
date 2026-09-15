@@ -187,12 +187,16 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
 
     @MainActor
     func testLoadingSnapshotDoesNotPromoteStatsDerivedHeroUnknowns() throws {
+        let collector = StatsCollector(
+            dbPath: "/dev/null",
+            daemonMonitor: DaemonHealthMonitor(targetPID: getpid())
+        )
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.healthyResult(),
             now: BrainBarOnePageTestFixture.now,
             agentActivity: .unavailable("not sampled yet"),
             snapshotFreshness: .loading,
-            collector: BrainBarDashboardFixture.makeCollector(.loading)
+            collector: collector
         )
 
         XCTAssertEqual(presentation.status.headline, "Checking…")
