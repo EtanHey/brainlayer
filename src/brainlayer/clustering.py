@@ -35,11 +35,6 @@ import leidenalg
 import numpy as np
 import sqlite_vec
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-)
 from .paths import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -720,6 +715,11 @@ def run_clustering(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
     parser = argparse.ArgumentParser(description="Run hierarchical clustering on BrainLayer chunks")
     parser.add_argument("--db-path", type=str, default=str(DEFAULT_DB))
     parser.add_argument("--k", type=int, default=30, help="KNN neighbors")

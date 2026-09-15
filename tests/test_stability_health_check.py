@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import io
 import json
+import logging
 import os
 import plistlib
 import sqlite3
@@ -376,7 +378,8 @@ def test_run_health_check_surfaces_jsonl_backup_failure(tmp_path):
     assert "jsonl_backup_attempt_failed" in [issue.code for issue in result.issues]
 
 
-def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, capsys):
+def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=4, vector_rows=3)
@@ -397,7 +400,8 @@ def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart
     assert "hotlane_backlog_disabled" in [issue.code for issue in first_result.issues]
     assert first_result.backlog_batch == 0
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
-    assert "kickstart" not in capsys.readouterr().err
+    assert not any("kickstart" in message for message in caplog.messages)
+    caplog.clear()
 
     second_result = run_health_check(
         HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True),
@@ -415,11 +419,11 @@ def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart
     kickstarts = [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
     assert len(kickstarts) == 1
     assert "com.brainlayer.hotlane-brainbar" in " ".join(kickstarts[0])
-    stderr = capsys.readouterr().err
-    assert "heal action" in stderr
-    assert "label=com.brainlayer.hotlane-brainbar" in stderr
-    assert "issue=hotlane_backlog_disabled" in stderr
-    assert "consecutive_failures=2" in stderr
+    log_text = "\n".join(caplog.messages)
+    assert "heal action" in log_text
+    assert "label=com.brainlayer.hotlane-brainbar" in log_text
+    assert "issue=hotlane_backlog_disabled" in log_text
+    assert "consecutive_failures=2" in log_text
 
 
 def test_any_zero_backlog_batch_alarms_when_multiple_hotlanes_are_running(tmp_path):
@@ -964,7 +968,8 @@ def test_lock_holder_stale_pidfile_is_ignored_without_false_wedge(
     assert saved["lock_holder_held_ticks"] == 0
 
 
-def test_heal_action_log_includes_the_health_check_timestamp(tmp_path, capsys):
+def test_heal_action_log_includes_the_health_check_timestamp(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
     result = health_check.HealthCheckResult(
         checked_at="2026-09-15T07:15:00+00:00",
         ok=False,
@@ -980,7 +985,86 @@ def test_heal_action_log_includes_the_health_check_timestamp(tmp_path, capsys):
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
-    assert "timestamp=2026-09-15T07:15:00+00:00 heal action label=com.example.watch" in capsys.readouterr().err
+    assert any(
+        "timestamp=2026-09-15T07:15:00+00:00" in message and "heal action label=com.example.watch" in message
+        for message in caplog.messages
+    )
+
+
+def test_health_event_logging_restores_the_callers_logger_state():
+    logger = logging.getLogger("brainlayer.health_check")
+    previous_handlers = list(logger.handlers)
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    stream = io.StringIO()
+
+    with health_check.health_event_logging(stream):
+        logger.info("inside")
+
+    assert stream.getvalue().endswith(" INFO inside\n")
+    assert logger.handlers == previous_handlers
+    assert logger.level == previous_level
+    assert logger.propagate is previous_propagate
+
+
+def test_heal_escalation_site_emits_incident_log(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+    result = health_check.HealthCheckResult(
+        checked_at="2026-09-15T07:15:00+00:00",
+        ok=False,
+        issues=[health_check.HealthIssue("watcher_stalled", "critical", "stalled")],
+    )
+
+    health_check._apply_heals(
+        result=result,
+        issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
+        previous_failures={"com.example.watch:watcher_stalled": 2},
+        previous_tripped=set(),
+        config=health_check.HealthCheckConfig(
+            heal=True,
+            heal_min_consecutive_failures=1,
+            heal_circuit_breaker_limit=3,
+        ),
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert "heal_escalation:com.example.watch:watcher_stalled" in result.actions
+    assert any(
+        "condition=heal:watcher_stalled" in message and "failed repeatedly" in message for message in caplog.messages
+    )
+
+
+def test_expired_pause_sentinel_site_emits_incident_log(tmp_path, caplog):
+    db_path = tmp_path / "brainlayer.db"
+    pause_path = tmp_path / "pause.sentinel"
+    _make_db(db_path, total=1, vector_rows=1)
+    pause_path.write_text(
+        json.dumps(
+            {
+                "labels": ["com.brainlayer.enrichment"],
+                "expires_at": "2026-09-15T06:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            pause_sentinel_path=pause_path,
+            queue_dir=tmp_path / "queue",
+            source_jsonl_globs=[],
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 9, 15, 7, 15, tzinfo=UTC),
+    )
+
+    assert "pause_sentinel_stale" in [issue.code for issue in result.issues]
+    assert any("condition=pause_expired" in message for message in caplog.messages)
 
 
 def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_breaker(tmp_path, monkeypatch):

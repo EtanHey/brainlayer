@@ -978,41 +978,37 @@ def health_check_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Run the lightweight BrainLayer stability health-check."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        stream=sys.stderr,
-    )
-    from ..health_check import HealthCheckConfig, run_health_check
+    from ..health_check import HealthCheckConfig, health_event_logging, run_health_check
 
-    result = run_health_check(
-        HealthCheckConfig(
-            db_path=db or get_db_path(),
-            state_path=state_path.expanduser(),
-            socket_path=socket_path.expanduser(),
-            canary_query=canary_query,
-            watch_label=watch_label,
-            drain_label=drain_label,
-            health_check_label=health_check_label,
-            enrichment_label=enrichment_label,
-            watch_plist_path=watch_plist_path.expanduser(),
-            drain_plist_path=drain_plist_path.expanduser(),
-            health_check_plist_path=health_check_plist_path.expanduser(),
-            enrichment_plist_path=enrichment_plist_path.expanduser(),
-            source_jsonl_globs=source_jsonl_globs
-            if source_jsonl_globs is not None
-            else HealthCheckConfig().source_jsonl_globs,
-            pause_sentinel_path=pause_sentinel_path.expanduser(),
-            drain_health_path=drain_health_path.expanduser(),
-            t3_health_path=t3_health_path.expanduser(),
-            queue_dir=queue_dir.expanduser(),
-            offsets_path=offsets_path.expanduser(),
-            watcher_health_path=watcher_health_path.expanduser(),
-            heal=heal,
-            socket_timeout_seconds=socket_timeout_seconds,
-            max_stalled_ticks=max_stalled_ticks,
+    with health_event_logging(sys.stderr):
+        result = run_health_check(
+            HealthCheckConfig(
+                db_path=db or get_db_path(),
+                state_path=state_path.expanduser(),
+                socket_path=socket_path.expanduser(),
+                canary_query=canary_query,
+                watch_label=watch_label,
+                drain_label=drain_label,
+                health_check_label=health_check_label,
+                enrichment_label=enrichment_label,
+                watch_plist_path=watch_plist_path.expanduser(),
+                drain_plist_path=drain_plist_path.expanduser(),
+                health_check_plist_path=health_check_plist_path.expanduser(),
+                enrichment_plist_path=enrichment_plist_path.expanduser(),
+                source_jsonl_globs=source_jsonl_globs
+                if source_jsonl_globs is not None
+                else HealthCheckConfig().source_jsonl_globs,
+                pause_sentinel_path=pause_sentinel_path.expanduser(),
+                drain_health_path=drain_health_path.expanduser(),
+                t3_health_path=t3_health_path.expanduser(),
+                queue_dir=queue_dir.expanduser(),
+                offsets_path=offsets_path.expanduser(),
+                watcher_health_path=watcher_health_path.expanduser(),
+                heal=heal,
+                socket_timeout_seconds=socket_timeout_seconds,
+                max_stalled_ticks=max_stalled_ticks,
+            )
         )
-    )
     payload = result.to_dict()
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
