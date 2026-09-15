@@ -238,21 +238,67 @@ exit 0
     (tool_dir / "plistbuddy").write_text(
         """#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${BRAINBAR_FAKE_PLISTBUDDY_LOG:-/dev/null}"
-if [[ "$2" == "Print :GitCommit" && -f "$3" ]]; then
-  awk '
-    found { gsub(/^[[:space:]]*<string>|<\\/string>[[:space:]]*$/, ""); print; exit }
-    /<key>GitCommit<\\/key>/ { found=1 }
-  ' "$3"
-  exit 0
-fi
-if [[ "$2" == "Print :CFBundleShortVersionString" ]]; then
-  printf '1.4.0\\n'
-  exit 0
-fi
-if [[ "$2" == Print* ]]; then
-  exit 1
-fi
-exit 0
+python3 - "$2" "$3" <<'PY'
+import plistlib
+import shlex
+import sys
+from pathlib import Path
+
+command = shlex.split(sys.argv[1])
+plist_path = Path(sys.argv[2])
+try:
+    document = plistlib.loads(plist_path.read_bytes())
+except (FileNotFoundError, plistlib.InvalidFileException):
+    document = {}
+
+action = command[0]
+keys = command[1].lstrip(":").split(":")
+parent = document
+for key in keys[:-1]:
+    if action == "Add":
+        parent = parent.setdefault(key, {})
+    elif not isinstance(parent, dict) or key not in parent:
+        raise SystemExit(1)
+    else:
+        parent = parent[key]
+leaf = keys[-1]
+
+if action == "Print":
+    if leaf not in parent:
+        if keys == ["CFBundleShortVersionString"]:
+            print("1.4.0")
+            raise SystemExit(0)
+        raise SystemExit(1)
+    value = parent[leaf]
+    if isinstance(value, bool):
+        print(str(value).lower())
+    else:
+        print(value)
+    raise SystemExit(0)
+
+if action == "Delete":
+    if leaf not in parent:
+        raise SystemExit(1)
+    del parent[leaf]
+elif action == "Set":
+    parent[leaf] = command[2]
+elif action == "Add":
+    value_type = command[2]
+    if value_type == "string":
+        value = command[3]
+    elif value_type == "bool":
+        value = command[3].lower() == "true"
+    elif value_type == "dict":
+        value = {}
+    else:
+        raise SystemExit(f"unsupported fake PlistBuddy type: {value_type}")
+    parent[leaf] = value
+else:
+    raise SystemExit(f"unsupported fake PlistBuddy action: {action}")
+
+plist_path.parent.mkdir(parents=True, exist_ok=True)
+plist_path.write_bytes(plistlib.dumps(document))
+PY
 """
     )
     (tool_dir / "launchctl").write_text(
@@ -1200,8 +1246,9 @@ def test_dev_build_stamps_unique_preview_identity_without_daemon_payload(tmp_pat
     assert 'CFBundleIdentifier string "com.brainlayer.brainbar.dev.feat-ui-guards-' in plist_calls
     assert "Add :BrainBarDevPreview bool true" in plist_calls
     assert 'BrainBarDevBranch string "feat/UI_Guards"' in plist_calls
-    assert f':GitCommit "{repo_head}"' in plist_calls
-    assert bogus_source_commit not in plist_calls
+    git_commit_calls = [line for line in plist_calls.splitlines() if ":GitCommit" in line]
+    assert any(repo_head in line for line in git_commit_calls)
+    assert not any(bogus_source_commit in line for line in git_commit_calls)
     assert not (preview_app / "Contents" / "MacOS" / "BrainBarDaemon").exists()
     assert not (preview_app / "Contents" / "Resources" / "LaunchAgents").exists()
 
@@ -1239,7 +1286,6 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
         "BRAINBAR_BREW_BIN": str(repo / "no-such-brew"),
         "BRAINBAR_DEV_PREVIEW_ROOT": str(preview_root),
         "BRAINBAR_DEV_OPEN_BIN": str(open_stub),
-        "BRAINBAR_PLIST_BUDDY": "/usr/libexec/PlistBuddy",
         "BRAINBAR_TEST_OPEN_LOG": str(open_log),
         "BRAINBAR_DEV_TRASH_DIR": str(tmp_path / "trash"),
     }
@@ -1386,7 +1432,6 @@ def test_dev_preview_wrapper_builds_from_target_head_not_harness_head(tmp_path: 
         "BRAINBAR_BREW_BIN": str(repo / "no-such-brew"),
         "BRAINBAR_DEV_PREVIEW_ROOT": str(preview_root),
         "BRAINBAR_DEV_OPEN_BIN": str(open_stub),
-        "BRAINBAR_PLIST_BUDDY": "/usr/libexec/PlistBuddy",
         "BRAINBAR_FAKE_SWIFT_HEAD_LOG": str(swift_head_log),
     }
 
