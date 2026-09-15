@@ -129,6 +129,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func windowDidResize(_ notification: Notification) { fitPanelToContent() }
 
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        NSSize(width: max(frameSize.width, Self.minSize.width), height: sender.frame.height)
+    }
+
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
 
