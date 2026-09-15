@@ -72,6 +72,19 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testBackupFailureOutranksUnmeasuredAgentActivityInTopStrip() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.unverifiedResult(),
+            now: BrainBarOnePageTestFixture.now,
+            agentActivity: .unavailable("ps capture failed")
+        )
+
+        XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+        XCTAssertTrue(presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true)
+        XCTAssertEqual(presentation.status.tone, .amber)
+    }
+
+    @MainActor
     func testNewTodayCountsHourlyBucketsSinceLocalMidnight() throws {
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.todayBoundaryResult(),
