@@ -539,7 +539,7 @@ struct ObservabilityLiveView: View {
             every interval: Duration = .seconds(30),
             using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) }
         ) -> AsyncStream<ObservabilityReadResult> {
-            AsyncStream { continuation in
+            AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
                 let producer = Task {
                     defer { continuation.finish() }
                     while !Task.isCancelled {
