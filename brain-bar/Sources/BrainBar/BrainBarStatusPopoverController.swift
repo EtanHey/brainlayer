@@ -13,6 +13,7 @@ final class BrainBarStatusPopoverController: NSObject {
     private let dashboardPanelController: BrainBarDashboardPanelController
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
+    private var badgeReadHistory = BadgeReadHistory()
 
     init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
         self.runtime = runtime
@@ -69,12 +70,20 @@ final class BrainBarStatusPopoverController: NSObject {
         Publishers.CombineLatest(collector.$stats, collector.$state)
             .receive(on: RunLoop.main)
             .sink { [weak self] stats, state in
-                self?.renderStatusIcon(stats: stats, state: state)
+                self?.renderStatusIcon(stats: stats, state: state, dbPath: collector.databasePathForObservability)
             }
             .store(in: &collectorCancellables)
     }
 
-    private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state: PipelineState) {
+    private func renderStatusIcon(stats: BrainDatabase.DashboardStats, state: PipelineState, dbPath: String) {
+        let now = Date()
+        let cadence = ObservabilityReader.installedHealthCheckCadence
+        let badge = BadgeStateReader.read(
+            url: BadgeStateReader.url(dbPath: dbPath),
+            now: now,
+            cadence: cadence,
+            history: badgeReadHistory
+        )
         // Three overlapping pipeline lines (Agent stores / JSONL watcher / Enrichment)
         // with an always-visible baseline so the icon stays legible on a dark
         // fullscreen menu bar instead of the old single gray line that vanished.
@@ -82,8 +91,12 @@ final class BrainBarStatusPopoverController: NSObject {
             agent: stats.recentAgentWriteBuckets,
             watcher: stats.recentWatcherWriteBuckets,
             enrichment: stats.recentEnrichmentBuckets,
+            badgeOn: badge.badgeOn,
             size: NSSize(width: 26, height: 14)
         )
+        statusItemForTesting.button?.toolTip = badge.badgeOn
+            ? "BrainBar — needs attention: \(badge.reason)"
+            : "BrainBar"
     }
 
     @objc private func toggleFromStatusItem(_ sender: Any?) {

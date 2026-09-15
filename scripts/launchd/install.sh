@@ -842,6 +842,10 @@ install_plist() {
     install_rendered_plist "$rendered_plist" "$dst" || return 1
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 
+    if [ "$name" = "health-check" ]; then
+        BRAINLAYER_SKIP_DISABLE_GATES=1 "$BRAINLAYER_JOB_WRAPPER" "$BRAINLAYER_PYTHON" -m brainlayer.badge_state || return 1
+    fi
+
     if ! load_plist "$name" "$PLIST_CHANGED"; then
         return 1
     fi
