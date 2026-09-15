@@ -1294,11 +1294,17 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     legacy_data.pop("BrainBarDevPreview", None)
     legacy_plist.write_bytes(plistlib.dumps(legacy_data))
     for app in (production, backup):
-        app.mkdir(parents=True)
+        (app / "Contents" / "MacOS").mkdir(parents=True)
+        (app / "Contents" / "MacOS" / "BrainBarDaemon").write_text("production daemon\n")
+        (app / "Contents" / "Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleIdentifier": "com.brainlayer.brainbar"})
+        )
     identity_named = preview_root / "preview-from-an-older-naming-generation.app"
     shutil.copytree(slash_app, identity_named)
     unrecognized = preview_root / "Unrelated.app"
     unrecognized.mkdir(parents=True)
+    production_copy = preview_root / "Production-copy.app"
+    shutil.copytree(production, production_copy)
 
     cleaned = subprocess.run(
         ["/bin/bash", str(wrapper), "--clean"],
@@ -1316,6 +1322,72 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     assert production.is_dir()
     assert backup.is_dir()
     assert unrecognized.is_dir()
+    assert production_copy.is_dir()
+    trash_dir = tmp_path / "trash"
+    for app in (slash_app, dash_app, legacy, identity_named):
+        assert (trash_dir / app.name).is_dir()
+
+
+def test_dev_preview_wrapper_builds_from_target_head_not_harness_head(tmp_path: Path) -> None:
+    current_build_script = Path(__file__).resolve().parents[1] / "brain-bar" / "build-app.sh"
+    current_wrapper = Path(__file__).resolve().parents[1] / "brain-bar" / "Scripts" / "dev-preview.sh"
+    repo, build_script = _prepare_build_repo(tmp_path, "brainlayer-harness", branch="harness")
+    _prepare_bundle_inputs(repo)
+    build_script.write_text(
+        current_build_script.read_text().replace("BrainBarDevHarnessCommit", "OldPreviewHarnessCommit")
+    )
+    _git(repo, "add", "brain-bar/build-app.sh")
+    _commit(repo, "test: old target build script")
+
+    _git(repo, "checkout", "-b", "target")
+    _write_tracked_file(repo, "brain-bar/Sources/feature-source.txt", "target-only source\n")
+    _commit(repo, "feat: target source")
+    target_sha = _git_stdout(repo, "rev-parse", "HEAD")
+
+    _git(repo, "checkout", "harness")
+    build_script.write_text(current_build_script.read_text())
+    wrapper = repo / "brain-bar" / "Scripts" / "dev-preview.sh"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(current_wrapper.read_text())
+    _git(repo, "add", "brain-bar/build-app.sh", "brain-bar/Scripts/dev-preview.sh")
+    _commit(repo, "feat: add preview harness")
+    harness_sha = _git_stdout(repo, "rev-parse", "HEAD")
+    target_worktree = tmp_path / "target-worktree"
+    _git(repo, "worktree", "add", str(target_worktree), "target")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
+    open_stub = tmp_path / "open"
+    open_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+    open_stub.chmod(0o755)
+    preview_root = home / "Applications" / "BrainBar DEV"
+    env = {
+        **_clean_git_env(),
+        **_fake_build_env(tmp_path, tool_dir, bin_dir),
+        "HOME": str(home),
+        "BRAINBAR_CANONICAL_REPO_ROOT": str(tmp_path / "canonical"),
+        "BRAINBAR_BREW_BIN": str(repo / "no-such-brew"),
+        "BRAINBAR_DEV_PREVIEW_ROOT": str(preview_root),
+        "BRAINBAR_DEV_OPEN_BIN": str(open_stub),
+        "BRAINBAR_PLIST_BUDDY": "/usr/libexec/PlistBuddy",
+    }
+
+    result = subprocess.run(
+        ["/bin/bash", str(wrapper), "target"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    branch_hash = hashlib.sha256(b"target").hexdigest()[:8]
+    plist_path = preview_root / f"BrainBar DEV · target-{branch_hash}.app" / "Contents" / "Info.plist"
+    plist_data = plistlib.loads(plist_path.read_bytes())
+    assert target_sha != harness_sha
+    assert plist_data["GitCommit"] == target_sha
+    assert plist_data["BrainBarDevHarnessCommit"] == harness_sha
 
 
 def test_dev_preview_wrapper_refuses_canonical_root_before_invoking_build(tmp_path: Path) -> None:
@@ -1362,6 +1434,7 @@ def test_build_app_rejects_dev_intent_at_canonical_root_before_teardown(tmp_path
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
     home.mkdir()
+    _prepare_bundle_inputs(repo)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
     teardown_log = tmp_path / "production-teardown.log"
     socket_stand_in = tmp_path / "brainbar.sock"

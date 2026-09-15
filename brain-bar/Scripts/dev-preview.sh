@@ -151,6 +151,7 @@ trash_preview_bundle() {
 prepare_overlay_worktree() {
     local target_worktree="$1" target_sha="$2"
     local harness_commit harness_base
+    local harness_paths=()
     if [ -n "$(git -C "$target_worktree" status --porcelain --untracked-files=all)" ]; then
         echo "[dev-preview] ERROR: target lacks the preview harness and is dirty; refusing to omit uncommitted source" >&2
         return 1
@@ -165,10 +166,17 @@ prepare_overlay_worktree() {
         return 1
     fi
     harness_base="$(git -C "$REPO_ROOT" rev-parse "$harness_commit^")"
+    if git -C "$REPO_ROOT" rev-list --merges "$harness_base..HEAD" | grep -q .; then
+        echo "[dev-preview] ERROR: preview harness history contains a merge; refusing to overlay unrelated branch changes" >&2
+        return 1
+    fi
+    while IFS= read -r path; do
+        [ -n "$path" ] && harness_paths+=("$path")
+    done < <(git -C "$REPO_ROOT" diff --name-only "$harness_base..$harness_commit")
     OVERLAY_TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/brainbar-dev-preview.XXXXXX")"
     OVERLAY_WORKTREE="$OVERLAY_TEMP_ROOT/checkout"
     git -C "$REPO_ROOT" worktree add --detach "$OVERLAY_WORKTREE" "$target_sha" >/dev/null
-    if ! git -C "$REPO_ROOT" diff --binary "$harness_base..HEAD" -- brain-bar tests/test_brainbar_build_app_guards.py |
+    if ! git -C "$REPO_ROOT" diff --binary "$harness_base..HEAD" -- "${harness_paths[@]}" |
         git -C "$OVERLAY_WORKTREE" apply --index --3way -; then
         echo "[dev-preview] ERROR: preview harness does not apply cleanly to $target_sha" >&2
         return 1
