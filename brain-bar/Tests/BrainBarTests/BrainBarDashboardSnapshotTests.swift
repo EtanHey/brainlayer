@@ -48,15 +48,15 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             BrainBarOnePageComposition.visibleSectionIDs,
             ["status", "backups", "memory", "ingest", "details"]
         )
-        XCTAssertEqual(BrainBarOnePageComposition.primaryTileCount, 3)
-        XCTAssertTrue(BrainBarOnePageComposition.primaryTilesHaveEqualHeight)
+        XCTAssertEqual(BrainBarOnePageComposition.primaryTileCount, 2)
+        XCTAssertFalse(BrainBarOnePageComposition.primaryTilesHaveEqualHeight)
         XCTAssertFalse(BrainBarOnePageComposition.detailsExpandedByDefault)
 
         let source = try String(
             contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
             encoding: .utf8
         )
-        XCTAssertTrue(source.contains("statusStrip\n                        summaryTiles(layout: layout)"))
+        XCTAssertTrue(source.contains("statusStrip\n                        summaryTiles(layout: layout)\n                        ingestBand(layout: layout)"))
         XCTAssertFalse(source.contains("ObservabilityDashboardView("), "The old lower observability grid must not return.")
         XCTAssertFalse(source.contains("Runtime & Details"), "Technical summaries must stay hidden while Details is collapsed.")
     }
@@ -67,14 +67,14 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
             encoding: .utf8
         )
-        let start = try XCTUnwrap(source.range(of: "private func ingestTile"))
+        let start = try XCTUnwrap(source.range(of: "private func ingestBand"))
         let end = try XCTUnwrap(source.range(of: "private func summaryTile", range: start.upperBound..<source.endIndex))
-        let ingestTile = String(source[start.lowerBound..<end.lowerBound])
+        let ingestBand = String(source[start.lowerBound..<end.lowerBound])
 
-        XCTAssertTrue(ingestTile.contains("BrainBarSharedTimeframeSelector"))
-        XCTAssertTrue(ingestTile.contains("ingestSeriesRow(.allCommits"))
-        XCTAssertTrue(ingestTile.contains("ingestSeriesRow(.agentStores"))
-        XCTAssertTrue(ingestTile.contains("ingestSeriesRow(.jsonlWatcher"))
+        XCTAssertTrue(ingestBand.contains("BrainBarSharedTimeframeSelector"))
+        XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.allCommits"))
+        XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.agentStores"))
+        XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.jsonlWatcher"))
 
         let summary = DashboardFlowSummary.derive(
             daemon: nil,
@@ -102,6 +102,54 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertNotEqual(maxima[0], maxima[1], "Each small multiple must derive its own y-scale.")
         XCTAssertNotEqual(maxima[0], maxima[2], "Each small multiple must derive its own y-scale.")
         XCTAssertNotEqual(maxima[1], maxima[2], "Each small multiple must derive its own y-scale.")
+    }
+
+    func testIngestBandChartSizesNeverTriggerSilentCompactRendering() {
+        for width: CGFloat in [760, 960, 1_280] {
+            let sizes = BrainBarIngestBandLayout.chartSizes(containerWidth: width)
+            XCTAssertEqual(sizes.count, 3)
+            XCTAssertTrue(
+                sizes.allSatisfy { !SparklineRenderer.isCompact(size: $0) },
+                "Dashboard width \(width) must preserve axes and labels for every ingest chart."
+            )
+        }
+    }
+
+    func testSignalCoverageUsesOneStableDisclosureControl() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "private struct BrainBarSignalCoveragePanel"))
+        let end = try XCTUnwrap(source.range(of: "private struct BrainBarSignalCoverageRow", range: start.upperBound..<source.endIndex))
+        let panel = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertEqual(panel.components(separatedBy: "brainbar.dashboard.signal-coverage-disclosure").count - 1, 1)
+        XCTAssertFalse(panel.contains("disclosureChevron"))
+        XCTAssertTrue(panel.contains("Image(systemName: \"chevron.right\")"))
+        XCTAssertTrue(panel.contains("rotationEffect(.degrees(isExpanded ? 90 : 0))"))
+        XCTAssertTrue(panel.contains(".focusEffectDisabled()"))
+    }
+
+    func testDashboardHasNoFocusableNonControlContainer() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "struct BrainBarDashboardView"))
+        let end = try XCTUnwrap(source.range(of: "enum BrainBarDisclosureActivationSource", range: start.upperBound..<source.endIndex))
+        let dashboard = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(dashboard.contains(".accessibilityIdentifier(\"brainbar.dashboard.scroll\")\n                .focusable()"))
+    }
+
+    func testDashboardTypeNeverDropsBelowNinePoints() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertNil(
+            source.range(of: #"\.font\(\.system\(size:\s*[0-8](?:\.[0-9]+)?[,)]"#, options: .regularExpression),
+            "BrainBar dashboard text and symbols must respect the 9 pt legibility floor."
+        )
     }
 
     @MainActor

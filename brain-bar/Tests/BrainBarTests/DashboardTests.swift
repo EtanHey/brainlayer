@@ -2285,6 +2285,17 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testDashboardMetricFormatterCapsOldRelativeEventsAtTwoDays() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        XCTAssertEqual(
+            DashboardMetricFormatter.relativeEventString(
+                lastEventAt: now.addingTimeInterval(-(14 * 24 * 3600)),
+                now: now
+            ),
+            "2d ago"
+        )
+    }
+
     func testSparklineRendererCompactClassificationMatchesEndpointAndChartPadding() {
         XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 52, height: 116)))
         XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 300, height: 20)))

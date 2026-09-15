@@ -102,11 +102,12 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let statusIndex = try XCTUnwrap(dashboardSource.range(of: "statusStrip")?.lowerBound)
         let tilesIndex = try XCTUnwrap(dashboardSource.range(of: "summaryTiles(layout: layout)")?.lowerBound)
 
-        XCTAssertLessThan(statusIndex, tilesIndex, "The one-line status must precede the three dashboard tiles.")
+        XCTAssertLessThan(statusIndex, tilesIndex, "The one-line status must precede the dashboard cards.")
         XCTAssertTrue(source.contains("All good"))
         XCTAssertTrue(source.contains("1 thing needs you"))
         XCTAssertTrue(dashboardSource.contains("brainbar.dashboard.status"))
-        XCTAssertTrue(dashboardSource.contains("ObservabilityTechnicalDetailsView"))
+        XCTAssertFalse(dashboardSource.contains("ObservabilityTechnicalDetailsView"), "Errors must stay on the row they explain.")
+        XCTAssertTrue(dashboardSource.contains("BrainBarDefinitionList"))
         XCTAssertFalse(dashboardSource.contains("lastGoodContentOpacity"))
     }
 
@@ -156,7 +157,8 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(sparkline.contains("metricDisclosure"))
         XCTAssertTrue(sparkline.contains("Text(metricDisclosure)"), "Pointer tooltip must name window, count unit, and clock.")
         XCTAssertTrue(dashboard.contains("accessibilitySummary"), "Charts need a non-pointer semantic summary.")
-        XCTAssertTrue(dashboard.contains(".focusable()"), "Dashboard scroll and controls need a keyboard focus path.")
+        XCTAssertTrue(dashboard.contains(".focusEffectDisabled()"), "Dashboard controls must suppress AppKit's pointer focus ring.")
+        XCTAssertTrue(dashboard.contains(".focused("), "Dashboard controls still need a keyboard focus path.")
         XCTAssertTrue(commandBar.contains("brainbar.command.mode.capture"))
         XCTAssertTrue(commandBar.contains("brainbar.command.mode.search"))
         XCTAssertTrue(commandBar.contains("brainbar.command.input"))
@@ -205,8 +207,8 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
         XCTAssertTrue(dashboard.contains("integerString(total, locale: locale)"))
         XCTAssertTrue(dashboard.contains("integerString(indexedToday, locale: locale)"))
-        XCTAssertTrue(dashboard.contains("BrainBarIngestSeriesPresentation(lane: lane, locale: locale)"))
-        XCTAssertTrue(dashboard.contains("axisTickString(lane.values.max() ?? 0, locale: locale)"))
+        XCTAssertTrue(dashboard.contains("integerString(lane.values.reduce(0, +), locale: locale)"))
+        XCTAssertTrue(dashboard.contains("axisTickString(presentation.axisMax)"))
         for rawInterpolation in [
             "\\(collector.stats.chunkCount)",
             "\\(collector.stats.enrichedChunkCount)",
@@ -279,10 +281,10 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         )
 
         XCTAssertTrue(tilesSource.contains("title: \"Backups\""))
-        XCTAssertTrue(tilesSource.contains("title: \"Indexed\""))
-        XCTAssertTrue(tilesSource.contains("title: \"Ingest\""))
-        XCTAssertTrue(tilesSource.contains("minHeight: height, maxHeight: height"), "All primary tiles must use one equal height.")
-        XCTAssertTrue(dashboard.contains("lane.status.stateTheme"), "Chart status pills must use semantic state color, not series color.")
+        XCTAssertTrue(tilesSource.contains("title: \"Today\""))
+        XCTAssertTrue(tilesSource.contains("private func ingestBand"))
+        XCTAssertFalse(tilesSource.contains("minHeight: height, maxHeight: height"), "Cards must size to their content.")
+        XCTAssertTrue(dashboard.contains("Text(\"Evidence unavailable\")"), "Unavailable charts must remain explicit.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
     }
@@ -302,11 +304,9 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
 
         XCTAssertFalse(onePageSource.localizedCaseInsensitiveContains("memories"))
         XCTAssertFalse(dashboardView.localizedCaseInsensitiveContains("memories total"))
-        XCTAssertTrue(dashboardView.contains("indexed chunks total"))
+        XCTAssertTrue(dashboardView.contains("totalIndexedChunks"))
         XCTAssertTrue(dashboardView.contains("indexed today"))
         XCTAssertTrue(onePageSource.contains("writes via brain_store"))
-        XCTAssertTrue(dashboardView.contains("Quiet: no agents active"))
-        XCTAssertTrue(dashboardView.contains("Agent activity unavailable"))
         XCTAssertTrue(dashboardView.contains("get: { displayedTimeframe }"))
         XCTAssertTrue(dashboardView.contains("selectedTimeframe = $0"))
         XCTAssertTrue(dashboardView.contains("if selectedTimeframe == $0"))

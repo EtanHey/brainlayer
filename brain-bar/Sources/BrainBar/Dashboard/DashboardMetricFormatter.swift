@@ -113,6 +113,9 @@ enum DashboardMetricFormatter {
         }
 
         let hoursAgo = Int((secondsAgo / 3600).rounded(.towardZero))
+        if hoursAgo >= 48 {
+            return "2d ago"
+        }
         return "\(hoursAgo)h ago"
     }
 
