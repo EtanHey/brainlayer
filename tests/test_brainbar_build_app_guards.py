@@ -170,6 +170,18 @@ def _prepare_fake_build_tools(tmp_path: Path) -> tuple[Path, Path]:
     os.chmod(bin_dir / "BrainBarDaemon", 0o755)
     (tool_dir / "swift").write_text(
         """#!/usr/bin/env bash
+package_path=""
+previous=""
+for argument in "$@"; do
+  if [[ "$previous" == "--package-path" ]]; then
+    package_path="$argument"
+    break
+  fi
+  previous="$argument"
+done
+if [[ -n "${BRAINBAR_FAKE_SWIFT_HEAD_LOG:-}" && -n "$package_path" ]]; then
+  git -C "$package_path" rev-parse HEAD >> "$BRAINBAR_FAKE_SWIFT_HEAD_LOG"
+fi
 if [[ "$*" == *"--show-bin-path"* ]]; then
   printf '%s\n' "$BRAINBAR_FAKE_BIN_DIR"
 fi
@@ -1161,6 +1173,8 @@ def test_dev_build_stamps_unique_preview_identity_without_daemon_payload(tmp_pat
     home = tmp_path / "home"
     home.mkdir()
     _prepare_bundle_inputs(repo)
+    repo_head = _git_stdout(repo, "rev-parse", "HEAD")
+    bogus_source_commit = "f" * 40
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
     plistbuddy_log = tmp_path / "plistbuddy.log"
     preview_app = home / "Applications" / "BrainBar DEV" / "BrainBar DEV · feat-UI_Guards.app"
@@ -1176,6 +1190,7 @@ def test_dev_build_stamps_unique_preview_identity_without_daemon_payload(tmp_pat
             **_fake_build_env(tmp_path, tool_dir, bin_dir),
             "BRAINBAR_DEV_APP_DIR": str(preview_app),
             "BRAINBAR_FAKE_PLISTBUDDY_LOG": str(plistbuddy_log),
+            "BRAINBAR_DEV_SOURCE_COMMIT": bogus_source_commit,
         },
     )
 
@@ -1185,6 +1200,8 @@ def test_dev_build_stamps_unique_preview_identity_without_daemon_payload(tmp_pat
     assert 'CFBundleIdentifier string "com.brainlayer.brainbar.dev.feat-ui-guards-' in plist_calls
     assert "Add :BrainBarDevPreview bool true" in plist_calls
     assert 'BrainBarDevBranch string "feat/UI_Guards"' in plist_calls
+    assert f':GitCommit "{repo_head}"' in plist_calls
+    assert bogus_source_commit not in plist_calls
     assert not (preview_app / "Contents" / "MacOS" / "BrainBarDaemon").exists()
     assert not (preview_app / "Contents" / "Resources" / "LaunchAgents").exists()
 
@@ -1362,6 +1379,7 @@ def test_dev_preview_wrapper_builds_from_target_head_not_harness_head(tmp_path: 
     open_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
     open_stub.chmod(0o755)
     preview_root = home / "Applications" / "BrainBar DEV"
+    swift_head_log = tmp_path / "swift-heads.log"
     env = {
         **_clean_git_env(),
         **_fake_build_env(tmp_path, tool_dir, bin_dir),
@@ -1371,6 +1389,7 @@ def test_dev_preview_wrapper_builds_from_target_head_not_harness_head(tmp_path: 
         "BRAINBAR_DEV_PREVIEW_ROOT": str(preview_root),
         "BRAINBAR_DEV_OPEN_BIN": str(open_stub),
         "BRAINBAR_PLIST_BUDDY": "/usr/libexec/PlistBuddy",
+        "BRAINBAR_FAKE_SWIFT_HEAD_LOG": str(swift_head_log),
     }
 
     result = subprocess.run(
@@ -1388,6 +1407,9 @@ def test_dev_preview_wrapper_builds_from_target_head_not_harness_head(tmp_path: 
     assert target_sha != harness_sha
     assert plist_data["GitCommit"] == target_sha
     assert plist_data["BrainBarDevHarnessCommit"] == harness_sha
+    compiled_heads = swift_head_log.read_text(encoding="utf-8").splitlines()
+    assert compiled_heads
+    assert set(compiled_heads) == {target_sha}
 
 
 def test_dev_preview_wrapper_refuses_canonical_root_before_invoking_build(tmp_path: Path) -> None:
