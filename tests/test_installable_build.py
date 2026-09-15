@@ -1891,7 +1891,7 @@ def test_packaged_launchd_installer_renders_p0_counter_console_shim(tmp_path: Pa
     assert "scripts/p0_longitudinal_count.py" not in content
 
 
-def test_packaged_launchd_installer_wires_tier0_notification_policy(tmp_path: Path) -> None:
+def test_packaged_launchd_installer_wires_log_only_tier0_watchdog(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "site-packages" / "brainlayer" / "launchd"
     _copy_packaged_launchd(launchd_dir)
     source_script = REPO_ROOT / "scripts" / "tier0-watchdog.sh"
@@ -1945,10 +1945,8 @@ def test_packaged_launchd_installer_wires_tier0_notification_policy(tmp_path: Pa
         home / ".local" / "share" / "brainlayer" / "tier0-watchdog-alert-state"
     )
     assert "BRAINLAYER_ENV_FILE" not in plist["EnvironmentVariables"]
-    assert plist["EnvironmentVariables"]["TIER0_ENV_RUN"] == str(
-        home / ".local" / "lib" / "brainlayer" / "brainlayer-env-run.sh"
-    )
-    assert plist["EnvironmentVariables"]["TIER0_NOTIFICATION_POLICY_PYTHON"] == sys.executable
+    assert "TIER0_ENV_RUN" not in plist["EnvironmentVariables"]
+    assert "TIER0_NOTIFICATION_POLICY_PYTHON" not in plist["EnvironmentVariables"]
     rendered_content = rendered.read_text(encoding="utf-8")
     assert "__TIER0_WATCHDOG_SCRIPT__" not in rendered_content
     assert "__BRAINLAYER_ENV_RUN__" not in rendered_content
