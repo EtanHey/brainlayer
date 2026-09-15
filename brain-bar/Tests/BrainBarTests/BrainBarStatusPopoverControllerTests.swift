@@ -111,6 +111,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertTrue(source.contains("DispatchQueue(label: \"com.brainlayer.brainbar.badge-read\", qos: .utility)"))
         XCTAssertTrue(source.contains("Timer.publish(every: max(cadence.interval, 1)"))
         XCTAssertTrue(source.contains("badgeReadQueue.async"))
+        XCTAssertTrue(source.contains("badgePresentation = .failVisible(\"Badge state has not been read yet.\")"))
 
         let renderStart = try XCTUnwrap(source.range(of: "private func renderStatusIcon"))
         let renderEnd = try XCTUnwrap(source.range(of: "@objc private func toggleFromStatusItem", range: renderStart.upperBound..<source.endIndex))

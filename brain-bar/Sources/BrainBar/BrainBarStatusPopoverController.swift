@@ -72,6 +72,7 @@ final class BrainBarStatusPopoverController: NSObject {
     private func bindCollector(_ collector: StatsCollector?) {
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
+        badgePresentation = .failVisible("Badge state has not been read yet.")
         latestStats = nil
         latestState = nil
         guard let collector else { return }
