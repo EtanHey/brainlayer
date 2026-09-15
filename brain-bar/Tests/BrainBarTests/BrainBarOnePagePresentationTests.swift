@@ -169,6 +169,20 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testIndexedTodayOverflowIsUnavailableInsteadOfTrapping() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.overflowingTodayResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "Indexed today unavailable: hourly observability count overflow"
+        )
+    }
+
+    @MainActor
     func testUnverifiedBackupTimestampIsNotCalledLastGood() throws {
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.unverifiedResult(),
@@ -256,6 +270,13 @@ enum BrainBarOnePageTestFixture {
 
     static func dashboardResult(indexedToday: Int) throws -> ObservabilityReadResult {
         .readable(try document(byHour: [.init(hour: now, count: indexedToday)]))
+    }
+
+    static func overflowingTodayResult() throws -> ObservabilityReadResult {
+        .readable(try document(byHour: [
+            .init(hour: now.addingTimeInterval(-60), count: Int.max),
+            .init(hour: now, count: 1),
+        ]))
     }
 
     static func todayBoundaryResult() throws -> ObservabilityReadResult {

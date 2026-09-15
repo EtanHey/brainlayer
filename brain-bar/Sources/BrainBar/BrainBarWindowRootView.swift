@@ -446,10 +446,20 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 indexedToday = nil
                 indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else if let buckets = document.stores.inWindow?.byHour {
-                indexedToday = buckets
+                let todayCount = buckets
                     .filter { $0.hour >= midnight && $0.hour <= now }
-                    .reduce(0) { $0 + $1.count }
-                indexedTodayUnavailableText = nil
+                    .reduce(Int?.some(0)) { total, bucket in
+                        guard let total else { return nil }
+                        let (sum, overflow) = total.addingReportingOverflow(bucket.count)
+                        return overflow ? nil : sum
+                    }
+                if let todayCount {
+                    indexedToday = todayCount
+                    indexedTodayUnavailableText = nil
+                } else {
+                    indexedToday = nil
+                    indexedTodayUnavailableText = "Indexed today unavailable: hourly observability count overflow"
+                }
             } else {
                 indexedToday = nil
                 indexedTodayUnavailableText = "Indexed today unavailable: hourly observability missing"
