@@ -23,8 +23,7 @@ def test_notification_policy_allows_only_explicit_data_loss_conditions() -> None
 def test_explicit_marker_can_suppress_but_not_enable_notification(tmp_path: Path) -> None:
     marker = tmp_path / "by-design-notifications.json"
     marker.write_text(
-        '{"conditions":{"jsonl_backup_attempt_failed":"maintenance",'
-        '"watcher_stopped":"wrongly marked enabled"}}',
+        '{"conditions":{"jsonl_backup_attempt_failed":"maintenance","watcher_stopped":"wrongly marked enabled"}}',
         encoding="utf-8",
     )
     env = {"BRAINLAYER_BY_DESIGN_REASON_FILE": str(marker)}
@@ -57,9 +56,7 @@ def test_paused_enrichment_only_suppresses_enrichment_backlog(tmp_path: Path) ->
     env = {"BRAINLAYER_PAUSE_SENTINEL_PATH": str(sentinel)}
 
     assert "enrichment" in (by_design_reason("enrichment_backlog", env=env) or "")
-    assert by_design_reason("watcher_stopped", env=env) == (
-        "condition is not allow-listed for desktop notification"
-    )
+    assert by_design_reason("watcher_stopped", env=env) == ("condition is not allow-listed for desktop notification")
 
 
 def test_disabled_enrichment_suppresses_only_enrichment_backlog() -> None:
@@ -81,9 +78,7 @@ def test_parked_backup_suppresses_backup_freshness_only(tmp_path: Path) -> None:
     env = {"BRAINLAYER_BY_DESIGN_DISABLED_DIR": str(disabled_dir)}
 
     assert by_design_reason("backup_freshness", env=env) == "backup-daily is parked on P0"
-    assert by_design_reason("watcher_stopped", env=env) == (
-        "condition is not allow-listed for desktop notification"
-    )
+    assert by_design_reason("watcher_stopped", env=env) == ("condition is not allow-listed for desktop notification")
 
 
 def test_explicit_reason_file_is_condition_scoped(tmp_path: Path) -> None:

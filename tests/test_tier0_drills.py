@@ -410,9 +410,7 @@ def test_missing_state_alerts_and_kickstarts_without_bootstrap(tmp_path: Path) -
 
 
 def test_future_state_mtime_alerts_and_kickstarts(tmp_path: Path) -> None:
-    result = _run_drill(
-        tmp_path, label_loaded=True, state_mtime=NOW_EPOCH + 60, policy_exit_status=1
-    )
+    result = _run_drill(tmp_path, label_loaded=True, state_mtime=NOW_EPOCH + 60, policy_exit_status=1)
 
     assert result.process.returncode == 1, result.process.stdout + result.process.stderr
     _assert_alert_contract(result)
