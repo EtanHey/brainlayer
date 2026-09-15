@@ -978,7 +978,7 @@ private struct BrainBarDashboardView: View {
         let counts = onePagePresentation
         return summaryTile(title: "Indexed", identifier: "memory", height: height) {
             if let total = counts.totalIndexedChunks {
-                Text("\(DashboardMetricFormatter.integerString(total)) indexed chunks total")
+                Text("\(DashboardMetricFormatter.integerString(total, locale: locale)) indexed chunks total")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
@@ -988,7 +988,7 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
             }
             if let indexedToday = counts.indexedToday {
-                Text("\(DashboardMetricFormatter.integerString(indexedToday)) indexed today")
+                Text("\(DashboardMetricFormatter.integerString(indexedToday, locale: locale)) indexed today")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextSecondary)
@@ -1060,7 +1060,7 @@ private struct BrainBarDashboardView: View {
         fetchedAt: Date
     ) -> some View {
         let lane = pipelineFlowSummary.lane(for: series)
-        let presentation = BrainBarIngestSeriesPresentation(lane: lane)
+        let presentation = BrainBarIngestSeriesPresentation(lane: lane, locale: locale)
         let disclosure = BrainBarDashboardChartDisclosure(
             series: series,
             lane: lane,
@@ -2363,7 +2363,7 @@ struct BrainBarIngestSeriesPresentation: Equatable {
             return
         }
 
-        metricText = "\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale)) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0))"
+        metricText = "\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale)) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0, locale: locale))"
         showsSparkline = true
     }
 }
