@@ -2,6 +2,77 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum BrainBarDisclosureAnimation {
+    enum Direction {
+        case open
+        case close
+    }
+
+    enum Curve: Equatable {
+        case easeInOut
+    }
+
+    struct Timing: Equatable {
+        let duration: TimeInterval
+        let curve: Curve
+    }
+
+    struct Layout: Equatable {
+        let containerHeight: CGFloat
+        let windowHeight: CGFloat
+    }
+
+    private static let standardDuration: TimeInterval = 0.25
+
+    static func timing(for direction: Direction, reduceMotion: Bool) -> Timing {
+        _ = direction
+        return Timing(duration: reduceMotion ? 0 : standardDuration, curve: .easeInOut)
+    }
+
+    static func animation(for direction: Direction, reduceMotion: Bool) -> Animation? {
+        let timing = timing(for: direction, reduceMotion: reduceMotion)
+        guard timing.duration > 0 else { return nil }
+        return .easeInOut(duration: timing.duration)
+    }
+
+    static func containerHeight(
+        progress: CGFloat,
+        collapsedContainerHeight: CGFloat,
+        expandedContainerHeight: CGFloat
+    ) -> CGFloat {
+        let clampedProgress = min(max(progress, 0), 1)
+        return collapsedContainerHeight
+            + ((expandedContainerHeight - collapsedContainerHeight) * clampedProgress)
+    }
+
+    static func windowHeight(
+        containerHeight: CGFloat,
+        chromeAndSurroundingContentHeight: CGFloat
+    ) -> CGFloat {
+        chromeAndSurroundingContentHeight + containerHeight
+    }
+
+    static func layout(
+        progress: CGFloat,
+        collapsedContainerHeight: CGFloat,
+        expandedContainerHeight: CGFloat,
+        chromeAndSurroundingContentHeight: CGFloat
+    ) -> Layout {
+        let containerHeight = containerHeight(
+            progress: progress,
+            collapsedContainerHeight: collapsedContainerHeight,
+            expandedContainerHeight: expandedContainerHeight
+        )
+        return Layout(
+            containerHeight: containerHeight,
+            windowHeight: windowHeight(
+                containerHeight: containerHeight,
+                chromeAndSurroundingContentHeight: chromeAndSurroundingContentHeight
+            )
+        )
+    }
+}
+
 final class BrainBarDashboardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -14,8 +85,19 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var headerHeight: CGFloat = 0
     @Published var searchOverlayPresented = false
     @Published var graphPresented = false
+    @Published private(set) var disclosureAnimationRevision = 0
     var fittingHeight: CGFloat {
-        max(headerHeight + dashboardHeight, searchOverlayPresented || graphPresented ? 640 : 300)
+        max(
+            BrainBarDisclosureAnimation.windowHeight(
+                containerHeight: dashboardHeight,
+                chromeAndSurroundingContentHeight: headerHeight
+            ),
+            searchOverlayPresented || graphPresented ? 640 : 300
+        )
+    }
+
+    func disclosureAnimationDidComplete() {
+        disclosureAnimationRevision += 1
     }
 }
 
