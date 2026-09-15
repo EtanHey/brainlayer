@@ -369,35 +369,47 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         locale: Locale = .current,
         observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence
     ) -> Self {
+        let snapshotAttentionCount: Int = switch snapshotFreshness {
+        case .stale, .error: 1
+        case .loading, .live: 0
+        }
+        let attentionCount =
+            (hero.healthTone == .green ? 0 : 1)
+            + (agentActivity.isMeasured ? 0 : 1)
+            + snapshotAttentionCount
+        let attentionHeadline = attentionCount == 1
+            ? "1 thing needs you"
+            : "\(attentionCount) things need you"
+
         let status: BrainBarOnePageStatus
         if case .unreadable("Loading observability data.") = observability {
             status = .init(headline: "Checking…", reason: nil, tone: .neutral)
+        } else if hero.healthTone != .green {
+            status = .init(
+                headline: attentionHeadline,
+                reason: hero.healthReason,
+                tone: .amber
+            )
         } else {
             switch snapshotFreshness {
             case .loading:
                 status = .init(headline: "Checking…", reason: nil, tone: .neutral)
             case let .stale(ageSeconds):
                 status = .init(
-                    headline: "1 thing needs you",
+                    headline: attentionHeadline,
                     reason: "Dashboard data is \(ageText(ageSeconds)) old.",
                     tone: .amber
                 )
             case .error:
                 status = .init(
-                    headline: "1 thing needs you",
+                    headline: attentionHeadline,
                     reason: "Dashboard data could not refresh.",
                     tone: .amber
                 )
             case .live:
-                if hero.healthTone != .green {
+                if !agentActivity.isMeasured {
                     status = .init(
-                        headline: "1 thing needs you",
-                        reason: hero.healthReason,
-                        tone: .amber
-                    )
-                } else if !agentActivity.isMeasured {
-                    status = .init(
-                        headline: "1 thing needs you",
+                        headline: attentionHeadline,
                         reason: "Agent activity could not be measured.",
                         tone: .amber
                     )
