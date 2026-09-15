@@ -1310,6 +1310,11 @@ def run_health_check(
         add_issue(jsonl_backup_issue.code, jsonl_backup_issue.severity, jsonl_backup_issue.message)
 
     pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
+    enrichment_by_design_reason = enrichment_pause_reason(
+        {**os.environ, "BRAINLAYER_PAUSE_SENTINEL_PATH": str(config.pause_sentinel_path)},
+        now,
+        label=config.enrichment_label,
+    )
 
     t3_health = _load_json(config.t3_health_path)
     result.t3_health = t3_health or None
@@ -1441,7 +1446,11 @@ def run_health_check(
             config.enrichment_label,
             config.observability_label,
         ):
-            if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
+            if (
+                label
+                and not (pause_active and pause_applies_to_label(pause_payload, label))
+                and not (label == config.enrichment_label and enrichment_by_design_reason)
+            ):
                 action = _bootstrap_if_absent(label, _plist_for_label(config, label), command_runner)
                 if action.startswith(("bootstrap:", "bootstrap_failed:", "launchctl-unavailable:", "disabled:")):
                     result.actions.append(action)
@@ -1460,12 +1469,7 @@ def run_health_check(
         if issue_code == "drain_unloaded":
             drain_loaded = loaded
         if loaded is False:
-            if issue_code == "enrichment_unloaded" and (
-                reason := enrichment_pause_reason(
-                    {**os.environ, "BRAINLAYER_PAUSE_SENTINEL_PATH": str(config.pause_sentinel_path)},
-                    now,
-                )
-            ):
+            if issue_code == "enrichment_unloaded" and (reason := enrichment_by_design_reason):
                 add_issue(issue_code, "info", f"{message}; {reason}")
                 logger.info("enrichment launchd label is intentionally unloaded reason=%s", reason)
             else:

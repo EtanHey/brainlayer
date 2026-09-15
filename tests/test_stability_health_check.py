@@ -1415,8 +1415,10 @@ def test_disabled_enrichment_unloaded_is_informational(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     _make_db(db_path, total=1, vector_rows=1)
     monkeypatch.setenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "0")
+    commands: list[list[str]] = []
 
     def command_runner(args: list[str]):
+        commands.append(args)
         if args[:2] == ["launchctl", "print"] and "com.brainlayer.enrichment" in args[2]:
             return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1425,6 +1427,40 @@ def test_disabled_enrichment_unloaded_is_informational(tmp_path, monkeypatch):
         HealthCheckConfig(
             db_path=db_path,
             state_path=tmp_path / "health-state.json",
+            queue_dir=tmp_path / "queue",
+            source_jsonl_globs=[],
+            heal=True,
+            heal_min_consecutive_failures=1,
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=command_runner,
+    )
+
+    enrichment_issue = next(issue for issue in result.issues if issue.code == "enrichment_unloaded")
+    assert enrichment_issue.severity == "info"
+    enrichment_commands = [command for command in commands if "com.brainlayer.enrichment" in " ".join(command)]
+    assert not [command for command in enrichment_commands if command[1] in {"bootstrap", "kickstart"}]
+
+
+def test_custom_enrichment_label_pause_makes_unloaded_informational(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    pause_path = tmp_path / "pause.sentinel"
+    custom_label = "com.example.brainlayer.enrichment"
+    _make_db(db_path, total=1, vector_rows=1)
+    pause_path.write_text(json.dumps({"labels": [custom_label]}), encoding="utf-8")
+
+    def command_runner(args: list[str]):
+        if args[:2] == ["launchctl", "print"] and custom_label in args[2]:
+            return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            pause_sentinel_path=pause_path,
+            enrichment_label=custom_label,
             queue_dir=tmp_path / "queue",
             source_jsonl_globs=[],
         ),

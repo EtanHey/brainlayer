@@ -65,14 +65,19 @@ def _explicit_reason(condition: str, env: Mapping[str, str]) -> str | None:
     return reason.strip() if isinstance(reason, str) and reason.strip() else None
 
 
-def enrichment_pause_reason(env: Mapping[str, str], now: datetime) -> str | None:
+def enrichment_pause_reason(
+    env: Mapping[str, str],
+    now: datetime,
+    *,
+    label: str = ENRICHMENT_LABEL,
+) -> str | None:
     for variable in ("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "BRAINLAYER_ENRICH_ENABLED"):
         value = env.get(variable)
         if value is not None and value.strip().lower() in FALSE_VALUES:
             return f"enrichment is disabled by configuration ({variable})"
     sentinel_path = _path_from_env(env, "BRAINLAYER_PAUSE_SENTINEL_PATH", DEFAULT_PAUSE_SENTINEL_PATH)
     payload, active, _stale = pause_sentinel_state(sentinel_path, now)
-    if active and pause_applies_to_label(payload, ENRICHMENT_LABEL):
+    if active and pause_applies_to_label(payload, label):
         paused_at = payload.get("paused_at")
         if isinstance(paused_at, str) and paused_at:
             return f"enrichment is paused since {paused_at}"
