@@ -1020,6 +1020,7 @@ private struct BrainBarDashboardView: View {
         fetchedAt: Date
     ) -> some View {
         let lane = pipelineFlowSummary.lane(for: series)
+        let presentation = BrainBarIngestSeriesPresentation(lane: lane)
         let disclosure = BrainBarDashboardChartDisclosure(
             series: series,
             lane: lane,
@@ -1032,27 +1033,35 @@ private struct BrainBarDashboardView: View {
                 .foregroundStyle(Color.brainBarTextSecondary.opacity(0.75))
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
-            BrainBarHeroSparkline(
-                label: lane.sparklineLabel,
-                values: lane.values,
-                secondaryValues: [],
-                primarySeriesLabel: nil,
-                secondarySeriesLabel: nil,
-                tertiaryValues: [],
-                tertiarySeriesLabel: nil,
-                latestBucketName: lane.latestBucketName,
-                accentColor: lane.accentColor,
-                secondaryAccentColor: nil,
-                tertiaryAccentColor: nil,
-                activityWindowMinutes: lane.activityWindowMinutes,
-                fetchedAt: fetchedAt,
-                pulseRevision: pulseRevision,
-                referenceValue: nil,
-                metricDisclosure: disclosure.tooltipDisclosure,
-                accessibilitySummary: disclosure.accessibilitySummary
-            )
-            .frame(height: 42)
-            Text("\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +))) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0))")
+            if presentation.showsSparkline {
+                BrainBarHeroSparkline(
+                    label: lane.sparklineLabel,
+                    values: lane.values,
+                    secondaryValues: [],
+                    primarySeriesLabel: nil,
+                    secondarySeriesLabel: nil,
+                    tertiaryValues: [],
+                    tertiarySeriesLabel: nil,
+                    latestBucketName: lane.latestBucketName,
+                    accentColor: lane.accentColor,
+                    secondaryAccentColor: nil,
+                    tertiaryAccentColor: nil,
+                    activityWindowMinutes: lane.activityWindowMinutes,
+                    fetchedAt: fetchedAt,
+                    pulseRevision: pulseRevision,
+                    referenceValue: nil,
+                    metricDisclosure: disclosure.tooltipDisclosure,
+                    accessibilitySummary: disclosure.accessibilitySummary
+                )
+                .frame(height: 42)
+            } else {
+                Text("Evidence unavailable")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .frame(maxWidth: .infinity, minHeight: 42, alignment: .center)
+                    .accessibilityLabel(disclosure.accessibilitySummary)
+            }
+            Text(presentation.metricText)
                 .font(.system(size: 8, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(Color.brainBar(nsColor: lane.accentColor).opacity(0.9))
@@ -2303,6 +2312,22 @@ private struct BrainBarPipelineSeriesCard: View {
     }
 }
 
+struct BrainBarIngestSeriesPresentation: Equatable {
+    let metricText: String
+    let showsSparkline: Bool
+
+    init(lane: DashboardFlowLane, locale: Locale = .current) {
+        guard lane.status != .unavailable else {
+            metricText = "Unavailable"
+            showsSparkline = false
+            return
+        }
+
+        metricText = "\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale)) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0))"
+        showsSparkline = true
+    }
+}
+
 struct BrainBarDashboardChartDisclosure: Equatable {
     let subtitle: String
     let visibleDetail: String?
@@ -2348,8 +2373,13 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             unitLabel = "success-status chunk rows"
         }
 
-        accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
-        tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
+        if lane.status == .unavailable {
+            accessibilitySummary = "\(lane.name). Evidence unavailable. Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
+            tooltipDisclosure = "Evidence unavailable"
+        } else {
+            accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
+            tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"
+        }
     }
 }
 
