@@ -59,6 +59,22 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testFreshRollingAgentWriteWindowRemainsAvailableAcrossMidnight() throws {
+        let now = Date(timeIntervalSince1970: 1_789_419_780) // 2026-09-15 00:03:00 Asia/Jerusalem
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.crossMidnightFreshResult(now: now),
+            now: now
+        )
+
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "Indexed today unavailable: observability as of 23:58"
+        )
+        XCTAssertEqual(presentation.agentWritesText, "175 writes via brain_store in 24 h")
+    }
+
+    @MainActor
     func testUnmeasuredAgentActivityRaisesTopStripAlert() throws {
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.healthyResult(),
@@ -198,6 +214,13 @@ enum BrainBarOnePageTestFixture {
         .readable(try document(
             byHour: [.init(hour: now.addingTimeInterval(-900), count: 99)],
             generatedAt: now.addingTimeInterval(-900)
+        ))
+    }
+
+    static func crossMidnightFreshResult(now: Date) throws -> ObservabilityReadResult {
+        .readable(try document(
+            byHour: [.init(hour: now.addingTimeInterval(-300), count: 9)],
+            generatedAt: now.addingTimeInterval(-300)
         ))
     }
 

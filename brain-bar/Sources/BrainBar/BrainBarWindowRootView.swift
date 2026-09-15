@@ -434,7 +434,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if case let .readable(document) = observability, document.stores.state == "measured" {
             totalIndexedChunks = document.stores.totalChunks ?? stats.chunkCount
             let midnight = calendar.startOfDay(for: now)
-            if !observabilityIsCurrent(document, now: now, midnight: midnight, cadence: observabilityCadence) {
+            if !observabilityIsCurrentToday(document, now: now, midnight: midnight, cadence: observabilityCadence) {
                 indexedToday = nil
                 indexedTodayUnavailableText = "Indexed today unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
             } else if let buckets = document.stores.inWindow?.byHour {
@@ -454,8 +454,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
 
         let agentWritesText: String
         if case let .readable(document) = observability {
-            let midnight = calendar.startOfDay(for: now)
-            if !observabilityIsCurrent(document, now: now, midnight: midnight, cadence: observabilityCadence) {
+            if !observabilityIsFresh(document, now: now, cadence: observabilityCadence) {
                 agentWritesText = "brain_store writes unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
             } else if document.emitters.state == "measured" {
                 if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
@@ -481,14 +480,22 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         )
     }
 
-    private static func observabilityIsCurrent(
+    private static func observabilityIsCurrentToday(
         _ document: ObservabilityDocument,
         now: Date,
         midnight: Date,
         cadence: ObservabilityCadence
     ) -> Bool {
         document.generatedAt >= midnight
-            && max(0, now.timeIntervalSince(document.generatedAt)) <= cadence.interval * 2
+            && observabilityIsFresh(document, now: now, cadence: cadence)
+    }
+
+    private static func observabilityIsFresh(
+        _ document: ObservabilityDocument,
+        now: Date,
+        cadence: ObservabilityCadence
+    ) -> Bool {
+        max(0, now.timeIntervalSince(document.generatedAt)) <= cadence.interval * 2
     }
 
     private static func shortTime(_ date: Date, calendar: Calendar, locale: Locale) -> String {
