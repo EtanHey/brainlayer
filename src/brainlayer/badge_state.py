@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 SCHEMA_VERSION = 1
 BADGE_STATE_ENV = "BRAINLAYER_BADGE_STATE_PATH"
+FIRST_RUN_DEADLINE_SECONDS = 600
 
 DATA_LOSS_CODES = frozenset(
     {
@@ -93,6 +94,23 @@ def build_badge_state_document(result: HealthCheckResult) -> dict[str, Any]:
     }
 
 
+def build_pending_first_run_document(now: datetime) -> dict[str, Any]:
+    """Build the install-time state that gives RunAtLoad two intervals to emit."""
+
+    generated_at = now.astimezone(UTC)
+    expected_by = generated_at.timestamp() + FIRST_RUN_DEADLINE_SECONDS
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": _iso_utc(generated_at.isoformat()),
+        "alerts": {
+            "state": "pending_first_run",
+            "reason": "awaiting first health-check run",
+            "inputs": [],
+            "expected_first_run_by": datetime.fromtimestamp(expected_by, UTC).isoformat().replace("+00:00", "Z"),
+        },
+    }
+
+
 def write_badge_state(path: Path, document: Mapping[str, Any]) -> None:
     """Atomically replace the consumed badge document."""
 
@@ -120,3 +138,12 @@ def write_badge_state(path: Path, document: Mapping[str, Any]) -> None:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+
+
+if __name__ == "__main__":
+    from .paths import get_db_path
+
+    write_badge_state(
+        badge_state_path(get_db_path()),
+        build_pending_first_run_document(datetime.now(UTC)),
+    )

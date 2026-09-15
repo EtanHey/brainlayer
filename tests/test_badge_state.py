@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,11 +16,13 @@ from brainlayer.badge_state import (
     SUPPRESSIBLE_CODES,
     badge_state_path,
     build_badge_state_document,
+    build_pending_first_run_document,
     write_badge_state,
 )
 from brainlayer.health_check import HealthCheckConfig, HealthCheckResult, HealthIssue, run_health_check
 
 FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-v1.json"
+PENDING_FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-pending-v1.json"
 
 
 def _result(*issues: HealthIssue) -> HealthCheckResult:
@@ -62,6 +67,25 @@ def test_versioned_contract_fixture_is_real_producer_output() -> None:
     )
 
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == build_badge_state_document(result)
+
+
+def test_pending_fixture_is_real_install_state_and_install_writes_it_before_load() -> None:
+    expected = build_pending_first_run_document(datetime.fromisoformat("2026-09-15T08:00:00+00:00"))
+    install = Path("scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    assert json.loads(PENDING_FIXTURE.read_text(encoding="utf-8")) == expected
+    assert install.index("-m brainlayer.badge_state") < install.index('load_plist "$name"')
+
+
+def test_pending_module_command_writes_contract(tmp_path: Path) -> None:
+    output = tmp_path / "badge-state.json"
+    env = {**os.environ, "BRAINLAYER_BADGE_STATE_PATH": str(output), "BRAINLAYER_DB": str(tmp_path / "brainlayer.db")}
+
+    subprocess.run([sys.executable, "-m", "brainlayer.badge_state"], env=env, check=True)
+
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["schema_version"] == 1
+    assert document["alerts"]["state"] == "pending_first_run"
 
 
 def test_data_loss_codes_are_structurally_unsuppressible_even_when_marker_lists_them(
