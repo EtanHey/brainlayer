@@ -919,8 +919,8 @@ private struct BrainBarDashboardView: View {
         .task(id: dbPath) {
             guard observabilityResult == nil, let dbPath else { return }
             let url = ObservabilityReader.url(dbPath: dbPath)
-            await ObservabilityLiveView.Reader.watch(url: url) {
-                liveObservabilityResult = $0
+            for await next in ObservabilityLiveView.Reader.watch(url: url) {
+                liveObservabilityResult = next
             }
         }
     }
