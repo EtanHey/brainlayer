@@ -393,16 +393,20 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                     tone: .amber
                 )
             case .live:
-                if !agentActivity.isMeasured {
+                if hero.healthTone != .green {
+                    status = .init(
+                        headline: "1 thing needs you",
+                        reason: hero.healthReason,
+                        tone: .amber
+                    )
+                } else if !agentActivity.isMeasured {
                     status = .init(
                         headline: "1 thing needs you",
                         reason: "Agent activity could not be measured.",
                         tone: .amber
                     )
                 } else {
-                    status = hero.healthTone == .green
-                        ? .init(headline: "All good", reason: nil, tone: .green)
-                        : .init(headline: "1 thing needs you", reason: hero.healthReason, tone: .amber)
+                    status = .init(headline: "All good", reason: nil, tone: .green)
                 }
             }
         }
