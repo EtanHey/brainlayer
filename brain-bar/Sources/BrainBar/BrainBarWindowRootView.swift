@@ -986,7 +986,11 @@ private struct BrainBarDashboardView: View {
         )
 
         VStack(alignment: .leading, spacing: 12) {
-            DisclosureGroup(isExpanded: $panelState.detailsExpanded) {
+            BrainBarDisclosureRow(
+                isExpanded: $panelState.detailsExpanded,
+                accessibilityIdentifier: "brainbar.dashboard.runtime-disclosure",
+                accessibilityLabel: "Details"
+            ) {
                 VStack(alignment: .leading, spacing: layout.gridSpacing) {
                     if layout.diagnosticColumns == 2 {
                         HStack(alignment: .top, spacing: layout.gridSpacing) {
@@ -1007,8 +1011,6 @@ private struct BrainBarDashboardView: View {
                 Text("Details")
                     .font(.system(size: 14, weight: .semibold))
             }
-            .accessibilityIdentifier("brainbar.dashboard.runtime-disclosure")
-            .focusable()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -1028,6 +1030,100 @@ private struct BrainBarDashboardView: View {
             lastEventAt: daemon.lastSeenAt,
             activityWindowMinutes: collector.stats.activityWindowMinutes
         )
+    }
+}
+
+enum BrainBarDisclosureActivationSource: Equatable {
+    case pointer
+    case keyboard
+
+    @MainActor
+    static func current(event: NSEvent? = NSApp.currentEvent) -> Self {
+        switch event?.type {
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp:
+            return .pointer
+        default:
+            // Keyboard focus changes and accessibility actions do not always
+            // retain a key event, so the non-pointer fallback must stay visible.
+            return .keyboard
+        }
+    }
+}
+
+struct BrainBarDisclosureInteractionState {
+    private(set) var showsKeyboardFocusRing = false
+
+    mutating func activate(
+        isExpanded: Bool,
+        source: BrainBarDisclosureActivationSource
+    ) -> Bool {
+        showsKeyboardFocusRing = source == .keyboard
+        return !isExpanded
+    }
+
+    mutating func registerFocusChange(
+        isFocused: Bool,
+        source: BrainBarDisclosureActivationSource
+    ) {
+        showsKeyboardFocusRing = isFocused && source == .keyboard
+    }
+}
+
+private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
+    @Binding var isExpanded: Bool
+    let accessibilityIdentifier: String
+    let accessibilityLabel: String
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let label: () -> Label
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var isFocused: Bool
+    @State private var interaction = BrainBarDisclosureInteractionState()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                let nextExpansion = interaction.activate(
+                    isExpanded: isExpanded,
+                    source: .current()
+                )
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                    isExpanded = nextExpansion
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 12, height: 12)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    label()
+                }
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .focused($isFocused)
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .opacity(interaction.showsKeyboardFocusRing && isFocused ? 1 : 0)
+            }
+            .onChange(of: isFocused) { _, focused in
+                interaction.registerFocusChange(isFocused: focused, source: .current())
+            }
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(isExpanded ? "Collapse" : "Expand")
+            .accessibilityIdentifier(accessibilityIdentifier)
+
+            if isExpanded {
+                content()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -2421,7 +2517,11 @@ private struct BrainBarQueueRail: View {
     }
 
     private var replayDebtDisclosure: some View {
-        DisclosureGroup(isExpanded: $replayDebtExpanded) {
+        BrainBarDisclosureRow(
+            isExpanded: $replayDebtExpanded,
+            accessibilityIdentifier: "brainbar.dashboard.replay-debt-disclosure",
+            accessibilityLabel: "Replay debt"
+        ) {
             VStack(alignment: .leading, spacing: 7) {
                 replayDebtRow("Pending stores", component: replayDebtBreakdown.pendingStores)
                 replayDebtRow("Queue entries", component: replayDebtBreakdown.durableQueue)
@@ -2454,8 +2554,6 @@ private struct BrainBarQueueRail: View {
                     .lineLimit(1)
             }
         }
-        .accessibilityIdentifier("brainbar.dashboard.replay-debt-disclosure")
-        .focusable()
     }
 
     private func replayDebtRow(

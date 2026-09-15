@@ -365,27 +365,29 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
-    func testDashboardReplayDebtDisclosureRendersExpanded() throws {
+    func testDashboardDetailsDisclosureRendersExpandedInteractionState() throws {
         try XCTSkipIf(
             shouldSkipDisplayDependentRenderInCI,
             "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
         )
 
-        let view = BrainBarPipelinePanelPreview.make(
-            stats: BrainBarDashboardFixture.partialReplayDebtStats,
-            containerSize: CGSize(width: 1_120, height: 1_420),
-            fetchedAt: BrainBarDashboardFixture.fetchedAt,
-            signalCoverageExpanded: false,
-            replayDebtExpanded: true
+        let panelState = BrainBarDashboardPanelState()
+        var interaction = BrainBarDisclosureInteractionState()
+        panelState.detailsExpanded = interaction.activate(isExpanded: false, source: .pointer)
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(.partialReplayDebt),
+            panelState: panelState
         )
-        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_700))
-        let url = try writePNG(png, name: "dashboard-replay-debt-expanded")
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: 1_200))
+        let url = try writePNG(png, name: "dashboard-details-expanded-state")
 
-        XCTAssertGreaterThan(png.count, 5_000, "expanded replay-debt PNG looks empty")
+        XCTAssertTrue(panelState.detailsExpanded, "The modeled pointer interaction must expand Details.")
+        XCTAssertFalse(interaction.showsKeyboardFocusRing, "Modeled pointer activation must not leave a focus ring.")
+        XCTAssertGreaterThan(png.count, 5_000, "expanded Details PNG looks empty")
         XCTAssertGreaterThan(
             distinctSampledColorCount(in: bitmap),
             16,
-            "expanded replay-debt render is too flat"
+            "expanded Details render is too flat"
         )
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
