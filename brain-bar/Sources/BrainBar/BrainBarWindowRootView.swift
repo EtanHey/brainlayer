@@ -434,9 +434,17 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if case let .readable(document) = observability, document.stores.state == "measured" {
             totalIndexedChunks = document.stores.totalChunks ?? stats.chunkCount
             let midnight = calendar.startOfDay(for: now)
-            if !observabilityIsCurrentToday(document, now: now, midnight: midnight, cadence: observabilityCadence) {
+            let trust = generatedAtTrust(
+                document,
+                now: now,
+                cadence: observabilityCadence,
+                sameDayBoundary: midnight,
+                calendar: calendar,
+                locale: locale
+            )
+            if case let .untrustworthy(reason) = trust {
                 indexedToday = nil
-                indexedTodayUnavailableText = "Indexed today unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
+                indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else if let buckets = document.stores.inWindow?.byHour {
                 indexedToday = buckets
                     .filter { $0.hour >= midnight && $0.hour <= now }
@@ -449,13 +457,25 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         } else {
             totalIndexedChunks = stats.chunkCount
             indexedToday = nil
-            indexedTodayUnavailableText = "Indexed today unavailable: observability unmeasurable"
+            if case let .unreadable(reason) = observability {
+                indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
+            } else {
+                indexedTodayUnavailableText = "Indexed today unavailable: observability unmeasurable"
+            }
         }
 
         let agentWritesText: String
         if case let .readable(document) = observability {
-            if !observabilityIsFresh(document, now: now, cadence: observabilityCadence) {
-                agentWritesText = "brain_store writes unavailable: observability as of \(shortTime(document.generatedAt, calendar: calendar, locale: locale))"
+            let trust = generatedAtTrust(
+                document,
+                now: now,
+                cadence: observabilityCadence,
+                sameDayBoundary: nil,
+                calendar: calendar,
+                locale: locale
+            )
+            if case let .untrustworthy(reason) = trust {
+                agentWritesText = "brain_store writes unavailable: \(reason)"
             } else if document.emitters.state == "measured" {
                 if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
                     agentWritesText = "\(DashboardMetricFormatter.integerString(mcp.countInWindow, locale: locale)) writes via brain_store in \(document.windowHours) h"
@@ -466,6 +486,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 let reason = document.emitters.reason.isEmpty ? "emitter measurement unavailable" : document.emitters.reason
                 agentWritesText = "brain_store writes unavailable: \(reason)"
             }
+        } else if case let .unreadable(reason) = observability {
+            agentWritesText = "brain_store writes unavailable: \(reason)"
         } else {
             agentWritesText = "brain_store writes unavailable: observability document unreadable"
         }
@@ -480,22 +502,33 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         )
     }
 
-    private static func observabilityIsCurrentToday(
-        _ document: ObservabilityDocument,
-        now: Date,
-        midnight: Date,
-        cadence: ObservabilityCadence
-    ) -> Bool {
-        document.generatedAt >= midnight
-            && observabilityIsFresh(document, now: now, cadence: cadence)
+    private enum GeneratedAtTrust: Equatable {
+        case trustworthy
+        case untrustworthy(String)
     }
 
-    private static func observabilityIsFresh(
+    private static func generatedAtTrust(
         _ document: ObservabilityDocument,
         now: Date,
-        cadence: ObservabilityCadence
-    ) -> Bool {
-        max(0, now.timeIntervalSince(document.generatedAt)) <= cadence.interval * 2
+        cadence: ObservabilityCadence,
+        sameDayBoundary: Date?,
+        calendar: Calendar,
+        locale: Locale
+    ) -> GeneratedAtTrust {
+        let generatedAt = document.generatedAt
+        if generatedAt <= Date(timeIntervalSince1970: 0) {
+            return .untrustworthy("observability generated_at is zero or epoch sentinel")
+        }
+        if generatedAt > now {
+            return .untrustworthy("observability generated_at is in the future")
+        }
+        if now.timeIntervalSince(generatedAt) > cadence.interval * 2 {
+            return .untrustworthy("observability as of \(shortTime(generatedAt, calendar: calendar, locale: locale))")
+        }
+        if let sameDayBoundary, generatedAt < sameDayBoundary {
+            return .untrustworthy("observability as of \(shortTime(generatedAt, calendar: calendar, locale: locale))")
+        }
+        return .trustworthy
     }
 
     private static func shortTime(_ date: Date, calendar: Calendar, locale: Locale) -> String {
