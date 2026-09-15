@@ -537,17 +537,25 @@ struct ObservabilityLiveView: View {
         static func watch(
             url: URL,
             every interval: Duration = .seconds(30),
-            using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) },
-            apply: @escaping @MainActor (ObservabilityReadResult) -> Void
-        ) async {
-            while !Task.isCancelled {
-                let next = await Reader.read(url: url, using: operation)
-                guard !Task.isCancelled else { return }
-                await apply(next)
-                do {
-                    try await Task.sleep(for: interval)
-                } catch {
-                    return
+            using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) }
+        ) -> AsyncStream<ObservabilityReadResult> {
+            AsyncStream { continuation in
+                let producer = Task {
+                    defer { continuation.finish() }
+                    while !Task.isCancelled {
+                        let next = await Reader.read(url: url, using: operation)
+                        guard !Task.isCancelled else { return }
+                        continuation.yield(next)
+                        do {
+                            try await Task.sleep(for: interval)
+                        } catch {
+                            return
+                        }
+                    }
+                }
+
+                continuation.onTermination = { @Sendable _ in
+                    producer.cancel()
                 }
             }
         }
@@ -561,8 +569,8 @@ struct ObservabilityLiveView: View {
         ObservabilityDashboardView(result: result, cadence: cadence)
             .task(id: dbPath) {
                 let url = ObservabilityReader.url(dbPath: dbPath)
-                await Reader.watch(url: url) {
-                    result = $0
+                for await next in Reader.watch(url: url) {
+                    result = next
                 }
             }
     }
