@@ -1313,9 +1313,7 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     for app in (production, backup):
         (app / "Contents" / "MacOS").mkdir(parents=True)
         (app / "Contents" / "MacOS" / "BrainBarDaemon").write_text("production daemon\n")
-        (app / "Contents" / "Info.plist").write_bytes(
-            plistlib.dumps({"CFBundleIdentifier": "com.brainlayer.brainbar"})
-        )
+        (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.brainlayer.brainbar"}))
     identity_named = preview_root / "preview-from-an-older-naming-generation.app"
     shutil.copytree(slash_app, identity_named)
     unrecognized = preview_root / "Unrelated.app"
@@ -1463,11 +1461,7 @@ def test_build_app_rejects_dev_intent_at_canonical_root_before_teardown(tmp_path
     socket_stand_in.write_text("fleet socket stand-in\n")
     for tool in ("killall", "launchctl"):
         stub = tool_dir / tool
-        stub.write_text(
-            "#!/usr/bin/env bash\n"
-            f'printf "{tool} %s\\n" "$*" >> "$BRAINBAR_TEST_TEARDOWN_LOG"\n'
-            "exit 0\n"
-        )
+        stub.write_text(f'#!/usr/bin/env bash\nprintf "{tool} %s\\n" "$*" >> "$BRAINBAR_TEST_TEARDOWN_LOG"\nexit 0\n')
         stub.chmod(0o755)
 
     result = _run_build_script(
