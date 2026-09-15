@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -108,6 +111,30 @@ def test_badge_state_write_is_atomic_and_round_trips(tmp_path: Path) -> None:
 
     assert json.loads(path.read_text(encoding="utf-8")) == expected
     assert not list(path.parent.glob(".*.tmp"))
+
+
+def test_concurrent_badge_writes_use_unique_temporary_files(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "badge-state.json"
+    documents = [
+        build_badge_state_document(_result(HealthIssue(code, "critical", code)))
+        for code in ("jsonl_backup_attempt_failed", "jsonl_backup_attempt_stale")
+    ]
+    barrier = threading.Barrier(2)
+    sources: list[Path] = []
+    real_replace = os.replace
+
+    def synchronized_replace(source: str | bytes | os.PathLike, destination: str | bytes | os.PathLike) -> None:
+        sources.append(Path(source))
+        barrier.wait(timeout=5)
+        real_replace(source, destination)
+
+    monkeypatch.setattr("brainlayer.badge_state.os.replace", synchronized_replace)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(lambda document: write_badge_state(path, document), documents))
+
+    assert len(set(sources)) == 2
+    assert json.loads(path.read_text(encoding="utf-8")) in documents
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None:
