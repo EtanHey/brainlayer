@@ -62,6 +62,50 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         )
     }
 
+    func testResizeDelegatePreservesFittedHeightAndMinimumWidthAcrossRestingTransitions() {
+        let runtime = BrainBarRuntime()
+        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        let panel = controller.panelForTesting
+        _ = controller.contentViewControllerForTesting.view
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
+
+        controller.setDetailsExpandedForTesting(true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        controller.setDetailsExpandedForTesting(false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
+
+        let widerSize = controller.windowWillResize(
+            panel,
+            to: NSSize(width: panel.frame.width + 80, height: panel.frame.height + 300)
+        )
+        panel.setFrame(NSRect(origin: panel.frame.origin, size: widerSize), display: false)
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: panel))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
+
+        let anchorWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 32, height: 24),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let anchorView = NSView(frame: NSRect(x: 0, y: 0, width: 32, height: 24))
+        anchorWindow.contentView = anchorView
+        anchorWindow.orderFront(nil)
+        defer {
+            controller.dismiss()
+            anchorWindow.orderOut(nil)
+        }
+
+        controller.show(anchoredTo: anchorView)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
+    }
+
     func testDashboardPanelDoesNotOpenWithoutStatusItemAnchor() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
 
@@ -136,6 +180,27 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
 
     private func runMainRunLoop() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    private func assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(
+        _ controller: BrainBarDashboardPanelController,
+        panel: NSPanel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let fittedFrameHeight = panel.frame.height
+        let taller = controller.windowWillResize(
+            panel,
+            to: NSSize(width: panel.frame.width + 40, height: fittedFrameHeight + 300)
+        )
+        XCTAssertEqual(taller.height, fittedFrameHeight, accuracy: 1, file: file, line: line)
+
+        let shorter = controller.windowWillResize(
+            panel,
+            to: NSSize(width: 100, height: max(fittedFrameHeight - 200, 1))
+        )
+        XCTAssertEqual(shorter.height, fittedFrameHeight, accuracy: 1, file: file, line: line)
+        XCTAssertEqual(shorter.width, BrainBarDashboardPanelController.minSize.width, file: file, line: line)
     }
 
     private func findSubview<T: NSView>(ofType type: T.Type, in root: NSView) -> T? {
