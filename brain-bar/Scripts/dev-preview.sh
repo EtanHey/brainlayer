@@ -17,6 +17,7 @@ CANONICAL_REPO_ROOT="${BRAINBAR_CANONICAL_REPO_ROOT:-$HOME/Gits/brainlayer}"
 PREVIEW_ROOT="${BRAINBAR_DEV_PREVIEW_ROOT:-$HOME/Applications/BrainBar DEV}"
 PLIST_BUDDY="${BRAINBAR_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 OPEN_BIN="${BRAINBAR_DEV_OPEN_BIN:-/usr/bin/open}"
+TRASH_DIR="${BRAINBAR_DEV_TRASH_DIR:-$HOME/.Trash}"
 OVERLAY_WORKTREE=""
 OVERLAY_TEMP_ROOT=""
 
@@ -109,6 +110,44 @@ verify_preview_bundle() {
     fi
 }
 
+preview_bundle_paths() {
+    if [ -d "$PREVIEW_ROOT" ]; then
+        find "$PREVIEW_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*.app' -print
+    fi
+    if [ -d "$HOME/Applications" ] && [ "$PREVIEW_ROOT" != "$HOME/Applications" ]; then
+        find "$HOME/Applications" -mindepth 1 -maxdepth 1 -type d -name 'BrainBar-DEV-*.app' -print
+    fi
+}
+
+refuse_duplicate_bundle_id() {
+    local app="$1"
+    local plist="$app/Contents/Info.plist"
+    local bundle_id candidate candidate_id matches=0
+    bundle_id="$($PLIST_BUDDY -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || true)"
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        candidate_id="$($PLIST_BUDDY -c 'Print :CFBundleIdentifier' "$candidate/Contents/Info.plist" 2>/dev/null || true)"
+        if [ -n "$bundle_id" ] && [ "$candidate_id" = "$bundle_id" ]; then
+            matches=$((matches + 1))
+        fi
+    done < <(preview_bundle_paths)
+    if [ "$matches" -ne 1 ]; then
+        echo "[dev-preview] ERROR: bundle identifier '$bundle_id' appears in $matches DEV bundles; run --clean before opening" >&2
+        return 1
+    fi
+}
+
+trash_preview_bundle() {
+    local app="$1" destination
+    mkdir -p "$TRASH_DIR"
+    destination="$TRASH_DIR/$(basename "$app")"
+    if [ -e "$destination" ]; then
+        destination="$destination.$(date +%s).$$"
+    fi
+    mv "$app" "$destination"
+    printf 'TRASHED\t%s\t%s\n' "$app" "$destination"
+}
+
 prepare_overlay_worktree() {
     local target_worktree="$1" target_sha="$2"
     local harness_commit harness_base
@@ -165,6 +204,7 @@ build_one() {
         bash "$build_source/brain-bar/build-app.sh" \
         --force-worktree-build --force-dirty
     verify_preview_bundle "$app" "$branch" "$sha" "$harness_sha"
+    refuse_duplicate_bundle_id "$app"
     cleanup_overlay
     "$OPEN_BIN" -n "$app"
     printf 'PREVIEW\t%s\t%s\t%s\n' "$branch" "$short" "$app"
@@ -194,19 +234,20 @@ build_all() {
 }
 
 clean_all() {
-    local app removed=0
-    for app in "$PREVIEW_ROOT"/BrainBar\ DEV\ ·\ *.app; do
+    local app plist preview bundle_id removed=0
+    while IFS= read -r app; do
         [ -d "$app" ] || continue
-        rm -rf "$app"
-        printf 'REMOVED\t%s\n' "$app"
-        removed=$((removed + 1))
-    done
-    for app in "$HOME"/Applications/BrainBar-DEV-*.app; do
-        [ -d "$app" ] || continue
-        rm -rf "$app"
-        printf 'REMOVED\t%s\n' "$app"
-        removed=$((removed + 1))
-    done
+        plist="$app/Contents/Info.plist"
+        preview="$($PLIST_BUDDY -c 'Print :BrainBarDevPreview' "$plist" 2>/dev/null || true)"
+        bundle_id="$($PLIST_BUDDY -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || true)"
+        if [ "$preview" = "true" ] || [[ "$bundle_id" == com.brainlayer.brainbar.dev.* ]] ||
+           { [[ "$app" == "$HOME"/Applications/BrainBar-DEV-*.app ]] && [ "$bundle_id" = "com.brainlayer.brainbar" ]; }; then
+            trash_preview_bundle "$app"
+            removed=$((removed + 1))
+        else
+            echo "[dev-preview] WARNING: preserving unrecognized app bundle: $app" >&2
+        fi
+    done < <(preview_bundle_paths)
     [ "$removed" -gt 0 ] || echo "[dev-preview] No DEV previews found under $PREVIEW_ROOT"
 }
 

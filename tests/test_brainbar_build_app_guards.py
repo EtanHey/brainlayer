@@ -1224,6 +1224,7 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
         "BRAINBAR_DEV_OPEN_BIN": str(open_stub),
         "BRAINBAR_PLIST_BUDDY": "/usr/libexec/PlistBuddy",
         "BRAINBAR_TEST_OPEN_LOG": str(open_log),
+        "BRAINBAR_DEV_TRASH_DIR": str(tmp_path / "trash"),
     }
 
     built = subprocess.run(
@@ -1237,6 +1238,20 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     assert built.returncode == 0, built.stdout + built.stderr
     assert "PREVIEW\tfeat/a\t" in built.stdout
     assert open_log.read_text().strip() == f"-n {slash_app}"
+
+    duplicate_app = preview_root / "BrainBar DEV old-generation.app"
+    shutil.copytree(slash_app, duplicate_app)
+    duplicate = subprocess.run(
+        ["/bin/bash", str(wrapper), "feat/a"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert duplicate.returncode != 0
+    assert "appears in 2 DEV bundles" in duplicate.stderr
+    assert open_log.read_text().count("\n") == 1
+    shutil.rmtree(duplicate_app)
 
     _git(repo, "checkout", "-b", "feat-a")
     collision_build = subprocess.run(
@@ -1272,8 +1287,18 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     legacy = home / "Applications" / "BrainBar-DEV-legacy.app"
     production = home / "Applications" / "BrainBar.app"
     backup = home / "Applications" / "BrainBar.app.bak-safe"
-    for app in (legacy, production, backup):
+    shutil.copytree(slash_app, legacy)
+    legacy_plist = legacy / "Contents" / "Info.plist"
+    legacy_data = plistlib.loads(legacy_plist.read_bytes())
+    legacy_data["CFBundleIdentifier"] = "com.brainlayer.brainbar"
+    legacy_data.pop("BrainBarDevPreview", None)
+    legacy_plist.write_bytes(plistlib.dumps(legacy_data))
+    for app in (production, backup):
         app.mkdir(parents=True)
+    identity_named = preview_root / "preview-from-an-older-naming-generation.app"
+    shutil.copytree(slash_app, identity_named)
+    unrecognized = preview_root / "Unrelated.app"
+    unrecognized.mkdir(parents=True)
 
     cleaned = subprocess.run(
         ["/bin/bash", str(wrapper), "--clean"],
@@ -1287,8 +1312,10 @@ def test_dev_preview_wrapper_builds_verifies_and_cleans_only_dev_bundles(tmp_pat
     assert not slash_app.exists()
     assert not dash_app.exists()
     assert not legacy.exists()
+    assert not identity_named.exists()
     assert production.is_dir()
     assert backup.is_dir()
+    assert unrecognized.is_dir()
 
 
 def test_dev_preview_wrapper_refuses_canonical_root_before_invoking_build(tmp_path: Path) -> None:
