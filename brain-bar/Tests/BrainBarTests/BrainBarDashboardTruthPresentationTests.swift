@@ -176,6 +176,17 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(source.contains("replayDebtBreakdown.isPartial"))
     }
 
+    func testTechnicalProvenanceDetailsGateRetainedPayloadsOnMeasuredState() throws {
+        let source = try sourceFile("Sources/BrainBar/Dashboard/ObservabilityView.swift")
+        let start = try XCTUnwrap(source.range(of: "struct ObservabilityTechnicalDetailsView"))
+        let details = String(source[start.lowerBound...])
+
+        XCTAssertTrue(details.contains("if document.emitters.state == \"measured\""))
+        XCTAssertTrue(details.contains("document.emitters.reason.isEmpty"))
+        XCTAssertTrue(details.contains("if document.authorUnknown.state == \"measured\""))
+        XCTAssertTrue(details.contains("document.authorUnknown.reason.isEmpty"))
+    }
+
     func testOnePageFormatsEveryDisplayedCount() throws {
         XCTAssertEqual(
             DashboardMetricFormatter.integerString(797_727, locale: Locale(identifier: "en_US")),

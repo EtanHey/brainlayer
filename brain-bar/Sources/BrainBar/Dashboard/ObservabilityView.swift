@@ -460,19 +460,29 @@ struct ObservabilityTechnicalDetailsView: View {
                 Divider()
                 Text("Memory provenance")
                     .font(.subheadline.bold())
-                if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
-                    detail("Agent writes · \(window)", "\(mcp.countInWindow) via brain_store")
-                }
-                ForEach(Array((document.emitters.byEmitter ?? []).enumerated()), id: \.offset) { _, row in
-                    if row.emitter != "mcp" {
-                        detail("\(row.emitter) · \(window)", "\(row.countInWindow) indexed chunks")
+                if document.emitters.state == "measured" {
+                    if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
+                        detail("Agent writes · \(window)", "\(mcp.countInWindow) via brain_store")
                     }
+                    ForEach(Array((document.emitters.byEmitter ?? []).enumerated()), id: \.offset) { _, row in
+                        if row.emitter != "mcp" {
+                            detail("\(row.emitter) · \(window)", "\(row.countInWindow) indexed chunks")
+                        }
+                    }
+                    ForEach(Array((document.emitters.bySourceClass ?? []).enumerated()), id: \.offset) { _, row in
+                        detail("\(row.sourceClass ?? "unclassified") · \(window)", "\(row.inWindow) indexed chunks")
+                    }
+                } else {
+                    let reason = document.emitters.reason.isEmpty ? "Emitter provenance unavailable" : document.emitters.reason
+                    detail("Emitters", reason)
                 }
-                ForEach(Array((document.emitters.bySourceClass ?? []).enumerated()), id: \.offset) { _, row in
-                    detail("\(row.sourceClass ?? "unclassified") · \(window)", "\(row.inWindow) indexed chunks")
-                }
-                if let unknown = document.authorUnknown.neverClassified {
-                    detail("Unattributed · total", "\(unknown.count) indexed chunks · \(percent(unknown.share)) of indexed chunks")
+                if document.authorUnknown.state == "measured" {
+                    if let unknown = document.authorUnknown.neverClassified {
+                        detail("Unattributed · total", "\(unknown.count) indexed chunks · \(percent(unknown.share)) of indexed chunks")
+                    }
+                } else {
+                    let reason = document.authorUnknown.reason.isEmpty ? "Attribution unavailable" : document.authorUnknown.reason
+                    detail("Attribution", reason)
                 }
 
                 Divider()
