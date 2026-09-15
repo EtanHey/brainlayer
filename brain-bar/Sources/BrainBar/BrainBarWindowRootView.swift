@@ -240,6 +240,7 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
     let healthVerdict: String
     let healthReason: String
     let healthTone: BrainBarHeroHealthTone
+    let backupFailureReason: String?
     let dbBackup: ObservabilityStatusLine
     let transcriptBackup: ObservabilityStatusLine
     let indexedInWindow: String
@@ -323,6 +324,7 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
             healthVerdict: health.0,
             healthReason: health.1,
             healthTone: health.2,
+            backupFailureReason: backupFailure,
             dbBackup: dbBackup,
             transcriptBackup: transcriptBackup,
             indexedInWindow: "\(DashboardMetricFormatter.integerString(stats.recentWriteCount, locale: locale)) chunk rows indexed in \(window)",
@@ -373,8 +375,13 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         case .stale, .error: 1
         case .loading, .live: 0
         }
+        let snapshotIsLive: Bool = if case .live = snapshotFreshness { true } else { false }
+        let otherLiveHeroAttention = snapshotIsLive
+            && hero.healthTone != .green
+            && hero.healthReason != hero.backupFailureReason
         let attentionCount =
-            (hero.healthTone == .green ? 0 : 1)
+            (hero.backupFailureReason == nil ? 0 : 1)
+            + (otherLiveHeroAttention ? 1 : 0)
             + (agentActivity.isMeasured ? 0 : 1)
             + snapshotAttentionCount
         let attentionHeadline = attentionCount == 1
@@ -384,10 +391,10 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         let status: BrainBarOnePageStatus
         if case .unreadable("Loading observability data.") = observability {
             status = .init(headline: "Checking…", reason: nil, tone: .neutral)
-        } else if hero.healthTone != .green {
+        } else if let backupFailureReason = hero.backupFailureReason {
             status = .init(
                 headline: attentionHeadline,
-                reason: hero.healthReason,
+                reason: backupFailureReason,
                 tone: .amber
             )
         } else {
@@ -407,7 +414,13 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                     tone: .amber
                 )
             case .live:
-                if !agentActivity.isMeasured {
+                if hero.healthTone != .green {
+                    status = .init(
+                        headline: attentionHeadline,
+                        reason: hero.healthReason,
+                        tone: .amber
+                    )
+                } else if !agentActivity.isMeasured {
                     status = .init(
                         headline: attentionHeadline,
                         reason: "Agent activity could not be measured.",

@@ -109,6 +109,40 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadingSnapshotDoesNotPromoteStatsDerivedHeroUnknowns() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.healthyResult(),
+            now: BrainBarOnePageTestFixture.now,
+            agentActivity: .unavailable("not sampled yet"),
+            snapshotFreshness: .loading,
+            collector: BrainBarDashboardFixture.makeCollector(.loading)
+        )
+
+        XCTAssertEqual(presentation.status.headline, "Checking…")
+        XCTAssertNil(presentation.status.reason)
+        XCTAssertEqual(presentation.status.tone, .neutral)
+    }
+
+    @MainActor
+    func testBackupFailureIsStructurallyFirstAcrossEveryOperatorState() throws {
+        for operatorState in BrainBarDashboardFixture.OperatorState.allCases {
+            let collector = BrainBarDashboardFixture.makeCollector(operatorState)
+            let presentation = try makePresentation(
+                result: BrainBarOnePageTestFixture.unverifiedResult(),
+                now: BrainBarOnePageTestFixture.now,
+                snapshotFreshness: collector.snapshotFreshnessState,
+                collector: collector
+            )
+
+            XCTAssertTrue(
+                presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true,
+                "Backup failure must remain first for \(operatorState)."
+            )
+            XCTAssertEqual(presentation.status.tone, .amber)
+        }
+    }
+
+    @MainActor
     func testNewTodayCountsHourlyBucketsSinceLocalMidnight() throws {
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.todayBoundaryResult(),
@@ -157,9 +191,10 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         result: ObservabilityReadResult,
         now: Date,
         agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity,
-        snapshotFreshness: SnapshotFreshnessState? = nil
+        snapshotFreshness: SnapshotFreshnessState? = nil,
+        collector providedCollector: StatsCollector? = nil
     ) throws -> BrainBarOnePagePresentation {
-        let collector = BrainBarDashboardFixture.makeCollector()
+        let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector()
         let flow = DashboardFlowSummary.derive(
             daemon: collector.daemon,
             stats: collector.stats,
