@@ -190,7 +190,10 @@ refuse_dev_production_app_dir() {
     done
 
     if [ -f "$APP_DIR/Contents/Info.plist" ]; then
-        existing_bundle_id="$("$PLIST_BUDDY" -c 'Print :CFBundleIdentifier' "$APP_DIR/Contents/Info.plist" 2>/dev/null || true)"
+        if ! existing_bundle_id="$("$PLIST_BUDDY" -c 'Print :CFBundleIdentifier' "$APP_DIR/Contents/Info.plist" 2>/dev/null)"; then
+            echo "[build-app] ERROR: refusing DEV bundle because the existing bundle identifier cannot be inspected: $APP_DIR" >&2
+            exit 1
+        fi
         if [ "$existing_bundle_id" = "com.brainlayer.brainbar" ]; then
             echo "[build-app] ERROR: refusing DEV bundle over an existing production bundle identifier: $APP_DIR" >&2
             exit 1

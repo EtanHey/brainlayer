@@ -1208,6 +1208,7 @@ def test_dev_build_refuses_production_app_path_before_rebuild(tmp_path: Path, re
 def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path, production_payload: str) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
     home = tmp_path / "home"
+    tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
     app = home / "Applications" / "BrainBar-DEV-disguised.app"
     plist_path = app / "Contents" / "Info.plist"
     plist_path.parent.mkdir(parents=True)
@@ -1234,7 +1235,10 @@ def test_dev_build_refuses_production_identity_at_dev_named_path(tmp_path: Path,
         home=home,
         dry_run=False,
         extra_args=["--force-worktree-build"],
-        extra_env={"BRAINBAR_DEV_APP_DIR": str(app)},
+        extra_env={
+            **_fake_build_env(tmp_path, tool_dir, bin_dir),
+            "BRAINBAR_DEV_APP_DIR": str(app),
+        },
     )
 
     assert result.returncode != 0
@@ -1263,6 +1267,31 @@ def test_dev_build_refuses_path_reserved_by_production_override(tmp_path: Path) 
 
     assert result.returncode != 0
     assert "refusing DEV bundle at production app path" in result.stderr
+
+
+def test_dev_build_fails_closed_when_existing_bundle_identity_cannot_be_read(tmp_path: Path) -> None:
+    repo, script = _prepare_build_repo(tmp_path, "brainlayer-worktree", branch="feat/ui-guards")
+    home = tmp_path / "home"
+    app = home / "Applications" / "BrainBar-DEV-uninspectable.app"
+    plist_path = app / "Contents" / "Info.plist"
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.brainlayer.brainbar"}))
+
+    result = _run_build_script(
+        repo,
+        script,
+        canonical_root=tmp_path / "brainlayer-canonical",
+        home=home,
+        extra_args=["--force-worktree-build"],
+        extra_env={
+            "BRAINBAR_DEV_APP_DIR": str(app),
+            "BRAINBAR_PLIST_BUDDY": str(tmp_path / "missing-plistbuddy"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "existing bundle identifier cannot be inspected" in result.stderr
+    assert plistlib.loads(plist_path.read_bytes())["CFBundleIdentifier"] == "com.brainlayer.brainbar"
 
 
 def test_build_app_rejects_dirty_canonical_repo_without_force(tmp_path: Path) -> None:
