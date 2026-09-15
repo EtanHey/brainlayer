@@ -176,6 +176,8 @@ private struct BrainBarDashboardContent: View {
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    var calendar: Calendar = .current
+    var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
 
     var body: some View {
@@ -188,6 +190,8 @@ private struct BrainBarDashboardContent: View {
                 dbPath: dbPath,
                 observabilityResult: observabilityResult,
                 referenceNow: referenceNow,
+                calendar: calendar,
+                locale: locale,
                 panelState: panelState ?? standalonePanelState
             )
         }
@@ -412,11 +416,11 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             let upload = document.backups.lastVerifiedUpload
             backupLines = [
                 .init(
-                    text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar) : nil } ?? "no verified copy")",
+                    text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
                     tone: snapshot?.verified == true ? .green : .red
                 ),
                 .init(
-                    text: "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar) : nil } ?? "no verified copy")",
+                    text: "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
                     tone: upload?.verified == true ? .green : .red
                 ),
             ]
@@ -502,11 +506,16 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         return "\(seconds / 3_600) h"
     }
 
-    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar) -> String {
+    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
         if calendar.isDate(date, inSameDayAs: now) {
-            return "last good today \(date.formatted(date: .omitted, time: .shortened))"
+            return "last good today \(shortTime(date, calendar: calendar, locale: locale))"
         }
-        return "last good \(date.formatted(date: .abbreviated, time: .shortened))"
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "MMM d 'at' HH:mm"
+        return "last good \(formatter.string(from: date))"
     }
 }
 
@@ -670,6 +679,8 @@ private struct BrainBarDashboardView: View {
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
     var referenceNow: Date? = nil
+    var calendar: Calendar = .current
+    var locale: Locale = .current
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -741,7 +752,8 @@ private struct BrainBarDashboardView: View {
         return BrainBarHeroPresentation.derive(
             flow: flowSummary,
             stats: collector.stats,
-            backupTruth: backupTruth
+            backupTruth: backupTruth,
+            locale: locale
         )
     }
 
@@ -754,7 +766,9 @@ private struct BrainBarDashboardView: View {
             observability: effectiveObservabilityResult,
             stats: collector.stats,
             agentActivity: collector.agentActivity,
-            now: currentNow
+            now: currentNow,
+            calendar: calendar,
+            locale: locale
         )
     }
 
@@ -2347,11 +2361,22 @@ struct BrainBarDashboardChartDisclosure: Equatable {
 /// selects the layout breakpoint: compact < 920 ≤ default < 1040 ≤ wide.
 @MainActor
 enum BrainBarDashboardPreview {
+    static var goldenCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.locale = goldenLocale
+        return calendar
+    }
+
+    static let goldenLocale = Locale(identifier: "en_US")
+
     static func make(
         collector: StatsCollector,
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
         now: Date? = nil,
+        calendar: Calendar = goldenCalendar,
+        locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil
     ) -> AnyView {
         AnyView(
@@ -2362,6 +2387,8 @@ enum BrainBarDashboardPreview {
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
                     referenceNow: now,
+                    calendar: calendar,
+                    locale: locale,
                     panelState: panelState
                 )
             }
