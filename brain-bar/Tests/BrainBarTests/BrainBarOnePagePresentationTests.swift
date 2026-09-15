@@ -156,9 +156,71 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             agentActivity: .unavailable("ps capture failed")
         )
 
-        XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+        XCTAssertEqual(presentation.status.headline, "2 things need you")
         XCTAssertTrue(presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true)
         XCTAssertEqual(presentation.status.tone, .amber)
+    }
+
+    @MainActor
+    func testBackupFailureOutranksSnapshotStatesInTopStrip() throws {
+        let cases: [(SnapshotFreshnessState, String)] = [
+            (.loading, "1 thing needs you"),
+            (.stale(ageSeconds: 61), "2 things need you"),
+            (.error(message: "Fixture fetch failed", lastSuccessAgeSeconds: 15), "2 things need you"),
+        ]
+
+        for (snapshotFreshness, expectedHeadline) in cases {
+            let presentation = try makePresentation(
+                result: BrainBarOnePageTestFixture.unverifiedResult(),
+                now: BrainBarOnePageTestFixture.now,
+                snapshotFreshness: snapshotFreshness
+            )
+
+            XCTAssertEqual(presentation.status.headline, expectedHeadline)
+            XCTAssertTrue(
+                presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true,
+                "Backup reason must outrank \(snapshotFreshness)."
+            )
+            XCTAssertEqual(presentation.status.tone, .amber)
+        }
+    }
+
+    @MainActor
+    func testLoadingSnapshotDoesNotPromoteStatsDerivedHeroUnknowns() throws {
+        let collector = StatsCollector(
+            dbPath: "/dev/null",
+            daemonMonitor: DaemonHealthMonitor(targetPID: getpid())
+        )
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.healthyResult(),
+            now: BrainBarOnePageTestFixture.now,
+            agentActivity: .unavailable("not sampled yet"),
+            snapshotFreshness: .loading,
+            collector: collector
+        )
+
+        XCTAssertEqual(presentation.status.headline, "Checking…")
+        XCTAssertNil(presentation.status.reason)
+        XCTAssertEqual(presentation.status.tone, .neutral)
+    }
+
+    @MainActor
+    func testBackupFailureIsStructurallyFirstAcrossEveryOperatorState() throws {
+        for operatorState in BrainBarDashboardFixture.OperatorState.allCases {
+            let collector = BrainBarDashboardFixture.makeCollector(operatorState)
+            let presentation = try makePresentation(
+                result: BrainBarOnePageTestFixture.unverifiedResult(),
+                now: BrainBarOnePageTestFixture.now,
+                snapshotFreshness: collector.snapshotFreshnessState,
+                collector: collector
+            )
+
+            XCTAssertTrue(
+                presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true,
+                "Backup failure must remain first for \(operatorState)."
+            )
+            XCTAssertEqual(presentation.status.tone, .amber)
+        }
     }
 
     @MainActor
@@ -223,9 +285,11 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     private func makePresentation(
         result: ObservabilityReadResult,
         now: Date,
-        agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity
+        agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity,
+        snapshotFreshness: SnapshotFreshnessState? = nil,
+        collector providedCollector: StatsCollector? = nil
     ) throws -> BrainBarOnePagePresentation {
-        let collector = BrainBarDashboardFixture.makeCollector()
+        let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector()
         let flow = DashboardFlowSummary.derive(
             daemon: collector.daemon,
             stats: collector.stats,
@@ -242,7 +306,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             locale: Locale(identifier: "en_US")
         )
         return BrainBarOnePagePresentation.derive(
-            snapshotFreshness: collector.snapshotFreshnessState,
+            snapshotFreshness: snapshotFreshness ?? collector.snapshotFreshnessState,
             hero: hero,
             observability: result,
             stats: collector.stats,

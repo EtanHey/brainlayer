@@ -244,6 +244,7 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
     let healthVerdict: String
     let healthReason: String
     let healthTone: BrainBarHeroHealthTone
+    let backupFailureReason: String?
     let dbBackup: ObservabilityStatusLine
     let transcriptBackup: ObservabilityStatusLine
     let indexedInWindow: String
@@ -327,6 +328,7 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
             healthVerdict: health.0,
             healthReason: health.1,
             healthTone: health.2,
+            backupFailureReason: backupFailure,
             dbBackup: dbBackup,
             transcriptBackup: transcriptBackup,
             indexedInWindow: "\(DashboardMetricFormatter.integerString(stats.recentWriteCount, locale: locale)) chunk rows indexed in \(window)",
@@ -373,35 +375,58 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         locale: Locale = .current,
         observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence
     ) -> Self {
+        let snapshotAttentionCount: Int = switch snapshotFreshness {
+        case .stale, .error: 1
+        case .loading, .live: 0
+        }
+        let snapshotIsLive: Bool = if case .live = snapshotFreshness { true } else { false }
+        let otherLiveHeroAttention = snapshotIsLive
+            && hero.healthTone != .green
+            && hero.healthReason != hero.backupFailureReason
+        let attentionCount =
+            (hero.backupFailureReason == nil ? 0 : 1)
+            + (otherLiveHeroAttention ? 1 : 0)
+            + (agentActivity.isMeasured ? 0 : 1)
+            + snapshotAttentionCount
+        let attentionHeadline = attentionCount == 1
+            ? "1 thing needs you"
+            : "\(attentionCount) things need you"
+
         let status: BrainBarOnePageStatus
         if case .unreadable("Loading observability data.") = observability {
             status = .init(headline: "Checking…", reason: nil, tone: .neutral)
+        } else if let backupFailureReason = hero.backupFailureReason {
+            status = .init(
+                headline: attentionHeadline,
+                reason: backupFailureReason,
+                tone: .amber
+            )
         } else {
             switch snapshotFreshness {
             case .loading:
                 status = .init(headline: "Checking…", reason: nil, tone: .neutral)
             case let .stale(ageSeconds):
                 status = .init(
-                    headline: "1 thing needs you",
+                    headline: attentionHeadline,
                     reason: "Dashboard data is \(ageText(ageSeconds)) old.",
                     tone: .amber
                 )
             case .error:
                 status = .init(
-                    headline: "1 thing needs you",
+                    headline: attentionHeadline,
                     reason: "Dashboard data could not refresh.",
                     tone: .amber
                 )
             case .live:
                 if hero.healthTone != .green {
                     status = .init(
-                        headline: "1 thing needs you",
+                        headline: attentionHeadline,
                         reason: hero.healthReason,
                         tone: .amber
                     )
                 } else if !agentActivity.isMeasured {
                     status = .init(
-                        headline: "1 thing needs you",
+                        headline: attentionHeadline,
                         reason: "Agent activity could not be measured.",
                         tone: .amber
                     )
