@@ -1013,7 +1013,11 @@ private struct BrainBarDashboardView: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if panelState.signalCoverageExpanded, vectorSignalDetailExpanded, vectorSignalRootFrame != .zero {
+                // Gate on the PARENT too: nothing resets signalCoverageExpanded or
+                // vectorSignalDetailExpanded when Details collapses, so without this the
+                // backlog popover floats over a closed section.
+                if panelState.detailsExpanded, panelState.signalCoverageExpanded, vectorSignalDetailExpanded,
+                   vectorSignalRootFrame != .zero {
                     BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)
                         .frame(width: vectorDetailWidth(layout: layout), alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
