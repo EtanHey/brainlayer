@@ -1178,7 +1178,9 @@ private struct BrainBarDashboardView: View {
                         .foregroundStyle(Color.orange)
                         .lineLimit(1)
                 }
-                if counts.indexedToday != nil, let writes = counts.agentWritesCount {
+                // Gated on agentWritesCount alone: a missing indexedToday must not hide a
+                // MEASURED brain_store count. One unknown never erases a known.
+                if let writes = counts.agentWritesCount {
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text(DashboardMetricFormatter.integerString(writes, locale: locale))
                             .font(.system(size: 20, weight: .semibold, design: .rounded))
@@ -1186,7 +1188,7 @@ private struct BrainBarDashboardView: View {
                         Text("brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
                             .font(.system(size: 13))
                     }
-                } else if counts.indexedToday != nil {
+                } else {
                     Text(counts.agentWritesText)
                         .font(.system(size: 11))
                         .foregroundStyle(Color.orange)
