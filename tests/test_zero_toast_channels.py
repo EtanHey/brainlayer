@@ -1,5 +1,6 @@
 """Etan's zero-toast contract: BrainLayer has no OS or phone push delivery path."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,6 +67,7 @@ raise SystemExit(result.exit_code)
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO", completed.stderr)
     assert "2026-09-15" in completed.stderr
     assert "condition=heal:watcher_stalled" in completed.stderr
     assert "com.brainlayer.watch failed repeatedly" in completed.stderr

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
 import os
 import plistlib
 import sqlite3
@@ -981,6 +982,66 @@ def test_heal_action_log_includes_the_health_check_timestamp(tmp_path, capsys):
     )
 
     assert "timestamp=2026-09-15T07:15:00+00:00 heal action label=com.example.watch" in capsys.readouterr().err
+
+
+def test_heal_escalation_site_emits_incident_log(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+    result = health_check.HealthCheckResult(
+        checked_at="2026-09-15T07:15:00+00:00",
+        ok=False,
+        issues=[health_check.HealthIssue("watcher_stalled", "critical", "stalled")],
+    )
+
+    health_check._apply_heals(
+        result=result,
+        issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
+        previous_failures={"com.example.watch:watcher_stalled": 2},
+        previous_tripped=set(),
+        config=health_check.HealthCheckConfig(
+            heal=True,
+            heal_min_consecutive_failures=1,
+            heal_circuit_breaker_limit=3,
+        ),
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert "heal_escalation:com.example.watch:watcher_stalled" in result.actions
+    assert any(
+        "condition=heal:watcher_stalled" in message and "failed repeatedly" in message for message in caplog.messages
+    )
+
+
+def test_expired_pause_sentinel_site_emits_incident_log(tmp_path, caplog):
+    db_path = tmp_path / "brainlayer.db"
+    pause_path = tmp_path / "pause.sentinel"
+    _make_db(db_path, total=1, vector_rows=1)
+    pause_path.write_text(
+        json.dumps(
+            {
+                "labels": ["com.brainlayer.enrichment"],
+                "expires_at": "2026-09-15T06:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            pause_sentinel_path=pause_path,
+            queue_dir=tmp_path / "queue",
+            source_jsonl_globs=[],
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 9, 15, 7, 15, tzinfo=UTC),
+    )
+
+    assert "pause_sentinel_stale" in [issue.code for issue in result.issues]
+    assert any("condition=pause_expired" in message for message in caplog.messages)
 
 
 def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_breaker(tmp_path, monkeypatch):
