@@ -1241,6 +1241,14 @@ def run_health_check(
             write_badge_state(config.badge_state_path, build_badge_state_document(result))
         except (OSError, ValueError) as exc:
             add_issue("badge_state_write_failed", "critical", f"badge state write failed: {exc}")
+            try:
+                config.badge_state_path.expanduser().unlink(missing_ok=True)
+            except OSError as invalidate_exc:
+                add_issue(
+                    "badge_state_invalidation_failed",
+                    "critical",
+                    f"failed badge state could not be invalidated: {invalidate_exc}",
+                )
 
     def finish_slow(stage: str, message: str) -> HealthCheckResult:
         result.slow_check = True

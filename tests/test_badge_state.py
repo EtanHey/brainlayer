@@ -33,6 +33,47 @@ def _result(*issues: HealthIssue) -> HealthCheckResult:
     )
 
 
+def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthCheckResult:
+    db_path = tmp_path / "brainlayer.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE chunks (
+                id TEXT PRIMARY KEY,
+                content TEXT,
+                archived_at TEXT,
+                superseded_by TEXT,
+                aggregated_into TEXT,
+                archived INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                enriched_at TEXT,
+                enrich_status TEXT,
+                char_count INTEGER
+            );
+            CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
+            INSERT INTO chunks (id, content) VALUES ('chunk-1', 'content');
+            INSERT INTO chunk_vectors_rowids (id) VALUES ('chunk-1');
+            """
+        )
+    return run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            badge_state_path=badge_state_path,
+            source_jsonl_globs=[],
+            queue_dir=tmp_path / "queue",
+            offsets_path=tmp_path / "offsets.json",
+            watcher_health_path=tmp_path / "watcher-health.json",
+            drain_health_path=tmp_path / "drain-health.json",
+            t3_health_path=tmp_path / "t3-health.json",
+            jsonl_backup_log_path=tmp_path / "backup.log",
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
+        socket_request_fn=lambda *_args: {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}},
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
+    )
+
+
 def test_badge_state_path_is_db_relative_with_environment_override(tmp_path: Path) -> None:
     db_path = tmp_path / "nested" / "brainlayer.db"
 
@@ -86,6 +127,20 @@ def test_pending_module_command_writes_contract(tmp_path: Path) -> None:
     document = json.loads(output.read_text(encoding="utf-8"))
     assert document["schema_version"] == 1
     assert document["alerts"]["state"] == "pending_first_run"
+
+
+def test_pending_module_command_preserves_existing_measured_alert(tmp_path: Path) -> None:
+    output = tmp_path / "badge-state.json"
+    measured_alert = build_badge_state_document(
+        _result(HealthIssue("jsonl_backup_attempt_missing", "critical", "backup receipt missing"))
+    )
+    write_badge_state(output, measured_alert)
+    original = output.read_bytes()
+    env = {**os.environ, "BRAINLAYER_BADGE_STATE_PATH": str(output), "BRAINLAYER_DB": str(tmp_path / "brainlayer.db")}
+
+    subprocess.run([sys.executable, "-m", "brainlayer.badge_state"], env=env, check=True)
+
+    assert output.read_bytes() == original
 
 
 def test_data_loss_codes_are_structurally_unsuppressible_even_when_marker_lists_them(
@@ -165,45 +220,24 @@ def test_concurrent_badge_writes_use_unique_temporary_files(tmp_path: Path, monk
 
 
 def test_completed_health_check_publishes_badge_contract(tmp_path: Path) -> None:
-    db_path = tmp_path / "brainlayer.db"
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE chunks (
-                id TEXT PRIMARY KEY,
-                content TEXT,
-                archived_at TEXT,
-                superseded_by TEXT,
-                aggregated_into TEXT,
-                archived INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'active',
-                enriched_at TEXT,
-                enrich_status TEXT,
-                char_count INTEGER
-            );
-            CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
-            INSERT INTO chunks (id, content) VALUES ('chunk-1', 'content');
-            INSERT INTO chunk_vectors_rowids (id) VALUES ('chunk-1');
-            """
-        )
     output = tmp_path / "contract" / "badge-state.json"
-    result = run_health_check(
-        HealthCheckConfig(
-            db_path=db_path,
-            state_path=tmp_path / "health-state.json",
-            badge_state_path=output,
-            source_jsonl_globs=[],
-            queue_dir=tmp_path / "queue",
-            offsets_path=tmp_path / "offsets.json",
-            watcher_health_path=tmp_path / "watcher-health.json",
-            drain_health_path=tmp_path / "drain-health.json",
-            t3_health_path=tmp_path / "t3-health.json",
-            jsonl_backup_log_path=tmp_path / "backup.log",
-        ),
-        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --backlog-batch 4",
-        socket_request_fn=lambda *_args: {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}},
-        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
-    )
+    result = _run_minimal_health_check(tmp_path, output)
 
     document = json.loads(output.read_text(encoding="utf-8"))
     assert document == build_badge_state_document(result)
+
+
+def test_failed_badge_publish_removes_prior_calm_document(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "badge-state.json"
+    write_badge_state(output, build_badge_state_document(_result()))
+
+    def fail_write(_path: Path, _document: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("brainlayer.badge_state.write_badge_state", fail_write)
+    result = _run_minimal_health_check(tmp_path, output)
+
+    issue_codes = {issue.code for issue in result.issues}
+    assert "jsonl_backup_attempt_missing" in issue_codes
+    assert "badge_state_write_failed" in issue_codes
+    assert not output.exists(), "A prior calm document would suppress the live failed-write alert."
