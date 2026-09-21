@@ -123,7 +123,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         let controller = BrainBarDashboardPanelController(runtime: runtime)
-        controller.setVisibleFrameForTesting(CGRect(x: 0, y: 0, width: 1_600, height: 1_200))
+        controller.setVisibleFrameForTesting(CGRect(x: -2_000, y: -2_000, width: 5_000, height: 5_000))
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
@@ -142,6 +142,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         let controller = BrainBarDashboardPanelController(runtime: runtime)
+        controller.setVisibleFrameForTesting(CGRect(x: -2_000, y: -2_000, width: 5_000, height: 5_000))
         _ = controller.contentViewControllerForTesting.view
         controller.setDetailsExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
