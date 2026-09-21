@@ -1,0 +1,122 @@
+#if DEBUG
+import AppKit
+import Darwin
+import SwiftUI
+
+@MainActor
+enum BrainBarRenderHarness {
+    private static let environmentVariable = "BRAINBAR_RENDER_ONLY"
+    private static let breakpoints: [(name: String, width: CGFloat)] = [
+        ("compact", 760), ("default", 960), ("wide", 1_280),
+    ]
+
+    private struct Failure: LocalizedError {
+        let errorDescription: String?
+        init(_ message: String) { errorDescription = message }
+    }
+
+    static func runIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment[environmentVariable] else { return }
+        do {
+            guard !path.isEmpty, NSString(string: path).isAbsolutePath else {
+                throw Failure("\(environmentVariable) must name an absolute output directory; got \(path.debugDescription)")
+            }
+
+            // This runs before App.main(): no AppDelegate, status UI, DB, socket,
+            // collector, or timer exists. Prohibited apps cannot be activated.
+            NSApplication.shared.setActivationPolicy(.prohibited)
+            let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            for breakpoint in breakpoints {
+                for detailsExpanded in [false, true] {
+                    let artifact = try render(
+                        breakpoint: breakpoint,
+                        detailsExpanded: detailsExpanded,
+                        outputDirectory: outputDirectory
+                    )
+                    print("[brainbar-render] \(artifact)")
+                }
+            }
+            Darwin.exit(EXIT_SUCCESS)
+        } catch {
+            FileHandle.standardError.write(Data("[brainbar-render] ERROR: \(error.localizedDescription)\n".utf8))
+            Darwin.exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func render(
+        breakpoint: (name: String, width: CGFloat),
+        detailsExpanded: Bool,
+        outputDirectory: URL
+    ) throws -> String {
+        let panelState = BrainBarDashboardPanelState()
+        panelState.detailsExpanded = detailsExpanded
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(),
+            now: BrainBarDashboardFixture.fetchedAt,
+            panelState: panelState
+        )
+        let suffix = detailsExpanded ? "-details-expanded" : ""
+        let name = "dashboard-\(breakpoint.name)\(suffix)"
+
+        let measuringHost = NSHostingView(rootView: view)
+        measuringHost.frame = NSRect(x: 0, y: 0, width: breakpoint.width, height: 10_000)
+        settle(measuringHost)
+        let height = ceil(panelState.fittingHeight)
+        guard height.isFinite, height > 0 else {
+            throw Failure("\(name): dashboard reported invalid fitting height \(height)")
+        }
+
+        let size = NSSize(width: breakpoint.width, height: height)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(origin: .zero, size: size)
+        settle(host)
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            throw Failure("\(name): AppKit could not allocate an off-screen bitmap")
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw Failure("\(name): AppKit could not encode PNG data")
+        }
+
+        let url = outputDirectory.appendingPathComponent("\(name).png")
+        try png.write(to: url, options: .atomic)
+        let emittedPNG = try Data(contentsOf: url)
+        guard let emittedBitmap = NSBitmapImageRep(data: emittedPNG) else {
+            try? FileManager.default.removeItem(at: url)
+            throw Failure("\(name): emitted PNG could not be decoded for pixel verification")
+        }
+        let colors = distinctSampledColorCount(in: emittedBitmap)
+        guard emittedPNG.count > 5_000, colors > 16 else {
+            try? FileManager.default.removeItem(at: url)
+            throw Failure("\(name): refusing a blank or trivial render (\(emittedPNG.count) PNG bytes, \(colors) sampled colors)")
+        }
+
+        return "\(name) \(Int(size.width))×\(Int(size.height)); wrote \(url.path) "
+            + "(\(emittedPNG.count) bytes, \(colors) sampled colors)"
+    }
+
+    private static func settle(_ host: NSView) {
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.layoutSubtreeIfNeeded()
+    }
+
+    private static func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
+        guard let data = bitmap.bitmapData else { return 0 }
+        let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
+        let baseStride = max(bitmap.bytesPerRow / 32, bytesPerPixel)
+        let sampleStride = baseStride - (baseStride % bytesPerPixel)
+        var colors = Set<String>()
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 24) {
+            let rowStart = y * bitmap.bytesPerRow
+            for x in stride(from: 0, to: bitmap.bytesPerRow, by: sampleStride) {
+                let offset = rowStart + x
+                guard offset + 2 < bitmap.bytesPerRow * bitmap.pixelsHigh else { continue }
+                colors.insert("\(data[offset])-\(data[offset + 1])-\(data[offset + 2])")
+            }
+        }
+        return colors.count
+    }
+}
+#endif
