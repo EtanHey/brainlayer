@@ -98,6 +98,68 @@ enum BrainBarDashboardFixture {
     )
 
     static let stats = makeStats(replayDebtBreakdown: readableReplayDebt)
+    static let readableObservabilityResult: ObservabilityReadResult = .readable(
+        ObservabilityDocument(
+            schemaVersion: 1,
+            generatedAt: fetchedAt,
+            dbPath: "/fixture/brainlayer.db",
+            windowHours: 24,
+            stores: .init(
+                state: "measured",
+                reason: "",
+                inputs: [],
+                totalChunks: stats.chunkCount,
+                inWindow: .init(
+                    count: stats.recentActivityBuckets.reduce(0, +),
+                    byHour: [.init(
+                        hour: fetchedAt,
+                        count: stats.recentActivityBuckets.reduce(0, +)
+                    )]
+                )
+            ),
+            emitters: .init(
+                state: "measured",
+                reason: "",
+                inputs: [],
+                byEmitter: [.init(emitter: "mcp", countInWindow: 23)],
+                bySourceClass: [.init(sourceClass: "claude_code", count: 180_000, inWindow: 23)],
+                hiddenFromDefaultSearch: 0
+            ),
+            authorUnknown: .init(
+                state: "measured",
+                reason: "",
+                inputs: [],
+                neverClassified: .init(count: 0, share: 0),
+                classifiedUnknown: .init(count: 0, share: 0)
+            ),
+            backups: .init(
+                state: "measured",
+                reason: "",
+                inputs: [],
+                freshness: "fresh",
+                thresholdHours: 36,
+                retentionInvariant: "PASS",
+                survivingArchives30D: 3,
+                errorType: nil,
+                lastVerifiedUpload: .init(
+                    at: fetchedAt.addingTimeInterval(-3_600),
+                    ageHours: 1,
+                    archiveId: "transcripts-verified",
+                    verified: true
+                ),
+                dbSnapshot: .init(
+                    lastAt: fetchedAt.addingTimeInterval(-7_200),
+                    destination: "brainlayer-verified.db.gz",
+                    verified: true
+                ),
+                launchd: .init(
+                    label: "com.brainlayer.jsonl-backup",
+                    bootstrapped: true,
+                    disabledDirPresent: false
+                )
+            )
+        )
+    )
     static let partialReplayDebtStats = makeStats(replayDebtBreakdown: partialReplayDebt)
     static let watcherOfflineStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,

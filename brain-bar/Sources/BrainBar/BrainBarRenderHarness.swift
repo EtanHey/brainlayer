@@ -10,6 +10,30 @@ enum BrainBarRenderHarness {
         ("compact", 760), ("default", 960), ("wide", 1_280),
     ]
 
+    @MainActor
+    private enum Scenario: String, CaseIterable {
+        case readable
+        case unreadable
+        case loading
+
+        var detailsStates: [Bool] {
+            self == .loading ? [false] : [false, true]
+        }
+
+        var collectorState: BrainBarDashboardFixture.OperatorState {
+            self == .loading ? .loading : .live
+        }
+
+        var observabilityResult: ObservabilityReadResult {
+            switch self {
+            case .readable, .loading:
+                BrainBarDashboardFixture.readableObservabilityResult
+            case .unreadable:
+                .unreadable("Database path unavailable.")
+            }
+        }
+    }
+
     private struct Failure: LocalizedError {
         let errorDescription: String?
         init(_ message: String) { errorDescription = message }
@@ -27,14 +51,17 @@ enum BrainBarRenderHarness {
             NSApplication.shared.setActivationPolicy(.prohibited)
             let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-            for breakpoint in breakpoints {
-                for detailsExpanded in [false, true] {
-                    let artifact = try render(
-                        breakpoint: breakpoint,
-                        detailsExpanded: detailsExpanded,
-                        outputDirectory: outputDirectory
-                    )
-                    print("[brainbar-render] \(artifact)")
+            for scenario in Scenario.allCases {
+                for breakpoint in breakpoints {
+                    for detailsExpanded in scenario.detailsStates {
+                        let artifact = try render(
+                            breakpoint: breakpoint,
+                            scenario: scenario,
+                            detailsExpanded: detailsExpanded,
+                            outputDirectory: outputDirectory
+                        )
+                        print("[brainbar-render] \(artifact)")
+                    }
                 }
             }
             Darwin.exit(EXIT_SUCCESS)
@@ -46,18 +73,22 @@ enum BrainBarRenderHarness {
 
     private static func render(
         breakpoint: (name: String, width: CGFloat),
+        scenario: Scenario,
         detailsExpanded: Bool,
         outputDirectory: URL
     ) throws -> String {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded
         let view = BrainBarDashboardPreview.make(
-            collector: BrainBarDashboardFixture.makeCollector(),
+            collector: BrainBarDashboardFixture.makeCollector(scenario.collectorState),
+            observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
             panelState: panelState
         )
         let suffix = detailsExpanded ? "-details-expanded" : ""
-        let name = "dashboard-\(breakpoint.name)\(suffix)"
+        // The XCTest renderer owns dashboard-<breakpoint>.png. Include the CLI
+        // state in every filename so the two producers cannot overwrite each other.
+        let name = "dashboard-cli-\(breakpoint.name)-\(scenario.rawValue)\(suffix)"
 
         let measuringHost = NSHostingView(rootView: view)
         measuringHost.frame = NSRect(x: 0, y: 0, width: breakpoint.width, height: 10_000)
