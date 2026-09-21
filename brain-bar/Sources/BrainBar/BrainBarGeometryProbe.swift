@@ -113,7 +113,48 @@ enum BrainBarGeometryProbe {
         )
         print("GEOMETRY_PROBE clamp inside=\(clampedInside) topLeftPreserved=\(clampedTopLeftPreserved) frame=\(NSStringFromRect(constrainedPanel.frame)) visible=\(NSStringFromRect(constrainedVisibleFrame))")
 
-        return expandOK && collapseOK && scrollOK && clampedInside && clampedTopLeftPreserved ? 0 : 1
+        let resolutionController = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let resolutionPanel = resolutionController.panelForTesting
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            print("GEOMETRY_PROBE resolution noScreen=true")
+            return 1
+        }
+        let screenFrame = screen.visibleFrame
+        let resolutionAnchorWindow = NSWindow(
+            contentRect: NSRect(
+                x: screenFrame.maxX - 40,
+                y: screenFrame.maxY - 28,
+                width: 32,
+                height: 24
+            ),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let resolutionAnchorView = NSView(frame: NSRect(x: 0, y: 0, width: 32, height: 24))
+        resolutionAnchorWindow.contentView = resolutionAnchorView
+        resolutionController.statusItemButton = resolutionAnchorView
+        _ = resolutionController.contentViewControllerForTesting.view
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        resolutionPanel.setFrameOrigin(NSPoint(
+            x: screenFrame.minX + 20,
+            y: screenFrame.maxY - 40 - resolutionPanel.frame.height
+        ))
+        resolutionController.setDashboardHeightForTesting(screenFrame.height + 400)
+        resolutionController.completeDisclosureTransitionForTesting(expanded: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let anchorResolutionInside = screenFrame.contains(resolutionPanel.frame)
+
+        resolutionController.statusItemButton = nil
+        resolutionController.setDashboardHeightForTesting(screenFrame.height + 500)
+        resolutionController.completeDisclosureTransitionForTesting(expanded: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let panelFallbackInside = screenFrame.contains(resolutionPanel.frame)
+        print("GEOMETRY_PROBE resolution overrideNil=true anchorInside=\(anchorResolutionInside) panelFallbackInside=\(panelFallbackInside) frame=\(NSStringFromRect(resolutionPanel.frame)) screen=\(NSStringFromRect(screenFrame))")
+
+        return expandOK && collapseOK && scrollOK
+            && clampedInside && clampedTopLeftPreserved
+            && anchorResolutionInside && panelFallbackInside ? 0 : 1
     }
 }
 #endif

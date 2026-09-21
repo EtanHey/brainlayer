@@ -123,6 +123,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         let controller = BrainBarDashboardPanelController(runtime: runtime)
+        controller.setVisibleFrameForTesting(CGRect(x: 0, y: 0, width: 1_600, height: 1_200))
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
@@ -244,6 +245,44 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertTrue(visibleFrame.contains(panel.frame))
         XCTAssertEqual(panel.frame.minX, originalTopLeft.x, accuracy: 0.5)
         XCTAssertEqual(panel.frame.maxY, originalTopLeft.y, accuracy: 0.5)
+    }
+
+    func testDisclosureGrowthResolvesRealAnchorScreenAndPanelScreenFallback() throws {
+        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let panel = controller.panelForTesting
+        let screen = try XCTUnwrap(NSScreen.main ?? NSScreen.screens.first)
+        let visibleFrame = screen.visibleFrame
+        let anchorWindow = NSWindow(
+            contentRect: NSRect(
+                x: visibleFrame.maxX - 40,
+                y: visibleFrame.maxY - 28,
+                width: 32,
+                height: 24
+            ),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let anchorView = NSView(frame: NSRect(x: 0, y: 0, width: 32, height: 24))
+        anchorWindow.contentView = anchorView
+        controller.statusItemButton = anchorView
+
+        _ = controller.contentViewControllerForTesting.view
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        panel.setFrameOrigin(NSPoint(
+            x: visibleFrame.minX + 20,
+            y: visibleFrame.maxY - 40 - panel.frame.height
+        ))
+        controller.setDashboardHeightForTesting(visibleFrame.height + 400)
+        controller.completeDisclosureTransitionForTesting(expanded: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertTrue(visibleFrame.contains(panel.frame))
+
+        controller.statusItemButton = nil
+        controller.setDashboardHeightForTesting(visibleFrame.height + 500)
+        controller.completeDisclosureTransitionForTesting(expanded: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertTrue(visibleFrame.contains(panel.frame))
     }
 
     func testSearchOverlayDoesNotShrinkExpandedDetailsAndVerticalSizeIsPinned() {

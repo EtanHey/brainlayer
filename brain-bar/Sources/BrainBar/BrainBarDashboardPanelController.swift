@@ -288,6 +288,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         let originalFrame = panel.frame
         let visibleFrame = visibleFrameOverrideForTesting
             ?? statusItemButton?.window?.screen?.visibleFrame
+            ?? panel.screen?.visibleFrame
         let titlebarInset = max((panel.contentView?.frame.height ?? panel.contentLayoutRect.height)
             - panel.contentLayoutRect.height, 0)
         let availableFrameHeight = visibleFrame.map { frame in
