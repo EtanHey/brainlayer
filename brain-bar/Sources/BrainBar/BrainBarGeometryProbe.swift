@@ -13,6 +13,8 @@ enum BrainBarGeometryProbe {
     private static func run() -> Int32 {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
         let panel = controller.panelForTesting
+        let unconstrainedVisibleFrame = CGRect(x: -2_000, y: -2_000, width: 5_000, height: 5_000)
+        controller.setVisibleFrameForTesting(unconstrainedVisibleFrame)
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         controller.setDashboardHeightForTesting(400)
@@ -85,7 +87,33 @@ enum BrainBarGeometryProbe {
             && !collapsed.opensDisclosure(comparedTo: expanded)
         print("GEOMETRY_PROBE scroll expandReset=\(expanded.opensDisclosure(comparedTo: collapsed)) collapseReset=\(collapsed.opensDisclosure(comparedTo: expanded))")
 
-        return expandOK && collapseOK && scrollOK ? 0 : 1
+        let constrainedController = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let constrainedPanel = constrainedController.panelForTesting
+        let constrainedVisibleFrame = CGRect(x: 100, y: 200, width: 900, height: 654)
+        constrainedController.setVisibleFrameForTesting(constrainedVisibleFrame)
+        _ = constrainedController.contentViewControllerForTesting.view
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        constrainedController.setDashboardHeightForTesting(400)
+        constrainedController.completeDisclosureTransitionForTesting(expanded: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        constrainedPanel.setFrameOrigin(NSPoint(
+            x: constrainedVisibleFrame.minX,
+            y: constrainedVisibleFrame.maxY - 80 - constrainedPanel.frame.height
+        ))
+        let constrainedTopLeft = NSPoint(x: constrainedPanel.frame.minX, y: constrainedPanel.frame.maxY)
+        constrainedController.resetGeometryMetricsForTesting()
+        constrainedController.setDashboardHeightForTesting(900)
+        constrainedController.completeDisclosureTransitionForTesting(expanded: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        let clampedInside = constrainedVisibleFrame.contains(constrainedPanel.frame)
+        let clampedTopLeftPreserved = samePoint(
+            constrainedTopLeft,
+            NSPoint(x: constrainedPanel.frame.minX, y: constrainedPanel.frame.maxY)
+        )
+        print("GEOMETRY_PROBE clamp inside=\(clampedInside) topLeftPreserved=\(clampedTopLeftPreserved) frame=\(NSStringFromRect(constrainedPanel.frame)) visible=\(NSStringFromRect(constrainedVisibleFrame))")
+
+        return expandOK && collapseOK && scrollOK && clampedInside && clampedTopLeftPreserved ? 0 : 1
     }
 }
 #endif

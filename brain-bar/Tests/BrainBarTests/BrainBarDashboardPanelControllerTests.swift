@@ -163,6 +163,8 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     func testDisclosureCompletionAppliesOneContentSizeWithoutReentryOrReanchoring() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
         let panel = controller.panelForTesting
+        let visibleFrame = CGRect(x: 0, y: 0, width: 2_000, height: 2_000)
+        controller.setVisibleFrameForTesting(visibleFrame)
         let anchorWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 32, height: 24),
             styleMask: [.borderless],
@@ -177,10 +179,9 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         controller.setDashboardHeightForTesting(400)
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        let visibleFrame = NSScreen.main?.visibleFrame
         panel.setFrameOrigin(NSPoint(
-            x: (visibleFrame?.minX ?? 0) + 80,
-            y: (visibleFrame?.maxY ?? 1_000) - 80 - panel.frame.height
+            x: visibleFrame.minX + 80,
+            y: visibleFrame.maxY - 80 - panel.frame.height
         ))
         let originalTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
         controller.resetGeometryMetricsForTesting()
@@ -217,6 +218,32 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertEqual(controller.reentrantFitAttemptCountForTesting, 0)
         XCTAssertEqual(panel.frame.minX, expandedTopLeft.x, accuracy: 0.5)
         XCTAssertEqual(panel.frame.maxY, expandedTopLeft.y, accuracy: 0.5)
+    }
+
+    func testDisclosureGrowthClampsBelowPreservedTopLeftOnConstrainedScreen() {
+        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let panel = controller.panelForTesting
+        let visibleFrame = CGRect(x: 100, y: 200, width: 900, height: 654)
+        controller.setVisibleFrameForTesting(visibleFrame)
+
+        _ = controller.contentViewControllerForTesting.view
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        controller.setDashboardHeightForTesting(400)
+        controller.completeDisclosureTransitionForTesting(expanded: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        panel.setFrameOrigin(NSPoint(
+            x: visibleFrame.minX,
+            y: visibleFrame.maxY - 80 - panel.frame.height
+        ))
+        let originalTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+
+        controller.setDashboardHeightForTesting(900)
+        controller.completeDisclosureTransitionForTesting(expanded: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+
+        XCTAssertTrue(visibleFrame.contains(panel.frame))
+        XCTAssertEqual(panel.frame.minX, originalTopLeft.x, accuracy: 0.5)
+        XCTAssertEqual(panel.frame.maxY, originalTopLeft.y, accuracy: 0.5)
     }
 
     func testSearchOverlayDoesNotShrinkExpandedDetailsAndVerticalSizeIsPinned() {

@@ -118,6 +118,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private(set) var contentSizeApplicationCountForTesting = 0
     private(set) var reentrantFitAttemptCountForTesting = 0
     var contentSizeDidApplyForTesting: (() -> Void)?
+    private var visibleFrameOverrideForTesting: CGRect?
 
     private let panel: NSPanel
     private let panelState = BrainBarDashboardPanelState()
@@ -241,6 +242,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panelState.dashboardHeight = height
     }
 
+    func setVisibleFrameForTesting(_ visibleFrame: CGRect?) {
+        visibleFrameOverrideForTesting = visibleFrame
+    }
+
     func completeDisclosureTransitionForTesting(expanded: Bool) {
         panelState.detailsExpanded = expanded
         panelState.disclosureAnimationDidComplete()
@@ -280,12 +285,17 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         }
 
         let width = panel.contentLayoutRect.width
-        let visibleFrame = statusItemButton?.window?.screen?.visibleFrame ?? panel.screen?.visibleFrame
-        let visibleHeight = visibleFrame?.height ?? Self.maxSize.height
+        let originalFrame = panel.frame
+        let visibleFrame = visibleFrameOverrideForTesting
+            ?? statusItemButton?.window?.screen?.visibleFrame
         let titlebarInset = max((panel.contentView?.frame.height ?? panel.contentLayoutRect.height)
             - panel.contentLayoutRect.height, 0)
+        let availableFrameHeight = visibleFrame.map { frame in
+            let preservedTop = min(max(originalFrame.maxY, frame.minY), frame.maxY)
+            return max(preservedTop - frame.minY, 0)
+        } ?? Self.maxSize.height
         let maxContentHeight = min(
-            max(visibleHeight - titlebarInset, 0),
+            max(availableFrameHeight - titlebarInset, 0),
             max(panel.maxSize.height - titlebarInset, 0)
         )
         let usableHeight = min(panelState.fittingHeight, maxContentHeight)
@@ -301,7 +311,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panel.contentMinSize = NSSize(width: Self.minSize.width, height: 0)
         panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: Self.maxSize.height)
 
-        let originalFrame = panel.frame
         let currentContentHeight = panel.contentView?.frame.height ?? panel.contentLayoutRect.height
         let targetFrameHeight = originalFrame.height + (contentHeight - currentContentHeight)
         var targetFrame = CGRect(
