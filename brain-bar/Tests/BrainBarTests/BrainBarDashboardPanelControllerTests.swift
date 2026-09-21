@@ -1,35 +1,9 @@
 import AppKit
-import SwiftUI
 import XCTest
 @testable import BrainBar
 
 @MainActor
 final class BrainBarDashboardPanelControllerTests: XCTestCase {
-    func testDisclosureTransitionDoesNotAnimateSwiftUILayoutAndDefersWindowFit() {
-        var expanded = false
-        var receivedAnimation = false
-        var completed = false
-        let binding = Binding<Bool>(
-            get: { expanded },
-            set: { value, transaction in
-                expanded = value
-                receivedAnimation = transaction.animation != nil
-            }
-        )
-
-        BrainBarDisclosureTransition.commit(
-            isExpanded: binding,
-            to: true,
-            completion: { completed = true }
-        )
-
-        XCTAssertTrue(expanded)
-        XCTAssertFalse(receivedAnimation)
-        XCTAssertFalse(completed)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertTrue(completed)
-    }
-
     func testDisclosureAnimationUsesOneTimingInBothDirectionsAndReduceMotionIsInstant() {
         let opening = BrainBarDisclosureAnimation.timing(for: .open, reduceMotion: false)
         let closing = BrainBarDisclosureAnimation.timing(for: .close, reduceMotion: false)

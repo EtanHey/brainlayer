@@ -1,7 +1,6 @@
 #if DEBUG
 import AppKit
 import Foundation
-import SwiftUI
 
 @MainActor
 enum BrainBarGeometryProbe {
@@ -12,29 +11,6 @@ enum BrainBarGeometryProbe {
     }
 
     private static func run() -> Int32 {
-        var transitionExpanded = false
-        var transitionWasAnimated = false
-        var transitionCompleted = false
-        let transitionBinding = Binding<Bool>(
-            get: { transitionExpanded },
-            set: { value, transaction in
-                transitionExpanded = value
-                transitionWasAnimated = transaction.animation != nil
-            }
-        )
-        BrainBarDisclosureTransition.commit(
-            isExpanded: transitionBinding,
-            to: true,
-            completion: { transitionCompleted = true }
-        )
-        let transitionCompletionWasDeferred = !transitionCompleted
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        let transitionOK = transitionExpanded
-            && !transitionWasAnimated
-            && transitionCompletionWasDeferred
-            && transitionCompleted
-        print("GEOMETRY_PROBE transition swiftUIAnimated=\(transitionWasAnimated) completionDeferred=\(transitionCompletionWasDeferred)")
-
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
         let panel = controller.panelForTesting
         _ = controller.contentViewControllerForTesting.view
@@ -109,7 +85,7 @@ enum BrainBarGeometryProbe {
             && !collapsed.opensDisclosure(comparedTo: expanded)
         print("GEOMETRY_PROBE scroll expandReset=\(expanded.opensDisclosure(comparedTo: collapsed)) collapseReset=\(collapsed.opensDisclosure(comparedTo: expanded))")
 
-        return transitionOK && expandOK && collapseOK && scrollOK ? 0 : 1
+        return expandOK && collapseOK && scrollOK ? 0 : 1
     }
 }
 #endif

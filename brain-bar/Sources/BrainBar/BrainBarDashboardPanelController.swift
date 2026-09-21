@@ -73,18 +73,6 @@ enum BrainBarDisclosureAnimation {
     }
 }
 
-@MainActor
-enum BrainBarDisclosureTransition {
-    static func commit(
-        isExpanded: Binding<Bool>,
-        to expanded: Bool,
-        completion: @escaping @MainActor () -> Void
-    ) {
-        isExpanded.wrappedValue = expanded
-        Task { @MainActor in completion() }
-    }
-}
-
 final class BrainBarDashboardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
