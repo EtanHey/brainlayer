@@ -73,6 +73,18 @@ enum BrainBarDisclosureAnimation {
     }
 }
 
+@MainActor
+enum BrainBarDisclosureTransition {
+    static func commit(
+        isExpanded: Binding<Bool>,
+        to expanded: Bool,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        isExpanded.wrappedValue = expanded
+        Task { @MainActor in completion() }
+    }
+}
+
 final class BrainBarDashboardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -115,10 +127,14 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     let contentViewControllerForTesting: NSViewController
     var isShownForTesting: Bool { panel.isVisible }
     var measuredContentHeightForTesting: CGFloat { panelState.headerHeight + panelState.dashboardHeight }
+    private(set) var contentSizeApplicationCountForTesting = 0
+    private(set) var reentrantFitAttemptCountForTesting = 0
+    var contentSizeDidApplyForTesting: (() -> Void)?
 
     private let panel: NSPanel
     private let panelState = BrainBarDashboardPanelState()
-    private var sizingObservation: AnyCancellable?
+    private var sizingObservations = Set<AnyCancellable>()
+    private var isApplyingFittedSize = false
     private var clickOutsideMonitor: Any?
     private var localClickMonitor: Any?
     private var shownAt: Date = .distantPast
@@ -139,9 +155,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panelForTesting = panel
         super.init()
         panel.delegate = self
-        sizingObservation = panelState.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.fitPanelToContent() }
-        }
+        installSizingObservers()
     }
 
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -210,32 +224,118 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         removeClickOutsideMonitor()
     }
 
-    func windowDidResize(_ notification: Notification) { fitPanelToContent() }
+    func windowDidResize(_ notification: Notification) {
+        guard !isApplyingFittedSize else { return }
+        fitPanelToContent()
+    }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(width: max(frameSize.width, Self.minSize.width), height: sender.frame.height)
     }
 
-    func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
-    func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
+    func setDetailsExpandedForTesting(_ expanded: Bool) {
+        panelState.detailsExpanded = expanded
+        DispatchQueue.main.async { [weak self] in self?.panelState.disclosureAnimationDidComplete() }
+    }
+
+    func setSignalCoverageExpandedForTesting(_ expanded: Bool) {
+        panelState.signalCoverageExpanded = expanded
+        DispatchQueue.main.async { [weak self] in self?.panelState.disclosureAnimationDidComplete() }
+    }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
 
+    func resetGeometryMetricsForTesting() {
+        contentSizeApplicationCountForTesting = 0
+        reentrantFitAttemptCountForTesting = 0
+    }
+
+    func setDashboardHeightForTesting(_ height: CGFloat) {
+        panelState.dashboardHeight = height
+    }
+
+    func completeDisclosureTransitionForTesting(expanded: Bool) {
+        panelState.detailsExpanded = expanded
+        panelState.disclosureAnimationDidComplete()
+    }
+
+    private func installSizingObservers() {
+        panelState.$dashboardHeight
+            .combineLatest(panelState.$headerHeight)
+            .filter { dashboardHeight, headerHeight in dashboardHeight > 0 && headerHeight > 0 }
+            .prefix(1)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.fitPanelToContent() }
+            }
+            .store(in: &sizingObservations)
+
+        panelState.$disclosureAnimationRevision
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.fitPanelToContent() }
+            }
+            .store(in: &sizingObservations)
+
+        panelState.$searchOverlayPresented
+            .combineLatest(panelState.$graphPresented)
+            .removeDuplicates { lhs, rhs in lhs.0 == rhs.0 && lhs.1 == rhs.1 }
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.fitPanelToContent() }
+            }
+            .store(in: &sizingObservations)
+    }
+
     private func fitPanelToContent() {
+        guard !isApplyingFittedSize else {
+            reentrantFitAttemptCountForTesting += 1
+            return
+        }
+
         let width = panel.contentLayoutRect.width
-        let visibleHeight = statusItemButton?.window?.screen?.visibleFrame.height ?? Self.maxSize.height
+        let visibleFrame = statusItemButton?.window?.screen?.visibleFrame ?? panel.screen?.visibleFrame
+        let visibleHeight = visibleFrame?.height ?? Self.maxSize.height
         let titlebarInset = max((panel.contentView?.frame.height ?? panel.contentLayoutRect.height)
             - panel.contentLayoutRect.height, 0)
-        let usableHeight = min(panelState.fittingHeight, max(visibleHeight - titlebarInset, 0))
+        let maxContentHeight = min(
+            max(visibleHeight - titlebarInset, 0),
+            max(panel.maxSize.height - titlebarInset, 0)
+        )
+        let usableHeight = min(panelState.fittingHeight, maxContentHeight)
         let contentHeight = usableHeight + titlebarInset
         let needsResize = abs(panel.contentLayoutRect.height - usableHeight) > 0.5
-        if needsResize {
-            panel.contentMinSize = NSSize(width: Self.minSize.width, height: 0)
-            panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: Self.maxSize.height)
-            panel.setContentSize(NSSize(width: width, height: contentHeight))
+        guard needsResize else {
+            lockContentHeight(contentHeight)
+            return
         }
+
+        isApplyingFittedSize = true
+        contentSizeApplicationCountForTesting += 1
+        panel.contentMinSize = NSSize(width: Self.minSize.width, height: 0)
+        panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: Self.maxSize.height)
+
+        let originalFrame = panel.frame
+        let currentContentHeight = panel.contentView?.frame.height ?? panel.contentLayoutRect.height
+        let targetFrameHeight = originalFrame.height + (contentHeight - currentContentHeight)
+        var targetFrame = CGRect(
+            x: originalFrame.minX,
+            y: originalFrame.maxY - targetFrameHeight,
+            width: originalFrame.width,
+            height: targetFrameHeight
+        )
+        if let visibleFrame {
+            targetFrame = BrainBarWindowPlacement.clamp(frame: targetFrame, to: visibleFrame)
+        }
+
+        panel.setContentSize(NSSize(width: width, height: contentHeight))
+        contentSizeDidApplyForTesting?()
+        panel.setFrameOrigin(targetFrame.origin)
+        lockContentHeight(contentHeight)
+        isApplyingFittedSize = false
+    }
+
+    private func lockContentHeight(_ contentHeight: CGFloat) {
         panel.contentMinSize = NSSize(width: Self.minSize.width, height: contentHeight)
         panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: contentHeight)
-        if needsResize, let statusItemButton { positionPanel(below: statusItemButton) }
     }
 
     private static func makePanel(contentViewController: NSViewController) -> NSPanel {

@@ -1552,9 +1552,14 @@ enum BrainBarDashboardScrollPosition {
     }
 }
 
-private struct BrainBarDashboardDisclosureState: Equatable {
+struct BrainBarDashboardDisclosureState: Equatable {
     let detailsExpanded: Bool
     let signalCoverageExpanded: Bool
+
+    func opensDisclosure(comparedTo previous: Self) -> Bool {
+        (!previous.detailsExpanded && detailsExpanded)
+            || (!previous.signalCoverageExpanded && signalCoverageExpanded)
+    }
 }
 
 private struct BrainBarDashboardScrollResetter: NSViewRepresentable {
@@ -1570,7 +1575,8 @@ private struct BrainBarDashboardScrollResetter: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         let previousState = context.coordinator.previousState
         context.coordinator.previousState = disclosureState
-        guard previousState != nil, previousState != disclosureState else { return }
+        guard let previousState,
+              disclosureState.opensDisclosure(comparedTo: previousState) else { return }
 
         DispatchQueue.main.async {
             guard let scrollView = nsView.enclosingScrollView,
@@ -1594,15 +1600,12 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     let accessibilityLabel: String
     let chevronPlacement: BrainBarDisclosureChevronPlacement
     let focusStateOverride: Bool?
-    let onAnimationCompleted: () -> Void
+    let onAnimationCompleted: @MainActor @Sendable () -> Void
     @ViewBuilder let content: () -> Content
     @ViewBuilder let label: () -> Label
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
     @State private var interaction: BrainBarDisclosureInteractionState
-    @State private var expansionProgress: CGFloat
-    @State private var isAnimatingExpansion = false
 
     init(
         isExpanded: Binding<Bool>,
@@ -1611,7 +1614,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         chevronPlacement: BrainBarDisclosureChevronPlacement = .leading,
         focusStateOverride: Bool? = nil,
         initialInteraction: BrainBarDisclosureInteractionState = .init(),
-        onAnimationCompleted: @escaping () -> Void = {},
+        onAnimationCompleted: @escaping @MainActor @Sendable () -> Void = {},
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder label: @escaping () -> Label
     ) {
@@ -1622,7 +1625,6 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         self.focusStateOverride = focusStateOverride
         self.onAnimationCompleted = onAnimationCompleted
         _interaction = State(initialValue: initialInteraction)
-        _expansionProgress = State(initialValue: isExpanded.wrappedValue ? 1 : 0)
         self.content = content
         self.label = label
     }
@@ -1661,22 +1663,11 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
             .accessibilityHint(isExpanded ? "Collapse" : "Expand")
             .accessibilityIdentifier(accessibilityIdentifier)
 
-            if isExpanded, !isAnimatingExpansion {
+            if isExpanded {
                 content()
-            } else if isAnimatingExpansion {
-                BrainBarDisclosureContentLayout(progress: expansionProgress) {
-                    content()
-                }
-                .clipped()
-                .allowsHitTesting(isExpanded)
-                .accessibilityHidden(!isExpanded)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: isExpanded) { _, expanded in
-            guard !isAnimatingExpansion else { return }
-            expansionProgress = expanded ? 1 : 0
-        }
     }
 
     private var focusRingIsVisible: Bool {
@@ -1691,30 +1682,13 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     }
 
     private func beginExpansionTransition(to expanded: Bool) {
-        guard !isAnimatingExpansion else { return }
-
-        let direction: BrainBarDisclosureAnimation.Direction = expanded ? .open : .close
-        let animation = BrainBarDisclosureAnimation.animation(for: direction, reduceMotion: reduceMotion)
-        let targetProgress: CGFloat = expanded ? 1 : 0
-
-        guard animation != nil else {
-            isExpanded = expanded
-            expansionProgress = targetProgress
-            onAnimationCompleted()
-            return
-        }
-
-        isAnimatingExpansion = true
-        expansionProgress = expanded ? 0 : 1
-        DispatchQueue.main.async {
-            withAnimation(animation, completionCriteria: .logicallyComplete) {
-                isExpanded = expanded
-                expansionProgress = targetProgress
-            } completion: {
-                isAnimatingExpansion = false
-                onAnimationCompleted()
-            }
-        }
+        // Commit without a SwiftUI animation transaction, then fit AppKit on
+        // a later main-loop turn after the layout transaction has finished.
+        BrainBarDisclosureTransition.commit(
+            isExpanded: $isExpanded,
+            to: expanded,
+            completion: onAnimationCompleted
+        )
     }
 }
 
@@ -1995,7 +1969,7 @@ private struct BrainBarSignalCoveragePanel: View {
     let compact: Bool
     @Binding var isExpanded: Bool
     @Binding var isVectorDetailExpanded: Bool
-    var onAnimationCompleted: () -> Void = {}
+    var onAnimationCompleted: @MainActor @Sendable () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var revealedSignalIDs: Set<String> = []
 

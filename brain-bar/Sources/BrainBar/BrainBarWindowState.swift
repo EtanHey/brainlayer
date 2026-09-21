@@ -265,6 +265,17 @@ enum BrainBarWindowPlacement {
         )
     }
 
+    static func clamp(frame: CGRect, to visibleFrame: CGRect) -> CGRect {
+        let maxOriginX = max(visibleFrame.minX, visibleFrame.maxX - frame.width)
+        let maxOriginY = max(visibleFrame.minY, visibleFrame.maxY - frame.height)
+        return CGRect(
+            x: min(max(frame.origin.x, visibleFrame.minX), maxOriginX),
+            y: min(max(frame.origin.y, visibleFrame.minY), maxOriginY),
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
     static func anchoredFrameBelowMenuBarItem(
         currentAccessibilityFrame: CGRect,
         menuBarItemAccessibilityFrame: CGRect,
