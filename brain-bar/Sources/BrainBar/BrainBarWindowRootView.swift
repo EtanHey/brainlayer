@@ -9,12 +9,28 @@ struct BrainBarWindowRootView: View {
     private let managesWindowFrame: Bool
     @ObservedObject private var panelState: BrainBarDashboardPanelState
 
-    @State private var selectedTab = BrainBarWindowRootView.defaultTab
     @State private var hasActivatedGraphTab = false
+    @State private var hasActivatedSettingsTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
+#if BRAINBAR_UI
+    private let settingsViewFactory: (String) -> AnyView
+#endif
 
+#if BRAINBAR_UI
+    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
+         panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState(),
+         settingsViewFactory: @escaping (String) -> AnyView = { AnyView(BrainBarSettingsView(databasePath: $0)) }) {
+        self.runtime = runtime
+        self.managesWindowFrame = managesWindowFrame
+        self.panelState = panelState
+        self.settingsViewFactory = settingsViewFactory
+        _windowObserver = StateObject(
+            wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
+        )
+    }
+#else
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
          panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()) {
         self.runtime = runtime
@@ -24,6 +40,7 @@ struct BrainBarWindowRootView: View {
             wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
         )
     }
+#endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,10 +50,7 @@ struct BrainBarWindowRootView: View {
                 commandBarViewModel: commandBarViewModel,
                 databasePath: runtime.databasePath,
                 showRetrievalTools: retrievalTools.isEnabled,
-                isShowingGraph: selectedTab == .graph,
-                toggleGraph: {
-                    selectedTab = selectedTab == .graph ? .dashboard : .graph
-                }
+                selectedTab: $panelState.selectedTab
             )
             .background(GeometryReader { proxy in
                 Color.clear.preference(key: BrainBarHeaderHeightKey.self, value: proxy.size.height)
@@ -44,12 +58,19 @@ struct BrainBarWindowRootView: View {
 
             ZStack {
                 dashboardContent
-                    .brainBarTabVisibility(selectedTab == .dashboard)
+                    .brainBarTabVisibility(panelState.selectedTab == .dashboard)
 
-                if hasActivatedGraphTab || selectedTab == .graph {
+                if hasActivatedGraphTab || panelState.selectedTab == .graph {
                     graphContent
-                        .brainBarTabVisibility(selectedTab == .graph)
+                        .brainBarTabVisibility(panelState.selectedTab == .graph)
                 }
+
+#if BRAINBAR_UI
+                if hasActivatedSettingsTab || panelState.selectedTab == .settings {
+                    settingsContent
+                        .brainBarTabVisibility(panelState.selectedTab == .settings)
+                }
+#endif
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
@@ -58,7 +79,7 @@ struct BrainBarWindowRootView: View {
                 // non-empty search query that hasn't been dismissed.
                 BrainBarCommandBarResultsOverlay(
                     viewModel: commandBarViewModel,
-                    isOnActiveTab: selectedTab == .dashboard,
+                    isOnActiveTab: panelState.selectedTab == .dashboard,
                     panelState: panelState
                 )
             }
@@ -74,18 +95,18 @@ struct BrainBarWindowRootView: View {
         .background(windowAttachment)
         .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
-            activate(tab: selectedTab)
+            activate(tab: panelState.selectedTab, refreshDashboard: true)
             if let action = runtime.requestedQuickAction {
                 handleRequestedQuickAction(action)
             }
         }
-        .onChange(of: selectedTab) { _, newTab in
+        .onChange(of: panelState.selectedTab) { oldTab, newTab in
             panelState.graphPresented = newTab == .graph
-            activate(tab: newTab)
+            activate(tab: newTab, refreshDashboard: oldTab != .settings)
         }
         .onChange(of: retrievalTools.isEnabled) { _, enabled in
-            selectedTab = BrainBarRetrievalToolsPolicy.selectedTab(
-                selectedTab,
+            panelState.selectedTab = BrainBarRetrievalToolsPolicy.selectedTab(
+                panelState.selectedTab,
                 showRetrievalTools: enabled
             )
         }
@@ -127,11 +148,17 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var graphContent: some View {
         if let database = runtime.database {
-            BrainBarGraphTab(database: database, isActive: selectedTab == .graph && windowObserver.isWindowVisible)
+            BrainBarGraphTab(database: database, isActive: panelState.selectedTab == .graph && windowObserver.isWindowVisible)
         } else {
             BrainBarLoadingView(title: "Graph", subtitle: "Knowledge graph unavailable.")
         }
     }
+
+#if BRAINBAR_UI
+    private var settingsContent: some View {
+        settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath())
+    }
+#endif
 
     private var commandBarViewModel: QuickCaptureViewModel? {
         guard BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: retrievalTools.isEnabled) else {
@@ -148,18 +175,22 @@ struct BrainBarWindowRootView: View {
         // If the DB isn't ready yet, leave the request in flight and replay
         // when the runtime database readiness token changes.
         guard let vm = commandBarViewModel else { return }
-        selectedTab = .dashboard
+        panelState.selectedTab = .dashboard
         vm.setMode(action == .capture ? .capture : .search)
         vm.panelDidAppear()
         runtime.clearQuickActionRequest()
     }
 
-    private func activate(tab: BrainBarTab) {
+    private func activate(tab: BrainBarTab, refreshDashboard: Bool) {
         switch tab {
         case .dashboard:
-            runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
+            if refreshDashboard {
+                runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
+            }
         case .graph:
             hasActivatedGraphTab = true
+        case .settings:
+            hasActivatedSettingsTab = true
         }
     }
 }
@@ -704,26 +735,28 @@ private struct BrainBarWindowHeader: View {
     let commandBarViewModel: QuickCaptureViewModel?
     let databasePath: String?
     let showRetrievalTools: Bool
-    let isShowingGraph: Bool
-    let toggleGraph: () -> Void
+    @Binding var selectedTab: BrainBarTab
 
     var body: some View {
         VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
                 brand
                 Spacer(minLength: 12)
-                refreshControls
-                if showRetrievalTools {
-                    Button(action: toggleGraph) {
-                        Label(isShowingGraph ? "Dashboard" : "Knowledge Graph", systemImage: isShowingGraph ? "gauge" : "point.3.connected.trianglepath.dotted")
+                if selectedTab == .dashboard { refreshControls }
+                Picker("Section", selection: $selectedTab) {
+                    ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools)) { tab in
+                        Label(tab.title, systemImage: tab.systemImage)
+                            .tag(tab)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: showRetrievalTools ? 280 : 190)
+                .accessibilityIdentifier("brainbar.shell.tabs")
                 BrainBarAppControlMenu(databasePath: databasePath)
             }
 
-            if !isShowingGraph,
+            if selectedTab == .dashboard,
                BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
                 BrainBarCommandBar(viewModel: commandBarViewModel)
             }
@@ -3001,6 +3034,37 @@ enum BrainBarDashboardPreview {
         )
     }
 }
+
+#if BRAINBAR_UI
+@MainActor
+enum BrainBarUnifiedWindowPreview {
+    static func make(
+        collector: StatsCollector,
+        settingsViewModel: BrainBarSettingsViewModel,
+        panelState: BrainBarDashboardPanelState
+    ) -> AnyView {
+        let runtime = BrainBarRuntime()
+        runtime.install(
+            collector: collector,
+            database: nil,
+            databasePath: "/tmp/brainbar-render-fixture.db"
+        )
+        panelState.selectedTab = .settings
+        return AnyView(
+            BrainBarWindowRootView(
+                runtime: runtime,
+                managesWindowFrame: false,
+                panelState: panelState,
+                settingsViewFactory: { _ in
+                    AnyView(BrainBarSettingsView(viewModel: settingsViewModel))
+                }
+            )
+            .environment(\.colorScheme, .dark)
+            .transaction { $0.disablesAnimations = true }
+        )
+    }
+}
+#endif
 
 /// Debug-only seam: render the (private) number-first flow lane card for visual QA.
 /// Never compiled into a release build.

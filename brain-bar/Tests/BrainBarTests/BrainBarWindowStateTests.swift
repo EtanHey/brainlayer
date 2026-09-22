@@ -54,10 +54,11 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
-    func testBrainBarOnlyKeepsDashboardAndOptInKnowledgeGraphSurfaces() {
-        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .graph])
+    func testBrainBarKeepsDashboardSettingsAndOptInKnowledgeGraphSurfaces() {
+        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .graph, .settings])
         XCTAssertEqual(BrainBarTab.dashboard.title, "Dashboard")
         XCTAssertEqual(BrainBarTab.graph.title, "Graph")
+        XCTAssertEqual(BrainBarTab.settings.title, "Settings")
     }
 
     @MainActor
@@ -65,7 +66,7 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertFalse(BrainBarRetrievalToolsSettings().isEnabled)
         XCTAssertEqual(
             BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: false),
-            [.dashboard]
+            [.dashboard, .settings]
         )
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
@@ -102,11 +103,15 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)
     }
 
-    func testDefaultWindowHasNoTabBarOrInjectionSurfaceAndFoldsObservabilityIntoDashboard() throws {
+    func testUnifiedWindowKeepsDashboardMountedBehindSettingsDestination() throws {
         let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
 
-        XCTAssertFalse(root.contains("Picker(\"Section\""))
-        XCTAssertFalse(root.contains("brainbar.shell.tabs"))
+        XCTAssertTrue(root.contains("Picker(\"Section\""))
+        XCTAssertTrue(root.contains("brainbar.shell.tabs"))
+        XCTAssertTrue(root.contains("dashboardContent\n                    .brainBarTabVisibility(panelState.selectedTab == .dashboard)"))
+        XCTAssertTrue(root.contains("settingsContent\n                        .brainBarTabVisibility(panelState.selectedTab == .settings)"))
+        XCTAssertTrue(root.contains("BrainBarSettingsView(databasePath:"))
+        XCTAssertTrue(root.contains("activate(tab: newTab, refreshDashboard: oldTab != .settings)"))
         XCTAssertFalse(root.contains("injectionsContent"))
         XCTAssertFalse(root.contains("BrainBarInjectionTab"))
         XCTAssertFalse(root.contains("ObservabilityTechnicalDetailsView(result: effectiveObservabilityResult)"))

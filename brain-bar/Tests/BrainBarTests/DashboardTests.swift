@@ -874,19 +874,19 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
     }
 
-    func testAppMainMenuHasOnlyTheSettingsSceneEntry() throws {
+    func testAppMainMenuRoutesItsOnlySettingsEntryIntoBrainBar() throws {
         let appSource = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
 
         XCTAssertTrue(appSource.contains("settingsSceneTitle = \"Settings…\""))
         XCTAssertEqual(BrainBarAppMenuCommands.settingsEntryCountForTesting, 1)
-        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Settings..."))
+        XCTAssertTrue(BrainBarAppMenuCommands.manualCommandTitles.contains("Settings…"))
         XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Toggle BrainBar"))
         XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings..."))
         XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings…"))
         XCTAssertEqual(
-            appSource.components(separatedBy: "Button(\"Settings...\")").count - 1,
-            0,
-            "The Settings scene owns the app-menu Settings entry; do not add a second manual command."
+            appSource.components(separatedBy: "Button(BrainBarAppMenuCommands.settingsSceneTitle)").count - 1,
+            1,
+            "The replaced app Settings command must route into the unified BrainBar window."
         )
         XCTAssertEqual(
             appSource.components(separatedBy: "Button(\"Toggle BrainBar\")").count - 1,
@@ -896,12 +896,14 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(
             appSource.components(separatedBy: "Settings {").count - 1,
             1,
-            "The app must retain exactly one SwiftUI Settings scene."
+            "The app must retain one inert SwiftUI Settings scene without a legacy settings view."
         )
+        XCTAssertFalse(appSource.contains("Settings {\n            BrainBarSettingsView("))
+        XCTAssertTrue(appSource.contains("CommandGroup(replacing: .appSettings)"))
     }
 
     @MainActor
-    func testDashboardPanelUsesKeyWindowContractAndSettingsDismissSuppression() throws {
+    func testDashboardPanelOwnsUnifiedSettingsSelection() throws {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
         let panel = controller.panelForTesting
         let panelSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
@@ -911,14 +913,19 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(panel.canBecomeMain)
         XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
         XCTAssertTrue(panelSource.contains("func windowWillClose(_ notification: Notification)"))
-        XCTAssertTrue(panelSource.contains("BrainBarSettingsActions.suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
+        XCTAssertTrue(panelSource.contains("BrainBarSettingsActions.installOpenHandler"))
+        XCTAssertTrue(panelSource.contains("panelState.selectedTab = .settings"))
+        XCTAssertFalse(settingsSource.contains("NSWindow("))
+        XCTAssertFalse(settingsSource.contains("NSWindowController"))
         XCTAssertTrue(settingsSource.contains("NSApp.activate(ignoringOtherApps: true)"))
-        XCTAssertTrue(settingsSource.contains("makeKeyAndOrderFront(nil)"))
+        XCTAssertTrue(settingsSource.contains("openHandler?()"))
         XCTAssertFalse(settingsSource.contains("promoteForSettings"))
         XCTAssertFalse(settingsSource.contains("setActivationPolicy(.regular)"))
+
+        BrainBarSettingsActions.openSettingsWindow(databasePath: nil)
+        BrainBarSettingsActions.openSettingsWindow(databasePath: nil)
+        XCTAssertEqual(controller.selectedTabForTesting, .settings)
+        XCTAssertFalse(NSApp.windows.contains { $0.title == "BrainLayer Settings" })
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {

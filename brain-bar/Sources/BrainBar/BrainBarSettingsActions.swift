@@ -5,55 +5,16 @@ import SwiftUI
 
 @MainActor
 enum BrainBarSettingsActions {
-    private(set) static var suppressDashboardResignDismiss = false
+    private static var openHandler: (() -> Void)?
 
-#if BRAINBAR_UI
-    private static var windowController: NSWindowController?
-    private static var closeObserver: NSObjectProtocol?
-
-    static var windowForTesting: NSWindow? { windowController?.window }
-
-    static func openSettingsWindow(databasePath: String?) {
-        NSApp.activate(ignoringOtherApps: true)
-
-        if let controller = windowController {
-            suppressDashboardResignDismiss = true
-            controller.window?.makeKeyAndOrderFront(nil)
-            return
-        }
-
-        let resolvedDatabasePath = databasePath ?? BrainBarServer.defaultDBPath()
-        let hosting = NSHostingController(rootView: BrainBarSettingsView(databasePath: resolvedDatabasePath))
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "BrainLayer Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.isReleasedWhenClosed = false
-        window.titlebarAppearsTransparent = false
-        window.level = .normal
-        window.center()
-
-        let controller = NSWindowController(window: window)
-        windowController = controller
-
-        closeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { _ in
-            Task { @MainActor in demoteAfterSettings() }
-        }
-
-        suppressDashboardResignDismiss = true
-        controller.showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
+    static func installOpenHandler(_ handler: @escaping () -> Void) {
+        openHandler = handler
     }
 
-    private static func demoteAfterSettings() {
-        suppressDashboardResignDismiss = false
-        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-        closeObserver = nil
-        windowController = nil
-        NSApp.setActivationPolicy(.accessory)
+#if BRAINBAR_UI
+    static func openSettingsWindow(databasePath _: String?) {
+        NSApp.activate(ignoringOtherApps: true)
+        openHandler?()
     }
 #else
     // BrainBarDaemon target is headless and never opens Settings (the file is shared
