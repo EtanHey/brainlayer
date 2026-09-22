@@ -146,6 +146,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertEqual(presentation.status.headline, "1 thing needs you")
         XCTAssertEqual(presentation.status.reason, "Agent activity could not be measured.")
         XCTAssertEqual(presentation.status.tone, .amber)
+        XCTAssertEqual(presentation.attentionItems, ["Agent activity could not be measured."])
     }
 
     @MainActor
@@ -159,6 +160,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertEqual(presentation.status.headline, "2 things need you")
         XCTAssertTrue(presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true)
         XCTAssertEqual(presentation.status.tone, .amber)
+        XCTAssertEqual(presentation.attentionItems.count, 2)
     }
 
     @MainActor
@@ -182,6 +184,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 "Backup reason must outrank \(snapshotFreshness)."
             )
             XCTAssertEqual(presentation.status.tone, .amber)
+            XCTAssertEqual(presentation.attentionItems.count, expectedHeadline == "1 thing needs you" ? 1 : 2)
         }
     }
 
