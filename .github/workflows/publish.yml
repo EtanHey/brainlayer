@@ -63,4 +63,10 @@ jobs:
           assert not dbs, f"database files in sdist (never ship the database): {dbs}"
           print(f"audit ok: {wheel} stamped {sha}; sdist has {len(names)} entries, 0 db files")
           PY
+      - name: Gate every installed module and hook before upload
+        run: |
+          set -euo pipefail
+          wheel="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          scripts/installed_import_gate.sh "$wheel" "$GITHUB_WORKSPACE/hooks" "$RUNNER_TEMP/brainlayer-publish-import-venv"
       - uses: pypa/gh-action-pypi-publish@release/v1

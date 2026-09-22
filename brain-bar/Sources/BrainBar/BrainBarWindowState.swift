@@ -29,9 +29,10 @@ enum BrainBarLaunchMode: Equatable {
     }
 }
 
-enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
+enum BrainBarTab: Int, CaseIterable, Equatable, Hashable, Identifiable {
     case dashboard = 0
     case graph = 1
+    case settings = 2
 
     var id: Int { rawValue }
 
@@ -41,6 +42,19 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
             return "Dashboard"
         case .graph:
             return "Graph"
+        case .settings:
+            return "Settings"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .dashboard:
+            return "gauge"
+        case .graph:
+            return "point.3.connected.trianglepath.dotted"
+        case .settings:
+            return "gearshape"
         }
     }
 }

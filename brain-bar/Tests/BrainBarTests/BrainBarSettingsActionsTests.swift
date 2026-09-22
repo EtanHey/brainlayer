@@ -4,26 +4,24 @@ import XCTest
 
 @MainActor
 final class BrainBarSettingsActionsTests: XCTestCase {
-    func testSettingsStaysAccessoryAndTakesKeyboardFocus() {
-        let databasePath = NSTemporaryDirectory() + "brainbar-settings-actions-\(UUID().uuidString).db"
+    func testSettingsActionRoutesToUnifiedWindowWithoutCreatingLegacyWindow() {
         let app = NSApplication.shared
         let previousPolicy = app.activationPolicy()
         app.setActivationPolicy(.accessory)
         defer {
-            app.windows.first { $0.title == "BrainLayer Settings" }?.close()
-            try? FileManager.default.removeItem(atPath: databasePath)
+            BrainBarSettingsActions.installOpenHandler {}
             if previousPolicy != .accessory {
                 app.setActivationPolicy(previousPolicy)
             }
         }
 
-        BrainBarSettingsActions.openSettingsWindow(databasePath: databasePath)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        var routedOpenCount = 0
+        BrainBarSettingsActions.installOpenHandler { routedOpenCount += 1 }
+        BrainBarSettingsActions.openSettingsWindow(databasePath: "/tmp/first.db")
+        BrainBarSettingsActions.openSettingsWindow(databasePath: "/tmp/second.db")
 
-        let settingsWindow = BrainBarSettingsActions.windowForTesting
         XCTAssertEqual(app.activationPolicy(), .accessory)
-        XCTAssertTrue(settingsWindow?.isVisible == true)
-        XCTAssertTrue(settingsWindow?.canBecomeKey == true)
-        XCTAssertNotNil(settingsWindow?.firstResponder)
+        XCTAssertEqual(routedOpenCount, 2)
+        XCTAssertFalse(app.windows.contains { $0.title == "BrainLayer Settings" })
     }
 }

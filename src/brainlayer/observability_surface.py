@@ -240,11 +240,15 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
         from .observability_backup import build_backups_section
 
         backups = build_backups_section(env=env, record_input=recorder, now=now)
-    except ImportError:
+    except ImportError as exc:
         for name in ("JSONL_BACKUP_LOG", "BACKUP_DAILY_LOG", "LAUNCHD_OUTPUT", "DISABLED_DIR"):
             if path := env.get(f"BRAINLAYER_OBSERVABILITY_{name}"):
                 recorder(path, in_section_inputs=False)
-        backups = {"state": "unmeasurable", "reason": "backups module not installed", "inputs": []}
+        backups = {
+            "state": "unmeasurable",
+            "reason": f"backups import failed: {type(exc).__name__}: {exc}",
+            "inputs": [],
+        }
     except Exception as exc:
         backups = _unmeasurable(f"backups raised {type(exc).__name__}: {exc}", db_input)
     document = {"schema_version": 1, "generated_at": _iso_utc(now), "db_path": recorder.display_path(db_path),
