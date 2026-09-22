@@ -21,6 +21,8 @@ enum BrainBarAppMenuCommands {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = BrainBarRuntime()
+    private let isDevPreview = BrainBarDevPreviewConfiguration.isPreviewProcess()
+    private let devPreview = BrainBarDevPreviewConfiguration.resolve()
 
     private var statusPopoverController: BrainBarStatusPopoverController?
     private var collector: StatsCollector?
@@ -32,60 +34,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let showRetrievalTools = (try? BrainLayerConfigStore().loadDocument().config.showRetrievalTools) ?? false
-        BrainBarRetrievalToolsSettings.shared.update(enabled: showRetrievalTools)
-        NSAppleEventManager.shared().setEventHandler(
-            self,
-            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
-            forEventClass: AEEventClass(kInternetEventClass),
-            andEventID: AEEventID(kAEGetURL)
+        let bundleIdentifier = Bundle.main.bundleIdentifier
+        let launchDecision = BrainBarLaunchDecision.resolve(
+            isDevPreview: isDevPreview,
+            previewConfiguration: devPreview,
+            bundleIdentifier: bundleIdentifier
         )
-
-        startHotkeyFileWatcher()
+        guard launchDecision != .refuse else {
+            NSLog("[BrainBar] Malformed DEV preview identity; refusing to launch with production behavior.")
+            NSApp.terminate(nil)
+            return
+        }
+        let showRetrievalTools = !isDevPreview
+            ? ((try? BrainLayerConfigStore().loadDocument().config.showRetrievalTools) ?? false)
+            : false
+        BrainBarRetrievalToolsSettings.shared.update(enabled: showRetrievalTools)
+        if !isDevPreview {
+            NSAppleEventManager.shared().setEventHandler(
+                self,
+                andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+                forEventClass: AEEventClass(kInternetEventClass),
+                andEventID: AEEventID(kAEGetURL)
+            )
+            startHotkeyFileWatcher()
+        }
 
         let runningInstances = NSRunningApplication.runningApplications(
-            withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.brainlayer.BrainBar"
+            withBundleIdentifier: bundleIdentifier ?? "com.brainlayer.BrainBar"
         )
         let otherInstances = runningInstances.filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        if let existingInstance = otherInstances.first {
-            if BrainBarRestartHandoff.consumeIfMatches(existingPID: existingInstance.processIdentifier) {
+        if launchDecision == .replaceExistingPreview {
+            for existingInstance in otherInstances {
+                NSLog(
+                    "[BrainBar] Replacing existing DEV preview PID %d before launching the rebuilt bundle.",
+                    existingInstance.processIdentifier
+                )
+                let replaced = BrainBarPreviewReplacement.replaceExisting(
+                    terminate: { existingInstance.terminate() },
+                    isTerminated: { existingInstance.isTerminated },
+                    pumpRunLoop: { date in
+                        _ = RunLoop.current.run(mode: .default, before: date)
+                    }
+                )
+                guard replaced else {
+                    NSLog(
+                        "[BrainBar] Existing DEV preview PID %d did not terminate; refusing to show a potentially stale preview.",
+                        existingInstance.processIdentifier
+                    )
+                    NSApp.terminate(nil)
+                    return
+                }
+            }
+        } else if let existingInstance = otherInstances.first {
+            let restartHandoffMatches = BrainBarRestartHandoff.consumeIfMatches(
+                existingPID: existingInstance.processIdentifier
+            )
+            switch BrainBarDuplicateInstanceAction.resolve(
+                isDevPreview: false,
+                restartHandoffMatches: restartHandoffMatches
+            ) {
+            case .continueRestartHandoff:
                 NSLog("[BrainBar] Continuing launch for requested restart while PID %d exits.", existingInstance.processIdentifier)
-            } else {
+            case .terminateNewInstance:
                 NSLog("[BrainBar] Another instance is already running (PID %d). Exiting.", existingInstance.processIdentifier)
                 NSApp.terminate(nil)
                 return
+            case .replaceExistingPreview:
+                assertionFailure("Production launch resolved to DEV replacement policy")
             }
         }
 
         NSApp.setActivationPolicy(.accessory)
-        startUIHeartbeat()
-        startDaemonWatchdog()
+        if !isDevPreview {
+            startUIHeartbeat()
+            startDaemonWatchdog()
+        }
         configureRuntimeCallbacks()
 
         runtime.hotkeyStatus.onFallbackChange = { [weak self] in
             self?.configureQuickCaptureHotkey()
         }
 
-        let dashboardPanel = BrainBarDashboardPanelController(runtime: runtime)
-        self.dashboardPanel = dashboardPanel
-        statusPopoverController = BrainBarStatusPopoverController(
+        let dashboardPanel = BrainBarDashboardPanelController(
             runtime: runtime,
-            dashboardPanelController: dashboardPanel
+            standaloneTitle: devPreview?.windowTitle
         )
+        self.dashboardPanel = dashboardPanel
+        if !isDevPreview {
+            statusPopoverController = BrainBarStatusPopoverController(
+                runtime: runtime,
+                dashboardPanelController: dashboardPanel
+            )
+        }
 
         let dbPath = BrainBarServer.defaultDBPath()
         NSLog("[BrainBar] Starting UI shell; database at %@", dbPath)
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: dbPath,
-            brainBusEvents: BrainBusClient()
+            brainBusEvents: isDevPreview ? nil : BrainBusClient()
         )
         self.collector = collector
-        BrainBarAppSupport.wireRuntime(runtime, dbPath: dbPath, collector: collector)
+        BrainBarAppSupport.wireRuntime(
+            runtime,
+            dbPath: dbPath,
+            collector: collector,
+            bootstrapMissingDatabase: !isDevPreview
+        )
 
         flushPendingBrainBarURLs()
 
         collector.start()
-        configureQuickCaptureHotkey()
+        if !isDevPreview {
+            configureQuickCaptureHotkey()
+        } else {
+            dashboardPanel.show()
+        }
         NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: runtime.launchMode))
     }
 
@@ -104,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
+        isDevPreview
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -200,12 +263,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleWindowSurface(_ sender: Any?) {
         if let statusPopoverController {
             statusPopoverController.toggle(sender)
+        } else {
+            dashboardPanel?.toggle()
         }
     }
 
     func showDashboardPanel() {
         if let statusPopoverController {
             statusPopoverController.show(nil)
+        } else {
+            dashboardPanel?.show()
         }
     }
 

@@ -126,9 +126,10 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private var clickOutsideMonitor: Any?
     private var localClickMonitor: Any?
     private var shownAt: Date = .distantPast
+    private let standaloneTitle: String?
     weak var statusItemButton: NSView?
 
-    init(runtime: BrainBarRuntime) {
+    init(runtime: BrainBarRuntime, standaloneTitle: String? = nil) {
         let hostingController = NSHostingController(
             rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false, panelState: panelState)
                 .frame(minWidth: Self.minSize.width)
@@ -139,8 +140,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         hostingController.view.autoresizingMask = [.width, .height]
 
         contentViewControllerForTesting = hostingController
-        panel = Self.makePanel(contentViewController: hostingController)
+        panel = Self.makePanel(contentViewController: hostingController, standaloneTitle: standaloneTitle)
         panelForTesting = panel
+        self.standaloneTitle = standaloneTitle
         super.init()
         panel.delegate = self
         sizingObservation = panelState.objectWillChange.sink { [weak self] _ in
@@ -157,13 +159,20 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(anchoredTo anchorView: NSView? = nil) {
-        guard let anchorView else { return }
-        positionPanel(below: anchorView)
+        if let anchorView {
+            positionPanel(below: anchorView)
+        } else if standaloneTitle != nil {
+            panel.center()
+        } else {
+            return
+        }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         shownAt = Date()
-        installClickOutsideMonitor()
+        if standaloneTitle == nil {
+            installClickOutsideMonitor()
+        }
     }
 
     func dismiss() {
@@ -205,6 +214,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        guard standaloneTitle == nil else { return }
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
         guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
         dismiss()
@@ -223,6 +233,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
+    func setShownAtForTesting(_ date: Date) { shownAt = date }
 
     private func fitPanelToContent() {
         let width = panel.contentLayoutRect.width
@@ -242,16 +253,16 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         if needsResize, let statusItemButton { positionPanel(below: statusItemButton) }
     }
 
-    private static func makePanel(contentViewController: NSViewController) -> NSPanel {
+    private static func makePanel(contentViewController: NSViewController, standaloneTitle: String?) -> NSPanel {
         let panel = BrainBarDashboardPanel(
             contentRect: NSRect(origin: .zero, size: defaultSize),
             styleMask: [.titled, .fullSizeContentView, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        panel.title = "BrainBar"
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+        panel.title = standaloneTitle ?? "BrainBar"
+        panel.titleVisibility = standaloneTitle == nil ? .hidden : .visible
+        panel.titlebarAppearsTransparent = standaloneTitle == nil
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
