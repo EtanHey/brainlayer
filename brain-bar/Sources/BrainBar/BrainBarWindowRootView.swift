@@ -1279,9 +1279,16 @@ private struct BrainBarDashboardView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Ingest")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Each chart has its own scale")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.brainBarTextSecondary)
+                    HStack(spacing: 8) {
+                        operationReceiptRow(
+                            label: "Last search", value: lastSearchReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
+                            help: "Most recent brain_search handled by BrainBar."
+                        )
+                        operationReceiptRow(
+                            label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
+                            help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
+                        )
+                    }
                 }
                 Spacer(minLength: 8)
                 BrainBarSharedTimeframeSelector(
@@ -1310,7 +1317,7 @@ private struct BrainBarDashboardView: View {
                 }
                 .help("How ingest charts are measured")
                 .popover(isPresented: $ingestHelpPresented) {
-                    Text("Source-time charts count chunk rows. Watcher counts unique chunk IDs by ingest time. The final bucket is partial.")
+                    Text("Each chart has its own scale. Source-time charts count chunk rows. Watcher counts unique chunk IDs by ingest time. The final bucket is partial.")
                         .font(.system(size: 11))
                         .padding(12)
                         .frame(width: 260)
@@ -1330,16 +1337,6 @@ private struct BrainBarDashboardView: View {
                     ingestSeriesChart(.jsonlWatcher)
                 }
             }
-            VStack(spacing: 5) {
-                operationReceiptRow(
-                    label: "Last search", value: lastSearchReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
-                    help: "Most recent brain_search handled by BrainBar."
-                )
-                operationReceiptRow(
-                    label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
-                    help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
-                )
-            }
         }
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
@@ -1347,10 +1344,9 @@ private struct BrainBarDashboardView: View {
     }
 
     private func operationReceiptRow(label: String, value: String, help: String) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             Text(label)
-            Spacer(minLength: 8)
-            Text(value).monospacedDigit()
+            Text(value).monospacedDigit().lineLimit(1)
         }
         .font(.system(size: 12))
         .foregroundStyle(Color.brainBarTextSecondary)

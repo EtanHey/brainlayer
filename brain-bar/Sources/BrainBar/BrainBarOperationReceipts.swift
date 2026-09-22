@@ -43,8 +43,7 @@ struct BrainBarOperationReceipt: Codable, Equatable, Sendable {
         return "\(duration) · \(count) \(unit)\(suffix)"
     }
 
-    /// Known search providers place the shown count in this header.
-    /// Unknown response shapes stay unavailable rather than inferring from text.
+    /// Known providers emit this header; unknown shapes stay unavailable.
     static func searchCount(in text: String) -> Int? {
         for line in text.split(separator: "\n") {
             let value = String(line)
