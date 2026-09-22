@@ -147,6 +147,9 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     var accessibilityValue: String {
         var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
+        if lastBucketIsPartial, !values.isEmpty {
+            components.insert("latest bucket is partial", at: 1)
+        }
         if let accessibilitySummary {
             components.insert(accessibilitySummary, at: 0)
         }

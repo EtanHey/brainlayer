@@ -1934,6 +1934,19 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.relativeBucketLabel(for: 2), "10m-5m ago")
     }
 
+    func testSparklineChartPresentationDisclosesPartialLatestBucketToVoiceOver() {
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: [2, 5, 3],
+            lastBucketIsPartial: true
+        )
+
+        XCTAssertEqual(
+            presentation.accessibilityValue,
+            "latest bucket count 3, latest bucket is partial, trending down"
+        )
+    }
+
     func testSparklineChartPresentationNamesHoverBucketsByRecency() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
