@@ -110,6 +110,25 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertFalse(panel.hidesOnDeactivate)
         XCTAssertEqual(panel.contentViewController, controller.contentViewControllerForTesting)
         XCTAssertEqual(controller.contentViewControllerForTesting.view.frame.size, BrainBarDashboardPanelController.defaultSize)
+        XCTAssertTrue(panel.canBecomeKey)
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
+    }
+
+    func testOpeningSettingsTwiceSelectsTheSameVisiblePanel() {
+        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        controller.statusItemButton = anchor
+        defer { controller.dismiss() }
+
+        controller.showSettings()
+        XCTAssertEqual(controller.selectedTabForTesting, .settings)
+        XCTAssertTrue(controller.isShownForTesting)
+        let panel = controller.panelForTesting
+        controller.showSettings()
+        XCTAssertTrue(controller.isShownForTesting)
+        XCTAssertTrue(controller.panelForTesting === panel)
+        XCTAssertFalse(NSApp.windows.contains { $0.title == "BrainLayer Settings" })
     }
 
     func testDashboardPanelFitsRestingContentAndGrowsForDetails() {

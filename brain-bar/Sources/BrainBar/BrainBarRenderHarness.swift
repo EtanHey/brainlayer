@@ -163,7 +163,8 @@ enum BrainBarRenderHarness {
         let store = BrainLayerConfigStore(configURL: configURL)
         try store.save(.defaultConfig)
 
-        for breakpoint in breakpoints {
+        for section in BrainBarSettingsSection.allCases {
+          for breakpoint in breakpoints {
             let viewModel = BrainBarSettingsViewModel(
                 store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
@@ -177,10 +178,11 @@ enum BrainBarRenderHarness {
             let view = BrainBarUnifiedWindowPreview.make(
                 collector: BrainBarDashboardFixture.makeCollector(),
                 settingsViewModel: viewModel,
-                panelState: panelState
+                panelState: panelState,
+                section: section
             )
             let size = NSSize(width: breakpoint.width, height: panelState.fittingHeight)
-            let name = "unified-settings-\(breakpoint.name)"
+            let name = "unified-settings-\(section.rawValue)-\(breakpoint.name)"
             let host = NSHostingView(rootView: view)
             host.frame = NSRect(origin: .zero, size: size)
             settle(host)
@@ -198,6 +200,7 @@ enum BrainBarRenderHarness {
                 throw Failure("\(name): refusing blank render (\(png.count) bytes, \(colors) colors)")
             }
             print("[brainbar-render] \(name) \(Int(size.width))×\(Int(size.height)); wrote \(url.path) (\(png.count) bytes, \(colors) sampled colors)")
+          }
         }
     }
 

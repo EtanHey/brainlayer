@@ -14,7 +14,9 @@ struct BrainBarWindowRootView: View {
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 #if BRAINBAR_UI
-    private var settingsViewFactory: (String) -> AnyView = { AnyView(BrainBarSettingsView(databasePath: $0)) }
+    private var settingsViewFactory: (String, Int) -> AnyView = {
+        AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1))
+    }
 #endif
 
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
@@ -30,7 +32,7 @@ struct BrainBarWindowRootView: View {
 #if BRAINBAR_UI
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool,
          panelState: BrainBarDashboardPanelState,
-         settingsViewFactory: @escaping (String) -> AnyView) {
+         settingsViewFactory: @escaping (String, Int) -> AnyView) {
         self.init(runtime: runtime, managesWindowFrame: managesWindowFrame, panelState: panelState)
         self.settingsViewFactory = settingsViewFactory
     }
@@ -150,8 +152,7 @@ struct BrainBarWindowRootView: View {
 
 #if BRAINBAR_UI
     private var settingsContent: some View {
-        settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath())
-            .id(panelState.settingsActivationRevision)
+        settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath(), panelState.settingsActivationRevision)
     }
 #endif
 
@@ -3035,7 +3036,8 @@ enum BrainBarUnifiedWindowPreview {
     static func make(
         collector: StatsCollector,
         settingsViewModel: BrainBarSettingsViewModel,
-        panelState: BrainBarDashboardPanelState
+        panelState: BrainBarDashboardPanelState,
+        section: BrainBarSettingsSection = .general
     ) -> AnyView {
         let runtime = BrainBarRuntime()
         runtime.install(
@@ -3049,8 +3051,8 @@ enum BrainBarUnifiedWindowPreview {
                 runtime: runtime,
                 managesWindowFrame: false,
                 panelState: panelState,
-                settingsViewFactory: { _ in
-                    AnyView(BrainBarSettingsView(viewModel: settingsViewModel))
+                settingsViewFactory: { _, _ in
+                    AnyView(BrainBarSettingsView(viewModel: settingsViewModel, initialSection: section))
                 }
             )
             .environment(\.colorScheme, .dark)

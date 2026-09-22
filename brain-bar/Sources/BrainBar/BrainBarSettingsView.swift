@@ -199,15 +199,20 @@ final class BrainBarSettingsViewModel: ObservableObject {
         refreshObservabilityStatus()
     }
 
-    func reloadConfigFromDisk() -> Bool {
+    func reloadConfigFromDisk(preservingDrafts: Bool = false) -> Bool {
         do {
             let loaded = try store.loadDocument().config
+            let previous = config
             config = loaded
-            onePasswordReference = loaded.googleAPIKey.opReference
-            backendDraft = loaded.enrichmentBackend
+            if !preservingDrafts || onePasswordReference == previous.googleAPIKey.opReference {
+                onePasswordReference = loaded.googleAPIKey.opReference
+            }
+            if !preservingDrafts || backendDraft == previous.enrichmentBackend {
+                backendDraft = loaded.enrichmentBackend
+            }
             applyLaunchdStates(launchdObservations.mapValues(\.loadState))
             errorMessage = nil
-            lastSaveReceipt = nil
+            if !preservingDrafts { lastSaveReceipt = nil }
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -427,9 +432,34 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 }
 
+enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
+    case general, jobs, backups, advanced
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .general: "slider.horizontal.3"
+        case .jobs: "clock.arrow.circlepath"
+        case .backups: "externaldrive"
+        case .advanced: "gearshape.2"
+        }
+    }
+    var groups: [BrainLayerLaunchdJobGroup] { self == .jobs ? BrainLayerLaunchdJobGroup.allCases : [] }
+    var advancedJobs: [BrainLayerLaunchdJob] { self == .advanced ? BrainLayerLaunchdJobGroup.advancedJobs : [] }
+}
+
+@MainActor
+final class BrainBarSettingsNavigation: ObservableObject {
+    @Published private(set) var selected: BrainBarSettingsSection = .general
+    init(selected: BrainBarSettingsSection = .general) { self.selected = selected }
+    func select(_ section: BrainBarSettingsSection) { selected = section }
+}
+
 struct BrainBarSettingsView: View {
     @StateObject var viewModel: BrainBarSettingsViewModel
-    @State private var isAdvancedExpanded = BrainBarSettingsPresentation.defaultAdvancedExpanded
+    @StateObject private var navigation = BrainBarSettingsNavigation()
+    private let activationRevision: Int
 
     static func observabilityURL(
         databasePath: String,
@@ -438,65 +468,85 @@ struct BrainBarSettingsView: View {
         ObservabilityReader.url(dbPath: databasePath, environment: environment)
     }
 
-    init(databasePath: String) {
+    init(databasePath: String, activationRevision: Int = 0) {
+        self.activationRevision = activationRevision
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
             observabilityURL: Self.observabilityURL(databasePath: databasePath)
         ))
     }
 
-    init(viewModel: BrainBarSettingsViewModel) {
+    init(viewModel: BrainBarSettingsViewModel, initialSection: BrainBarSettingsSection = .general) {
+        activationRevision = 0
         _viewModel = StateObject(wrappedValue: viewModel)
+        _navigation = StateObject(wrappedValue: BrainBarSettingsNavigation(selected: initialSection))
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                if let errorMessage = viewModel.errorMessage {
-                    errorBanner(errorMessage)
-                }
-                if let receipt = viewModel.lastSaveReceipt {
-                    BrainBarSettingsPanel(title: "Last save receipt") {
-                        saveReceipt(receipt)
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 214)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(Color.brainBarGlassSecondary)
+            Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    header
+                    if let errorMessage = viewModel.errorMessage { errorBanner(errorMessage) }
+                    if let receipt = viewModel.lastSaveReceipt {
+                        VStack(alignment: .leading, spacing: 8) {
+                            sectionHeading("Last save receipt")
+                            saveReceipt(receipt)
+                        }
                     }
+                    sectionContent
                 }
-                BrainBarSettingsPanel(title: "Backup Status") {
-                    backupStatus
-                }
-                BrainBarSettingsPanel(title: "System Jobs") {
-                    jobsGrid
-                }
-                BrainBarSettingsPanel(title: "Interface") {
-                    Toggle(
-                        "Show retrieval tools",
-                        isOn: Binding(
-                            get: { viewModel.config.showRetrievalTools },
-                            set: { viewModel.setShowRetrievalTools($0) }
-                        )
-                    )
-                    Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.brainBarTextMuted)
-                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 25)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(22)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .frame(width: 700)
-        .frame(minHeight: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.brainBarBackgroundBase)
         .foregroundStyle(Color.brainBarTextPrimary)
         .environment(\.colorScheme, .dark)
+        .onChange(of: activationRevision) { _, _ in
+            _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
+            viewModel.refreshLaunchdStatus()
+            viewModel.refreshObservabilityStatus()
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("BrainBar")
+                .font(.system(size: 17, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 22)
+            ForEach(BrainBarSettingsSection.allCases) { section in
+                Button {
+                    navigation.select(section)
+                } label: {
+                    Label(section.title, systemImage: section.symbol)
+                        .font(.system(size: 13, weight: navigation.selected == section ? .semibold : .medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 9)
+                        .background(navigation.selected == section ? Color.brainBarGlassPrimary : .clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(navigation.selected == section ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(15)
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "gearshape.2")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(Color.brainBarAccentBright)
             VStack(alignment: .leading, spacing: 3) {
-                Text("BrainLayer Settings")
-                    .font(.system(size: 22, weight: .semibold))
+                Text(navigation.selected.title)
+                    .font(.system(size: 25, weight: .semibold))
                 Text(BrainLayerConfigStore.defaultConfigURL().path)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.brainBarTextMuted)
@@ -512,6 +562,49 @@ struct BrainBarSettingsView: View {
             .controlSize(.small)
             .disabled(viewModel.isRefreshingLaunchdStatus)
         }
+    }
+
+    @ViewBuilder
+    private var sectionContent: some View {
+        switch navigation.selected {
+        case .general:
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeading("Interface")
+                HStack {
+                    Text("Show retrieval tools")
+                    Spacer()
+                    Toggle("Show retrieval tools", isOn: Binding(
+                        get: { viewModel.config.showRetrievalTools },
+                        set: { viewModel.setShowRetrievalTools($0) }
+                    )).labelsHidden()
+                }
+                Divider()
+                Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
+                    .font(.system(size: 11)).foregroundStyle(Color.brainBarTextMuted)
+            }
+        case .jobs:
+            VStack(alignment: .leading, spacing: 16) {
+                sectionHeading("System jobs")
+                jobsGrid
+            }
+        case .backups:
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeading("Backup status")
+                backupStatus
+            }
+        case .advanced:
+            VStack(alignment: .leading, spacing: 16) {
+                sectionHeading("Advanced jobs")
+                ForEach(navigation.selected.advancedJobs) { job in
+                    BrainBarJobToggle(job: job, viewModel: viewModel)
+                    Divider()
+                }
+            }
+        }
+    }
+
+    private func sectionHeading(_ title: String) -> some View {
+        Text(title).font(.system(size: 14, weight: .semibold))
     }
 
     private func saveReceipt(_ receipt: BrainLayerSettingsSaveReceipt) -> some View {
@@ -534,32 +627,20 @@ struct BrainBarSettingsView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.brainBarTextMuted)
                 .frame(width: 110, alignment: .leading)
+            Spacer(minLength: 12)
             Text(value)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextSecondary)
                 .textSelection(.enabled)
         }
+        .padding(.vertical, 5)
     }
 
     private var jobsGrid: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(BrainLayerLaunchdJobGroup.allCases) { group in
+            ForEach(navigation.selected.groups) { group in
                 BrainBarJobGroupCard(group: group, viewModel: viewModel)
-            }
-            DisclosureGroup(isExpanded: $isAdvancedExpanded) {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 205), spacing: 12)],
-                    alignment: .leading,
-                    spacing: 12
-                ) {
-                    ForEach(BrainBarSettingsPresentation.visibleAdvancedJobs(isExpanded: isAdvancedExpanded)) { job in
-                        BrainBarJobToggle(job: job, viewModel: viewModel)
-                    }
-                }
-                .padding(.top, 8)
-            } label: {
-                Text("Advanced")
-                    .font(.system(size: 12, weight: .semibold))
+                Divider()
             }
         }
     }
@@ -601,13 +682,7 @@ private struct BrainBarJobGroupCard: View {
         let status = viewModel.groupStatus(group)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Toggle(
-                    group.title,
-                    isOn: Binding(
-                        get: { viewModel.isGroupEnabled(group) },
-                        set: { viewModel.setGroup(group, enabled: $0) }
-                    )
-                )
+                Text(group.title).font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Label(
                     status.health.title,
@@ -619,6 +694,10 @@ private struct BrainBarJobGroupCard: View {
                             ? BrainBarStateTheme.active.theme.swiftUIColor
                             : BrainBarStateTheme.error.theme.swiftUIColor
                     )
+                Toggle(group.title, isOn: Binding(
+                    get: { viewModel.isGroupEnabled(group) },
+                    set: { viewModel.setGroup(group, enabled: $0) }
+                )).labelsHidden()
             }
             Text(group.summary)
                 .font(.system(size: 11, weight: .medium))
@@ -626,49 +705,21 @@ private struct BrainBarJobGroupCard: View {
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)
         }
-        .padding(12)
-        .background(Color.brainBarGlassSecondary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.brainBarBorderSoft, lineWidth: 1)
-        )
+        .padding(.vertical, 6)
     }
 
     private func groupTiming(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
                 .font(.system(size: 9, weight: .bold))
                 .tracking(0.6)
                 .foregroundStyle(Color.brainBarTextMuted)
+                .frame(width: 72, alignment: .leading)
             Text(value)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.brainBarTextSecondary)
+            Spacer(minLength: 0)
         }
-    }
-}
-
-private struct BrainBarSettingsPanel<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.brainBarTextPrimary)
-            VStack(alignment: .leading, spacing: 12) {
-                content
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.brainBarGlassPrimary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.brainBarBorderEdge, lineWidth: 1)
-        )
     }
 }
 
@@ -679,13 +730,14 @@ private struct BrainBarJobToggle: View {
     var body: some View {
         let setting = viewModel.config.launchdJobs[job] ?? BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown)
         VStack(alignment: .leading, spacing: 7) {
-            Toggle(
-                job.title,
-                isOn: Binding(
+            HStack {
+                Text(job.title).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Toggle(job.title, isOn: Binding(
                     get: { viewModel.config.launchdJobs[job]?.enabled ?? true },
                     set: { viewModel.setJob(job, enabled: $0) }
-                )
-            )
+                )).labelsHidden()
+            }
             HStack(spacing: 6) {
                 Circle()
                     .fill(loadStateColor(setting.loadState))
@@ -698,13 +750,7 @@ private struct BrainBarJobToggle: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)
         }
-        .padding(12)
-        .background(Color.brainBarGlassSecondary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.brainBarBorderSoft, lineWidth: 1)
-        )
+        .padding(.vertical, 7)
     }
 
     private func loadStateColor(_ state: BrainLayerLaunchdLoadState) -> Color {
