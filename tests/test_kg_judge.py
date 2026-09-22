@@ -364,6 +364,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_build_sha.py",
         "test_ci_ratchet_table.py",
         "test_doctor.py",
+        "test_git_env_containment.py",
         "test_git_learning.py",
         "test_kg_judge.py",
         "test_maintenance_code_freshness.py",

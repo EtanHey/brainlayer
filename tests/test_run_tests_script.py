@@ -161,6 +161,10 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
                 '  echo "RANGE=${BRAINLAYER_CHANGED_FILES_RANGE:-<unset>}"',
                 '  echo "FILES=${BRAINLAYER_CHANGED_FILES:-<unset>}"',
                 '  echo "TAG=${BRAINLAYER_PREPUSH_TAG:-<unset>}"',
+                '  echo "GIT_DIR=${GIT_DIR:-<unset>}"',
+                '  echo "GIT_INDEX_FILE=${GIT_INDEX_FILE:-<unset>}"',
+                '  echo "GIT_WORK_TREE=${GIT_WORK_TREE:-<unset>}"',
+                '  echo "GIT_COMMON_DIR=${GIT_COMMON_DIR:-<unset>}"',
                 '} >> "$HOOK_ENV_LOG"',
                 "exit 0",
                 "",
@@ -1328,6 +1332,44 @@ def test_pre_push_hook_leaves_a_branch_push_alone(tmp_path: Path) -> None:
     handed = env_log.read_text()
     assert "SCOPE=<unset>" in handed
     assert "RANGE=<unset>" in handed
+
+
+def test_pre_push_hook_scrubs_git_routing_only_after_parsing_refs(tmp_path: Path) -> None:
+    """The hook may use its Git context, but the test runner must never inherit it.
+
+    Git exports these variables to hooks launched from a linked worktree. An inherited `GIT_DIR`
+    overrides every fixture's `git -C`: that exact shape let an otherwise disposable `git init`
+    rewrite this repository's shared config and refs. Feed a real branch ref first, then assert the
+    runner boundary removed all four routing variables.
+    """
+    repo = _repo_with_two_tags(tmp_path)
+    linked = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "-b", "fixture-linked", str(linked), "HEAD")
+    (linked / "scripts").mkdir()
+    env_log = _install_pre_push_hook(linked, tmp_path)
+    git_dir = subprocess.check_output(
+        ["git", "-C", str(linked), "rev-parse", "--absolute-git-dir"],
+        text=True,
+        env=_clean_git_env(),
+    ).strip()
+    sha = _rev_parse(linked, "HEAD")
+
+    result = _run_hook(
+        linked,
+        env_log,
+        f"refs/heads/fixture-linked {sha} refs/heads/fixture-linked {'0' * 40}\n",
+        extra_env={
+            "GIT_DIR": git_dir,
+            "GIT_INDEX_FILE": str(Path(git_dir) / "index"),
+            "GIT_WORK_TREE": str(linked),
+            "GIT_COMMON_DIR": str(repo / ".git"),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text(encoding="utf-8")
+    for name in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        assert f"{name}=<unset>" in handed
 
 
 def test_pre_push_hook_leaves_a_mixed_branch_and_tag_push_alone(tmp_path: Path) -> None:
