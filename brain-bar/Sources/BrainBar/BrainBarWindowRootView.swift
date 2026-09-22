@@ -2354,12 +2354,13 @@ private struct BrainBarAnimatedCoverageBar: View {
             }
         }
         .onAppear {
+#if DEBUG
+            // Count the fill lifecycle even when Reduce Motion makes it instantaneous.
+            BrainBarCoverageLifecycleProbe.recordFillStart(signalID)
+#endif
             if reduceMotion {
                 displayedPercent = percent
             } else {
-#if DEBUG
-                BrainBarCoverageLifecycleProbe.recordFillStart(signalID)
-#endif
                 displayedPercent = 0
                 withAnimation(.easeOut(duration: 0.45)) {
                     displayedPercent = percent
