@@ -1450,21 +1450,18 @@ def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_succ
     assert "com.brainlayer.enrichment:enrichment_unloaded" not in saved["heal_tripped"]
 
 
-def test_health_check_does_not_bootstrap_label_recorded_in_active_pause_sentinel(tmp_path):
+def test_health_check_classifies_unloaded_label_recorded_in_active_pause_as_healthy(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     pause_path = tmp_path / "pause.sentinel"
     _make_db(db_path, total=1, vector_rows=1)
-    pause_path.write_text(
-        json.dumps(
-            {
-                "labels": ["com.brainlayer.enrichment"],
-                "created_at": "2026-08-02T09:00:00+00:00",
-                "expires_at": "2026-08-02T11:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
+    pause_payload = {
+        "labels": ["com.brainlayer.enrichment"],
+        "created_at": "2026-08-02T09:00:00+00:00",
+        "expires_at": "2026-08-02T11:00:00+00:00",
+        "reason": "provenance safety",
+    }
+    pause_path.write_text(json.dumps(pause_payload), encoding="utf-8")
     commands: list[list[str]] = []
 
     def command_runner(args: list[str]):
@@ -1490,9 +1487,12 @@ def test_health_check_does_not_bootstrap_label_recorded_in_active_pause_sentinel
     )
 
     enrichment_commands = [command for command in commands if "com.brainlayer.enrichment" in " ".join(command)]
-    assert "enrichment_unloaded" in [issue.code for issue in result.issues]
+    assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
+    assert result.ok is True
     assert not [command for command in enrichment_commands if command[:2] == ["launchctl", "bootstrap"]]
     assert not [command for command in enrichment_commands if command[:2] == ["launchctl", "enable"]]
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["pause_sentinel"] == pause_payload
 
 
 def test_health_check_bootstraps_non_paused_labels_during_active_pause(tmp_path, monkeypatch):

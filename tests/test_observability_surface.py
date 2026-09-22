@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
@@ -174,6 +175,36 @@ def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     trace_items = json.loads(trace.read_text())
     assert trace_items[0] == str(case["inputs"]["db"])
     assert len(trace_items) == 5
+
+
+def test_transitive_backup_import_failure_names_the_missing_dependency(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import brainlayer.observability_surface as surface
+
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = _stage_db(case, tmp_path)
+    original_import = builtins.__import__
+
+    def fail_backup_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 1 and name == "observability_backup":
+            raise ModuleNotFoundError("No module named 'idna'", name="idna")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_backup_import)
+    document, _ = surface.build_document(
+        env={
+            "BRAINLAYER_DB": str(db),
+            "BRAINLAYER_OBSERVABILITY_INPUT_ROOT": str(tmp_path / "inputs"),
+            "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"]),
+        }
+    )
+
+    assert document["backups"] == {
+        "state": "unmeasurable",
+        "reason": "backups import failed: ModuleNotFoundError: No module named 'idna'",
+        "inputs": [],
+    }
 
 
 def test_trace_only_input_is_excluded_from_recorder_section_inputs(tmp_path: Path) -> None:

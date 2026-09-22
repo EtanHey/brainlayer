@@ -1,17 +1,34 @@
 """Vector index for style message embeddings (ChromaDB)."""
 
-import hashlib
-from pathlib import Path
-from typing import Optional
+from __future__ import annotations
 
-import chromadb
-from chromadb.config import Settings
+import hashlib
+import importlib
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    import chromadb
 
 from .unified_timeline import UnifiedMessage
 
 DEFAULT_DB_PATH = Path.home() / ".local" / "share" / "brainlayer" / "chromadb"
 STYLE_COLLECTION = "style_messages"
 CHROMADB_BATCH_SIZE = 1000
+
+
+def _style_dependencies():
+    """Import style-extra modules on use while preserving transitive failures."""
+    try:
+        chromadb = importlib.import_module("chromadb")
+    except ModuleNotFoundError as exc:
+        if exc.name == "chromadb":
+            raise ModuleNotFoundError(
+                "style indexing requires 'chromadb'; install the 'brainlayer[style]' extra"
+            ) from exc
+        raise
+    settings = importlib.import_module("chromadb.config").Settings
+    return chromadb, settings
 
 
 def _msg_id(msg: UnifiedMessage, idx: int) -> str:
@@ -28,10 +45,11 @@ def _timestamp_epoch(msg: UnifiedMessage) -> float:
 
 def get_style_client(db_path: Path = DEFAULT_DB_PATH) -> chromadb.Client:
     """Get ChromaDB client for style index."""
+    chromadb, settings = _style_dependencies()
     db_path.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(
         path=str(db_path),
-        settings=Settings(anonymized_telemetry=False, allow_reset=True),
+        settings=settings(anonymized_telemetry=False, allow_reset=True),
     )
 
 

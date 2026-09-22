@@ -18,7 +18,10 @@ Usage:
     python3 -m brainlayer.clustering [--db-path PATH] [--k 30] [--dry-run]
 """
 
+from __future__ import annotations
+
 import argparse
+import importlib
 import json
 import logging
 import struct
@@ -26,14 +29,14 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import apsw
-import faiss
-import igraph as ig
-import leidenalg
 import numpy as np
 import sqlite_vec
+
+if TYPE_CHECKING:
+    import igraph as ig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +52,18 @@ EMBEDDING_DIM = 1024
 
 # Target cluster counts at each level
 LEVEL_TARGETS = [40, 10, 10]  # L0: ~40 top, L1: ~10 per L0, L2: ~10 per L1
+
+
+def _optional_brain_dependency(module_name: str):
+    """Import one brain-extra module without concealing a broken installation."""
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            raise ModuleNotFoundError(
+                f"clustering requires '{module_name}'; install the 'brainlayer[brain]' extra"
+            ) from exc
+        raise
 
 
 def serialize_f32(vector) -> bytes:
@@ -128,6 +143,7 @@ def build_knn_graph(embeddings: np.ndarray, k: int = 30):
         distances: (N, k) array of cosine similarities
         indices: (N, k) array of neighbor indices
     """
+    faiss = _optional_brain_dependency("faiss")
     n, d = embeddings.shape
     logger.info(f"L2-normalizing {n} embeddings...")
     faiss.normalize_L2(embeddings)  # in-place
@@ -155,6 +171,7 @@ def knn_to_igraph(indices: np.ndarray, distances: np.ndarray, n: int):
 
     Collapses directed KNN edges into undirected with max weight.
     """
+    ig = _optional_brain_dependency("igraph")
     logger.info(f"Building igraph from KNN ({n} nodes)...")
 
     edge_set = set()
@@ -199,6 +216,7 @@ def find_resolution_for_target(
 
     tolerance: fraction of target we accept (e.g., 0.2 = within 20%)
     """
+    leidenalg = _optional_brain_dependency("leidenalg")
     best_res = (lo + hi) / 2
     best_diff = float("inf")
 
@@ -252,6 +270,7 @@ def recursive_leiden(
     Returns:
         list of cluster dicts: {id, level, parent_id, path, node_indices, centroid}
     """
+    leidenalg = _optional_brain_dependency("leidenalg")
     if level >= len(level_targets):
         return []
 
