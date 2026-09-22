@@ -2247,20 +2247,28 @@ private struct BrainBarSignalCoveragePanel: View {
                 .foregroundStyle(Color.brainBarTextPrimary)
         }
         .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(signal.presentation.accessibilityLabel(for: signal.name))
+        .help(signal.presentation.accessibilityLabel(for: signal.name))
     }
 
     @ViewBuilder
     private var signalBars: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .top, spacing: compact ? 8 : 10) {
-                ForEach(signals) { signal in
-                    signalColumn(for: signal)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Indexed / eligible chunks")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: compact ? 8 : 10) {
+                    ForEach(signals) { signal in
+                        signalColumn(for: signal)
+                    }
                 }
-            }
 
-            VStack(spacing: 8) {
-                ForEach(signals) { signal in
-                    signalColumn(for: signal)
+                VStack(spacing: 8) {
+                    ForEach(signals) { signal in
+                        signalColumn(for: signal)
+                    }
                 }
             }
         }
@@ -2320,6 +2328,57 @@ private struct BrainBarSignalCoveragePanel: View {
     }
 }
 
+struct BrainBarCoveragePresentation {
+    let indexedCount: Int
+    let eligibleCount: Int
+    let isAvailable: Bool
+
+    var isMeasurable: Bool {
+        isAvailable && eligibleCount > 0 && indexedCount >= 0 && indexedCount <= eligibleCount
+    }
+
+    var missingCount: Int? {
+        isMeasurable ? eligibleCount - indexedCount : nil
+    }
+
+    var percentText: String {
+        guard isAvailable else { return "Unavailable" }
+        guard eligibleCount > 0 else { return indexedCount == 0 ? "No eligible" : "Unavailable" }
+        guard isMeasurable else { return "Unavailable" }
+        if indexedCount == eligibleCount { return "100%" }
+        // An incomplete fraction must never round up to a complete-looking 100%.
+        return "\(min(99, Int((Double(indexedCount) / Double(eligibleCount) * 100).rounded())))%"
+    }
+
+    var countText: String {
+        guard isAvailable else { return "Counts unavailable" }
+        guard eligibleCount > 0 || indexedCount != 0 else { return "0 eligible chunks" }
+        guard isMeasurable else { return "Counts disagree" }
+        return "\(formatted(indexedCount)) / \(formatted(eligibleCount))"
+    }
+
+    var fillPercent: Double {
+        guard isMeasurable else { return 0 }
+        return Double(indexedCount) / Double(eligibleCount) * 100
+    }
+
+    func accessibilityLabel(for name: String) -> String {
+        guard isMeasurable, let missingCount else {
+            switch countText {
+            case "0 eligible chunks": return "\(name): No eligible chunks"
+            case "Counts disagree":
+                return "\(name): Coverage counts disagree: \(formatted(indexedCount)) indexed, \(formatted(eligibleCount)) eligible"
+            default: return "\(name): Coverage counts unavailable"
+            }
+        }
+        return "\(name): \(percentText); \(formatted(indexedCount)) of \(formatted(eligibleCount)) eligible chunks indexed; \(formatted(missingCount)) not indexed"
+    }
+
+    private func formatted(_ value: Int) -> String {
+        value.formatted(.number.locale(Locale(identifier: "en_US")))
+    }
+}
+
 private struct BrainBarSignalCoverage: Identifiable {
     let name: String
     let indexedCount: Int
@@ -2334,18 +2393,21 @@ private struct BrainBarSignalCoverage: Identifiable {
 
     var id: String { name }
 
+    var presentation: BrainBarCoveragePresentation {
+        BrainBarCoveragePresentation(indexedCount: indexedCount, eligibleCount: totalCount, isAvailable: isAvailable)
+    }
+
     var percentText: String {
-        guard isAvailable else { return "computing…" }
-        return String(format: "%.0f%%", coveragePercent)
+        presentation.percentText
     }
 
     var clampedCoveragePercent: Double {
-        min(max(coveragePercent, 0), 100)
+        presentation.fillPercent
     }
 
     var backlogText: String {
-        guard isAvailable else { return "computing…" }
-        return NumberFormatter.localizedString(from: NSNumber(value: backlogCount), number: .decimal)
+        guard let missingCount = presentation.missingCount else { return "unavailable" }
+        return NumberFormatter.localizedString(from: NSNumber(value: missingCount), number: .decimal)
     }
 }
 
@@ -2368,7 +2430,7 @@ private struct BrainBarSignalCoverageRow: View {
                     .monospacedDigit()
             }
 
-            if signal.isAvailable {
+            if signal.presentation.isMeasurable {
                 BrainBarAnimatedCoverageBar(
                     signalID: signal.id,
                     percent: signal.clampedCoveragePercent,
@@ -2379,6 +2441,19 @@ private struct BrainBarSignalCoverageRow: View {
                 Capsule()
                     .fill(signal.accentColor.opacity(0.16))
                     .frame(height: 6)
+            }
+
+            Text(signal.presentation.countText)
+                .font(.system(size: compact ? 10 : 11))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if let missingCount = signal.presentation.missingCount, missingCount > 0 {
+                Text("\(missingCount.formatted(.number.locale(Locale(identifier: "en_US")))) not indexed")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .monospacedDigit()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2391,6 +2466,9 @@ private struct BrainBarSignalCoverageRow: View {
         .shadow(color: isSelected ? signal.accentColor.opacity(0.18) : .clear, radius: 12, y: 2)
         .scaleEffect(isSelected ? 0.98 : 1)
         .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: signal.clampedCoveragePercent)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(signal.presentation.accessibilityLabel(for: signal.name))
+        .help(signal.presentation.accessibilityLabel(for: signal.name))
 #if DEBUG
         .onAppear {
             BrainBarCoverageLifecycleProbe.recordLabel(signal.id, signal.percentText)
