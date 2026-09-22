@@ -1412,7 +1412,7 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
-def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_success(tmp_path):
+def test_health_check_never_bootstraps_absent_enrichment(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=1, vector_rows=1)
@@ -1459,16 +1459,12 @@ def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_succ
         now_fn=lambda: datetime(2026, 6, 21, 10, 0, tzinfo=UTC),
     )
 
-    assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
-    assert [
-        "launchctl",
-        "bootstrap",
-        f"gui/{os.getuid()}",
-        str(Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist").expanduser()),
-    ] in commands
-    assert "bootstrap:com.brainlayer.enrichment" in result.actions
-    saved = json.loads(state_path.read_text(encoding="utf-8"))
-    assert "com.brainlayer.enrichment:enrichment_unloaded" not in saved["heal_tripped"]
+    assert "enrichment_unloaded" in [issue.code for issue in result.issues]
+    assert not any(
+        "com.brainlayer.enrichment" in " ".join(command) and command[:2] == ["launchctl", "bootstrap"]
+        for command in commands
+    )
+    assert "bootstrap:com.brainlayer.enrichment" not in result.actions
 
 
 def test_health_check_classifies_unloaded_label_recorded_in_active_pause_as_healthy(tmp_path):
@@ -1595,7 +1591,8 @@ def test_health_check_surfaces_disabled_launchd_action(tmp_path, monkeypatch):
         now_fn=lambda: datetime(2026, 8, 2, 10, 0, tzinfo=UTC),
     )
 
-    assert "disabled:com.brainlayer.enrichment" in result.actions
+    assert "disabled:com.brainlayer.watch" in result.actions
+    assert "disabled:com.brainlayer.enrichment" not in result.actions
 
 
 def test_run_health_check_references_mode_d_detector_helpers():
