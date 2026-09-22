@@ -2097,9 +2097,9 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(sparse.nonZeroFraction(.primary), 0.2, accuracy: 0.001)
         XCTAssertFalse(sparse.isDense(.primary))
         XCTAssertTrue(sparse.isDense(.secondary))
-        XCTAssertEqual(sparse.axisMax, 5)
-        XCTAssertEqual(sparse.tightAxisMax, 3)
-        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 3])
+        XCTAssertEqual(sparse.axisMax, 4)
+        XCTAssertEqual(sparse.tightAxisMax, 4)
+        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 4])
 
         let larger = SparklineChartPresentation(
             label: "Writes over 30m",
@@ -2110,6 +2110,51 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(larger.tightAxisMax, larger.axisMax)
         XCTAssertEqual(larger.axisMax, 10)
+    }
+
+    func testSparklineAxisCeilingStaysJustAboveTheObservedPeak() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 51, 71],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.axisMax, 80)
+        XCTAssertEqual(presentation.tightAxisMax, 80)
+        XCTAssertGreaterThan(presentation.axisMax, presentation.maxValue)
+        XCTAssertLessThanOrEqual(Double(presentation.axisMax) / Double(presentation.maxValue), 1.15)
+        XCTAssertEqual(presentation.tightYAxisTicks, [0, 40, 80])
+    }
+
+    func testSparklineAxisCeilingKeepsBoundedHeadroomAcrossMagnitudeBoundaries() {
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "Single write", values: [1]).axisMax,
+            1,
+            "A peak of one is the intentional integer exception to strict headroom."
+        )
+
+        let examples = [
+            (peak: 11, ceiling: 12),
+            (peak: 101, ceiling: 120),
+            (peak: 1_001, ceiling: 1_200),
+        ]
+
+        for example in examples {
+            let presentation = SparklineChartPresentation(
+                label: "Writes over 30m",
+                values: [0, example.peak],
+                activityWindowMinutes: 30,
+                fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+            )
+
+            XCTAssertEqual(presentation.axisMax, example.ceiling)
+            XCTAssertGreaterThan(presentation.axisMax, example.peak)
+            XCTAssertLessThanOrEqual(
+                Double(presentation.axisMax) / Double(example.peak),
+                1.20
+            )
+        }
     }
 
     func testSparklineCompactMarkersPreferLatestPointForSparseSeries() {
