@@ -445,7 +445,13 @@ enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
         case .advanced: "gearshape.2"
         }
     }
-    var groups: [BrainLayerLaunchdJobGroup] { self == .jobs ? BrainLayerLaunchdJobGroup.allCases : [] }
+    var groups: [BrainLayerLaunchdJobGroup] {
+        switch self {
+        case .jobs: [.ingest, .maintenance]
+        case .backups: [.backups]
+        case .general, .advanced: []
+        }
+    }
     var advancedJobs: [BrainLayerLaunchdJob] { self == .advanced ? BrainLayerLaunchdJobGroup.advancedJobs : [] }
 }
 
@@ -502,6 +508,7 @@ struct BrainBarSettingsView: View {
                 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 25)
+                .frame(maxWidth: 720, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
@@ -518,10 +525,6 @@ struct BrainBarSettingsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("BrainBar")
-                .font(.system(size: 17, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.bottom, 22)
             ForEach(BrainBarSettingsSection.allCases) { section in
                 Button {
                     navigation.select(section)
@@ -533,6 +536,7 @@ struct BrainBarSettingsView: View {
                         .padding(.vertical, 9)
                         .background(navigation.selected == section ? Color.brainBarGlassPrimary : .clear)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(navigation.selected == section ? .isSelected : [])
@@ -576,7 +580,7 @@ struct BrainBarSettingsView: View {
                     Toggle("Show retrieval tools", isOn: Binding(
                         get: { viewModel.config.showRetrievalTools },
                         set: { viewModel.setShowRetrievalTools($0) }
-                    )).labelsHidden()
+                    )).labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
                 Divider()
                 Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
@@ -584,17 +588,16 @@ struct BrainBarSettingsView: View {
             }
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
-                sectionHeading("System jobs")
                 jobsGrid
             }
         case .backups:
-            VStack(alignment: .leading, spacing: 12) {
-                sectionHeading("Backup status")
+            VStack(alignment: .leading, spacing: 16) {
+                BrainBarJobGroupCard(group: .backups, viewModel: viewModel)
+                Divider()
                 backupStatus
             }
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
-                sectionHeading("Advanced jobs")
                 ForEach(navigation.selected.advancedJobs) { job in
                     BrainBarJobToggle(job: job, viewModel: viewModel)
                     Divider()
@@ -697,7 +700,7 @@ private struct BrainBarJobGroupCard: View {
                 Toggle(group.title, isOn: Binding(
                     get: { viewModel.isGroupEnabled(group) },
                     set: { viewModel.setGroup(group, enabled: $0) }
-                )).labelsHidden()
+                )).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             Text(group.summary)
                 .font(.system(size: 11, weight: .medium))
@@ -736,7 +739,7 @@ private struct BrainBarJobToggle: View {
                 Toggle(job.title, isOn: Binding(
                     get: { viewModel.config.launchdJobs[job]?.enabled ?? true },
                     set: { viewModel.setJob(job, enabled: $0) }
-                )).labelsHidden()
+                )).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             HStack(spacing: 6) {
                 Circle()

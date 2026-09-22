@@ -112,7 +112,10 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             XCTAssertEqual(navigation.selected, section)
             XCTAssertEqual(try Data(contentsOf: store.configURL), before)
         }
-        XCTAssertEqual(Set(BrainBarSettingsSection.jobs.groups), Set(BrainLayerLaunchdJobGroup.allCases))
+        XCTAssertEqual(
+            Set(BrainBarSettingsSection.jobs.groups + BrainBarSettingsSection.backups.groups),
+            Set(BrainLayerLaunchdJobGroup.allCases)
+        )
         XCTAssertEqual(BrainBarSettingsSection.advanced.advancedJobs, BrainLayerLaunchdJobGroup.advancedJobs)
     }
 
