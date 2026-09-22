@@ -60,6 +60,7 @@
 - #926: Disclose Settings locality and model residency in BrainBar.
 - #929: Self-heal failed BrainLayer jobs with badge escalation.
 - #930: Preserve self-heal state across uncertain health checks.
+- #933: Verify installed keg native-library loadability alongside signatures.
 
 ## [1.0.0] - 2026-02-19
 
