@@ -1430,6 +1430,8 @@ def run_health_check(
         if issue_code == "drain_unloaded":
             drain_loaded = loaded
         if loaded is False:
+            if pause_active and pause_applies_to_label(pause_payload, label):
+                continue
             add_issue(issue_code, "critical", message)
             heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
     if slow_result := deadline_reached("launchd_status"):
