@@ -886,6 +886,7 @@ private struct BrainBarDashboardView: View {
     @State private var ingestHelpPresented = false
     @State private var lastSearchReceipt: BrainBarOperationReceipt?
     @State private var lastIngestReceipt: BrainBarOperationReceipt?
+    @State private var receiptDisplayNow = Date()
 
     private var pipelineStats: BrainDatabase.DashboardStats {
         guard selectedTimeframe != .live,
@@ -1045,6 +1046,7 @@ private struct BrainBarDashboardView: View {
 #endif
         .onAppear {
             receiptStore.reload()
+            receiptDisplayNow = referenceNow ?? Date()
             lastSearchReceipt = receiptStore.search
             lastIngestReceipt = receiptStore.ingest
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
@@ -1060,6 +1062,12 @@ private struct BrainBarDashboardView: View {
             receiptStore.reload()
             if lastSearchReceipt != receiptStore.search { lastSearchReceipt = receiptStore.search }
             if lastIngestReceipt != receiptStore.ingest { lastIngestReceipt = receiptStore.ingest }
+            if referenceNow == nil {
+                let now = Date()
+                if Int(now.timeIntervalSince1970 / 60) != Int(receiptDisplayNow.timeIntervalSince1970 / 60) {
+                    receiptDisplayNow = now
+                }
+            }
         }
         .onChange(of: collector.stats.recentActivityBuckets) { _, newBuckets in
             if BrainBarPipelinePulseGate.shouldPulse(
@@ -1324,11 +1332,11 @@ private struct BrainBarDashboardView: View {
             }
             VStack(spacing: 5) {
                 operationReceiptRow(
-                    label: "Last search", value: lastSearchReceipt?.value ?? "unavailable",
+                    label: "Last search", value: lastSearchReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
                     help: "Most recent brain_search handled by BrainBar."
                 )
                 operationReceiptRow(
-                    label: "Last ingest", value: lastIngestReceipt?.value ?? "unavailable",
+                    label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
                     help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
                 )
             }

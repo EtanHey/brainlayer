@@ -204,7 +204,7 @@ final class MCPRouter: @unchecked Sendable {
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
         backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970,
-        receiptStore: BrainBarOperationReceipts = .shared
+        receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts()
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
@@ -219,6 +219,10 @@ final class MCPRouter: @unchecked Sendable {
         )
         self.backupWriterStartedAtUnix = backupWriterStartedAtUnix
     }
+
+#if DEBUG
+    var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
+#endif
 
     private static func resolveToolProfile(_ explicitProfile: String?) -> ToolProfile {
         let environmentProfile = ProcessInfo.processInfo.environment[profileEnvironmentKey]
