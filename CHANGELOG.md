@@ -38,6 +38,29 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.36] - 2026-09-23
+
+- #909: Expose backup import dependency failures in observability diagnostics.
+- #910: Respect deliberately paused launchd jobs in health checks.
+- #911: Accept an empty corpus in the canary health check.
+- #912: Use the query-embedding interface for digest passage retrieval.
+- #913: Keep BrainBar ingest charts readable at rest.
+- #914: Declare required runtime dependencies and gate installed module and hook imports.
+- #915: Contain inherited Git repository variables in hook tests.
+- #916: Unify Settings inside the BrainBar panel.
+- #917: Isolate Git reads when maintenance classifies installed code.
+- #918: Preserve the SQLite error when an index dedupe savepoint disappears.
+- #919: Retain BrainBar coverage fills while toggling Details.
+- #920: Add the BrainBar Settings sidebar and section layout.
+- #921: Restart loaded BrainLayer jobs after upgrade with verification.
+- #922: Cap installed BrainLayer job logs.
+- #923: Align BrainBar badge paths and confirm API-key replacement.
+- #924: Report stalled drain progress without hiding a stale heartbeat.
+- #925: Show measured search and store receipts in BrainBar.
+- #926: Disclose Settings locality and model residency in BrainBar.
+- #929: Self-heal failed BrainLayer jobs with badge escalation.
+- #930: Preserve self-heal state across uncertain health checks.
+
 ## [1.0.0] - 2026-02-19
 
 ### Added
