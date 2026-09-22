@@ -181,12 +181,14 @@ def test_cli_caps_valid_log_and_exits_nonzero_for_each_bad_plist(tmp_path):
     for name in ("bad-one", "bad-two"):
         (agents_dir / f"com.brainlayer.{name}.plist").write_bytes(b"not a plist")
 
-    script = Path(__file__).resolve().parents[1] / "src/brainlayer/log_cap.py"
+    src = Path(__file__).resolve().parents[1] / "src"
+    args = ["--agents-dir", str(agents_dir), "--max-bytes", "100", "--keep-bytes", "50"]
     result = subprocess.run(
-        [sys.executable, str(script), "--agents-dir", str(agents_dir), "--max-bytes", "100", "--keep-bytes", "50"],
+        [sys.executable, "-m", "brainlayer.log_cap", *args],
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, "PYTHONPATH": str(src)},
     )
     assert result.returncode == 1
     assert "com.brainlayer.bad-one: InvalidFileException" in result.stderr
