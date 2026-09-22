@@ -22,6 +22,31 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.hero, 72, accuracy: 0.001)
     }
 
+    func testSemanticStatusesStaySeparateFromSignalsAndTextHonorsNinePointFloor() {
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusOK.hexRGB, "#30DC97")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusAttention.hexRGB, "#F5B34A")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusError.hexRGB, "#FF6B7D")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusUnknown.hexRGB, "#8A8A90")
+        let signalAndSeriesColors = [
+            BrainBarDesignTokens.Colors.signalVector,
+            BrainBarDesignTokens.Colors.signalFTS5,
+            BrainBarDesignTokens.Colors.signalTrigram,
+            BrainBarDesignTokens.Colors.seriesAgent,
+            BrainBarDesignTokens.Colors.seriesWatcher,
+        ]
+        let statusColors = [
+            BrainBarDesignTokens.Colors.statusOK,
+            BrainBarDesignTokens.Colors.statusAttention,
+            BrainBarDesignTokens.Colors.statusError,
+            BrainBarDesignTokens.Colors.statusUnknown,
+        ]
+        for statusColor in statusColors {
+            XCTAssertFalse(signalAndSeriesColors.contains(statusColor))
+        }
+        XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
+        XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(11), 11, accuracy: 0.001)
+    }
+
     func testStateThemesExposeGroundTruthSemanticColors() {
         XCTAssertEqual(BrainBarStateTheme.idle.theme.color.hexRGB, "#506C8A")
         XCTAssertEqual(BrainBarStateTheme.active.theme.color.hexRGB, "#30DC97")

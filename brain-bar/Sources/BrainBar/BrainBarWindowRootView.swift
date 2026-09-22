@@ -1122,9 +1122,9 @@ private struct BrainBarDashboardView: View {
         let queueDirection = BrainBarQueueDirectionPresentation.derive(flowSummary.queue.status)
         let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
-        case .green: .green
-        case .amber: .orange
-        case .neutral: .brainBarTextSecondary
+        case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+        case .amber: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
+        case .neutral: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
         }
         return HStack(alignment: .top, spacing: 9) {
             if attentionItems.isEmpty {
@@ -2254,7 +2254,9 @@ private struct BrainBarSignalCoveragePanel: View {
     private func signalChip(for signal: BrainBarSignalCoverage) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(signal.accentColor)
+                .fill(Int(signal.clampedCoveragePercent.rounded()) >= 100
+                    ? Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+                    : Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown))
                 .frame(width: 7, height: 7)
             Text(signal.name)
                 .font(.system(size: 11, weight: .medium))
@@ -2459,10 +2461,17 @@ private struct BrainBarSignalCoverageRow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.brainBarTextPrimary)
                 Spacer(minLength: 8)
-                Text(signal.percentText)
-                    .font(.system(size: compact ? 18 : 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(signal.accentColor)
-                    .monospacedDigit()
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Int(signal.clampedCoveragePercent.rounded()) >= 100
+                            ? Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+                            : Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown))
+                        .frame(width: 6, height: 6)
+                    Text(signal.percentText)
+                        .font(.system(size: compact ? 18 : 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.brainBarTextPrimary)
+                        .monospacedDigit()
+                }
             }
 
             if signal.presentation.isMeasurable {
@@ -2646,13 +2655,16 @@ private struct BrainBarVectorSignalDetail: View {
     }
 
     private var trend: some View {
-        Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
+        let statusColor = isFalling
+            ? Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+            : Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
+        return Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(signal.accentColor)
+            .foregroundStyle(Color.brainBarTextPrimary)
             .padding(.vertical, 5)
             .padding(.horizontal, 8)
-            .background(Capsule().fill(signal.accentColor.opacity(0.12)))
-            .overlay(Capsule().stroke(signal.accentColor.opacity(0.32), lineWidth: 1))
+            .background(Capsule().fill(statusColor.opacity(0.12)))
+            .overlay(Capsule().stroke(statusColor.opacity(0.32), lineWidth: 1))
             .help("Vector backlog trend")
     }
 

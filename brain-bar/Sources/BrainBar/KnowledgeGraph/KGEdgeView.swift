@@ -26,7 +26,7 @@ enum KGEdgeRenderer {
             y: (sourcePos.y + targetPos.y) / 2
         )
         let label = Text(edge.relationType)
-            .font(.system(size: 8))
+            .font(.system(size: BrainBarDesignTokens.TypeScale.textSize(8)))
             .foregroundColor(
                 isHighlighted
                     ? (darkMode ? Color.brainBarWhite.opacity(0.9) : Color.brainBarBlack.opacity(0.75))
