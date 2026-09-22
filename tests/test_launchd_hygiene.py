@@ -545,7 +545,10 @@ def test_launchd_installer_wires_observability_target_for_fresh_installs():
     assert "./scripts/launchd/install.sh observability" in install_source
     assert "observability)" in install_source
     assert "install_plist observability" in install_source
-    assert "install_many maintenance-nightly maintenance-weekly health-check observability p0-counter" in install_source
+    assert (
+        "install_many maintenance-nightly maintenance-weekly health-check log-cap observability p0-counter"
+        in install_source
+    )
     assert "remove_plist observability" in install_source
 
 
