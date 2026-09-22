@@ -1885,6 +1885,12 @@ private struct BrainBarDashboardHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+enum BrainBarScrollOrigin {
+    static func clamped(_ origin: CGFloat, documentHeight: CGFloat, viewportHeight: CGFloat) -> CGFloat {
+        min(max(origin, 0), max(documentHeight - viewportHeight, 0))
+    }
+}
+
 private struct BrainBarScrollOriginObserver: NSViewRepresentable {
     let onScroll: (CGFloat) -> Void
 
@@ -1906,7 +1912,11 @@ private struct BrainBarScrollOriginObserver: NSViewRepresentable {
             clip.postsBoundsChangedNotifications = true
             token = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self, weak clip] _ in
                 guard let clip else { return }
-                self?.onScroll?(clip.bounds.minY)
+                self?.onScroll?(BrainBarScrollOrigin.clamped(
+                    clip.bounds.minY,
+                    documentHeight: clip.documentView?.bounds.height ?? 0,
+                    viewportHeight: clip.bounds.height
+                ))
             }
         }
 

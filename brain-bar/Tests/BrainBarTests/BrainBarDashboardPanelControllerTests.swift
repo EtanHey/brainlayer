@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class BrainBarDashboardPanelControllerTests: XCTestCase {
+    func testScrollOriginClampExcludesElasticOverscroll() {
+        XCTAssertEqual(BrainBarScrollOrigin.clamped(-24, documentHeight: 1_202, viewportHeight: 558), 0)
+        XCTAssertEqual(BrainBarScrollOrigin.clamped(644, documentHeight: 1_202, viewportHeight: 558), 644)
+        XCTAssertEqual(BrainBarScrollOrigin.clamped(704, documentHeight: 1_202, viewportHeight: 558), 644)
+        XCTAssertEqual(BrainBarScrollOrigin.clamped(24, documentHeight: 556, viewportHeight: 558), 0)
+    }
+
     func testDisclosureAnimationUsesOneTimingInBothDirectionsAndReduceMotionIsInstant() {
         let opening = BrainBarDisclosureAnimation.timing(for: .open, reduceMotion: false)
         let closing = BrainBarDisclosureAnimation.timing(for: .close, reduceMotion: false)
