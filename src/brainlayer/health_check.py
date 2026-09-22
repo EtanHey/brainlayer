@@ -227,6 +227,7 @@ class HealthCheckResult:
     stalled_ticks: int = 0
     lock_holder: LockHolder | None = None
     canary_ok: bool = False
+    canary_status: str | None = None
     canary_result_count: int | None = None
     duration_seconds: float = 0.0
     slow_check: bool = False
@@ -616,9 +617,20 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
 def _canary_text(response: dict[str, Any]) -> tuple[bool, str]:
     if response.get("error"):
         return False, str(response["error"])
-    result = response.get("result") or {}
-    content = result.get("content") or []
-    text = "\n".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return False, "BrainBar response missing a result object"
+    content = result.get("content")
+    if not isinstance(content, list):
+        return False, "BrainBar result missing a content array"
+    if not content:
+        return False, "BrainBar result returned an empty content array"
+    if any(not isinstance(item, dict) or item.get("type") != "text" for item in content):
+        return False, "BrainBar result contains malformed content"
+    text_items = [item.get("text") for item in content]
+    if any(not isinstance(item, str) for item in text_items):
+        return False, "BrainBar result contains malformed text content"
+    text = "\n".join(text_items)
     if result.get("isError"):
         return False, text or "BrainBar returned isError=true"
     return True, text
@@ -1373,28 +1385,27 @@ def run_health_check(
     try:
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
         canary_success, text = _canary_text(response)
-        result.canary_result_count = _canary_count(text) if canary_success else 0
-        result.canary_ok = canary_success and (result.canary_result_count or 0) > 0
-        if not result.canary_ok:
-            code = "brain_search_canary_failed" if not canary_success else "brain_search_canary_empty"
+        if canary_success:
+            result.canary_result_count = _canary_count(text)
+            result.canary_ok = True
+            # This is request liveness, not recall quality: a well-formed empty search
+            # proves the request path worked without claiming the corpus should match.
+            result.canary_status = "results" if (result.canary_result_count or 0) > 0 else "empty"
+        else:
+            result.canary_ok = False
+            result.canary_status = "retrieval_failed"
             add_issue(
-                code,
+                "brain_search_canary_failed",
                 "critical",
-                f"BrainBar brain_search canary returned no usable results: {text[:240]}",
+                f"BrainBar brain_search canary retrieval failed: {text[:240]}",
             )
-            # Only a canary that did not COME BACK is evidence about the daemon. An empty
-            # result set means the socket answered -- which proves the daemon is alive and
-            # serving -- and that the index simply holds nothing for this query. Restarting
-            # a healthy daemon cannot add content to an index: on the M1 that remedy ran 97
-            # consecutive times without once changing the answer. Report the gap, never heal
-            # the daemon for it.
-            if not canary_success:
-                heal_issue_labels[code] = (
-                    config.brainbar_daemon_label,
-                    _plist_for_label(config, config.brainbar_daemon_label),
-                )
+            heal_issue_labels["brain_search_canary_failed"] = (
+                config.brainbar_daemon_label,
+                _plist_for_label(config, config.brainbar_daemon_label),
+            )
     except Exception as exc:
         result.canary_ok = False
+        result.canary_status = "transport_failed"
         add_issue("brain_search_canary_failed", "critical", f"BrainBar brain_search canary failed: {exc}")
         heal_issue_labels["brain_search_canary_failed"] = (
             config.brainbar_daemon_label,
@@ -1679,6 +1690,11 @@ def run_health_check(
         state_payload["lock_holder_held_ticks"] = 0
     if pause_payload:
         state_payload["pause_sentinel"] = pause_payload
+    state_payload["canary_status"] = result.canary_status
+    if result.canary_result_count is not None:
+        state_payload["canary_result_count"] = result.canary_result_count
+    else:
+        state_payload.pop("canary_result_count", None)
     result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
     result.slow_check = result.duration_seconds >= config.max_duration_seconds
     state_payload["duration_seconds"] = result.duration_seconds

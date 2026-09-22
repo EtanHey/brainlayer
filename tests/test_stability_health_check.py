@@ -194,6 +194,7 @@ def test_health_check_consumes_alerting_t3_health_snapshot(tmp_path):
     )
 
     assert result.t3_health == payload
+    assert result.canary_status == "results"
     issue = next(issue for issue in result.issues if issue.code == "t3_ingest_unhealthy")
     assert issue.severity == "critical"
     assert "schema_drift" in issue.message
@@ -2017,7 +2018,7 @@ def _empty_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> d
     }
 
 
-def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tmp_path):
+def test_empty_canary_is_healthy_and_never_kickstarts_a_live_brainbar_daemon(tmp_path):
     """Measured on the M1, 2026-09-06: heal_failures reached 97 for this exact key.
 
     Restarting a daemon that is answering cannot put content into an index, so the
@@ -2042,8 +2043,11 @@ def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tm
             command_runner=commands.append,
             now_fn=_clock_at(minute),
         )
-        assert result.ok is False
-        assert "brain_search_canary_empty" in [issue.code for issue in result.issues]
+        assert result.ok is True
+        assert result.canary_ok is True
+        assert result.canary_status == "empty"
+        assert result.canary_result_count == 0
+        assert not [issue for issue in result.issues if issue.code.startswith("brain_search_canary_")]
 
     assert not any(
         "com.brainlayer.brainbar-daemon" in " ".join(command)
@@ -2051,11 +2055,13 @@ def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tm
         if command[:3] == ["launchctl", "kickstart", "-k"]
     ), commands
     saved = json.loads(state_path.read_text(encoding="utf-8"))
-    assert "com.brainlayer.brainbar-daemon:brain_search_canary_empty" not in saved["heal_failures"]
+    assert saved["canary_status"] == "empty"
+    assert saved["canary_result_count"] == 0
+    assert not [key for key in saved["heal_failures"] if "brain_search_canary" in key]
 
 
-def test_unanswered_canary_still_kickstarts_the_daemon(tmp_path):
-    """The socket failing to answer IS evidence about the daemon; that path is unchanged."""
+def test_failed_retrieval_still_kickstarts_the_daemon(tmp_path):
+    """A returned isError is a failed retrieval, not an empty corpus."""
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=3, vector_rows=3)
@@ -2076,12 +2082,78 @@ def test_unanswered_canary_still_kickstarts_the_daemon(tmp_path):
         "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 128 --enrich-limit 25\n"
     )
     for minute in (25, 30):
-        run_health_check(
+        result = run_health_check(
             config,
             ps_output_fn=_ps_output_stub(ps_output),
             socket_request_fn=failed_canary,
             command_runner=commands.append,
             now_fn=_clock_at(minute),
         )
+        assert result.canary_status == "retrieval_failed"
+        assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
 
     assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert json.loads(state_path.read_text(encoding="utf-8"))["canary_status"] == "retrieval_failed"
+
+
+def test_transport_error_is_distinct_and_still_kickstarts_the_daemon(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=3, vector_rows=3)
+    commands: list[list[str]] = []
+
+    def timed_out_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
+        raise TimeoutError("socket read timed out")
+
+    config = HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True)
+    ps_output = (
+        "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 128 --enrich-limit 25\n"
+    )
+    for minute in (25, 30):
+        result = run_health_check(
+            config,
+            ps_output_fn=_ps_output_stub(ps_output),
+            socket_request_fn=timed_out_canary,
+            command_runner=commands.append,
+            now_fn=_clock_at(minute),
+        )
+        assert result.canary_status == "transport_failed"
+        assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
+
+    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert json.loads(state_path.read_text(encoding="utf-8"))["canary_status"] == "transport_failed"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"jsonrpc": "2.0", "id": 1, "result": {}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": "not-an-array"}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": []}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text"}]}},
+    ],
+    ids=["missing-result", "missing-content", "non-array-content", "empty-content", "missing-text"],
+)
+def test_malformed_canary_content_fails_closed_as_retrieval_failure(tmp_path, response):
+    db_path = tmp_path / "brainlayer.db"
+    _make_db(db_path, total=3, vector_rows=3)
+
+    def missing_content(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
+        return response
+
+    result = run_health_check(
+        HealthCheckConfig(db_path=db_path, state_path=tmp_path / "health-state.json"),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py "
+            "--interval 1 --backlog-batch 128 --enrich-limit 25\n"
+        ),
+        socket_request_fn=missing_content,
+        command_runner=lambda _args: None,
+        now_fn=_clock_at(25),
+    )
+
+    assert result.ok is False
+    assert result.canary_ok is False
+    assert result.canary_status == "retrieval_failed"
+    assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
