@@ -136,10 +136,15 @@ def scan_job_lifecycle(
         advanced = prior_runs is not None and runs > prior_runs
         reason, last_exit = _failure(_output(printed), current_keg, opt_path, command_runner)
         if reason and reason.startswith("keg mapping unavailable"):
+            if interval:
+                continue  # A running interval script may not have loaded a keg library yet.
             return fail(f"{label}: {reason}")
+        if interval and reason and reason.startswith("stale keg"):
+            # Defer counting until launchd reports a completed, advanced run.
+            continue
         if reason is None and advanced and last_exit not in (None, 0):
             reason = f"crashloop, last exit code {last_exit}"
-        if reason is None and last_exit in (None, 0):
+        if reason is None and (last_exit in (None, 0) or (not interval and not advanced)):
             state[label] = {"runs": runs, "consecutive": 0, "attempts": 0, "failed_heals": False}
             continue
         if reason is None:

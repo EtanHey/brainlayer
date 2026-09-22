@@ -12,6 +12,7 @@ class FakeCommands:
         self.exit = {"watch": 1, "drain": 0}
         self.pid = {"watch": None, "drain": 42}
         self.keg = {42: old}
+        self.ps_command = f"/Library/Frameworks/Python.framework/python {current}/bin/brainlayer"
         self.unloaded: set[str] = set()
         self.commands: list[list[str]] = []
 
@@ -32,9 +33,7 @@ class FakeCommands:
             output = f"n{keg}/libexec/venv/bin/python\n" if keg else "n/usr/lib/libSystem.B.dylib\n"
             return subprocess.CompletedProcess(args, 0, output, "")
         if args[:2] == ["ps", "-p"]:
-            return subprocess.CompletedProcess(
-                args, 0, f"/Library/Frameworks/Python.framework/python {self.current}/bin/brainlayer", ""
-            )
+            return subprocess.CompletedProcess(args, 0, self.ps_command, "")
         if args[:3] == ["launchctl", "kickstart", "-k"]:
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(args)
@@ -121,3 +120,49 @@ def test_corrupt_counter_and_prune_unloaded_or_deleted(tmp_path: Path) -> None:
     (tmp_path / "com.brainlayer.watch.plist").unlink()
     deleted = _tick(tmp_path, opt, fake, prior, 900)
     assert deleted.state == {} and deleted.actions == ["pruned:com.brainlayer.watch"]
+
+
+def test_unmapped_inflight_interval_does_not_abort_other_jobs(tmp_path: Path) -> None:
+    old, current, opt = _setup(tmp_path, ("watch", {"StartInterval": 60}), ("drain", {"KeepAlive": True}))
+    fake = FakeCommands(current, old)
+    fake.pid["watch"] = 44
+    fake.keg[42] = current
+    fake.ps_command = "/Library/Frameworks/Python.framework/python /Users/test/.local/lib/brainlayer/watch.py"
+    tick = _tick(tmp_path, opt, fake, {}, 0)
+    assert tick.scan_error is None
+    assert tick.escalations == []
+    assert "com.brainlayer.drain" in tick.state
+
+
+def test_interval_stale_keg_does_not_count_samples_as_failed_runs(tmp_path: Path) -> None:
+    old, current, opt = _setup(tmp_path, ("watch", {"StartInterval": 60}))
+    fake = FakeCommands(current, old)
+    state = _tick(tmp_path, opt, fake, {}, 0).state
+    fake.pid["watch"] = 44
+    fake.keg[44] = old
+    for now in (300, 600, 900):
+        tick = _tick(tmp_path, opt, fake, state, now)
+        state = tick.state
+        assert tick.actions == []
+        assert tick.escalations == []
+    fake.runs["watch"] += 1
+    for now in (1200, 1500, 1800):
+        tick = _tick(tmp_path, opt, fake, state, now)
+        state = tick.state
+        assert tick.escalations == []
+    fake.pid["watch"] = None
+    completed = _tick(tmp_path, opt, fake, state, 2100)
+    assert completed.state["com.brainlayer.watch"]["consecutive"] == 1
+
+
+def test_healthy_daemon_sample_resets_prior_crash_streak(tmp_path: Path) -> None:
+    old, current, opt = _setup(tmp_path, ("drain", {"KeepAlive": True}))
+    fake = FakeCommands(current, old)
+    fake.keg[42] = current
+    fake.exit["drain"] = 1
+    baseline = _tick(tmp_path, opt, fake, {}, 0)
+    fake.runs["drain"] += 1
+    failed = _tick(tmp_path, opt, fake, baseline.state, 300)
+    assert failed.state["com.brainlayer.drain"]["consecutive"] == 1
+    healthy = _tick(tmp_path, opt, fake, failed.state, 600)
+    assert healthy.state["com.brainlayer.drain"]["consecutive"] == 0
