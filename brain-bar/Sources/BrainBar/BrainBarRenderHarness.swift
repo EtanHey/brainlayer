@@ -13,6 +13,8 @@ enum BrainBarRenderHarness {
     @MainActor
     private enum Scenario: String, CaseIterable {
         case readable
+        case attentionCollapsed = "readable-attention"
+        case attentionExpanded = "readable-attention-expanded"
         case unreadable
         case loading
         case queueDraining
@@ -20,7 +22,7 @@ enum BrainBarRenderHarness {
 
         var detailsStates: [Bool] {
             switch self {
-            case .loading, .queueDraining, .queueBacklogged:
+            case .loading, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged:
                 [false]
             case .readable, .unreadable:
                 [false, true]
@@ -31,7 +33,7 @@ enum BrainBarRenderHarness {
             switch self {
             case .queueDraining, .queueBacklogged:
                 [("default", 960)]
-            case .readable, .unreadable, .loading:
+            case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .loading:
                 BrainBarRenderHarness.breakpoints
             }
         }
@@ -40,6 +42,8 @@ enum BrainBarRenderHarness {
             switch self {
             case .loading:
                 .loading
+            case .attentionCollapsed, .attentionExpanded:
+                .live
             case .queueDraining:
                 .queueDraining
             case .queueBacklogged:
@@ -51,7 +55,7 @@ enum BrainBarRenderHarness {
 
         var observabilityResult: ObservabilityReadResult {
             switch self {
-            case .readable, .loading, .queueDraining, .queueBacklogged:
+            case .readable, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining, .queueBacklogged:
                 BrainBarDashboardFixture.readableObservabilityResult
             case .unreadable:
                 .unreadable("Database path unavailable.")
@@ -91,6 +95,7 @@ enum BrainBarRenderHarness {
                 }
             }
             try verifyDirectionalStatesDiffer(in: outputDirectory)
+            try verifyAttentionDisclosureChangesPixels(in: outputDirectory)
             Darwin.exit(EXIT_SUCCESS)
         } catch {
             FileHandle.standardError.write(Data("[brainbar-render] ERROR: \(error.localizedDescription)\n".utf8))
@@ -133,15 +138,22 @@ enum BrainBarRenderHarness {
     ) throws -> String {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded
+        panelState.attentionExpanded = scenario == .attentionExpanded
+        let collector = scenario == .attentionCollapsed || scenario == .attentionExpanded
+            ? BrainBarDashboardFixture.makeCollector(
+                scenario.collectorState,
+                agentActivity: .unavailable("fixture agent activity unavailable")
+            )
+            : BrainBarDashboardFixture.makeCollector(scenario.collectorState)
         let view = BrainBarDashboardPreview.make(
-            collector: BrainBarDashboardFixture.makeCollector(scenario.collectorState),
+            collector: collector,
             observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
             panelState: panelState
         )
-        let suffix = detailsExpanded ? "-details-expanded" : ""
         // The XCTest renderer owns dashboard-<breakpoint>.png. Include the CLI
         // state in every filename so the two producers cannot overwrite each other.
+        let suffix = detailsExpanded ? "-details-expanded" : ""
         let name = "dashboard-cli-\(breakpoint.name)-\(scenario.rawValue)\(suffix)"
 
         let measuringHost = NSHostingView(rootView: view)
@@ -185,6 +197,23 @@ enum BrainBarRenderHarness {
         }
         return "\(name) \(Int(size.width))×\(Int(size.height))\(cardReceipt); wrote \(url.path) "
             + "(\(emittedPNG.count) bytes, \(colors) sampled colors)"
+    }
+
+    private static func verifyAttentionDisclosureChangesPixels(in outputDirectory: URL) throws {
+        for breakpoint in breakpoints {
+            let collapsed = outputDirectory.appendingPathComponent(
+                "dashboard-cli-\(breakpoint.name)-readable-attention.png"
+            )
+            let expanded = outputDirectory.appendingPathComponent(
+                "dashboard-cli-\(breakpoint.name)-readable-attention-expanded.png"
+            )
+            guard try Data(contentsOf: collapsed) != Data(contentsOf: expanded) else {
+                throw Failure(
+                    "attention disclosure probe collapsed at \(breakpoint.width)pt: "
+                        + "collapsed and expanded rendered byte-identically"
+                )
+            }
+        }
     }
 
     private static func settle(_ host: NSView) {
