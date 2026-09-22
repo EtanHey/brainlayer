@@ -1478,6 +1478,7 @@ private struct BrainBarDashboardView: View {
                 isExpanded: $panelState.detailsExpanded,
                 accessibilityIdentifier: "brainbar.dashboard.runtime-disclosure",
                 accessibilityLabel: "Details",
+                retainsContentWhenCollapsed: true,
                 onAnimationCompleted: panelState.disclosureAnimationDidComplete
             ) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -1670,6 +1671,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     let accessibilityLabel: String
     let chevronPlacement: BrainBarDisclosureChevronPlacement
     let focusStateOverride: Bool?
+    let retainsContentWhenCollapsed: Bool
     let onAnimationCompleted: () -> Void
     @ViewBuilder let content: () -> Content
     @ViewBuilder let label: () -> Label
@@ -1687,6 +1689,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         chevronPlacement: BrainBarDisclosureChevronPlacement = .leading,
         focusStateOverride: Bool? = nil,
         initialInteraction: BrainBarDisclosureInteractionState = .init(),
+        retainsContentWhenCollapsed: Bool = false,
         onAnimationCompleted: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder label: @escaping () -> Label
@@ -1696,6 +1699,7 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
         self.accessibilityLabel = accessibilityLabel
         self.chevronPlacement = chevronPlacement
         self.focusStateOverride = focusStateOverride
+        self.retainsContentWhenCollapsed = retainsContentWhenCollapsed
         self.onAnimationCompleted = onAnimationCompleted
         _interaction = State(initialValue: initialInteraction)
         _expansionProgress = State(initialValue: isExpanded.wrappedValue ? 1 : 0)
@@ -1737,7 +1741,17 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
             .accessibilityHint(isExpanded ? "Collapse" : "Expand")
             .accessibilityIdentifier(accessibilityIdentifier)
 
-            if isExpanded, !isAnimatingExpansion {
+            if retainsContentWhenCollapsed {
+                BrainBarDisclosureContentLayout(
+                    progress: isAnimatingExpansion ? expansionProgress : (isExpanded ? 1 : 0)
+                ) {
+                    content()
+                }
+                .clipShape(Rectangle().inset(by: (isExpanded && !isAnimatingExpansion) ? -24 : 0))
+                .allowsHitTesting(isExpanded)
+                .accessibilityHidden(!isExpanded)
+                .disabled(!isExpanded)
+            } else if isExpanded, !isAnimatingExpansion {
                 content()
             } else if isAnimatingExpansion {
                 BrainBarDisclosureContentLayout(progress: expansionProgress) {
@@ -2311,7 +2325,11 @@ private struct BrainBarSignalCoverageRow: View {
             }
 
             if signal.isAvailable {
-                BrainBarAnimatedCoverageBar(percent: signal.clampedCoveragePercent, accentColor: signal.accentColor)
+                BrainBarAnimatedCoverageBar(
+                    signalID: signal.id,
+                    percent: signal.clampedCoveragePercent,
+                    accentColor: signal.accentColor
+                )
                     .frame(height: 6)
             } else {
                 Capsule()
@@ -2329,10 +2347,19 @@ private struct BrainBarSignalCoverageRow: View {
         .shadow(color: isSelected ? signal.accentColor.opacity(0.18) : .clear, radius: 12, y: 2)
         .scaleEffect(isSelected ? 0.98 : 1)
         .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: signal.clampedCoveragePercent)
+#if DEBUG
+        .onAppear {
+            BrainBarCoverageLifecycleProbe.recordLabel(signal.id, signal.percentText)
+        }
+        .onChange(of: signal.percentText) { _, label in
+            BrainBarCoverageLifecycleProbe.recordLabel(signal.id, label)
+        }
+#endif
     }
 }
 
 private struct BrainBarAnimatedCoverageBar: View {
+    let signalID: String
     let percent: Double
     let accentColor: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -2355,6 +2382,10 @@ private struct BrainBarAnimatedCoverageBar: View {
             }
         }
         .onAppear {
+#if DEBUG
+            // Count the fill lifecycle even when Reduce Motion makes it instantaneous.
+            BrainBarCoverageLifecycleProbe.recordFillStart(signalID)
+#endif
             if reduceMotion {
                 displayedPercent = percent
             } else {
@@ -2375,6 +2406,27 @@ private struct BrainBarAnimatedCoverageBar: View {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+enum BrainBarCoverageLifecycleProbe {
+    static var fillStarted: ((String) -> Void)?
+    static var labelPresented: ((String, String) -> Void)?
+
+    static func recordFillStart(_ signalID: String) {
+        fillStarted?(signalID)
+    }
+
+    static func recordLabel(_ signalID: String, _ label: String) {
+        labelPresented?(signalID, label)
+    }
+
+    static func reset() {
+        fillStarted = nil
+        labelPresented = nil
+    }
+}
+#endif
 
 private struct BrainBarVectorSignalDetail: View {
     let signal: BrainBarSignalCoverage
@@ -3006,9 +3058,10 @@ enum BrainBarDashboardPreview {
         now: Date? = nil,
         calendar: Calendar = goldenCalendar,
         locale: Locale = goldenLocale,
-        panelState: BrainBarDashboardPanelState? = nil
+        panelState: BrainBarDashboardPanelState? = nil,
+        disablesAnimations: Bool = true
     ) -> AnyView {
-        AnyView(
+        let dashboard =
             ZStack {
                 BrainBarAppBackground()
                 BrainBarDashboardContent(
@@ -3022,11 +3075,13 @@ enum BrainBarDashboardPreview {
                 )
             }
             .environment(\.colorScheme, .dark)
+        if disablesAnimations {
             // Suppress SwiftUI animations so every value lands at its final state
             // immediately — no mid-animation capture. (The read-only
             // `accessibilityReduceMotion` env key can't be injected directly.)
-            .transaction { $0.disablesAnimations = true }
-        )
+            return AnyView(dashboard.transaction { $0.disablesAnimations = true })
+        }
+        return AnyView(dashboard)
     }
 }
 
