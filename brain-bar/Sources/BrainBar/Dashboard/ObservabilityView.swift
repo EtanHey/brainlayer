@@ -127,8 +127,10 @@ enum BadgeStateReader {
                 guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
                     return .failVisible("Badge pending_first_run state is invalid.")
                 }
-                guard expected <= document.generatedAt.addingTimeInterval(600) else {
-                    return .failVisible("Badge pending_first_run deadline exceeds the allowed 600 seconds.")
+                // The Python producer truncates generated_at to whole seconds but
+                // preserves fractional seconds in expected_first_run_by.
+                guard expected <= document.generatedAt.addingTimeInterval(601) else {
+                    return .failVisible("Badge pending_first_run deadline exceeds the allowed 600 seconds plus timestamp precision slack.")
                 }
                 if now <= expected || sleepGraceApplies {
                     return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])

@@ -153,6 +153,23 @@ final class BadgeStateTests: XCTestCase {
         XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("deadline"))
     }
 
+    func testProducerPendingFirstRunDeadlineAllowsFractionalSecondBeyondTenMinutes() throws {
+        let generatedAtString = "2026-09-22T22:28:02Z"
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: generatedAtString)).addingTimeInterval(600)
+        let url = try mutatedFixture(source: pendingFixtureURL) {
+            $0["generated_at"] = generatedAtString
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["expected_first_run_by"] = "2026-09-22T22:38:02.122198Z"
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let presentation = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
+
+        XCTAssertFalse(presentation.badgeOn)
+        XCTAssertEqual(presentation.reason, "awaiting first health-check run")
+    }
+
     func testFutureBadgeStateFailsVisibleAfterSleepGrace() throws {
         let url = try mutatedFixture {
             $0["generated_at"] = timestamp(now.addingTimeInterval(3_601))
