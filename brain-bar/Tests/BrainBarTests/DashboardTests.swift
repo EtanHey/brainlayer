@@ -704,6 +704,34 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testAttentionHeadlineUsesRealDisclosurePathToRevealEveryCountedItem() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let statusStart = try XCTUnwrap(source.range(of: "private var statusStrip: some View"))
+        let statusEnd = try XCTUnwrap(source[statusStart.upperBound...].range(of: "private func summaryTiles"))
+        let statusSource = String(source[statusStart.lowerBound..<statusEnd.lowerBound])
+
+        XCTAssertEqual(
+            source.components(separatedBy: "private var statusStrip: some View").count - 1,
+            1,
+            "Mutation target statusStrip must exist exactly once."
+        )
+        for marker in ["BrainBarDisclosureRow(", "brainbar.dashboard.attention-disclosure", "attentionItems"] {
+            XCTAssertTrue(statusSource.contains(marker), "Working disclosure is missing \(marker)")
+        }
+    }
+
+    func testAttentionDisclosureLabelDoesNotRepeatTheRevealedReason() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let disclosureStart = try XCTUnwrap(source.range(of: "brainbar.dashboard.attention-disclosure"))
+        let disclosureEnd = try XCTUnwrap(source[disclosureStart.upperBound...].range(of: "Spacer(minLength: 8)"))
+        let disclosureSource = String(source[disclosureStart.lowerBound..<disclosureEnd.lowerBound])
+
+        XCTAssertFalse(
+            disclosureSource.contains("if let reason = status.reason"),
+            "The collapsed control must not repeat an item that expansion reveals."
+        )
+    }
+
     func testDetailsDisclosureAnimationRetainsContentAndHasOneWindowHeightWriter() throws {
         let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let controllerSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")

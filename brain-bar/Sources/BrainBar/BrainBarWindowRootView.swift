@@ -489,6 +489,7 @@ struct BrainBarOnePageStatus: Sendable, Equatable {
 
 struct BrainBarOnePagePresentation: Sendable, Equatable {
     let status: BrainBarOnePageStatus
+    let attentionItems: [String]
     let backupLines: [ObservabilityStatusLine]
     let totalIndexedChunks: Int?
     let indexedToday: Int?
@@ -521,6 +522,24 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             + (otherLiveHeroAttention ? 1 : 0)
             + (agentActivity.isMeasured ? 0 : 1)
             + snapshotAttentionCount
+        var attentionItems: [String] = []
+        if let backupFailureReason = hero.backupFailureReason {
+            attentionItems.append(backupFailureReason)
+        }
+        switch snapshotFreshness {
+        case let .stale(ageSeconds):
+            attentionItems.append("Dashboard data is \(ageText(ageSeconds)) old.")
+        case .error:
+            attentionItems.append("Dashboard data could not refresh.")
+        case .loading, .live:
+            break
+        }
+        if otherLiveHeroAttention {
+            attentionItems.append(hero.healthReason)
+        }
+        if !agentActivity.isMeasured {
+            attentionItems.append("Agent activity could not be measured.")
+        }
         let attentionHeadline = attentionCount == 1
             ? "1 thing needs you"
             : "\(attentionCount) things need you"
@@ -680,6 +699,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
 
         return Self(
             status: status,
+            attentionItems: status.tone == .amber ? attentionItems : [],
             backupLines: backupLines,
             totalIndexedChunks: totalIndexedChunks,
             indexedToday: indexedToday,
@@ -1022,6 +1042,7 @@ private struct BrainBarDashboardView: View {
                     .background(
                         BrainBarDashboardScrollResetter(
                             disclosureState: BrainBarDashboardDisclosureState(
+                                attentionExpanded: panelState.attentionExpanded,
                                 detailsExpanded: panelState.detailsExpanded,
                                 signalCoverageExpanded: panelState.signalCoverageExpanded
                             )
@@ -1134,22 +1155,56 @@ private struct BrainBarDashboardView: View {
     private var statusStrip: some View {
         let status = onePagePresentation.status
         let queueDirection = BrainBarQueueDirectionPresentation.derive(flowSummary.queue.status)
+        let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
         case .green: .green
         case .amber: .orange
         case .neutral: .brainBarTextSecondary
         }
-        return HStack(spacing: 9) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 9, height: 9)
-            Text(status.headline)
-                .font(.system(size: 13, weight: .semibold))
-            if let reason = status.reason {
-                Text("· \(reason)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                    .lineLimit(1)
+        return HStack(alignment: .top, spacing: 9) {
+            if attentionItems.isEmpty {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 9, height: 9)
+                Text(status.headline)
+                    .font(.system(size: 13, weight: .semibold))
+                if let reason = status.reason {
+                    Text("· \(reason)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary)
+                        .lineLimit(1)
+                }
+            } else {
+                BrainBarDisclosureRow(
+                    isExpanded: $panelState.attentionExpanded,
+                    accessibilityIdentifier: "brainbar.dashboard.attention-disclosure",
+                    accessibilityLabel: status.headline,
+                    onAnimationCompleted: panelState.disclosureAnimationDidComplete
+                ) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(Array(attentionItems.enumerated()), id: \.offset) { _, item in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Circle()
+                                    .fill(statusColor)
+                                    .frame(width: 5, height: 5)
+                                Text(item)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(Color.brainBarTextSecondary)
+                            }
+                        }
+                    }
+                    .padding(.top, 7)
+                    .padding(.leading, 20)
+                } label: {
+                    HStack(spacing: 9) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 9, height: 9)
+                        Text(status.headline)
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer(minLength: 0)
+                    }
+                }
             }
             Spacer(minLength: 8)
             Label(queueDirection.label, systemImage: queueDirection.symbol)
@@ -1605,6 +1660,7 @@ enum BrainBarDashboardScrollPosition {
 }
 
 private struct BrainBarDashboardDisclosureState: Equatable {
+    let attentionExpanded: Bool
     let detailsExpanded: Bool
     let signalCoverageExpanded: Bool
 }
