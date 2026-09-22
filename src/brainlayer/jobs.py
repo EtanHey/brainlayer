@@ -14,6 +14,7 @@ from typing import Any
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 PID_RE = re.compile(r"(?m)^\s*pid\s*=\s*(\d+)\s*$")
 ENRICHMENT_LABEL = "com.brainlayer.enrichment"
+BACKUP_LABELS = {"com.brainlayer.backup-daily", "com.brainlayer.jsonl-backup"}
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -62,12 +63,21 @@ def _job_plists(directory: Path) -> list[tuple[str, dict[str, Any]]]:
         try:
             with path.open("rb") as handle:
                 payload = plistlib.load(handle)
-        except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
-            continue
+        except (OSError, ValueError, TypeError, plistlib.InvalidFileException) as exc:
+            raise ValueError(f"cannot inspect BrainLayer plist {path}: {exc}") from exc
         label = payload.get("Label") if isinstance(payload, dict) else None
-        if label == path.stem and isinstance(label, str) and label.startswith("com.brainlayer."):
-            jobs.append((label, payload))
+        if label != path.stem or not isinstance(label, str) or not label.startswith("com.brainlayer."):
+            raise ValueError(f"invalid BrainLayer LaunchAgent label in {path}")
+        jobs.append((label, payload))
     return jobs
+
+
+def _runs_keg(plist: dict[str, Any], opt_path: Path, current_keg: Path) -> bool:
+    arguments = plist.get("ProgramArguments")
+    if not isinstance(arguments, list):
+        return False
+    prefixes = (f"{opt_path}/", f"{current_keg}/")
+    return any(isinstance(argument, str) and argument.startswith(prefixes) for argument in arguments)
 
 
 def restart_loaded_jobs(
@@ -90,22 +100,40 @@ def restart_loaded_jobs(
         "stale": {},
         "errors": {},
     }
-    for label, plist in _job_plists(plist_dir):
+    try:
+        if not plist_dir.is_dir():
+            raise ValueError(f"BrainLayer LaunchAgents directory unavailable: {plist_dir}")
+        jobs = _job_plists(plist_dir)
+        if not jobs:
+            raise ValueError(f"no BrainLayer LaunchAgent plists found in {plist_dir}")
+    except ValueError as exc:
+        report["errors"]["discovery"] = str(exc)
+        report["ok"] = False
+        return report
+    measured_jobs = 0
+    for label, plist in jobs:
         target = f"gui/{uid}/{label}"
         initial = command_runner(["launchctl", "print", target])
         if initial.returncode != 0:
-            report["skipped"][label] = "not loaded"
+            if initial.returncode == 113:
+                report["skipped"][label] = "not loaded"
+            else:
+                report["errors"][label] = f"launchctl print failed: {initial.stderr.strip() or initial.returncode}"
             continue
         report["loaded"].append(label)
         if label == ENRICHMENT_LABEL:
             report["skipped"][label] = "enrichment excluded"
             continue
-        bundle_ids = plist.get("AssociatedBundleIdentifiers", [])
-        if isinstance(bundle_ids, str):
-            bundle_ids = [bundle_ids]
-        if "com.brainlayer.brainbar" in bundle_ids:
+        if label in {"com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon"}:
             report["skipped"][label] = "cask-owned BrainBar job"
             continue
+        if label in BACKUP_LABELS:
+            report["skipped"][label] = "backup job waits for next run"
+            continue
+        if not _runs_keg(plist, opt_path, current_keg):
+            report["skipped"][label] = "not a BrainLayer keg command"
+            continue
+        measured_jobs += 1
         pid = _pid(initial.stdout)
         interval = "StartInterval" in plist or "StartCalendarInterval" in plist
         daemon = bool(plist.get("KeepAlive") or plist.get("RunAtLoad")) and not interval
@@ -123,18 +151,27 @@ def restart_loaded_jobs(
             report["skipped"][label] = "interval job waits for next run"
         else:
             report["skipped"][label] = "not a resident daemon"
-        for attempt in range(5):
+        for attempt in range(17):
             observed = command_runner(["launchctl", "print", target])
+            if observed.returncode != 0:
+                report["errors"][label] = (
+                    f"verification launchctl print failed: {observed.stderr.strip() or observed.returncode}"
+                )
+                break
             if observed.returncode == 0 and (running_pid := _pid(observed.stdout)) is not None:
                 mapped, error = _mapped_kegs(running_pid, command_runner)
                 if error is None and mapped == {current_keg}:
                     break
-                if attempt == 4:
+                if attempt == 16:
                     report["stale"][label] = error or f"pid {running_pid} maps {sorted(map(str, mapped))}"
             else:
-                if daemon and label in report["restarted"]:
-                    report["errors"][label] = "resident job did not reach a running pid after kickstart"
-                break  # an interval job may exit; its next run executes the new keg
-            sleep_fn(0.2)
+                if not daemon and not stale_inflight:
+                    break  # an idle interval job will execute the new keg next time
+                if attempt == 16:
+                    report["errors"][label] = "job did not reach a running pid before verification deadline"
+            if attempt < 16:
+                sleep_fn(0.5)
+    if measured_jobs == 0:
+        report["errors"]["selection"] = "no loaded BrainLayer keg jobs were measured"
     report["ok"] = not report["errors"] and not report["stale"]
     return report
