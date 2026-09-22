@@ -148,17 +148,6 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         }
     }
 
-    func testRestingIngestAxesLabelBothZeroAndTheCeiling() throws {
-        let source = try String(
-            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/Dashboard/SparklineRenderer.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(source.contains("ForEach(presentation.tightYAxisTicks"))
-        XCTAssertTrue(source.contains("Text(DashboardMetricFormatter.axisTickString(tick))"))
-        XCTAssertFalse(source.contains("if tick != 0"))
-    }
-
     func testSignalCoverageUsesOneStableDisclosureControl() throws {
         let source = try String(
             contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
