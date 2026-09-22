@@ -43,6 +43,33 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         }
     }
 
+    func testIngestChartsUseOneMarkerOnLatestCompleteBucket() {
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "empty", values: [], lastBucketIsPartial: true)
+                .visiblePointMarkers(for: .primary, compact: false),
+            []
+        )
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "single", values: [0], lastBucketIsPartial: true)
+                .visiblePointMarkers(for: .primary, compact: false),
+            []
+        )
+
+        for values in [[7, 3], [0, 0], [3, 5, 2, 0]] {
+            let presentation = SparklineChartPresentation(
+                label: "Ingest",
+                values: values,
+                lastBucketIsPartial: true
+            )
+            let markerIndices = presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket)
+            XCTAssertEqual(markerIndices.count, 1)
+            XCTAssertEqual(markerIndices[0], values.count - 2)
+            XCTAssertNotEqual(markerIndices[0], values.indices.last)
+            XCTAssertEqual(presentation.completePoints(for: .primary).map(\.bucket), Array(values.indices.dropLast()))
+            XCTAssertEqual(presentation.partialSegmentPoints(for: .primary).map(\.bucket), Array(values.indices.suffix(2)))
+        }
+    }
+
     func testOnePageCompositionContract() throws {
         XCTAssertEqual(
             BrainBarOnePageComposition.visibleSectionIDs,
@@ -75,6 +102,9 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.allCommits"))
         XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.agentStores"))
         XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.jsonlWatcher"))
+        XCTAssertTrue(ingestBand.contains("BrainBarHeroSparkline("))
+        XCTAssertTrue(ingestBand.contains("lastBucketIsPartial: true"))
+        XCTAssertFalse(source.contains("private struct BrainBarIngestBarChart"))
 
         let summary = DashboardFlowSummary.derive(
             daemon: nil,
@@ -464,7 +494,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             latestBucketName: "latest ingest bucket",
             fetchedAt: BrainBarDashboardFixture.fetchedAt,
             metricDisclosure: disclosure,
-            accessibilitySummary: accessibilitySummary
+            accessibilitySummary: accessibilitySummary,
+            lastBucketIsPartial: true
         )
         XCTAssertTrue(presentation.accessibilityValue.contains(accessibilitySummary))
         let tooltipView = SparklineChart(

@@ -35,6 +35,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let fetchedAt: Date
     let metricDisclosure: String?
     let accessibilitySummary: String?
+    let lastBucketIsPartial: Bool
 
     init(
         label: String,
@@ -48,7 +49,8 @@ struct SparklineChartPresentation: Equatable, Sendable {
         latestBucketName: String = "latest bucket count",
         fetchedAt: Date = Date(),
         metricDisclosure: String? = nil,
-        accessibilitySummary: String? = nil
+        accessibilitySummary: String? = nil,
+        lastBucketIsPartial: Bool = false
     ) {
         self.label = label
         self.values = values
@@ -62,6 +64,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.fetchedAt = fetchedAt
         self.metricDisclosure = metricDisclosure
         self.accessibilitySummary = accessibilitySummary
+        self.lastBucketIsPartial = lastBucketIsPartial
     }
 
     var points: [SparklineChartPoint] {
@@ -240,6 +243,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     func visiblePointMarkers(for role: SparklineSeriesRole, compact: Bool) -> [SparklineChartPoint] {
         let rolePoints = points(for: role)
+        if lastBucketIsPartial {
+            guard rolePoints.count > 1 else { return [] }
+            return [rolePoints[rolePoints.count - 2]]
+        }
         guard let latest = rolePoints.last else { return [] }
         if compact {
             return [latest]
@@ -248,6 +255,17 @@ struct SparklineChartPresentation: Equatable, Sendable {
             return rolePoints.filter { $0.value > 0 }
         }
         return [latest]
+    }
+
+    func completePoints(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
+        let rolePoints = points(for: role)
+        return lastBucketIsPartial ? Array(rolePoints.dropLast()) : rolePoints
+    }
+
+    func partialSegmentPoints(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
+        let rolePoints = points(for: role)
+        guard lastBucketIsPartial, rolePoints.count > 1 else { return [] }
+        return Array(rolePoints.suffix(2))
     }
 
     func nonZeroFraction(_ role: SparklineSeriesRole) -> Double {
@@ -524,7 +542,8 @@ struct SparklineChart: View {
                 ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
                     if !compact, presentation.shouldPlotSeries(role) {
                         SparklineSeriesAreaShape(
-                            points: presentation.points(for: role),
+                            points: presentation.completePoints(for: role),
+                            bucketCount: presentation.points(for: role).count,
                             maxValue: plotMax,
                             plotFrame: plotFrame,
                             baselineY: baselineY(for: role, in: plotFrame),
@@ -540,6 +559,26 @@ struct SparklineChart: View {
                                 endPoint: .bottom
                             )
                         )
+                        if !presentation.partialSegmentPoints(for: role).isEmpty {
+                            SparklineSeriesAreaShape(
+                                points: presentation.partialSegmentPoints(for: role),
+                                bucketCount: presentation.points(for: role).count,
+                                maxValue: plotMax,
+                                plotFrame: plotFrame,
+                                baselineY: baselineY(for: role, in: plotFrame),
+                                smoothing: smoothing(for: role)
+                            )
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        color(for: role).opacity(role == .primary ? 0.136 : 0.064),
+                                        color(for: role).opacity(0.0),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        }
                     }
                 }
 
@@ -573,7 +612,8 @@ struct SparklineChart: View {
                 ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
                     if presentation.shouldPlotSeries(role) {
                         SparklineSeriesPathShape(
-                            points: presentation.points(for: role),
+                            points: presentation.completePoints(for: role),
+                            bucketCount: presentation.points(for: role).count,
                             maxValue: plotMax,
                             plotFrame: plotFrame,
                             smoothing: smoothing(for: role)
@@ -584,6 +624,17 @@ struct SparklineChart: View {
                             radius: !compact && role == .primary ? 4 : 0,
                             y: !compact && role == .primary ? 1 : 0
                         )
+
+                        if !presentation.partialSegmentPoints(for: role).isEmpty {
+                            SparklineSeriesPathShape(
+                                points: presentation.partialSegmentPoints(for: role),
+                                bucketCount: presentation.points(for: role).count,
+                                maxValue: plotMax,
+                                plotFrame: plotFrame,
+                                smoothing: smoothing(for: role)
+                            )
+                            .stroke(color(for: role).opacity(0.4), style: lineStyle(for: role))
+                        }
 
                         ForEach(presentation.visiblePointMarkers(for: role, compact: compact)) { point in
                             Circle()
@@ -901,6 +952,7 @@ struct SparklineChart: View {
 
 private struct SparklineSeriesPathShape: Shape {
     let points: [SparklineChartPoint]
+    let bucketCount: Int
     let maxValue: Int
     let plotFrame: CGRect
     let smoothing: SparklineSmoothing
@@ -908,6 +960,7 @@ private struct SparklineSeriesPathShape: Shape {
     func path(in rect: CGRect) -> Path {
         SparklineSeriesPathBuilder.topPath(
             for: points,
+            bucketCount: bucketCount,
             maxValue: maxValue,
             plotFrame: plotFrame,
             smoothing: smoothing
@@ -917,6 +970,7 @@ private struct SparklineSeriesPathShape: Shape {
 
 private struct SparklineSeriesAreaShape: Shape {
     let points: [SparklineChartPoint]
+    let bucketCount: Int
     let maxValue: Int
     let plotFrame: CGRect
     let baselineY: CGFloat
@@ -925,6 +979,7 @@ private struct SparklineSeriesAreaShape: Shape {
     func path(in rect: CGRect) -> Path {
         let renderedPoints = SparklineSeriesPathBuilder.renderedPoints(
             for: points,
+            bucketCount: bucketCount,
             maxValue: maxValue,
             plotFrame: plotFrame
         )
@@ -948,12 +1003,18 @@ private struct SparklineSeriesAreaShape: Shape {
 private enum SparklineSeriesPathBuilder {
     static func topPath(
         for points: [SparklineChartPoint],
+        bucketCount: Int,
         maxValue: Int,
         plotFrame: CGRect,
         smoothing: SparklineSmoothing
     ) -> Path {
         topPath(
-            for: renderedPoints(for: points, maxValue: maxValue, plotFrame: plotFrame),
+            for: renderedPoints(
+                for: points,
+                bucketCount: bucketCount,
+                maxValue: maxValue,
+                plotFrame: plotFrame
+            ),
             plotFrame: plotFrame,
             smoothing: smoothing
         )
@@ -961,15 +1022,16 @@ private enum SparklineSeriesPathBuilder {
 
     static func renderedPoints(
         for points: [SparklineChartPoint],
+        bucketCount: Int,
         maxValue: Int,
         plotFrame: CGRect
     ) -> [CGPoint] {
         points.map { point in
             let x: CGFloat
-            if points.count <= 1 {
+            if bucketCount <= 1 {
                 x = plotFrame.midX
             } else {
-                x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(points.count - 1))
+                x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(bucketCount - 1))
             }
             let normalizedValue = CGFloat(point.value) / CGFloat(max(maxValue, 1))
             return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))

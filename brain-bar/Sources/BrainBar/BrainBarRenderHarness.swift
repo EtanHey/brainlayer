@@ -81,6 +81,7 @@ enum BrainBarRenderHarness {
             let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
             try verifyDirectionalStateCoverage()
+            try verifyReadableChartMarkerContract()
             for scenario in Scenario.allCases {
                 for breakpoint in scenario.breakpoints {
                     for detailsExpanded in scenario.detailsStates {
@@ -119,6 +120,34 @@ enum BrainBarRenderHarness {
             }
         }
         print("[brainbar-render] directional-state coverage PASS: empty, stable, draining, growing, backlogged, unavailable")
+    }
+
+    private static func verifyReadableChartMarkerContract() throws {
+        let stats = BrainBarDashboardFixture.stats
+        let charts = [
+            ("All chunks", stats.recentActivityBuckets),
+            ("Agent", stats.recentAgentWriteBuckets),
+            ("Watcher", stats.recentWatcherWriteBuckets),
+        ]
+
+        for (name, values) in charts {
+            let presentation = SparklineChartPresentation(
+                label: name,
+                values: values,
+                lastBucketIsPartial: true
+            )
+            let markerIndices = presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket)
+            guard markerIndices.count == 1 else {
+                throw Failure("\(name) chart rendered \(markerIndices.count) point markers; expected exactly one")
+            }
+            guard markerIndices[0] == values.count - 2 else {
+                throw Failure(
+                    "\(name) chart partial bucket \(values.count - 1) has 2 marks (series + point marker); "
+                        + "marker landed on bucket \(markerIndices[0]), expected latest complete bucket \(values.count - 2)"
+                )
+            }
+        }
+        print("[brainbar-render] chart-marker contract PASS: All chunks, Agent, Watcher each have one marker on the latest complete bucket")
     }
 
     private static func verifyDirectionalStatesDiffer(in outputDirectory: URL) throws {
