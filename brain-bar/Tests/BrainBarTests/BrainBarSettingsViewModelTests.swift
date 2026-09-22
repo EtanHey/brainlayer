@@ -4,6 +4,66 @@ import XCTest
 final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
+    func testFooterQualifiesCloudAndLocalConfiguration() {
+        var config = BrainLayerConfig.defaultConfig
+        config.enrichmentMode = .local
+        config.enrichmentBackend = "mlx"
+        let cloud = BrainBarSettingsFooterPresentation(config: config, watcher: .running)
+        XCTAssertEqual(cloud.state, .watcherRunning)
+        XCTAssertTrue(cloud.locality.contains("Memory on this Mac"))
+        XCTAssertTrue(cloud.locality.contains("Enrichment → Gemini"))
+        XCTAssertFalse(cloud.locality.contains("Local enrichment"))
+        XCTAssertFalse(cloud.showsLock)
+        XCTAssertEqual(cloud.symbol, "icloud")
+
+        config.launchdJobs[.backupDaily]?.enabled = false
+        config.launchdJobs[.jsonlBackup]?.enabled = false
+        let weeklyOnly = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        XCTAssertTrue(weeklyOnly.locality.contains("Backups → Drive"))
+        XCTAssertFalse(weeklyOnly.showsLock)
+
+        config.enrichmentEnabled = false
+        config.launchdJobs[.enrichment]?.enabled = false
+        config.launchdJobs[.maintenanceWeekly]?.enabled = false
+        let local = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        XCTAssertTrue(local.locality.contains("Memory on this Mac"))
+        XCTAssertTrue(local.locality.contains("Enrichment off"))
+        XCTAssertTrue(local.locality.contains("Backups off"))
+        XCTAssertTrue(local.showsLock)
+        XCTAssertEqual(local.symbol, "lock")
+        XCTAssertEqual(local.state, .unavailable)
+
+        let unreadable = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
+        XCTAssertTrue(unreadable.locality.contains("Enrichment unknown"))
+        XCTAssertTrue(unreadable.locality.contains("Backups unknown"))
+        XCTAssertFalse(unreadable.showsLock)
+        XCTAssertEqual(unreadable.symbol, "questionmark.circle")
+    }
+
+    @MainActor
+    func testModelResidencyDoesNotInferLoadedStateFromConfigOrDaemonMemory() {
+        let residency = BrainBarSettingsViewModel.modelResidencyPresentation
+        XCTAssertEqual(residency.modelName, "Name unavailable")
+        XCTAssertEqual(residency.status, "Residency unavailable")
+        XCTAssertEqual(residency.memory, "Unavailable")
+    }
+
+    @MainActor
+    func testUnreadableConfigKeepsFooterUnknown() {
+        let store = BrainLayerConfigStore(
+            configURL: URL(fileURLWithPath: "/nonexistent/settings.env"),
+            loadDocumentOverride: { throw CocoaError(.fileReadNoPermission) }
+        )
+        let viewModel = BrainBarSettingsViewModel(store: store, refreshStatusOnLoad: false)
+        XCTAssertFalse(viewModel.configReadSucceeded)
+        XCTAssertFalse(viewModel.reloadConfigFromDisk())
+        XCTAssertFalse(viewModel.configReadSucceeded)
+        let footer = viewModel.footerPresentation
+        XCTAssertTrue(footer.locality.contains("Enrichment unknown"))
+        XCTAssertTrue(footer.locality.contains("Backups unknown"))
+        XCTAssertEqual(footer.state, .unavailable)
+    }
+
     @MainActor
     func testSettingsReadsBackupTruthFromObservabilityDocument() async throws {
         let fixture = try makeFixture()
