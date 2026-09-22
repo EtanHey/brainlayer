@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 enum BrainBarRenderHarness {
     private static let environmentVariable = "BRAINBAR_RENDER_ONLY"
+    private static let sampleReceipts = BrainBarOperationReceipts()
     private static let breakpoints: [(name: String, width: CGFloat)] = [
         ("compact", 760), ("default", 960), ("wide", 1_280),
     ]
@@ -86,6 +87,8 @@ enum BrainBarRenderHarness {
             try verifyDirectionalStateCoverage()
             try verifyReadableChartMarkerContract()
             try renderUnifiedSettings(in: outputDirectory)
+            sampleReceipts.record(BrainBarOperationReceipt(kind: .search, durationMillis: 142, count: 10))
+            sampleReceipts.record(BrainBarOperationReceipt(kind: .ingest, durationMillis: 1_200, count: 1))
             for scenario in Scenario.allCases {
                 for breakpoint in scenario.breakpoints {
                     for detailsExpanded in scenario.detailsStates {
@@ -240,6 +243,7 @@ enum BrainBarRenderHarness {
             : BrainBarDashboardFixture.makeCollector(scenario.collectorState)
         let view = BrainBarDashboardPreview.make(
             collector: collector,
+            receiptStore: sampleReceipts,
             observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
             panelState: panelState

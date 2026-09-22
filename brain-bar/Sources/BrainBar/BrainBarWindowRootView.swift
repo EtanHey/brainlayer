@@ -223,6 +223,7 @@ struct BrainBarQueueDirectionPresentation: Equatable {
 
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
+    var receiptStore: BrainBarOperationReceipts = .shared
     @StateObject private var standalonePanelState = BrainBarDashboardPanelState()
     let hotkeyStatus: String
     var dbPath: String? = nil
@@ -238,6 +239,7 @@ private struct BrainBarDashboardContent: View {
         } else {
             BrainBarDashboardView(
                 collector: collector,
+                receiptStore: receiptStore,
                 hotkeyStatus: hotkeyStatus,
                 dbPath: dbPath,
                 observabilityResult: observabilityResult,
@@ -859,6 +861,7 @@ private struct BrainBarAppControlMenu: View {
 
 private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
+    let receiptStore: BrainBarOperationReceipts
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
@@ -881,6 +884,8 @@ private struct BrainBarDashboardView: View {
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     @State private var vectorDetailHeight: CGFloat = 0
     @State private var ingestHelpPresented = false
+    @State private var lastSearchReceipt: BrainBarOperationReceipt?
+    @State private var lastIngestReceipt: BrainBarOperationReceipt?
 
     private var pipelineStats: BrainDatabase.DashboardStats {
         guard selectedTimeframe != .live,
@@ -1039,9 +1044,22 @@ private struct BrainBarDashboardView: View {
         }
 #endif
         .onAppear {
+            receiptStore.reload()
+            lastSearchReceipt = receiptStore.search
+            lastIngestReceipt = receiptStore.ingest
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
             previousWriteBuckets = collector.stats.recentAgentWriteBuckets
             previousWatcherBuckets = collector.stats.recentWatcherWriteBuckets
+        }
+        .onReceive(NotificationCenter.default.publisher(for: BrainBarOperationReceipts.changed)
+            .receive(on: DispatchQueue.main)) { _ in
+            lastSearchReceipt = receiptStore.search
+            lastIngestReceipt = receiptStore.ingest
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            receiptStore.reload()
+            if lastSearchReceipt != receiptStore.search { lastSearchReceipt = receiptStore.search }
+            if lastIngestReceipt != receiptStore.ingest { lastIngestReceipt = receiptStore.ingest }
         }
         .onChange(of: collector.stats.recentActivityBuckets) { _, newBuckets in
             if BrainBarPipelinePulseGate.shouldPulse(
@@ -1304,10 +1322,32 @@ private struct BrainBarDashboardView: View {
                     ingestSeriesChart(.jsonlWatcher)
                 }
             }
+            VStack(spacing: 5) {
+                operationReceiptRow(
+                    label: "Last search", value: lastSearchReceipt?.value ?? "unavailable",
+                    help: "Most recent brain_search handled by BrainBar."
+                )
+                operationReceiptRow(
+                    label: "Last ingest", value: lastIngestReceipt?.value ?? "unavailable",
+                    help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
+                )
+            }
         }
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
         .accessibilityIdentifier("brainbar.dashboard.tile.ingest")
+    }
+
+    private func operationReceiptRow(label: String, value: String, help: String) -> some View {
+        HStack(spacing: 12) {
+            Text(label)
+            Spacer(minLength: 8)
+            Text(value).monospacedDigit()
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(Color.brainBarTextSecondary)
+        .accessibilityElement(children: .combine)
+        .help(help)
     }
 
     private func ingestSeriesChart(_ series: PipelineSeries) -> some View {
@@ -3053,6 +3093,7 @@ enum BrainBarDashboardPreview {
 
     static func make(
         collector: StatsCollector,
+        receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts(),
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
         now: Date? = nil,
@@ -3066,6 +3107,7 @@ enum BrainBarDashboardPreview {
                 BrainBarAppBackground()
                 BrainBarDashboardContent(
                     collector: collector,
+                    receiptStore: receiptStore,
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
                     referenceNow: now,

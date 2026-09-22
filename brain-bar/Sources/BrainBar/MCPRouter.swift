@@ -167,6 +167,7 @@ final class MCPRouter: @unchecked Sendable {
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
+    private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
     private let pendingStoreDrainScheduler: PendingStoreDrainScheduler
     private let defaultPaletteSession = PaletteSession()
@@ -202,11 +203,13 @@ final class MCPRouter: @unchecked Sendable {
         hybridSearchBudget: TimeInterval = 0.8,
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
-        backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970
+        backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970,
+        receiptStore: BrainBarOperationReceipts = .shared
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
+        self.receiptStore = receiptStore
         self.dbPath = dbPath
         self.pendingStoreDrainScheduler = PendingStoreDrainScheduler(
             queue: pendingStoreDrainQueue ?? DispatchQueue(
@@ -534,12 +537,28 @@ final class MCPRouter: @unchecked Sendable {
             return jsonRPCError(id: id, code: -32601, message: message)
         }
 
+        let startedAt = ProcessInfo.processInfo.systemUptime
         // Dispatch to handler
         do {
             try Self.validate(arguments: arguments, for: toolName)
             let output = try dispatchTool(name: toolName, arguments: arguments, session: session)
+            if toolName == "brain_search" || toolName == "brain_store" {
+                let elapsed = Int(max(0, (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded())
+                let kind: BrainBarOperationReceipt.Kind = toolName == "brain_search" ? .search : .ingest
+                let count = toolName == "brain_search"
+                    ? BrainBarOperationReceipt.searchCount(in: output.text)
+                    : (output.metadata["stored_new"] as? Bool).map { $0 ? 1 : 0 }
+                receiptStore.record(BrainBarOperationReceipt(kind: kind, durationMillis: elapsed, count: count))
+            }
             return toolCallResult(id: id, output: output)
         } catch {
+            if toolName == "brain_search" || toolName == "brain_store" {
+                let elapsed = Int(max(0, (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded())
+                let kind: BrainBarOperationReceipt.Kind = toolName == "brain_search" ? .search : .ingest
+                receiptStore.record(BrainBarOperationReceipt(
+                    kind: kind, durationMillis: elapsed, count: nil, failed: true
+                ))
+            }
             return [
                 "jsonrpc": "2.0",
                 "id": id,
