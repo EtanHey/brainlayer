@@ -7,6 +7,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import sysconfig
 import time
 import tomllib
 import zipfile
@@ -165,6 +166,14 @@ def _populate_fake_keg_native_root(keg_root: Path) -> Path:
     native_file.parent.mkdir(parents=True, exist_ok=True)
     native_file.write_bytes(b"\x00")
     return native_file
+
+
+def _loadable_stdlib_extension() -> Path:
+    if source := getattr(_ctypes, "__file__", None):
+        return Path(source)
+    candidates = sorted((Path(sysconfig.get_path("stdlib")) / "lib-dynload").glob("*.so"))
+    assert candidates, "no standard-library native extension in this Python"
+    return candidates[0]
 
 
 def _copy_packaged_launchd(launchd_dir: Path) -> None:
@@ -2811,7 +2820,7 @@ def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_versio
     _copy_packaged_launchd(launchd_dir)
     native_file = _populate_fake_keg_native_root(cellar_root)
     # This installer success fixture now passes the release gate's real dlopen pass as well.
-    shutil.copy2(_ctypes.__file__, native_file)
+    shutil.copy2(_loadable_stdlib_extension(), native_file)
     keg_python = cellar_root / "libexec" / "venv" / "bin" / "python"
     keg_python.parent.mkdir(parents=True)
     keg_python.symlink_to(sys.executable)

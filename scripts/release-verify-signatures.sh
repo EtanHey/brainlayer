@@ -36,16 +36,34 @@ if ! command -v "$codesign_bin" >/dev/null 2>&1; then
     exit 2
 fi
 
-# find -type f does not follow links. Refuse linked libraries or package directories instead of
-# silently skipping a native file outside the keg. Venv python launchers under bin/ are expected.
-native_symlink="$(find "$native_root" -type l \( ! -path "$native_root/bin/*" -o -name '*.so' -o -name '*.dylib' \) -print -quit)"
-if [[ -n "$native_symlink" ]]; then
-    printf 'ERROR: symlink in native library tree: %s\n' "$native_symlink" >&2
+keg_python="$native_root/bin/python"
+if [[ ! -x "$keg_python" ]]; then
+    printf 'ERROR: keg python not executable: %s\n' "$keg_python" >&2
+    exit 2
+fi
+if ! python_versioned="$("$keg_python" -I -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")')"; then
+    printf 'ERROR: keg python could not report its version: %s\n' "$keg_python" >&2
     exit 2
 fi
 
+# find -type f does not follow links. Refuse linked libraries or package directories instead of
+# silently skipping a native file outside the keg. Only the three Python launcher names may link.
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
+find "$native_root" -type l -print0 >"$tmp_dir/native-links"
+while IFS= read -r -d '' native_symlink; do
+    relative_link="${native_symlink#"$native_root/"}"
+    case "$relative_link" in
+        bin/python|bin/python3|bin/"$python_versioned")
+            if [[ -f "$native_symlink" && -x "$native_symlink" && "$native_symlink" -ef "$keg_python" ]]; then
+                continue
+            fi
+            ;;
+    esac
+    printf 'ERROR: symlink in native library tree: %s\n' "$native_symlink" >&2
+    exit 2
+done <"$tmp_dir/native-links"
+
 # -type f skips symlinked extensions (none in current wheels); descends into dot-dirs like PIL/.dylibs.
 find "$native_root" -type f \( -name '*.so' -o -name '*.dylib' \) -print0 >"$tmp_dir/native-files"
 
@@ -68,12 +86,6 @@ printf 'valid-signature: %d\n' "$valid"
 if [[ $((valid + invalid)) -eq 0 ]]; then
     printf 'ERROR: no native extensions found under %s\n' "$native_root" >&2
     exit 1
-fi
-
-keg_python="$native_root/bin/python"
-if [[ ! -x "$keg_python" ]]; then
-    printf 'ERROR: keg python not executable: %s\n' "$keg_python" >&2
-    exit 2
 fi
 
 # A valid signature does not prove dyld can load the Mach-O (e.g. a misaligned LINKEDIT string pool).
