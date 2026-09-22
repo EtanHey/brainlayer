@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Draw helpers for rendering a KG edge on a Canvas.
 enum KGEdgeRenderer {
+    static let relationLabelFontSize = BrainBarDesignTokens.TypeScale.textSize(8)
+
     static func draw(
         edge: KGEdge,
         sourcePos: CGPoint,
@@ -26,7 +28,7 @@ enum KGEdgeRenderer {
             y: (sourcePos.y + targetPos.y) / 2
         )
         let label = Text(edge.relationType)
-            .font(.system(size: BrainBarDesignTokens.TypeScale.textSize(8)))
+            .font(.system(size: relationLabelFontSize))
             .foregroundColor(
                 isHighlighted
                     ? (darkMode ? Color.brainBarWhite.opacity(0.9) : Color.brainBarBlack.opacity(0.75))

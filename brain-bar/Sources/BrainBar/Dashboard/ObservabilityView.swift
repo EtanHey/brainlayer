@@ -330,8 +330,8 @@ struct ObservabilityStatusRows: View {
 
     private func color(_ tone: ObservabilityStatusTone) -> Color {
         switch tone {
-        case .green: .green
-        case .red: .red
+        case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+        case .red: Color(nsColor: BrainBarDesignTokens.Colors.statusError)
         case .neutral: .secondary
         }
     }

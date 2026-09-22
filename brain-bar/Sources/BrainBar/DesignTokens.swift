@@ -33,10 +33,15 @@ enum BrainBarDesignTokens {
         static let signalTrigram = NSColor.brainBarHex(0xA78BFA)
 
         // Semantic health, kept separate from value-agnostic signal/series palettes.
-        static let statusOK = NSColor.brainBarHex(0x30DC97)
-        static let statusAttention = NSColor.brainBarHex(0xF5B34A)
-        static let statusError = NSColor.brainBarHex(0xFF6B7D)
+        static let statusOK = NSColor.brainBarHex(0xB7D91A)
+        static let statusAttention = NSColor.brainBarHex(0xFF4D00)
+        static let statusError = NSColor.brainBarHex(0xFF1744)
         static let statusUnknown = NSColor.brainBarHex(0x8A8A90)
+
+        static func signalCoverageStatus(coveragePercent: Double, isAvailable: Bool) -> NSColor {
+            guard isAvailable else { return statusUnknown }
+            return Int(min(max(coveragePercent, 0), 100).rounded()) == 100 ? statusOK : statusUnknown
+        }
 
         static let seriesAgent = NSColor.brainBarHex(0x22D3EE)
         static let seriesWatcher = NSColor.brainBarHex(0xFB7185)
@@ -72,6 +77,10 @@ enum BrainBarDesignTokens {
     enum TypeScale {
         static let minimumText: CGFloat = 9
         static func textSize(_ proposed: CGFloat) -> CGFloat { max(minimumText, proposed) }
+        static func minimumScaleFactor(for proposed: CGFloat) -> CGFloat {
+            guard proposed > 0 else { return 1 }
+            return min(1, minimumText / proposed)
+        }
         static let hero: CGFloat = 72
         static let display: CGFloat = 28
         static let title: CGFloat = 20

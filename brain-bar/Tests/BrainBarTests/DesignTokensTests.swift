@@ -22,29 +22,65 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.hero, 72, accuracy: 0.001)
     }
 
+    @MainActor
     func testSemanticStatusesStaySeparateFromSignalsAndTextHonorsNinePointFloor() {
-        XCTAssertEqual(BrainBarDesignTokens.Colors.statusOK.hexRGB, "#30DC97")
-        XCTAssertEqual(BrainBarDesignTokens.Colors.statusAttention.hexRGB, "#F5B34A")
-        XCTAssertEqual(BrainBarDesignTokens.Colors.statusError.hexRGB, "#FF6B7D")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusOK.hexRGB, "#B7D91A")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusAttention.hexRGB, "#FF4D00")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusError.hexRGB, "#FF1744")
         XCTAssertEqual(BrainBarDesignTokens.Colors.statusUnknown.hexRGB, "#8A8A90")
-        let signalAndSeriesColors = [
-            BrainBarDesignTokens.Colors.signalVector,
-            BrainBarDesignTokens.Colors.signalFTS5,
-            BrainBarDesignTokens.Colors.signalTrigram,
-            BrainBarDesignTokens.Colors.seriesAgent,
-            BrainBarDesignTokens.Colors.seriesWatcher,
+        let signalAndSeriesColors: [(String, NSColor)] = [
+            ("Vector", BrainBarDesignTokens.Colors.signalVector),
+            ("FTS5", BrainBarDesignTokens.Colors.signalFTS5),
+            ("Trigram", BrainBarDesignTokens.Colors.signalTrigram),
+            ("Agent", BrainBarDesignTokens.Colors.seriesAgent),
+            ("Watcher", BrainBarDesignTokens.Colors.seriesWatcher),
+            ("Agent dimmed", BrainBarDesignTokens.Colors.seriesAgentDimmed),
+            ("Watcher dimmed", BrainBarDesignTokens.Colors.seriesWatcherDimmed),
         ]
-        let statusColors = [
-            BrainBarDesignTokens.Colors.statusOK,
-            BrainBarDesignTokens.Colors.statusAttention,
-            BrainBarDesignTokens.Colors.statusError,
-            BrainBarDesignTokens.Colors.statusUnknown,
+        let statusColors: [(String, NSColor)] = [
+            ("OK", BrainBarDesignTokens.Colors.statusOK),
+            ("attention", BrainBarDesignTokens.Colors.statusAttention),
+            ("error", BrainBarDesignTokens.Colors.statusError),
+            ("unknown", BrainBarDesignTokens.Colors.statusUnknown),
         ]
-        for statusColor in statusColors {
-            XCTAssertFalse(signalAndSeriesColors.contains(statusColor))
+        for (statusName, statusColor) in statusColors {
+            for (signalName, signalColor) in signalAndSeriesColors {
+                XCTAssertGreaterThanOrEqual(
+                    statusColor.cie76Distance(to: signalColor),
+                    20,
+                    "\(statusName) status is too close to \(signalName)"
+                )
+            }
         }
+
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(11), 11, accuracy: 0.001)
+        XCTAssertEqual(KGEdgeRenderer.relationLabelFontSize, BrainBarDesignTokens.TypeScale.minimumText, accuracy: 0.001)
+        XCTAssertEqual(DegradationBadge.labelFontSize * DegradationBadge.minimumLabelScaleFactor, 9, accuracy: 0.001)
+        XCTAssertEqual(BrainBarFlowStatusPill.fontSize * BrainBarFlowStatusPill.minimumScaleFactor, 9, accuracy: 0.001)
+        XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
+        XCTAssertEqual(
+            BrainBarDesignTokens.Colors.signalCoverageStatus(coveragePercent: 100, isAvailable: true),
+            BrainBarDesignTokens.Colors.statusOK
+        )
+        XCTAssertEqual(
+            BrainBarDesignTokens.Colors.signalCoverageStatus(coveragePercent: 100, isAvailable: false),
+            BrainBarDesignTokens.Colors.statusUnknown
+        )
+
+        let scaledFonts = [
+            (DegradationBadge.labelFontSize, DegradationBadge.minimumLabelScaleFactor),
+            (BrainBarFlowStatusPill.fontSize, BrainBarFlowStatusPill.minimumScaleFactor),
+            (CGFloat(11), BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: 11)),
+            (CGFloat(40), BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: 40)),
+        ]
+        for (fontSize, scaleFactor) in scaledFonts {
+            XCTAssertGreaterThanOrEqual(
+                fontSize * scaleFactor,
+                BrainBarDesignTokens.TypeScale.minimumText,
+                "Scaled \(fontSize) pt text can fall below the floor"
+            )
+        }
     }
 
     func testStateThemesExposeGroundTruthSemanticColors() {
@@ -96,5 +132,31 @@ private extension NSColor {
         let g = Int((color.greenComponent * 255).rounded())
         let b = Int((color.blueComponent * 255).rounded())
         return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
+    func cie76Distance(to other: NSColor) -> Double {
+        let lhs = labComponents
+        let rhs = other.labComponents
+        return sqrt(pow(lhs.l - rhs.l, 2) + pow(lhs.a - rhs.a, 2) + pow(lhs.b - rhs.b, 2))
+    }
+
+    private var labComponents: (l: Double, a: Double, b: Double) {
+        let rgb = usingColorSpace(.deviceRGB)!
+        func linear(_ component: Double) -> Double {
+            component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+        }
+        let red = linear(rgb.redComponent)
+        let green = linear(rgb.greenComponent)
+        let blue = linear(rgb.blueComponent)
+        let x = (red * 0.4124564 + green * 0.3575761 + blue * 0.1804375) / 0.95047
+        let y = red * 0.2126729 + green * 0.7151522 + blue * 0.0721750
+        let z = (red * 0.0193339 + green * 0.1191920 + blue * 0.9503041) / 1.08883
+        func labCurve(_ value: Double) -> Double {
+            value > 0.008856451679 ? pow(value, 1.0 / 3.0) : 7.787037037 * value + 16.0 / 116.0
+        }
+        let fx = labCurve(x)
+        let fy = labCurve(y)
+        let fz = labCurve(z)
+        return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
     }
 }

@@ -102,6 +102,10 @@ enum BrainBarDashboardFixture {
 
     static let stats = makeStats(replayDebtBreakdown: readableReplayDebt)
     static let loadingStats = makeStats(replayDebtBreakdown: readableReplayDebt, coverageAvailable: false)
+    static let vectorAt100Stats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        vectorIndexedChunkCount: 297_412
+    )
     static let readableObservabilityResult: ObservabilityReadResult = .readable(
         ObservabilityDocument(
             schemaVersion: 1,
@@ -212,6 +216,7 @@ enum BrainBarDashboardFixture {
         activityWindowMinutes: Int = 60,
         watcherProcessProbeResult: WatcherProcessProbeResult = .running(pid: 4242),
         watcherRecentDistinctChunkCount: Int = 14,
+        vectorIndexedChunkCount: Int = 240_100,
         recentEnrichmentBuckets: [Int] = [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6],
         recentEnrichmentFiveMinuteCount: Int = 22
     ) -> DashboardStats {
@@ -240,7 +245,7 @@ enum BrainBarDashboardFixture {
             lastWriteAt: nil,
             lastEnrichedAt: nil,
             signalEligibleChunkCount: coverageAvailable ? 297_412 : 0,
-            vectorIndexedChunkCount: coverageAvailable ? 240_100 : 0,
+            vectorIndexedChunkCount: coverageAvailable ? vectorIndexedChunkCount : 0,
             ftsIndexedChunkCount: coverageAvailable ? 296_980 : 0,
             trigramIndexedChunkCount: coverageAvailable ? 210_540 : 0,
             signalCoverageIsAvailable: coverageAvailable,
@@ -354,6 +359,18 @@ enum BrainBarDashboardFixture {
             lastDataFetchedAt: lastDataFetchedAt,
             lastFetchError: lastFetchError,
             snapshotFreshnessState: freshness
+        )
+    }
+
+    static func makeCollector(stats: DashboardStats) -> StatsCollector {
+        StatsCollector.fixture(
+            stats: stats,
+            daemon: daemon,
+            agentActivity: agentActivity,
+            state: PipelineState.derive(daemon: daemon, stats: stats),
+            heartbeat: .empty,
+            lastDataFetchedAt: fetchedAt,
+            snapshotFreshnessState: .live(ageSeconds: 0)
         )
     }
 }
