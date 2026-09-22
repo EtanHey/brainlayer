@@ -30,6 +30,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let now: @Sendable () -> Date
     private let observabilityURL: URL?
     private let observabilityRead: @Sendable (URL) async -> ObservabilityReadResult
+    private let confirmAPIKeyOverwrite: (() -> Bool)?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
 
@@ -43,6 +44,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         now: @escaping @Sendable () -> Date = Date.init,
         observabilityURL: URL? = nil,
         initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable."),
+        confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
             await Task.detached { ObservabilityReader.read(url: url) }.value
         }
@@ -53,6 +55,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.now = now
         self.observabilityURL = observabilityURL
         self.observabilityRead = observabilityRead
+        self.confirmAPIKeyOverwrite = confirmAPIKeyOverwrite
         observabilityResult = initialObservabilityResult
         launchdObservations = initialLaunchdObservations.isEmpty
             ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
@@ -127,8 +130,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func storePlainAPIKey() {
         let value = pendingPlainAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        guard confirmGoogleAPIKeyOverwriteIfNeeded() else { return }
-        if updateConfig({ $0.googleAPIKey = .plain(value) }) {
+        if updateConfig({ $0.googleAPIKey = .plain(value) }, beforeUpdate: confirmGoogleAPIKeyOverwriteIfNeeded) {
             pendingPlainAPIKey = ""
         }
     }
@@ -136,10 +138,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func storeOnePasswordReference() {
         let reference = onePasswordReference.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reference.isEmpty else { return }
-        if config.googleAPIKey != .onePasswordReference(reference) {
-            guard confirmGoogleAPIKeyOverwriteIfNeeded() else { return }
-        }
-        _ = updateConfig { $0.googleAPIKey = .onePasswordReference(reference) }
+        _ = updateConfig({ $0.googleAPIKey = .onePasswordReference(reference) }, beforeUpdate: {
+            self.config.googleAPIKey == .onePasswordReference(reference) || self.confirmGoogleAPIKeyOverwriteIfNeeded()
+        })
     }
 
     func clearGoogleAPIKey() {
@@ -252,8 +253,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     @discardableResult
-    private func updateConfig(_ apply: (inout BrainLayerConfig) -> Void) -> Bool {
+    private func updateConfig(
+        _ apply: (inout BrainLayerConfig) -> Void,
+        beforeUpdate: (() -> Bool)? = nil
+    ) -> Bool {
         guard reloadConfigFromDisk() else { return false }
+        guard beforeUpdate?() ?? true else { return false }
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
@@ -436,6 +441,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     private func confirmGoogleAPIKeyOverwriteIfNeeded() -> Bool {
         guard config.googleAPIKey.kind != .missing else { return true }
+        if let confirmAPIKeyOverwrite { return confirmAPIKeyOverwrite() }
         let alert = NSAlert()
         alert.messageText = "Replace existing Gemini API key?"
         alert.informativeText = "BrainBar will update the BrainLayer config file without displaying the current value."

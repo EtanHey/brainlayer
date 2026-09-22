@@ -464,6 +464,36 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCancelledAPIKeyOverwritePreservesExternallyAddedKey() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var confirmationCount = 0
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            refreshStatusOnLoad: false,
+            confirmAPIKeyOverwrite: {
+                confirmationCount += 1
+                return false
+            }
+        )
+        var external = try fixture.store.loadDocument().config
+        external.googleAPIKey = .onePasswordReference("op://Private/Existing/key")
+        try fixture.store.save(external)
+
+        viewModel.pendingPlainAPIKey = "replacement-secret"
+        viewModel.storePlainAPIKey()
+
+        XCTAssertEqual(confirmationCount, 1)
+        XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, external.googleAPIKey)
+        XCTAssertEqual(viewModel.pendingPlainAPIKey, "replacement-secret")
+
+        viewModel.onePasswordReference = "op://Private/Replacement/key"
+        viewModel.storeOnePasswordReference()
+        XCTAssertEqual(confirmationCount, 2)
+        XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, external.googleAPIKey)
+    }
+
+    @MainActor
     private func waitForBackupStatus(
         _ viewModel: BrainBarSettingsViewModel
     ) async throws -> ObservabilityBackupStatus {

@@ -123,6 +123,26 @@ final class BadgeStateTests: XCTestCase {
         XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("future"))
     }
 
+    func testFutureBadgeStateFailsVisibleAfterSleepGrace() throws {
+        let url = try mutatedFixture {
+            $0["generated_at"] = timestamp(now.addingTimeInterval(3_601))
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["badge_on"] = false
+            alerts["active"] = []
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let history = BadgeReadHistory()
+        let cadence = ObservabilityCadence.known(300)
+        _ = BadgeStateReader.read(url: url, now: now, cadence: cadence, history: history)
+
+        let presentation = BadgeStateReader.read(
+            url: url, now: now.addingTimeInterval(3_600), cadence: cadence, history: history
+        )
+        XCTAssertTrue(presentation.badgeOn)
+        XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("future"))
+    }
+
     func testInconsistentBadgeStateFailsVisibleWithBadgeOn() throws {
         let url = try mutatedFixture {
             var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
@@ -175,6 +195,34 @@ final class BadgeStateTests: XCTestCase {
                 environment: ["BRAINLAYER_BADGE_STATE_PATH": "/tmp/override-badge.json"]
             ).path,
             "/tmp/override-badge.json"
+        )
+    }
+
+    func testBadgeStateOverrideExpandsHomeDirectory() {
+        let name = "badge-state-\(UUID().uuidString).json"
+        let actual = BadgeStateReader.url(
+            dbPath: "/tmp/brainlayer.db",
+            environment: ["BRAINLAYER_BADGE_STATE_PATH": "~/\(name)"]
+        )
+        XCTAssertEqual(actual.path, FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(name).path)
+    }
+
+    func testBadgeStateURLResolvesSymlinkedDatabase() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("badge-state-path-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let realDirectory = root.appendingPathComponent("real", isDirectory: true)
+        let linkDirectory = root.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createDirectory(at: realDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: linkDirectory, withIntermediateDirectories: true)
+        let realDB = realDirectory.appendingPathComponent("brainlayer.db")
+        let linkedDB = linkDirectory.appendingPathComponent("brainlayer.db")
+        try Data().write(to: realDB)
+        try FileManager.default.createSymbolicLink(at: linkedDB, withDestinationURL: realDB)
+
+        XCTAssertEqual(
+            BadgeStateReader.url(dbPath: linkedDB.path, environment: [:]).path,
+            realDirectory.appendingPathComponent("badge-state.json").path
         )
     }
 
