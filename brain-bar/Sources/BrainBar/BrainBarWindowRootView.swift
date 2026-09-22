@@ -1719,9 +1719,10 @@ private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
                 ) {
                     content()
                 }
-                .clipped()
+                .clipShape(Rectangle().inset(by: (isExpanded && !isAnimatingExpansion) ? -24 : 0))
                 .allowsHitTesting(isExpanded)
                 .accessibilityHidden(!isExpanded)
+                .disabled(!isExpanded)
             } else if isExpanded, !isAnimatingExpansion {
                 content()
             } else if isAnimatingExpansion {

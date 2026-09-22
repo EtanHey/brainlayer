@@ -66,9 +66,9 @@ final class BrainBarL0StateTests: XCTestCase {
         XCTAssertEqual(provider.callCount, 1)
 
         var fillStarts: [String] = []
-        var presentedLabels: [String: String] = [:]
+        var labelEvents: [String] = []
         BrainBarCoverageLifecycleProbe.fillStarted = { fillStarts.append($0) }
-        BrainBarCoverageLifecycleProbe.labelPresented = { presentedLabels[$0] = $1 }
+        BrainBarCoverageLifecycleProbe.labelPresented = { labelEvents.append("\($0)=\($1)") }
         defer { BrainBarCoverageLifecycleProbe.reset() }
 
         let panelState = BrainBarDashboardPanelState()
@@ -82,42 +82,77 @@ final class BrainBarL0StateTests: XCTestCase {
         let host = NSHostingController(rootView: view)
         host.view.frame = NSRect(x: 0, y: 0, width: 960, height: 1_200)
 
-        try render(host, name: "initial-loaded")
+        pump(host)
         XCTAssertEqual(fillStarts.sorted(), ["FTS5", "Trigram", "Vector"])
-        XCTAssertEqual(presentedLabels, ["Vector": "71%", "FTS5": "83%", "Trigram": "96%"])
-        XCTAssertFalse(presentedLabels.values.contains("computing…"))
+        XCTAssertEqual(labelEvents.sorted(), ["FTS5=83%", "Trigram=96%", "Vector=71%"])
 
         for cycle in 1 ... 2 {
             panelState.detailsExpanded = false
-            try render(host, name: "collapsed-\(cycle)")
+            pump(host)
             panelState.detailsExpanded = true
-            try render(host, name: "reopened-\(cycle)")
+            pump(host)
         }
 
         XCTAssertEqual(provider.callCount, 1, "Presentation-only toggles must not refetch exact coverage.")
         XCTAssertEqual(fillStarts.sorted(), ["FTS5", "Trigram", "Vector"], "Each real bar may start its fill only once.")
-        XCTAssertEqual(presentedLabels, ["Vector": "71%", "FTS5": "83%", "Trigram": "96%"])
-        XCTAssertFalse(presentedLabels.values.contains("computing…"))
+        XCTAssertFalse(labelEvents.contains { $0.hasSuffix("=computing…") }, "No transient computing label: \(labelEvents)")
+        XCTAssertEqual(labelEvents.sorted(), ["FTS5=83%", "Trigram=96%", "Vector=71%"],
+                       "Presentation-only toggles must not re-present or change any label.")
         print(
             "[brainbar-l0-state] provider_calls=\(provider.callCount) "
-                + "fill_starts=\(fillStarts.sorted()) labels=\(presentedLabels) details_toggle_cycles=2"
+                + "fill_starts=\(fillStarts.sorted()) label_events=\(labelEvents) details_toggle_cycles=2"
         )
+        if let directory = ProcessInfo.processInfo.environment["BRAINBAR_L0_STATE_RENDER_DIR"] {
+            BrainBarCoverageLifecycleProbe.reset()
+            try renderWindowedFrames(host, panelState: panelState, directory: URL(fileURLWithPath: directory))
+        }
     }
 
     @MainActor
-    private func render(_ host: NSHostingController<AnyView>, name: String) throws {
+    private func pump(_ host: NSHostingController<AnyView>) {
         host.view.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.55))
         host.view.layoutSubtreeIfNeeded()
+    }
 
-        guard let bitmap = host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds) else {
+    @MainActor
+    private func renderWindowedFrames(
+        _ host: NSHostingController<AnyView>,
+        panelState: BrainBarDashboardPanelState,
+        directory: URL
+    ) throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: -6_000, y: -6_000, width: 960, height: 1_200),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentViewController = host
+        window.setFrame(NSRect(x: -6_000, y: -6_000, width: 960, height: 1_200), display: false)
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.0))
+        try save(host.view, name: "window-initial", directory: directory)
+        for cycle in 1 ... 2 {
+            panelState.detailsExpanded = false
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.6))
+            try save(host.view, name: "window-collapsed-\(cycle)", directory: directory)
+            panelState.detailsExpanded = true
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.12))
+            try save(host.view, name: "window-reopened-\(cycle)-early", directory: directory)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))
+            try save(host.view, name: "window-reopened-\(cycle)-settled", directory: directory)
+        }
+    }
+
+    @MainActor
+    private func save(_ view: NSView, name: String, directory: URL) throws {
+        view.layoutSubtreeIfNeeded()
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
             return XCTFail("Could not allocate bitmap for \(name).")
         }
-        host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+        view.cacheDisplay(in: view.bounds, to: bitmap)
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
             return XCTFail("Could not encode \(name).")
         }
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["BRAINBAR_L0_STATE_RENDER_DIR"] ?? "/tmp/brainbar-l0-state")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("\(name).png")
         try png.write(to: url, options: .atomic)
