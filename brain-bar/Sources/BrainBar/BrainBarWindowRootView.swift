@@ -746,7 +746,7 @@ private struct BrainBarWindowHeader: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: showRetrievalTools ? 280 : 190)
-                .accessibilityIdentifier("brainbar.shell.tabs")
+                .accessibilityIdentifier("brainbar.shell.destination")
                 BrainBarAppControlMenu(databasePath: databasePath)
             }
 
