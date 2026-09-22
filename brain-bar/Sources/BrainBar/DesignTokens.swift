@@ -32,10 +32,10 @@ enum BrainBarDesignTokens {
         static let signalFTS5 = NSColor.brainBarHex(0x34D399)
         static let signalTrigram = NSColor.brainBarHex(0xA78BFA)
 
-        // Semantic health, kept separate from value-agnostic signal/series palettes.
-        static let statusOK = NSColor.brainBarHex(0xB7D91A)
-        static let statusAttention = NSColor.brainBarHex(0xFF4D00)
-        static let statusError = NSColor.brainBarHex(0xFF1744)
+        // Lead palette decision, pending Etan confirmation; signal/series colors stay unchanged.
+        static let statusOK = NSColor.brainBarHex(0x32D74B)
+        static let statusAttention = NSColor.brainBarHex(0xFFD60A)
+        static let statusError = NSColor.brainBarHex(0xFF453A)
         static let statusUnknown = NSColor.brainBarHex(0x8A8A90)
 
         static func signalCoverageStatus(coveragePercent: Double, isAvailable: Bool) -> NSColor {

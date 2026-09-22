@@ -24,11 +24,15 @@ final class DesignTokensTests: XCTestCase {
 
     @MainActor
     func testSemanticStatusesStaySeparateFromSignalsAndTextHonorsNinePointFloor() {
-        XCTAssertEqual(BrainBarDesignTokens.Colors.statusOK.hexRGB, "#B7D91A")
-        XCTAssertEqual(BrainBarDesignTokens.Colors.statusAttention.hexRGB, "#FF4D00")
-        XCTAssertEqual(BrainBarDesignTokens.Colors.statusError.hexRGB, "#FF1744")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusOK.hexRGB, "#32D74B")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusAttention.hexRGB, "#FFD60A")
+        XCTAssertEqual(BrainBarDesignTokens.Colors.statusError.hexRGB, "#FF453A")
         XCTAssertEqual(BrainBarDesignTokens.Colors.statusUnknown.hexRGB, "#8A8A90")
-        let signalAndSeriesColors: [(String, NSColor)] = [
+        let chartPaletteColors: [(String, NSColor)] = [
+            ("Accent", BrainBarDesignTokens.Colors.accent),
+            ("Accent bright", BrainBarDesignTokens.Colors.accentBright),
+            ("Accent deep", BrainBarDesignTokens.Colors.accentDeep),
+            ("Accent violet", BrainBarDesignTokens.Colors.accentViolet),
             ("Vector", BrainBarDesignTokens.Colors.signalVector),
             ("FTS5", BrainBarDesignTokens.Colors.signalFTS5),
             ("Trigram", BrainBarDesignTokens.Colors.signalTrigram),
@@ -44,11 +48,11 @@ final class DesignTokensTests: XCTestCase {
             ("unknown", BrainBarDesignTokens.Colors.statusUnknown),
         ]
         for (statusName, statusColor) in statusColors {
-            for (signalName, signalColor) in signalAndSeriesColors {
+            for (signalName, signalColor) in chartPaletteColors {
                 XCTAssertGreaterThanOrEqual(
                     statusColor.cie76Distance(to: signalColor),
-                    20,
-                    "\(statusName) status is too close to \(signalName)"
+                    25,
+                    "\(statusName) status token is too close to \(signalName)"
                 )
             }
         }
