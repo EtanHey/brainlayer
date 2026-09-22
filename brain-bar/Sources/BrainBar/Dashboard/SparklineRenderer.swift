@@ -168,23 +168,33 @@ struct SparklineChartPresentation: Equatable, Sendable {
         return components.joined(separator: ", ")
     }
 
+    private var observedMaxValue: Int {
+        max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 0)
+    }
+
     var maxValue: Int {
-        max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 1)
+        max(observedMaxValue, 1)
     }
 
-    var tightAxisMax: Int {
-        maxValue <= 5 ? max(maxValue, 1) : axisMax
-    }
+    var tightAxisMax: Int { axisMax }
 
-    /// Rounds the raw peak up to a glanceable 1/2/5 x 10^n tick so y-axis labels are round.
+    /// Uses the largest 1/2/5 decimal step that keeps headroom within 20%.
     var axisMax: Int {
-        let raw = maxValue
+        let raw = observedMaxValue
         guard raw > 1 else { return 1 }
-        let exponent = floor(log10(Double(raw)))
-        let base = pow(10, exponent)
-        let fraction = Double(raw) / base
-        let niceFraction: Double = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10
-        return max(Int((niceFraction * base).rounded(.up)), 1)
+        let magnitude = Int(pow(10, floor(log10(Double(raw)))))
+        let headroomLimit = Int(floor(Double(raw) * 1.20))
+
+        for divisor in [1, 2, 5, 10] {
+            let step = max(magnitude / divisor, 1)
+            let ceiling = ((raw / step) + 1) * step
+            if ceiling <= headroomLimit {
+                return ceiling
+            }
+        }
+
+        // Integer peaks below five cannot always preserve both strict headroom and 20%.
+        return raw + 1
     }
     /// Tick values bottom->top: always includes 0 (baseline) and axisMax (peak).
     var yAxisTicks: [Int] {
@@ -535,15 +545,13 @@ struct SparklineChart: View {
                             )
                             .transition(.opacity)
 
-                            if tick != 0 {
-                                Text(DashboardMetricFormatter.axisTickString(tick))
-                                    .font(.system(size: 9, weight: .medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(Color.brainBarTextMuted)
-                                    .frame(width: yAxisGutter - 4, alignment: .trailing)
-                                    .position(x: (yAxisGutter - 4) / 2, y: y)
-                                    .transition(.opacity)
-                            }
+                            Text(DashboardMetricFormatter.axisTickString(tick))
+                                .font(.system(size: 9, weight: .medium))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.brainBarTextMuted)
+                                .frame(width: yAxisGutter - 4, alignment: .trailing)
+                                .position(x: (yAxisGutter - 4) / 2, y: y)
+                                .transition(.opacity)
                         }
                     }
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hoveredBucket)

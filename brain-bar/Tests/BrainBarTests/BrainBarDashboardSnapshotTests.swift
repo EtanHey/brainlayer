@@ -136,9 +136,11 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     func testIngestBandChartSizesNeverTriggerSilentCompactRendering() {
+        XCTAssertEqual(BrainBarIngestBandLayout.plotHeight, 96)
         for width: CGFloat in [760, 960, 1_280] {
             let sizes = BrainBarIngestBandLayout.chartSizes(containerWidth: width)
             XCTAssertEqual(sizes.count, 3)
+            XCTAssertTrue(sizes.allSatisfy { $0.height == 96 })
             XCTAssertTrue(
                 sizes.allSatisfy { !SparklineRenderer.isCompact(size: $0) },
                 "Dashboard width \(width) must preserve axes and labels for every ingest chart."

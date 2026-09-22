@@ -371,7 +371,7 @@ enum BrainBarOnePageComposition {
 }
 
 enum BrainBarIngestBandLayout {
-    static let plotHeight: CGFloat = 72
+    static let plotHeight: CGFloat = 96
 
     static func chartSizes(containerWidth: CGFloat) -> [NSSize] {
         let compact = containerWidth < 920
