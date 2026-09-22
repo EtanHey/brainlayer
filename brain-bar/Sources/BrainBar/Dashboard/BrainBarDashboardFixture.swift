@@ -217,10 +217,10 @@ enum BrainBarDashboardFixture {
     )
     static let unavailableStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,
+        coverageAvailable: false,
         watcherProcessProbeResult: .failure("fixture watcher unavailable"),
         agentWriteReadability: .unreadable("fixture agent flow unavailable"),
-        watcherFlowReadability: .unreadable("fixture watcher flow unavailable"),
-        coverageAvailable: false
+        watcherFlowReadability: .unreadable("fixture watcher flow unavailable")
     )
 
     static func makeStats(activityWindowMinutes: Int) -> DashboardStats {

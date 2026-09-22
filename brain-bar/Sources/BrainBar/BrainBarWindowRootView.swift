@@ -2330,17 +2330,9 @@ private struct BrainBarSignalCoveragePanel: View {
             Text("Indexed / eligible chunks")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.brainBarTextSecondary)
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: compact ? 8 : 10) {
-                    ForEach(signals) { signal in
-                        signalColumn(for: signal)
-                    }
-                }
-
-                VStack(spacing: 8) {
-                    ForEach(signals) { signal in
-                        signalColumn(for: signal)
-                    }
+            HStack(alignment: .top, spacing: compact ? 8 : 10) {
+                ForEach(signals) { signal in
+                    signalColumn(for: signal)
                 }
             }
         }
@@ -2526,6 +2518,8 @@ private struct BrainBarSignalCoverageRow: View {
                         .font(.system(size: compact ? 18 : 20, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.brainBarTextPrimary)
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
             }
 
@@ -2548,16 +2542,16 @@ private struct BrainBarSignalCoverageRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if let missingCount = signal.presentation.missingCount, missingCount > 0,
-               let missingText = signal.presentation.missingText {
-                Text("\(missingText) not indexed")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                    .monospacedDigit()
-            }
+            Text(signal.presentation.missingCount.map { $0 > 0 ? "\(signal.presentation.missingText ?? "") not indexed" : " " } ?? " ")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(height: 12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
+        .frame(height: compact ? 106 : 114)
         .background(BrainBarDashboardCardStyle(emphasized: isSelected, cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
