@@ -63,9 +63,10 @@ enum BadgeStateReader {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
         if let override = environment["BRAINLAYER_BADGE_STATE_PATH"], !override.isEmpty {
-            return URL(fileURLWithPath: override)
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
         }
-        return URL(fileURLWithPath: dbPath).deletingLastPathComponent()
+        return URL(fileURLWithPath: (dbPath as NSString).expandingTildeInPath)
+            .resolvingSymlinksInPath().deletingLastPathComponent()
             .appendingPathComponent("badge-state.json")
     }
 
@@ -115,7 +116,7 @@ enum BadgeStateReader {
                 return .failVisible("Badge producer missed expected_first_run_by.")
             }
             let age = now.timeIntervalSince(document.generatedAt)
-            guard age >= 0 || sleepGraceApplies else {
+            guard age >= 0 else {
                 return .failVisible("Badge state timestamp is in the future.")
             }
             guard age <= cadence.interval * 2 || sleepGraceApplies else {
