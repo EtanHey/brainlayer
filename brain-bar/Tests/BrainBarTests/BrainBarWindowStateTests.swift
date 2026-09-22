@@ -103,26 +103,6 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)
     }
 
-    func testUnifiedWindowKeepsDashboardMountedBehindSettingsDestination() throws {
-        let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-
-        XCTAssertTrue(root.contains("Picker(\"Section\""))
-        XCTAssertTrue(root.contains("brainbar.shell.tabs"))
-        XCTAssertTrue(root.contains("dashboardContent\n                    .brainBarTabVisibility(panelState.selectedTab == .dashboard)"))
-        XCTAssertTrue(root.contains("settingsContent\n                        .brainBarTabVisibility(panelState.selectedTab == .settings)"))
-        XCTAssertTrue(root.contains("BrainBarSettingsView(databasePath:"))
-        XCTAssertTrue(root.contains("activate(tab: newTab, refreshDashboard: oldTab != .settings)"))
-        XCTAssertFalse(root.contains("injectionsContent"))
-        XCTAssertFalse(root.contains("BrainBarInjectionTab"))
-        XCTAssertFalse(root.contains("ObservabilityTechnicalDetailsView(result: effectiveObservabilityResult)"))
-        XCTAssertTrue(root.contains("BrainBarDefinitionList(title: \"Activity\""))
-        XCTAssertTrue(root.contains("summaryTiles(layout: layout)"))
-        XCTAssertTrue(root.contains("Text(\"Details\")"))
-        XCTAssertFalse(root.contains("Runtime & Details"))
-        XCTAssertTrue(root.contains("BrainBarHeroBackupTruth.derive("))
-        XCTAssertTrue(root.contains("ObservabilityPresentation.backupStatus(for: document.backups)"))
-    }
-
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(

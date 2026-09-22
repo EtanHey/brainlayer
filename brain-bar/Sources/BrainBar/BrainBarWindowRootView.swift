@@ -10,27 +10,13 @@ struct BrainBarWindowRootView: View {
     @ObservedObject private var panelState: BrainBarDashboardPanelState
 
     @State private var hasActivatedGraphTab = false
-    @State private var hasActivatedSettingsTab = false
     @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 #if BRAINBAR_UI
-    private let settingsViewFactory: (String) -> AnyView
+    private var settingsViewFactory: (String) -> AnyView = { AnyView(BrainBarSettingsView(databasePath: $0)) }
 #endif
 
-#if BRAINBAR_UI
-    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
-         panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState(),
-         settingsViewFactory: @escaping (String) -> AnyView = { AnyView(BrainBarSettingsView(databasePath: $0)) }) {
-        self.runtime = runtime
-        self.managesWindowFrame = managesWindowFrame
-        self.panelState = panelState
-        self.settingsViewFactory = settingsViewFactory
-        _windowObserver = StateObject(
-            wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
-        )
-    }
-#else
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
          panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()) {
         self.runtime = runtime
@@ -39,6 +25,14 @@ struct BrainBarWindowRootView: View {
         _windowObserver = StateObject(
             wrappedValue: BrainBarWindowObserver(coordinator: runtime.windowCoordinator)
         )
+    }
+
+#if BRAINBAR_UI
+    init(runtime: BrainBarRuntime, managesWindowFrame: Bool,
+         panelState: BrainBarDashboardPanelState,
+         settingsViewFactory: @escaping (String) -> AnyView) {
+        self.init(runtime: runtime, managesWindowFrame: managesWindowFrame, panelState: panelState)
+        self.settingsViewFactory = settingsViewFactory
     }
 #endif
 
@@ -66,7 +60,7 @@ struct BrainBarWindowRootView: View {
                 }
 
 #if BRAINBAR_UI
-                if hasActivatedSettingsTab || panelState.selectedTab == .settings {
+                if panelState.selectedTab == .settings {
                     settingsContent
                         .brainBarTabVisibility(panelState.selectedTab == .settings)
                 }
@@ -157,6 +151,7 @@ struct BrainBarWindowRootView: View {
 #if BRAINBAR_UI
     private var settingsContent: some View {
         settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath())
+            .id(panelState.settingsActivationRevision)
     }
 #endif
 
@@ -189,8 +184,7 @@ struct BrainBarWindowRootView: View {
             }
         case .graph:
             hasActivatedGraphTab = true
-        case .settings:
-            hasActivatedSettingsTab = true
+        case .settings: break
         }
     }
 }

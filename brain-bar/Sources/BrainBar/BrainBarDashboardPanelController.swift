@@ -88,6 +88,7 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var searchOverlayPresented = false
     @Published var graphPresented = false
     @Published var selectedTab: BrainBarTab = .dashboard
+    @Published var settingsActivationRevision = 0
     @Published private(set) var disclosureAnimationRevision = 0
 #if DEBUG
     var renderedSummaryTileHeights: [String: CGFloat] = [:]
@@ -163,6 +164,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func show(anchoredTo anchorView: NSView? = nil) {
         guard let anchorView else { return }
+        if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
         positionPanel(below: anchorView)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -207,11 +209,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     private func dismissIfClickOutside() {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
         dismiss()
     }
 
     private func dismissIfLocalClickOutside(_ event: NSEvent) {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
         if event.window === panel { return }
         if let button = statusItemButton, event.window === button.window { return }   // let toggle() own the menubar click
         dismiss()
@@ -219,6 +223,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
+        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
         dismiss()
     }
 
