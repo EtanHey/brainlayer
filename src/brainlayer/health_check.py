@@ -21,6 +21,8 @@ from typing import Any, Callable
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     ENRICH_DAILY_COST_COUNTER_FILENAME,
+    PROGRESS_STALLED_CODE,
+    PROGRESS_UNKNOWN_CODE,
     STALLED_CODE,
     check_drain_liveness,
 )
@@ -32,7 +34,12 @@ from .launchd_primitive import (
     launchd_target,
 )
 from .paths import get_db_path
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .pause import (
+    DEFAULT_PAUSE_SENTINEL_PATH,
+    pause_applies_to_label,
+    pause_sentinel_state,
+    queue_contains_only_enrichment,
+)
 from .watcher import default_watch_roots
 
 DEFAULT_SOCKET_PATH = Path("/tmp/brainbar.sock")
@@ -1053,30 +1060,7 @@ def _paused_enrichment_queue_explanation(
 
 
 def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
-    if expected_count <= 0:
-        return False
-    try:
-        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
-    except OSError:
-        return False
-    return len(paths) == expected_count and all(_queue_file_is_paused_enrichment(path) for path in paths)
-
-
-def _queue_file_is_paused_enrichment(path: Path) -> bool:
-    """Return true only when every drain-visible event is an enrichment update."""
-    try:
-        saw_event = False
-        with path.open(encoding="utf-8") as queue_file:
-            for line in queue_file:
-                if not line.strip():
-                    continue
-                event = json.loads(line)
-                saw_event = True
-                if not isinstance(event, dict) or event.get("kind") != "enrichment_update":
-                    return False
-    except (OSError, json.JSONDecodeError):
-        return False
-    return saw_event
+    return queue_contains_only_enrichment(queue_dir, expected_count)
 
 
 def _queue_heal_summary(
@@ -1579,12 +1563,20 @@ def run_health_check(
         stale_seconds=config.drain_liveness_stale_seconds,
         enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
-    if drain_liveness_issue is not None:
-        severity = "critical" if drain_liveness_issue.code == STALLED_CODE else drain_liveness_issue.severity
+    if drain_liveness_issue is not None and not (
+        drain_liveness_issue.code == PROGRESS_STALLED_CODE and queue_pause_explanation
+    ):
+        drain_stalled_codes = {STALLED_CODE, PROGRESS_STALLED_CODE, PROGRESS_UNKNOWN_CODE}
+        severity = "critical" if drain_liveness_issue.code in drain_stalled_codes else drain_liveness_issue.severity
         add_issue(drain_liveness_issue.code, severity, drain_liveness_issue.message)
-        if drain_liveness_issue.code == STALLED_CODE:
+        if drain_liveness_issue.code in drain_stalled_codes:
             drain_starved = True
-    if queue_count > 0 and isinstance(drain_total, int) and drain_total == previous_drain_total:
+    if (
+        queue_count > 0
+        and queue_pause_explanation is None
+        and isinstance(drain_total, int)
+        and drain_total == previous_drain_total
+    ):
         add_issue(
             "drain_no_progress",
             "critical",
