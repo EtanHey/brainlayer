@@ -887,6 +887,9 @@ private struct BrainBarDashboardView: View {
     @State private var lastSearchReceipt: BrainBarOperationReceipt?
     @State private var lastIngestReceipt: BrainBarOperationReceipt?
     @State private var receiptDisplayNow = Date()
+    @State private var scrollContentFloor: CGFloat = 0
+    @State private var scrollOrigin: CGFloat = 0
+    @State private var scrollViewportHeight: CGFloat = 0
 
     private var pipelineStats: BrainDatabase.DashboardStats {
         guard selectedTimeframe != .live,
@@ -984,19 +987,15 @@ private struct BrainBarDashboardView: View {
                     .background(GeometryReader { proxy in
                         Color.clear.preference(key: BrainBarDashboardHeightKey.self, value: proxy.size.height)
                     })
-                    .background(
-                        BrainBarDashboardScrollResetter(
-                            disclosureState: BrainBarDashboardDisclosureState(
-                                attentionExpanded: panelState.attentionExpanded,
-                                detailsExpanded: panelState.detailsExpanded,
-                                signalCoverageExpanded: panelState.signalCoverageExpanded
-                            )
-                        )
-                            .frame(width: 0, height: 0)
-                    )
+                    .background(BrainBarScrollOriginObserver { origin in
+                        scrollOrigin = origin
+                        updateScrollContentFloor()
+                    })
+                    .frame(minHeight: scrollContentFloor, alignment: .top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .accessibilityIdentifier("brainbar.dashboard.scroll")
+                .onChange(of: proxy.size.height, initial: true) { _, height in scrollViewportHeight = height }
             }
             .coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)
             .onPreferenceChange(BrainBarVectorSignalRootFrameKey.self) { frame in
@@ -1041,6 +1040,7 @@ private struct BrainBarDashboardView: View {
         }
         .onPreferenceChange(BrainBarDashboardHeightKey.self) { height in
             panelState.dashboardHeight = height
+            updateScrollContentFloor()
         }
 #if DEBUG
         .onPreferenceChange(BrainBarSummaryTileHeightKey.self) { heights in
@@ -1115,6 +1115,10 @@ private struct BrainBarDashboardView: View {
                 liveObservabilityResult = next
             }
         }
+    }
+
+    private func updateScrollContentFloor() {
+        scrollContentFloor = max(panelState.dashboardHeight, scrollOrigin + scrollViewportHeight)
     }
 
     private var statusStrip: some View {
@@ -1664,57 +1668,6 @@ struct BrainBarDisclosureInteractionState {
     }
 }
 
-enum BrainBarDashboardScrollPosition {
-    static func topOrigin(
-        documentBounds: CGRect,
-        viewportHeight: CGFloat,
-        documentIsFlipped: Bool,
-        currentX: CGFloat
-    ) -> CGPoint {
-        let y = documentIsFlipped
-            ? documentBounds.minY
-            : max(documentBounds.maxY - viewportHeight, documentBounds.minY)
-        return CGPoint(x: currentX, y: y)
-    }
-}
-
-private struct BrainBarDashboardDisclosureState: Equatable {
-    let attentionExpanded: Bool
-    let detailsExpanded: Bool
-    let signalCoverageExpanded: Bool
-}
-
-private struct BrainBarDashboardScrollResetter: NSViewRepresentable {
-    let disclosureState: BrainBarDashboardDisclosureState
-
-    final class Coordinator {
-        var previousState: BrainBarDashboardDisclosureState?
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        let previousState = context.coordinator.previousState
-        context.coordinator.previousState = disclosureState
-        guard previousState != nil, previousState != disclosureState else { return }
-
-        DispatchQueue.main.async {
-            guard let scrollView = nsView.enclosingScrollView,
-                  let documentView = scrollView.documentView else { return }
-            let clipView = scrollView.contentView
-            let origin = BrainBarDashboardScrollPosition.topOrigin(
-                documentBounds: documentView.bounds,
-                viewportHeight: clipView.bounds.height,
-                documentIsFlipped: documentView.isFlipped,
-                currentX: clipView.bounds.origin.x
-            )
-            clipView.scroll(to: origin)
-            scrollView.reflectScrolledClipView(clipView)
-        }
-    }
-}
-
 private struct BrainBarDisclosureRow<Label: View, Content: View>: View {
     @Binding var isExpanded: Bool
     let accessibilityIdentifier: String
@@ -1930,6 +1883,35 @@ enum BrainBarDisclosureRowPreview {
 private struct BrainBarDashboardHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct BrainBarScrollOriginObserver: NSViewRepresentable {
+    let onScroll: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> ObservingView { ObservingView() }
+    func updateNSView(_ view: ObservingView, context: Context) { view.onScroll = onScroll }
+
+    final class ObservingView: NSView {
+        var onScroll: ((CGFloat) -> Void)?
+        private var token: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil
+            var ancestor = superview
+            while ancestor != nil && !(ancestor is NSScrollView) { ancestor = ancestor?.superview }
+            guard let scroll = ancestor as? NSScrollView else { return }
+            let clip = scroll.contentView
+            clip.postsBoundsChangedNotifications = true
+            token = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self, weak clip] _ in
+                guard let clip else { return }
+                self?.onScroll?(clip.bounds.minY)
+            }
+        }
+
+        deinit { MainActor.assumeIsolated { if let token { NotificationCenter.default.removeObserver(token) } } }
+    }
 }
 
 #if DEBUG
