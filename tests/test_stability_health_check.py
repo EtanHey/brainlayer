@@ -2126,7 +2126,10 @@ def test_transport_error_is_distinct_and_still_kickstarts_the_daemon(tmp_path):
         assert result.canary_status == "transport_failed"
         assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
 
-    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert any(
+        command[:3] == ["launchctl", "kickstart", "-k"] and "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+    )
     assert json.loads(state_path.read_text(encoding="utf-8"))["canary_status"] == "transport_failed"
 
 
