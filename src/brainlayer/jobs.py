@@ -52,9 +52,18 @@ def _mapped_kegs(pid: int, command_runner: CommandRunner) -> tuple[set[Path], st
             if parts[index : index + 2] == ("Cellar", "brainlayer"):
                 kegs.add(Path(*parts[: index + 3]))
                 break
-    if not kegs:
-        return set(), f"pid {pid} has no mapped BrainLayer keg in lsof output"
     return kegs, None
+
+
+def _maps_current_keg(pid: int, opt_path: Path, current_keg: Path, command_runner: CommandRunner) -> tuple[bool, str]:
+    mapped, error = _mapped_kegs(pid, command_runner)
+    if error is None and mapped == {current_keg}:
+        return True, ""
+    if error is None and not mapped:
+        process = command_runner(["ps", "-p", str(pid), "-o", "command="])
+        if process.returncode == 0 and process.stdout.strip().startswith((f"{opt_path}/", f"{current_keg}/")):
+            return True, ""
+    return False, error or f"pid {pid} maps {sorted(map(str, mapped))}"
 
 
 def _job_plists(directory: Path) -> list[tuple[str, dict[str, Any]]]:
@@ -139,8 +148,7 @@ def restart_loaded_jobs(
         daemon = bool(plist.get("KeepAlive") or plist.get("RunAtLoad")) and not interval
         stale_inflight = False
         if interval and pid is not None:
-            mapped, error = _mapped_kegs(pid, command_runner)
-            stale_inflight = error is not None or mapped != {current_keg}
+            stale_inflight = not _maps_current_keg(pid, opt_path, current_keg, command_runner)[0]
         if daemon or stale_inflight:
             kicked = command_runner(["launchctl", "kickstart", "-k", target])
             if kicked.returncode != 0:
@@ -159,12 +167,15 @@ def restart_loaded_jobs(
                 )
                 break
             if observed.returncode == 0 and (running_pid := _pid(observed.stdout)) is not None:
-                mapped, error = _mapped_kegs(running_pid, command_runner)
-                if error is None and mapped == {current_keg}:
+                current, reason = _maps_current_keg(running_pid, opt_path, current_keg, command_runner)
+                if current:
                     break
                 if attempt == 16:
-                    report["stale"][label] = error or f"pid {running_pid} maps {sorted(map(str, mapped))}"
+                    report["stale"][label] = reason
             else:
+                if interval and stale_inflight and label in report["restarted"]:
+                    report["skipped"][label] = "completed_after_restart"
+                    break
                 if not daemon and not stale_inflight:
                     break  # an idle interval job will execute the new keg next time
                 if attempt == 16:

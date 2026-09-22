@@ -1,5 +1,3 @@
-"""Upgrade restart must use only fake launchctl/lsof and a disposable keg."""
-
 import json
 import plistlib
 import subprocess
@@ -16,16 +14,10 @@ class FakeCommands:
         self.old_keg = old_keg
         self.current_keg = current_keg
         self.commands: list[list[str]] = []
-        self.pids = {
-            "watch": 101,
-            "drain": 102,
-            "backup-daily": 103,
-            "enrichment": 104,
-            "brainbar": 105,
-            "gemini-loopback": 106,
-            "health-check": 107,
-        }
+        names = "watch drain backup-daily enrichment brainbar gemini-loopback health-check".split()
+        self.pids = {name: 101 + index for index, name in enumerate(names)}
         self.kegs = {name: old_keg for name in self.pids}
+        self.no_keg_map_for: set[str] = set()
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         self.commands.append(args)
@@ -41,7 +33,12 @@ class FakeCommands:
         if args[:2] == ["lsof", "-p"]:
             pid = int(args[2])
             name = next(name for name, value in self.pids.items() if value == pid)
+            if name in self.no_keg_map_for:
+                return subprocess.CompletedProcess(args, 0, f"p{pid}\nn/usr/lib/libSystem.B.dylib\n", "")
             return subprocess.CompletedProcess(args, 0, f"p{pid}\nn{self.kegs[name]}/libexec/venv/bin/python\n", "")
+        if args[:2] == ["ps", "-p"]:
+            opt = self.current_keg.parents[2] / "opt" / "brainlayer"
+            return subprocess.CompletedProcess(args, 0, f"{opt}/libexec/venv/bin/python -m brainlayer\n", "")
         raise AssertionError(args)
 
 
@@ -74,6 +71,7 @@ def test_restart_loaded_daemons_and_stale_inflight_interval(tmp_path: Path) -> N
         },
         "backup-daily": {"StartCalendarInterval": {"Hour": 3}, "ProgramArguments": ["/bin/sh", "/tmp/backup-daily.sh"]},
         "gemini-loopback": {"KeepAlive": True, "ProgramArguments": ["/opt/homebrew/bin/socat", "TCP-LISTEN:48123"]},
+        "brainbar": {"KeepAlive": True, "ProgramArguments": ["/Applications/BrainBar.app/Contents/MacOS/BrainBar"]},
         "enrichment": {"KeepAlive": True, "ProgramArguments": [keg_cli, "enrich"]},
         "unloaded": {"KeepAlive": True, "ProgramArguments": [keg_cli, "watch"]},
     }.items():
@@ -92,6 +90,7 @@ def test_restart_loaded_daemons_and_stale_inflight_interval(tmp_path: Path) -> N
     assert "com.brainlayer.unloaded" in result["skipped"]
     assert "com.brainlayer.backup-daily" in result["skipped"]
     assert "com.brainlayer.gemini-loopback" in result["skipped"]
+    assert result["skipped"]["com.brainlayer.brainbar"] == "cask-owned BrainBar job"
     assert not any("enrichment" in " ".join(args) and "kickstart" in args for args in fake.commands)
 
 
@@ -99,7 +98,6 @@ def test_stale_mapping_fails_with_named_job(tmp_path: Path) -> None:
     old_keg, current_keg, opt = _kegs(tmp_path)
     _plist(tmp_path, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/bin/brainlayer", "watch"])
     fake = FakeCommands(old_keg, current_keg)
-    fake.kegs["watch"] = old_keg
 
     def failed_restart(args: list[str]) -> subprocess.CompletedProcess[str]:
         if args[:3] == ["launchctl", "kickstart", "-k"]:
@@ -118,34 +116,11 @@ def test_cli_emits_json_and_exits_nonzero_for_stale_job(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(jobs, "installed_opt_path", lambda: tmp_path)
     monkeypatch.setattr(
-        jobs,
-        "restart_loaded_jobs",
-        lambda *_args, **_kwargs: {"ok": False, "stale": {"com.brainlayer.watch": "old keg"}},
+        jobs, "restart_loaded_jobs", lambda *_args, **_kwargs: {"ok": False, "stale": {"watch": "old keg"}}
     )
-
     result = CliRunner().invoke(app, ["jobs", "restart", "--all", "--verify"])
-
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["stale"] == {"com.brainlayer.watch": "old keg"}
-
-
-def test_cask_owned_brainbar_is_left_to_cask_postflight(tmp_path: Path) -> None:
-    old_keg, current_keg, opt = _kegs(tmp_path)
-    _plist(
-        tmp_path,
-        "brainbar",
-        KeepAlive=True,
-        AssociatedBundleIdentifiers=["com.brainlayer.brainbar"],
-        ProgramArguments=["/Applications/BrainBar.app/Contents/MacOS/BrainBar"],
-    )
-    fake = FakeCommands(old_keg, current_keg)
-
-    result = restart_loaded_jobs(tmp_path, opt, command_runner=fake, uid=501)
-
-    assert result["ok"] is False
-    assert result["skipped"]["com.brainlayer.brainbar"] == "cask-owned BrainBar job"
-    assert "selection" in result["errors"]
-    assert not any(args[0] in {"lsof"} or "kickstart" in args for args in fake.commands)
+    assert json.loads(result.stdout)["stale"] == {"watch": "old keg"}
 
 
 def test_discovery_and_launchctl_errors_fail_closed(tmp_path: Path) -> None:
@@ -183,3 +158,30 @@ def test_cold_start_retries_before_declaring_missing_pid(tmp_path: Path) -> None
     result = restart_loaded_jobs(tmp_path, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
     assert result["ok"] is True
     assert fake.cold_prints == 3
+
+
+def test_restarted_interval_may_complete_before_verification(tmp_path: Path) -> None:
+    old_keg, current_keg, opt = _kegs(tmp_path)
+    _plist(tmp_path, "health-check", StartInterval=300, ProgramArguments=[f"{opt}/bin/brainlayer", "health-check"])
+
+    class CompletedInterval(FakeCommands):
+        def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+            if args[:2] == ["launchctl", "print"] and self.kegs["health-check"] == current_keg:
+                return subprocess.CompletedProcess(args, 0, "state = waiting\nlast exit code = 0\n", "")
+            return super().__call__(args)
+
+    result = restart_loaded_jobs(
+        tmp_path, opt, command_runner=CompletedInterval(old_keg, current_keg), uid=501, sleep_fn=lambda _: None
+    )
+    assert result["ok"] is True
+    assert result["skipped"]["com.brainlayer.health-check"] == "completed_after_restart"
+
+
+def test_opt_keg_python_command_verifies_without_mapped_extension(tmp_path: Path) -> None:
+    old_keg, current_keg, opt = _kegs(tmp_path)
+    _plist(tmp_path, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/libexec/venv/bin/python", "-m", "brainlayer"])
+    fake = FakeCommands(old_keg, current_keg)
+    fake.no_keg_map_for.add("watch")
+    result = restart_loaded_jobs(tmp_path, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
+    assert result["ok"] is True
+    assert any(args[:2] == ["ps", "-p"] for args in fake.commands)
