@@ -491,6 +491,44 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         viewModel.storeOnePasswordReference()
         XCTAssertEqual(confirmationCount, 2)
         XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, external.googleAPIKey)
+        XCTAssertEqual(viewModel.onePasswordReference, "op://Private/Replacement/key")
+    }
+
+    @MainActor
+    func testOnePasswordOverwriteDoesNotReplaceExternalEditMadeDuringConfirmation() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var external = try fixture.store.loadDocument().config
+        external.googleAPIKey = .onePasswordReference("op://Private/InitiallySaved/key")
+        try fixture.store.save(external)
+        var externalDuringConfirmation = external
+        externalDuringConfirmation.googleAPIKey = .onePasswordReference("op://Private/ExternalEdit/key")
+        var confirmationWriteError: Error?
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            refreshStatusOnLoad: false,
+            confirmAPIKeyOverwrite: {
+                do {
+                    try fixture.store.save(externalDuringConfirmation)
+                } catch {
+                    confirmationWriteError = error
+                    return false
+                }
+                return true
+            }
+        )
+
+        viewModel.onePasswordReference = "op://Private/Replacement/key"
+        viewModel.storeOnePasswordReference()
+
+        XCTAssertNil(confirmationWriteError)
+        XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, externalDuringConfirmation.googleAPIKey)
+        XCTAssertEqual(viewModel.config.googleAPIKey, externalDuringConfirmation.googleAPIKey)
+        XCTAssertEqual(viewModel.onePasswordReference, "op://Private/Replacement/key")
+        XCTAssertEqual(
+            viewModel.lastSaveReceipt?.validation,
+            .failed("API key changed while overwrite confirmation was open. Review it and try again.")
+        )
     }
 
     @MainActor

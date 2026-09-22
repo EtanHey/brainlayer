@@ -138,8 +138,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func storeOnePasswordReference() {
         let reference = onePasswordReference.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reference.isEmpty else { return }
+        let draft = onePasswordReference
         _ = updateConfig({ $0.googleAPIKey = .onePasswordReference(reference) }, beforeUpdate: {
-            self.config.googleAPIKey == .onePasswordReference(reference) || self.confirmGoogleAPIKeyOverwriteIfNeeded()
+            let accepted = self.config.googleAPIKey == .onePasswordReference(reference)
+                || self.confirmGoogleAPIKeyOverwriteIfNeeded()
+            if !accepted { self.onePasswordReference = draft }
+            return accepted
         })
     }
 
@@ -257,8 +261,23 @@ final class BrainBarSettingsViewModel: ObservableObject {
         _ apply: (inout BrainLayerConfig) -> Void,
         beforeUpdate: (() -> Bool)? = nil
     ) -> Bool {
+        let confirmedReferenceDraft = beforeUpdate == nil ? nil : onePasswordReference
         guard reloadConfigFromDisk() else { return false }
+        let apiKeyBeforeConfirmation = config.googleAPIKey
         guard beforeUpdate?() ?? true else { return false }
+        if beforeUpdate != nil {
+            guard reloadConfigFromDisk() else {
+                if let confirmedReferenceDraft { onePasswordReference = confirmedReferenceDraft }
+                return false
+            }
+            guard config.googleAPIKey == apiKeyBeforeConfirmation else {
+                if let confirmedReferenceDraft { onePasswordReference = confirmedReferenceDraft }
+                recordValidationFailure(
+                    "API key changed while overwrite confirmation was open. Review it and try again."
+                )
+                return false
+            }
+        }
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)

@@ -123,6 +123,53 @@ final class BadgeStateTests: XCTestCase {
         XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("future"))
     }
 
+    func testFuturePendingFirstRunFailsVisibleBeforePendingGrace() throws {
+        let url = try mutatedFixture(source: pendingFixtureURL) {
+            $0["generated_at"] = timestamp(now.addingTimeInterval(3_600))
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["expected_first_run_by"] = timestamp(now.addingTimeInterval(4_200))
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let presentation = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
+
+        XCTAssertTrue(presentation.badgeOn)
+        XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("future"))
+    }
+
+    func testPendingFirstRunDeadlineCannotExceedGeneratedAtPlusTenMinutes() throws {
+        let url = try mutatedFixture(source: pendingFixtureURL) {
+            $0["generated_at"] = timestamp(now)
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["expected_first_run_by"] = "2099-01-01T00:00:00Z"
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let presentation = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
+
+        XCTAssertTrue(presentation.badgeOn)
+        XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("deadline"))
+    }
+
+    func testProducerPendingFirstRunDeadlineAllowsFractionalSecondBeyondTenMinutes() throws {
+        let generatedAtString = "2026-09-22T22:28:02Z"
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: generatedAtString)).addingTimeInterval(600)
+        let url = try mutatedFixture(source: pendingFixtureURL) {
+            $0["generated_at"] = generatedAtString
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["expected_first_run_by"] = "2026-09-22T22:38:02.122198Z"
+            $0["alerts"] = alerts
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let presentation = BadgeStateReader.read(url: url, now: now, cadence: .known(300))
+
+        XCTAssertFalse(presentation.badgeOn)
+        XCTAssertEqual(presentation.reason, "awaiting first health-check run")
+    }
+
     func testFutureBadgeStateFailsVisibleAfterSleepGrace() throws {
         let url = try mutatedFixture {
             $0["generated_at"] = timestamp(now.addingTimeInterval(3_601))
@@ -205,6 +252,14 @@ final class BadgeStateTests: XCTestCase {
             environment: ["BRAINLAYER_BADGE_STATE_PATH": "~/\(name)"]
         )
         XCTAssertEqual(actual.path, FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(name).path)
+    }
+
+    func testBadgeStateTildeExpansionIsExplicitForMacOS14() {
+        let name = "badge-state-\(UUID().uuidString).json"
+        XCTAssertEqual(
+            BadgeStateReader.expandedTildePath("~/\(name)"),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(name).path
+        )
     }
 
     func testBadgeStateURLResolvesSymlinkedDatabase() throws {
