@@ -24,6 +24,7 @@ from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     ENRICH_DAILY_COST_COUNTER_FILENAME,
+    PROGRESS_STALLED_CODE,
     STALLED_CODE,
     check_drain_liveness,
 )
@@ -54,6 +55,7 @@ from .mcp_socket_config import (
     owned_mcp_config_paths,
 )
 from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
+from .pause import pause_applies_to_label, pause_sentinel_state, queue_contains_only_enrichment
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
@@ -205,6 +207,7 @@ class DoctorConfig:
     drain_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
+    pause_sentinel_path: Path | None = None
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
     watch_label: str = DEFAULT_WATCH_LABEL
     drain_label: str = DEFAULT_DRAIN_LABEL
@@ -774,6 +777,15 @@ def run_doctor(
     queue_count, queue_bytes, _queue_oldest_age = _queue_stats(config.queue_dir, now)
     result.queue_count = queue_count
     result.queue_bytes = queue_bytes
+    paused_enrichment_queue = False
+    if queue_count > 0:
+        pause_path = config.pause_sentinel_path or config.db_path.expanduser().parent / "pause.sentinel"
+        pause_payload, pause_active, _ = pause_sentinel_state(pause_path, now)
+        paused_enrichment_queue = (
+            pause_active
+            and pause_applies_to_label(pause_payload, config.enrichment_label)
+            and queue_contains_only_enrichment(config.queue_dir, queue_count)
+        )
     drain_health = _load_json(config.drain_health_path)
     watcher_health = _load_json(config.watcher_health_path)
     # Drain should publish heartbeat cycles even while the durable queue is empty.
@@ -835,7 +847,8 @@ def run_doctor(
         suppress_stale_drain = (
             active_drain_liveness_issue.code == STALLED_CODE and has_drain_backlog and drain_liveness_moving
         )
-        if not suppress_stale_drain:
+        suppress_paused_progress = active_drain_liveness_issue.code == PROGRESS_STALLED_CODE and paused_enrichment_queue
+        if not suppress_stale_drain and not suppress_paused_progress:
             if isinstance(active_drain_liveness_issue, BrainLayerAlarm):
                 emit_alarm(active_drain_liveness_issue)
             result.issues.append(
@@ -846,7 +859,13 @@ def run_doctor(
                     active_drain_liveness_issue.details,
                 )
             )
-    if queue_count > 0 and not queue_moving:
+    if queue_count > 0 and paused_enrichment_queue:
+        warning(
+            "queue_paused_enrichment",
+            "durable queue contains only deliberately paused enrichment updates",
+            queue_count=queue_count,
+        )
+    elif queue_count > 0 and not queue_moving:
         fatal(
             "queue_not_moving_with_backlog",
             "durable queue has backlog and watcher/drain movement counters did not advance",

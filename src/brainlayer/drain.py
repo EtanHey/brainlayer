@@ -33,7 +33,12 @@ from .dedupe import (
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .pause import (
+    DEFAULT_PAUSE_SENTINEL_PATH,
+    pause_applies_to_label,
+    pause_sentinel_state,
+    queue_contains_only_enrichment,
+)
 from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .runtime_store import _without_connection_maintenance_hooks
 from .vector_store import _configure_writer_pragmas
@@ -53,6 +58,8 @@ _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
 _DEFAULT_DRAIN_BUSY_LOG_INTERVAL_SECONDS = 60.0
 _DEFAULT_DRAIN_ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
 _DEFAULT_DRAIN_ERROR_LOG_BACKUPS = 5
+_DRAIN_PROGRESS_STALE_SECONDS = 300.0
+_DRAIN_PROGRESS_SCAN_INTERVAL_SECONDS = 10.0
 # How many pending fallback files one daemon start may put on the queue. Bounded so a
 # backlog that outgrows the drain cannot be re-enqueued in full on every restart.
 DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT = 50
@@ -1921,12 +1928,14 @@ def _write_drain_health(
     *,
     drain_cycles: int,
     drained_total: int,
+    last_progress_at: datetime,
     state: dict[str, Any] | None = None,
 ) -> None:
     payload = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "drain_cycles": drain_cycles,
         "drained_total": drained_total,
+        "last_progress_at": last_progress_at.isoformat(),
         "state": "ok",
         "reason": "",
     }
@@ -1936,6 +1945,55 @@ def _write_drain_health(
     tmp_path = path.with_suffix(".tmp")
     tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _last_progress_at(path: Path, now: datetime) -> datetime:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8")).get("last_progress_at")
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None and parsed <= now:
+            return parsed.astimezone(timezone.utc)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return now
+
+
+def _queue_progress_state(
+    queue_dir: Path, now: datetime, last_progress_at: datetime
+) -> tuple[dict[str, Any] | None, int | None]:
+    """A fresh daemon heartbeat is not evidence that old queued files are draining."""
+    try:
+        oldest_age = 0.0
+        count = 0
+        for path in queue_dir.glob("*.jsonl"):
+            try:
+                age = max(0.0, now.timestamp() - path.stat().st_mtime)
+            except FileNotFoundError:
+                continue
+            count += 1
+            oldest_age = max(oldest_age, age)
+    except OSError as exc:
+        return {"state": "drain_progress_unknown", "reason": f"queue scan failed: {type(exc).__name__}: {exc}"}, None
+    progress_age = max(0.0, (now - last_progress_at).total_seconds())
+    if count and oldest_age >= _DRAIN_PROGRESS_STALE_SECONDS and progress_age >= _DRAIN_PROGRESS_STALE_SECONDS:
+        pause_payload, pause_active, _ = pause_sentinel_state(DEFAULT_PAUSE_SENTINEL_PATH, now)
+        if (
+            pause_active
+            and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
+            and queue_contains_only_enrichment(queue_dir, count)
+        ):
+            return {
+                "state": "drain_paused",
+                "reason": f"queue_count={count} contains only deliberately paused enrichment updates",
+            }, count
+        return {
+            "state": "drain_progress_stalled",
+            "reason": (
+                f"queue_count={count} oldest_age_seconds={oldest_age:.0f} "
+                f"last_progress_age_seconds={progress_age:.0f}; no files processed"
+            ),
+        }, count
+    return None, count
 
 
 def _fallback_replay_on_start_enabled() -> bool:
@@ -2000,12 +2058,15 @@ def run_daemon(
     replay_fallbacks_fn: Callable[[], Any] | None = None,
 ) -> None:
     health_path = health_path or Path(os.environ.get("BRAINLAYER_DRAIN_HEALTH_PATH", str(_default_drain_health_path())))
+    last_progress_at = _last_progress_at(health_path, datetime.now(timezone.utc))
     drain_cycles = 0
     drained_total = 0
     swept = False
     cycle_state: dict[str, Any] = {"state": "ok", "reason": ""}
     last_cycle_error_log_monotonic: float | None = None
     suppressed_cycle_errors = 0
+    last_queue_scan_monotonic: float | None = None
+    queue_progress_state: dict[str, Any] | None = None
 
     def report_state(state: dict[str, Any]) -> None:
         nonlocal cycle_state
@@ -2014,6 +2075,7 @@ def run_daemon(
             health_path,
             drain_cycles=drain_cycles,
             drained_total=drained_total,
+            last_progress_at=last_progress_at,
             state=cycle_state,
         )
 
@@ -2055,12 +2117,31 @@ def run_daemon(
             else:
                 suppressed_cycle_errors += 1
         drained_total += int(drained or 0)
+        now = datetime.now(timezone.utc)
+        if drained:
+            last_progress_at = now
+            queue_progress_state = None
+            last_queue_scan_monotonic = None
+        elif (now - last_progress_at).total_seconds() >= _DRAIN_PROGRESS_STALE_SECONDS:
+            monotonic_now = time.monotonic()
+            if (
+                last_queue_scan_monotonic is None
+                or monotonic_now - last_queue_scan_monotonic >= _DRAIN_PROGRESS_SCAN_INTERVAL_SECONDS
+            ):
+                queue_progress_state, queue_count = _queue_progress_state(_default_queue_dir(), now, last_progress_at)
+                last_queue_scan_monotonic = monotonic_now
+                if queue_count == 0:
+                    last_progress_at = now
+                    last_queue_scan_monotonic = None
+            if cycle_state["state"] == "ok" and queue_progress_state is not None:
+                cycle_state = queue_progress_state
         drain_cycles += 1
         try:
             _write_drain_health(
                 health_path,
                 drain_cycles=drain_cycles,
                 drained_total=drained_total,
+                last_progress_at=last_progress_at,
                 state=cycle_state,
             )
         except OSError:

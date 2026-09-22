@@ -736,6 +736,7 @@ def _run_frozen_drain_liveness_scenario(
     quota_blocked_enrichment: bool = False,
     heal: bool = False,
     command_runner=None,
+    reported_progress_stall: bool = False,
 ):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
@@ -763,6 +764,8 @@ def _run_frozen_drain_liveness_scenario(
                 "drained_total": 10,
                 "drain_cycles": 4,
                 "updated_at": (now - heartbeat_age).isoformat(),
+                "state": "drain_progress_stalled" if reported_progress_stall else "ok",
+                "reason": "queue_count=2 oldest_age_seconds=600" if reported_progress_stall else "",
             }
         ),
         encoding="utf-8",
@@ -808,6 +811,20 @@ def _run_frozen_drain_liveness_scenario(
         now_fn=lambda: now,
     )
     return result, holder_pid
+
+
+def test_health_check_surfaces_reported_progress_stall_despite_fresh_heartbeat(tmp_path, monkeypatch):
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(seconds=10),
+        pending_store_count=2,
+        reported_progress_stall=True,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "drain_progress_stalled")
+    assert issue.severity == "critical"
+    assert "queue_count=2" in issue.message
 
 
 def test_frozen_drain_with_pending_stores_heals_live_index_lock_holder(tmp_path, monkeypatch):
@@ -1748,7 +1765,8 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
         json.dumps({"drain_drained_total": 10, "heal_failures": {"com.brainlayer.drain:queue_backed_up": 85}}),
         encoding="utf-8",
     )
-    config.drain_health_path.write_text(json.dumps({"drained_total": 10}), encoding="utf-8")
+    snapshot = {"drained_total": 10, "updated_at": "2026-09-08T11:30:00Z", "state": "drain_progress_stalled"}
+    config.drain_health_path.write_text(json.dumps(snapshot), encoding="utf-8")
     commands: list[list[str]] = []
     notifications = _capture_queue_notifications(monkeypatch)
 
@@ -1760,6 +1778,12 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
     assert "drain restart would be a no-op" in queue_issue.message
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+    assert "drain_no_progress" not in [issue.code for issue in result.issues]
+    assert "drain_progress_stalled" not in [issue.code for issue in result.issues]
+    snapshot["updated_at"] = "2026-09-08T11:20:00Z"
+    config.drain_health_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    stale_result = _run_queue_backlog_health(config, _loaded_launchd_runner([]))
+    assert "drain_liveness_stalled" in [issue.code for issue in stale_result.issues]
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert "com.brainlayer.drain:queue_backed_up" not in saved["heal_failures"]
 
