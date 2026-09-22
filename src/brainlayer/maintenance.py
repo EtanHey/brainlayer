@@ -424,6 +424,11 @@ def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> N
             raise MaintenanceAbort(f"failed to quiesce launchd service {service}; it remains loaded")
 
 
+def _clean_git_env() -> dict[str, str]:
+    """Ignore caller Git routing so ``-C repo_root`` remains authoritative."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _git_head_sha(repo_root: Path) -> str | None:
     """SHA of the code actually on disk — the code an editable install will import."""
     try:
@@ -431,12 +436,30 @@ def _git_head_sha(repo_root: Path) -> str | None:
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
             timeout=30,
             check=True,
         )
     except Exception:
         return None
     return out.stdout.strip() or None
+
+
+def _git_toplevel(repo_root: Path) -> Path | None:
+    """Return the checkout root only when Git can classify ``repo_root``."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            env=_clean_git_env(),
+            timeout=30,
+            check=True,
+        )
+    except Exception:
+        return None
+    value = out.stdout.strip()
+    return Path(value).resolve() if value else None
 
 
 def _git_merged_head_sha(repo_root: Path) -> str | None:
@@ -446,6 +469,7 @@ def _git_merged_head_sha(repo_root: Path) -> str | None:
             ["git", "-C", str(repo_root), "fetch", "--quiet", "origin", "main"],
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
             timeout=60,
             check=False,
         )
@@ -453,6 +477,7 @@ def _git_merged_head_sha(repo_root: Path) -> str | None:
             ["git", "-C", str(repo_root), "rev-parse", "origin/main"],
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
             timeout=30,
             check=True,
         )
@@ -464,12 +489,13 @@ def _git_merged_head_sha(repo_root: Path) -> str | None:
 def _assert_running_merged_code(repo_root: Path, *, strict: bool = False) -> None:
     """Refuse to run code that is not the merged code.
 
-    The nightly job runs `python -m brainlayer.maintenance` from an EDITABLE install,
-    so `import brainlayer` resolves to the WORKING TREE. On 2026-08-05 that tree was 8
-    commits behind origin/main and #650's pause-sentinel fix -- merged hours earlier --
-    was simply not on disk. The job would have run stale code and reported success.
+    A source-installed nightly job resolves imports to the working tree. On 2026-08-05
+    that tree was 8 commits behind origin/main and would have run stale code. A packaged
+    install is different: it has no BrainLayer checkout, and Git must not walk upward
+    from site-packages into an unrelated ancestor repository such as Homebrew's tap.
 
-    Either we run the merged code, or we abort LOUDLY. Never silently stale.
+    Source checkouts either match merged code or abort loudly. Installed artifacts skip
+    only this checkout-specific comparison; their integrity is covered at build/release.
     """
     if os.environ.get("PYTEST_CURRENT_TEST"):
         # Under pytest the working tree is legitimately a feature branch, which is not
@@ -479,6 +505,15 @@ def _assert_running_merged_code(repo_root: Path, *, strict: bool = False) -> Non
         return
     if os.environ.get("BRAINLAYER_MAINTENANCE_ALLOW_STALE") == "1":
         print("maintenance: BRAINLAYER_MAINTENANCE_ALLOW_STALE=1 -- skipping freshness check", file=sys.stderr)
+        return
+
+    git_toplevel = _git_toplevel(repo_root)
+    if git_toplevel != repo_root.resolve():
+        print(
+            "maintenance: installed artifact is not an editable BrainLayer checkout; "
+            "skipping working-tree freshness check",
+            file=sys.stderr,
+        )
         return
 
     head = _git_head_sha(repo_root)
