@@ -26,9 +26,12 @@ enum BrainBarDashboardFixture {
     enum OperatorState: CaseIterable, Equatable {
         case loading
         case coverageLoading
+        case loadingCards
         case live
         case stale
         case error
+        case empty
+        case unavailable
         case partialReplayDebt
         case watcherOffline
         case watcherUnknown
@@ -106,7 +109,11 @@ enum BrainBarDashboardFixture {
         replayDebtBreakdown: readableReplayDebt,
         vectorIndexedChunkCount: 297_412
     )
-    static let readableObservabilityResult: ObservabilityReadResult = .readable(
+    static let readableObservabilityResult = makeObservabilityResult(stats: stats)
+    static let emptyObservabilityResult = makeObservabilityResult(stats: emptyStats)
+
+    private static func makeObservabilityResult(stats: DashboardStats) -> ObservabilityReadResult {
+        .readable(
         ObservabilityDocument(
             schemaVersion: 1,
             generatedAt: fetchedAt,
@@ -129,8 +136,8 @@ enum BrainBarDashboardFixture {
                 state: "measured",
                 reason: "",
                 inputs: [],
-                byEmitter: [.init(emitter: "mcp", countInWindow: 23)],
-                bySourceClass: [.init(sourceClass: "claude_code", count: 180_000, inWindow: 23)],
+                byEmitter: [.init(emitter: "mcp", countInWindow: stats.recentAgentWriteCount)],
+                bySourceClass: [.init(sourceClass: "claude_code", count: stats.chunkCount == 0 ? 0 : 180_000, inWindow: stats.recentAgentWriteCount)],
                 hiddenFromDefaultSearch: 0
             ),
             authorUnknown: .init(
@@ -167,7 +174,8 @@ enum BrainBarDashboardFixture {
                 )
             )
         )
-    )
+        )
+    }
     static let partialReplayDebtStats = makeStats(replayDebtBreakdown: partialReplayDebt)
     static let watcherOfflineStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,
@@ -202,6 +210,18 @@ enum BrainBarDashboardFixture {
         recentEnrichmentBuckets: Array(repeating: 0, count: 12),
         recentEnrichmentFiveMinuteCount: 0
     )
+    static let emptyStats = makeStats(
+        replayDebtBreakdown: emptyReplayDebt,
+        watcherRecentDistinctChunkCount: 0,
+        zeroFlow: true
+    )
+    static let unavailableStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .failure("fixture watcher unavailable"),
+        agentWriteReadability: .unreadable("fixture agent flow unavailable"),
+        watcherFlowReadability: .unreadable("fixture watcher flow unavailable"),
+        coverageAvailable: false
+    )
 
     static func makeStats(activityWindowMinutes: Int) -> DashboardStats {
         makeStats(
@@ -218,25 +238,29 @@ enum BrainBarDashboardFixture {
         watcherRecentDistinctChunkCount: Int = 14,
         vectorIndexedChunkCount: Int = 240_100,
         recentEnrichmentBuckets: [Int] = [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6],
-        recentEnrichmentFiveMinuteCount: Int = 22
+        recentEnrichmentFiveMinuteCount: Int = 22,
+        zeroFlow: Bool = false,
+        agentWriteReadability: MetricEvidenceReadability = .readable,
+        watcherFlowReadability: MetricEvidenceReadability = .readable,
     ) -> DashboardStats {
         let windowScale = max(activityWindowMinutes / 60, 1)
         let watcherBuckets = watcherRecentDistinctChunkCount == 0
             ? Array(repeating: 0, count: 12)
             : [1, 0, 2, 1, 0, 3, 1, 2, 0, 1, 2, 1].map { $0 * windowScale }
         return DashboardStats(
-            chunkCount: 297_412,
-            enrichedChunkCount: 188_204,
-            failedEnrichmentCount: 1_204,
-            skippedEnrichmentCount: 2_104,
-            pendingEnrichmentCount: 12_840,
-            enrichmentPercent: 63.3,
-            enrichmentRatePerMinute: 11.4,
-            databaseSizeBytes: 8_120_000_000,
-            recentActivityBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
-            recentAgentWriteBuckets: [1, 2, 0, 3, 2, 1, 4, 3, 1, 2, 3, 1].map { $0 * windowScale },
+            chunkCount: zeroFlow ? 0 : 297_412,
+            enrichedChunkCount: zeroFlow ? 0 : 188_204,
+            failedEnrichmentCount: zeroFlow ? 0 : 1_204,
+            skippedEnrichmentCount: zeroFlow ? 0 : 2_104,
+            pendingEnrichmentCount: zeroFlow ? 0 : 12_840,
+            enrichmentPercent: zeroFlow ? 0 : 63.3,
+            enrichmentRatePerMinute: zeroFlow ? 0 : 11.4,
+            databaseSizeBytes: zeroFlow ? 0 : 8_120_000_000,
+            recentActivityBuckets: (zeroFlow ? Array(repeating: 0, count: 12) : [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4]).map { $0 * windowScale },
+            recentAgentWriteBuckets: (zeroFlow ? Array(repeating: 0, count: 12) : [1, 2, 0, 3, 2, 1, 4, 3, 1, 2, 3, 1]).map { $0 * windowScale },
+            agentWriteReadability: agentWriteReadability,
             recentWatcherWriteBuckets: watcherBuckets,
-            recentEnrichmentBuckets: recentEnrichmentBuckets.map { $0 * windowScale },
+            recentEnrichmentBuckets: (zeroFlow ? Array(repeating: 0, count: 12) : recentEnrichmentBuckets).map { $0 * windowScale },
             recentWriteFiveMinuteCount: 18,
             recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
             activityWindowMinutes: activityWindowMinutes,
@@ -244,10 +268,10 @@ enum BrainBarDashboardFixture {
             liveWindowMinutes: 1,
             lastWriteAt: nil,
             lastEnrichedAt: nil,
-            signalEligibleChunkCount: coverageAvailable ? 297_412 : 0,
-            vectorIndexedChunkCount: coverageAvailable ? vectorIndexedChunkCount : 0,
-            ftsIndexedChunkCount: coverageAvailable ? 296_980 : 0,
-            trigramIndexedChunkCount: coverageAvailable ? 210_540 : 0,
+            signalEligibleChunkCount: coverageAvailable && !zeroFlow ? 297_412 : 0,
+            vectorIndexedChunkCount: coverageAvailable && !zeroFlow ? vectorIndexedChunkCount : 0,
+            ftsIndexedChunkCount: coverageAvailable && !zeroFlow ? 296_980 : 0,
+            trigramIndexedChunkCount: coverageAvailable && !zeroFlow ? 210_540 : 0,
             signalCoverageIsAvailable: coverageAvailable,
             pendingStoreQueueDepth: replayDebtBreakdown.deduplicatedTotal,
             pendingStoreFlushQueueDepth: replayDebtBreakdown.pendingStores.snapshot.depth,
@@ -264,7 +288,7 @@ enum BrainBarDashboardFixture {
             replayDebtBreakdown: replayDebtBreakdown,
             watcherProcessProbeResult: watcherProcessProbeResult,
             watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-            watcherFlowReadability: .readable
+            watcherFlowReadability: watcherFlowReadability
         )
     }
 
@@ -314,6 +338,10 @@ enum BrainBarDashboardFixture {
             fixtureStats = queueDrainingStats
         case .queueBacklogged:
             fixtureStats = queueBackloggedStats
+        case .empty:
+            fixtureStats = emptyStats
+        case .loadingCards, .unavailable:
+            fixtureStats = unavailableStats
         case .live, .stale, .error:
             fixtureStats = stats
         }
@@ -332,7 +360,9 @@ enum BrainBarDashboardFixture {
              .watcherRunningNoRecentFlow,
              .watcherStalledWithPendingWork,
              .queueDraining,
-             .queueBacklogged:
+             .queueBacklogged,
+             .empty,
+             .loadingCards:
             freshness = .live(ageSeconds: 0)
             lastDataFetchedAt = fetchedAt
             lastFetchError = nil
@@ -344,6 +374,10 @@ enum BrainBarDashboardFixture {
             freshness = .error(message: "Fixture fetch failed", lastSuccessAgeSeconds: 15)
             lastDataFetchedAt = fetchedAt
             lastFetchError = "Fixture fetch failed"
+        case .unavailable:
+            freshness = .error(message: "Fixture evidence unavailable", lastSuccessAgeSeconds: nil)
+            lastDataFetchedAt = nil
+            lastFetchError = "Fixture evidence unavailable"
         case .partialReplayDebt:
             freshness = .live(ageSeconds: 0)
             lastDataFetchedAt = fetchedAt

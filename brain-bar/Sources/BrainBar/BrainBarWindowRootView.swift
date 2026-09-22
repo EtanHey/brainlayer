@@ -1046,6 +1046,9 @@ private struct BrainBarDashboardView: View {
         .onPreferenceChange(BrainBarSummaryTileHeightKey.self) { heights in
             panelState.renderedSummaryTileHeights = heights
         }
+        .onPreferenceChange(BrainBarCardSizeKey.self) { sizes in
+            panelState.renderedCardSizes = sizes
+        }
 #endif
         .onAppear {
             receiptStore.reload()
@@ -1360,6 +1363,7 @@ private struct BrainBarDashboardView: View {
         }
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
+        .brainBarCardShapeProbe("ingest")
         .accessibilityIdentifier("brainbar.dashboard.tile.ingest")
     }
 
@@ -1370,12 +1374,15 @@ private struct BrainBarDashboardView: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(Color.brainBarTextSecondary)
+        .brainBarCardShapeProbe("receipt.\(label)")
         .accessibilityElement(children: .combine)
         .help(help)
     }
 
     private func ingestSeriesChart(_ series: PipelineSeries) -> some View {
         let lane = pipelineFlowSummary.lane(for: series)
+        let isUnavailable = lane.status == .unavailable
+        let isEmpty = !isUnavailable && lane.values.allSatisfy { $0 == 0 }
         let disclosure = BrainBarDashboardChartDisclosure(
             series: series,
             lane: lane,
@@ -1387,41 +1394,53 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color.brainBarTextSecondary)
                 Spacer(minLength: 4)
-                Text(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale))
+                Text(isUnavailable ? "—" : DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale))
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
-            if lane.status != .unavailable {
-                BrainBarHeroSparkline(
-                    label: lane.sparklineLabel,
-                    values: lane.values,
-                    secondaryValues: [],
-                    primarySeriesLabel: nil,
-                    secondarySeriesLabel: nil,
-                    tertiaryValues: [],
-                    tertiarySeriesLabel: nil,
-                    latestBucketName: lane.latestBucketName,
-                    accentColor: lane.accentColor,
-                    secondaryAccentColor: nil,
-                    tertiaryAccentColor: nil,
-                    activityWindowMinutes: lane.activityWindowMinutes,
-                    fetchedAt: collector.lastDataFetchedAt ?? currentNow,
-                    pulseRevision: ingestPulseRevision(for: series),
-                    referenceValue: nil,
-                    metricDisclosure: disclosure.tooltipDisclosure,
-                    accessibilitySummary: disclosure.accessibilitySummary,
-                    lastBucketIsPartial: true,
-                    showsRestingAxes: true
-                )
-                .frame(height: BrainBarIngestBandLayout.plotHeight)
-            } else {
-                Text("Evidence unavailable")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                    .frame(maxWidth: .infinity, minHeight: BrainBarIngestBandLayout.plotHeight)
+            BrainBarHeroSparkline(
+                label: lane.sparklineLabel,
+                values: isUnavailable ? Array(repeating: 0, count: lane.values.count) : lane.values,
+                secondaryValues: [],
+                primarySeriesLabel: nil,
+                secondarySeriesLabel: nil,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                latestBucketName: lane.latestBucketName,
+                accentColor: lane.accentColor,
+                secondaryAccentColor: nil,
+                tertiaryAccentColor: nil,
+                activityWindowMinutes: lane.activityWindowMinutes,
+                fetchedAt: collector.lastDataFetchedAt ?? currentNow,
+                pulseRevision: ingestPulseRevision(for: series),
+                referenceValue: nil,
+                metricDisclosure: disclosure.tooltipDisclosure,
+                accessibilitySummary: disclosure.accessibilitySummary,
+                lastBucketIsPartial: true,
+                showsRestingAxes: true,
+                plotsSeries: !isUnavailable && !isEmpty
+            )
+            .frame(height: BrainBarIngestBandLayout.plotHeight)
+            .overlay {
+                if isUnavailable || isEmpty {
+                    Group {
+                        if isUnavailable {
+                            Text("Evidence unavailable")
+                        } else {
+                            Text("No activity yet")
+                        }
+                    }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.brainBarBlack.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
+                        .allowsHitTesting(false)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .brainBarCardShapeProbe("ingest.\(series.rawValue)")
         .accessibilityIdentifier(disclosure.accessibilityIdentifier)
         .accessibilityLabel(disclosure.accessibilitySummary)
     }
@@ -1458,6 +1477,7 @@ private struct BrainBarDashboardView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
+        .brainBarCardShapeProbe("summary.\(identifier)")
 #if DEBUG
         .background(
             GeometryReader { proxy in
@@ -1616,6 +1636,7 @@ private struct BrainBarDefinitionList: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .brainBarCardShapeProbe(title.lowercased())
     }
 }
 
@@ -1947,7 +1968,28 @@ private struct BrainBarSummaryTileHeightKey: PreferenceKey {
         value.merge(nextValue(), uniquingKeysWith: max)
     }
 }
+
+private struct BrainBarCardSizeKey: PreferenceKey {
+    static let defaultValue: [String: CGSize] = [:]
+
+    static func reduce(value: inout [String: CGSize], nextValue: () -> [String: CGSize]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
 #endif
+
+private extension View {
+    @ViewBuilder
+    func brainBarCardShapeProbe(_ identifier: String) -> some View {
+#if DEBUG
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: BrainBarCardSizeKey.self, value: [identifier: proxy.size])
+        })
+#else
+        self
+#endif
+    }
+}
 
 private struct BrainBarSnapshotFreshnessBanner: View {
     let state: SnapshotFreshnessState
@@ -2323,6 +2365,7 @@ private struct BrainBarSignalCoveragePanel: View {
             }
         }
         .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .topLeading)
+        .brainBarCardShapeProbe("coverage.\(signal.id)")
         .opacity(isExpanded ? (revealedSignalIDs.contains(signal.id) ? 1 : 0) : 1)
         .background {
             if signal.showsDetail {
@@ -4039,6 +4082,7 @@ private struct BrainBarHeroSparkline: View {
     let accessibilitySummary: String?
     var lastBucketIsPartial = false
     var showsRestingAxes = false
+    var plotsSeries = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -4062,7 +4106,8 @@ private struct BrainBarHeroSparkline: View {
                     metricDisclosure: metricDisclosure,
                     accessibilitySummary: accessibilitySummary,
                     lastBucketIsPartial: lastBucketIsPartial,
-                    showsRestingAxes: showsRestingAxes
+                    showsRestingAxes: showsRestingAxes,
+                    plotsSeries: plotsSeries
                 ),
                 accentColor: accentColor,
                 secondaryAccentColor: secondaryAccentColor,

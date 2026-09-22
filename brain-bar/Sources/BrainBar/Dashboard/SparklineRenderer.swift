@@ -37,6 +37,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let accessibilitySummary: String?
     let lastBucketIsPartial: Bool
     let showsRestingAxes: Bool
+    let plotsSeries: Bool
 
     init(
         label: String,
@@ -52,7 +53,8 @@ struct SparklineChartPresentation: Equatable, Sendable {
         metricDisclosure: String? = nil,
         accessibilitySummary: String? = nil,
         lastBucketIsPartial: Bool = false,
-        showsRestingAxes: Bool = false
+        showsRestingAxes: Bool = false,
+        plotsSeries: Bool = true
     ) {
         self.label = label
         self.values = values
@@ -68,6 +70,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.accessibilitySummary = accessibilitySummary
         self.lastBucketIsPartial = lastBucketIsPartial
         self.showsRestingAxes = showsRestingAxes
+        self.plotsSeries = plotsSeries
     }
 
     var points: [SparklineChartPoint] {
@@ -244,6 +247,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     func shouldPlotSeries(_ role: SparklineSeriesRole) -> Bool {
+        guard plotsSeries else { return false }
         guard label(for: role) != nil else { return false }
         if hasMultipleSeries {
             return isSeriesActive(role)
