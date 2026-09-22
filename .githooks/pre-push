@@ -97,7 +97,12 @@ if [ "$tag_count" -gt 0 ]; then
   fi
 fi
 
-BRAINLAYER_PREPUSH=1 bash scripts/run_tests.sh
+BRAINLAYER_PREPUSH=1 env \
+  -u GIT_DIR \
+  -u GIT_INDEX_FILE \
+  -u GIT_WORK_TREE \
+  -u GIT_COMMON_DIR \
+  bash scripts/run_tests.sh
 exit_status=$?
 
 if [ $exit_status -ne 0 ]; then

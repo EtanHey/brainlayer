@@ -1,9 +1,19 @@
 """Shared test fixtures for BrainLayer tests."""
 
+import os
+
+# Git exports repository-routing variables to hooks. They override even explicit `git -C` calls,
+# so a pytest fixture that creates a disposable repository can otherwise write into the checkout
+# whose pre-push hook launched the suite. Scrub the whole family before test modules, fixtures, or
+# subprocesses can observe it.
+for _git_env_key in tuple(os.environ):
+    if _git_env_key.startswith("GIT_"):
+        os.environ.pop(_git_env_key, None)
+
 import functools
 import importlib
-import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -46,6 +56,63 @@ else:
     os.environ["HOME"] = _original_home
 
 import pytest
+
+
+def _git_probe(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
+    commands = {
+        "core.bare": ("config", "--local", "--get", "core.bare"),
+        "user.*": ("config", "--local", "--null", "--get-regexp", "^user\\."),
+        "origin/main": ("rev-parse", "--verify", "refs/remotes/origin/main"),
+    }
+    snapshot: dict[str, str] = {}
+    for label, command in commands.items():
+        result = _git_probe(f"--git-dir={common_dir}", *command)
+        if result.returncode not in (0, 1):
+            pytest.fail(
+                f"shared Git guard could not read {label}: {result.stderr.strip() or f'exit {result.returncode}'}"
+            )
+        snapshot[label] = result.stdout
+    return snapshot
+
+
+@pytest.fixture(scope="session", autouse=True)
+def guard_shared_git_state():
+    """Fail the session if any test rewrites checkout-global Git state."""
+    repo_root = Path(__file__).resolve().parents[1]
+    common_result = _git_probe("rev-parse", "--git-common-dir", cwd=repo_root)
+    if common_result.returncode != 0:
+        yield
+        return
+
+    common_dir = Path(common_result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (repo_root / common_dir).resolve()
+    bare_result = _git_probe("rev-parse", "--is-bare-repository", cwd=repo_root)
+    if bare_result.returncode != 0:
+        pytest.fail(f"shared Git guard could not classify checkout: {bare_result.stderr.strip()}")
+    if bare_result.stdout.strip() != "false":
+        pytest.fail(
+            "shared Git guard requires a non-bare checkout at session start; "
+            f"got {bare_result.stdout.strip()!r} for {repo_root}"
+        )
+
+    initial = _shared_git_snapshot(common_dir)
+    yield
+    final = _shared_git_snapshot(common_dir)
+    changed = [label for label in initial if initial[label] != final[label]]
+    if changed:
+        pytest.fail("shared Git state changed during pytest: " + ", ".join(changed))
+
 
 # Deterministic CLI output for assertions: several tests compare CLI messages as plain
 # strings, and ANSI color escapes mid-sentence broke 3 test_installable_build assertions
