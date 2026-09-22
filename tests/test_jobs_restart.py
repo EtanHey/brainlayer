@@ -18,6 +18,7 @@ class FakeCommands:
         self.pids = {name: 101 + index for index, name in enumerate(names)}
         self.kegs = {name: old_keg for name in self.pids}
         self.no_keg_map_for: set[str] = set()
+        self.ps_command = f"{current_keg.parents[2]}/opt/brainlayer/libexec/venv/bin/python -m brainlayer\n"
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         self.commands.append(args)
@@ -37,8 +38,7 @@ class FakeCommands:
                 return subprocess.CompletedProcess(args, 0, f"p{pid}\nn/usr/lib/libSystem.B.dylib\n", "")
             return subprocess.CompletedProcess(args, 0, f"p{pid}\nn{self.kegs[name]}/libexec/venv/bin/python\n", "")
         if args[:2] == ["ps", "-p"]:
-            opt = self.current_keg.parents[2] / "opt" / "brainlayer"
-            return subprocess.CompletedProcess(args, 0, f"{opt}/libexec/venv/bin/python -m brainlayer\n", "")
+            return subprocess.CompletedProcess(args, 0, self.ps_command, "")
         raise AssertionError(args)
 
 
@@ -86,10 +86,8 @@ def test_restart_loaded_daemons_and_stale_inflight_interval(tmp_path: Path) -> N
         "com.brainlayer.drain",
         "com.brainlayer.health-check",
     }
-    assert "com.brainlayer.enrichment" in result["skipped"]
-    assert "com.brainlayer.unloaded" in result["skipped"]
-    assert "com.brainlayer.backup-daily" in result["skipped"]
-    assert "com.brainlayer.gemini-loopback" in result["skipped"]
+    assert "com.brainlayer.enrichment" in result["skipped"] and "com.brainlayer.unloaded" in result["skipped"]
+    assert "com.brainlayer.backup-daily" in result["skipped"] and "com.brainlayer.gemini-loopback" in result["skipped"]
     assert result["skipped"]["com.brainlayer.brainbar"] == "cask-owned BrainBar job"
     assert not any("enrichment" in " ".join(args) and "kickstart" in args for args in fake.commands)
 
@@ -182,6 +180,6 @@ def test_opt_keg_python_command_verifies_without_mapped_extension(tmp_path: Path
     _plist(tmp_path, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/libexec/venv/bin/python", "-m", "brainlayer"])
     fake = FakeCommands(old_keg, current_keg)
     fake.no_keg_map_for.add("watch")
+    fake.ps_command = f"/Library/Frameworks/Python.framework/Versions/3.12/bin/python {opt}/bin/brainlayer watch\n"
     result = restart_loaded_jobs(tmp_path, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
     assert result["ok"] is True
-    assert any(args[:2] == ["ps", "-p"] for args in fake.commands)

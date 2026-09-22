@@ -61,7 +61,9 @@ def _maps_current_keg(pid: int, opt_path: Path, current_keg: Path, command_runne
         return True, ""
     if error is None and not mapped:
         process = command_runner(["ps", "-p", str(pid), "-o", "command="])
-        if process.returncode == 0 and process.stdout.strip().startswith((f"{opt_path}/", f"{current_keg}/")):
+        if process.returncode == 0 and any(
+            arg.startswith((f"{opt_path}/", f"{current_keg}/")) for arg in process.stdout.split()
+        ):
             return True, ""
     return False, error or f"pid {pid} maps {sorted(map(str, mapped))}"
 
