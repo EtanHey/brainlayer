@@ -614,7 +614,9 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
     return json.loads(data.decode("utf-8"))
 
 
-def _canary_text(response: dict[str, Any]) -> tuple[bool, str]:
+def _canary_text(response: Any) -> tuple[bool, str]:
+    if not isinstance(response, dict):
+        return False, "BrainBar response is not a JSON object"
     if response.get("error"):
         return False, str(response["error"])
     result = response.get("result")

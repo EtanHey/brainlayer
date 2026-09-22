@@ -1314,7 +1314,10 @@ def test_brainbar_canary_error_waits_until_repeated_failure_to_kickstart_brainba
 
     assert second_result.ok is False
     assert "brain_search_canary_failed" in [issue.code for issue in second_result.issues]
-    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert any(
+        command[:3] == ["launchctl", "kickstart", "-k"] and "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+    )
 
 
 def test_heal_min_consecutive_failures_can_be_overridden_by_env(monkeypatch):
@@ -2092,7 +2095,10 @@ def test_failed_retrieval_still_kickstarts_the_daemon(tmp_path):
         assert result.canary_status == "retrieval_failed"
         assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
 
-    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert any(
+        command[:3] == ["launchctl", "kickstart", "-k"] and "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+    )
     assert json.loads(state_path.read_text(encoding="utf-8"))["canary_status"] == "retrieval_failed"
 
 
@@ -2127,13 +2133,23 @@ def test_transport_error_is_distinct_and_still_kickstarts_the_daemon(tmp_path):
 @pytest.mark.parametrize(
     "response",
     [
+        [],
+        "not-an-object",
         {},
         {"jsonrpc": "2.0", "id": 1, "result": {}},
         {"jsonrpc": "2.0", "id": 1, "result": {"content": "not-an-array"}},
         {"jsonrpc": "2.0", "id": 1, "result": {"content": []}},
         {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text"}]}},
     ],
-    ids=["missing-result", "missing-content", "non-array-content", "empty-content", "missing-text"],
+    ids=[
+        "top-level-list",
+        "top-level-scalar",
+        "missing-result",
+        "missing-content",
+        "non-array-content",
+        "empty-content",
+        "missing-text",
+    ],
 )
 def test_malformed_canary_content_fails_closed_as_retrieval_failure(tmp_path, response):
     db_path = tmp_path / "brainlayer.db"
