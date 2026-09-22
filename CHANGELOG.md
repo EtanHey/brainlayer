@@ -58,8 +58,10 @@
 - #924: Report stalled drain progress without hiding a stale heartbeat.
 - #925: Show measured search and store receipts in BrainBar.
 - #926: Disclose Settings locality and model residency in BrainBar.
+- #928: Harden BrainBar's first-run badge and API-key confirmation.
 - #929: Self-heal failed BrainLayer jobs with badge escalation.
 - #930: Preserve self-heal state across uncertain health checks.
+- #931: Present honest signal-coverage counts in BrainBar.
 - #933: Verify installed keg native-library loadability alongside signatures.
 
 ## [1.0.0] - 2026-02-19
