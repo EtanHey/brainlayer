@@ -17,7 +17,7 @@ def _git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True, env=_clean_git_env()).strip()
 
 
-def _linked_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _linked_repo(tmp_path: Path, *, origin_main: bool = True, detached: bool = False) -> tuple[Path, Path, Path]:
     repo = tmp_path / "repo"
     subprocess.run(
         ["git", "init", "-q", "-b", "main", str(repo)],
@@ -29,13 +29,16 @@ def _linked_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
     (repo / "seed.txt").write_text("one\n", encoding="utf-8")
     _git(repo, "add", "seed.txt")
     _git(repo, "commit", "-qm", "first")
-    first = _git(repo, "rev-parse", "HEAD")
     (repo / "seed.txt").write_text("two\n", encoding="utf-8")
     _git(repo, "commit", "-qam", "second")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    if origin_main:
+        _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
 
     linked = tmp_path / "linked"
-    _git(repo, "worktree", "add", "-q", "-b", "guard-linked", str(linked), "HEAD")
+    if detached:
+        _git(repo, "worktree", "add", "-q", "--detach", str(linked), "HEAD")
+    else:
+        _git(repo, "worktree", "add", "-q", "-b", "guard-linked", str(linked), "HEAD")
     tests_dir = linked / "tests"
     tests_dir.mkdir()
     shutil.copy2(REPO_ROOT / "tests" / "conftest.py", tests_dir / "conftest.py")
@@ -129,3 +132,41 @@ def test_probe():
     assert "core.bare" in output
     assert "user.*" in output
     assert "origin/main" in output
+
+
+def test_session_guard_accepts_detached_checkout_without_origin_main(tmp_path: Path) -> None:
+    repo, linked, git_dir = _linked_repo(tmp_path, origin_main=False, detached=True)
+    assert _git(linked, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    (linked / "tests" / "test_probe.py").write_text("def test_probe():\n    assert True\n", encoding="utf-8")
+
+    result = _run_nested_pytest(linked, _hook_env(repo, linked, git_dir))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+
+
+def test_session_guard_detects_origin_main_created_from_absence(tmp_path: Path) -> None:
+    repo, linked, git_dir = _linked_repo(tmp_path, origin_main=False, detached=True)
+    (linked / "tests" / "test_probe.py").write_text(
+        """
+import os
+import subprocess
+
+
+def test_probe():
+    subprocess.run(
+        ["git", "--git-dir", os.environ["TEST_SHARED_GIT_DIR"],
+         "update-ref", "refs/remotes/origin/main", "HEAD"],
+        check=True,
+    )
+""".lstrip(),
+        encoding="utf-8",
+    )
+    env = _hook_env(repo, linked, git_dir)
+    env["TEST_SHARED_GIT_DIR"] = str(repo / ".git")
+
+    result = _run_nested_pytest(linked, env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    assert "shared Git state changed during pytest: origin/main" in output

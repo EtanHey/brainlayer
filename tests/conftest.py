@@ -72,7 +72,7 @@ def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
     commands = {
         "core.bare": ("config", "--local", "--get", "core.bare"),
         "user.*": ("config", "--local", "--null", "--get-regexp", "^user\\."),
-        "origin/main": ("rev-parse", "--verify", "refs/remotes/origin/main"),
+        "origin/main": ("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"),
     }
     snapshot: dict[str, str] = {}
     for label, command in commands.items():
@@ -81,7 +81,7 @@ def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
             pytest.fail(
                 f"shared Git guard could not read {label}: {result.stderr.strip() or f'exit {result.returncode}'}"
             )
-        snapshot[label] = result.stdout
+        snapshot[label] = "<absent>" if label == "origin/main" and result.returncode == 1 else result.stdout
     return snapshot
 
 
