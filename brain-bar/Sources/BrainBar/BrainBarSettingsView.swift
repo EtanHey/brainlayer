@@ -13,6 +13,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+    @Published private(set) var configReadSucceeded = true
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
@@ -54,6 +55,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             onePasswordReference = document.config.googleAPIKey.opReference
             backendDraft = document.config.enrichmentBackend
         } catch {
+            configReadSucceeded = false
             config = .defaultConfig
             onePasswordReference = BrainLayerConfig.defaultConfig.googleAPIKey.opReference
             backendDraft = BrainLayerConfig.defaultConfig.enrichmentBackend
@@ -204,6 +206,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let loaded = try store.loadDocument().config
             let previous = config
             config = loaded
+            configReadSucceeded = true
             if !preservingDrafts || onePasswordReference == previous.googleAPIKey.opReference {
                 onePasswordReference = loaded.googleAPIKey.opReference
             }
@@ -215,6 +218,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             if !preservingDrafts { lastSaveReceipt = nil }
             return true
         } catch {
+            configReadSucceeded = false
             errorMessage = error.localizedDescription
             return false
         }
@@ -432,6 +436,62 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 }
 
+struct BrainBarSettingsFooterPresentation {
+    let status: String
+    let locality: String
+
+    init(config: BrainLayerConfig?, watcher: BrainLayerLaunchdLoadState?) {
+        guard let config else {
+            status = "Status unavailable"
+            locality = "Memory on this Mac · Cloud processing unknown · Backups unknown"
+            return
+        }
+
+        if !config.systemEnabled {
+            status = "System off"
+        } else if watcher == .running {
+            status = "Watcher running"
+        } else {
+            status = "Status unavailable"
+        }
+
+        let backend = config.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let enrichment: String
+        if !config.enrichmentEnabled {
+            enrichment = "Enrichment off"
+        } else if backend == "groq" {
+            enrichment = "Enrichment via Groq"
+        } else if backend == "gemini" {
+            enrichment = "Enrichment via Gemini"
+        } else if config.enrichmentMode == .remote {
+            enrichment = "Cloud enrichment configured"
+        } else if backend == "ollama" || backend == "mlx" {
+            enrichment = "Local enrichment configured"
+        } else {
+            enrichment = "Enrichment locality unknown"
+        }
+        let driveConfigured = BrainLayerLaunchdJobGroup.backups.jobs.contains {
+            config.launchdJobs[$0]?.enabled == true
+        }
+        locality = "Memory on this Mac · \(enrichment) · "
+            + (driveConfigured ? "Backups to Drive configured" : "Drive backups off")
+    }
+}
+
+struct BrainBarModelResidencyPresentation {
+    let modelName: String
+    let status: String
+    let memory: String
+
+    // No model-specific loaded state or resident bytes are exposed to BrainBar.
+    // The daemon RSS measures the entire process, not the embedding model.
+    static let unavailable = Self(
+        modelName: "Name unavailable",
+        status: "Residency unavailable",
+        memory: "Unavailable"
+    )
+}
+
 enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
     case general, jobs, backups, advanced
 
@@ -542,8 +602,35 @@ struct BrainBarSettingsView: View {
                 .accessibilityAddTraits(navigation.selected == section ? .isSelected : [])
             }
             Spacer(minLength: 0)
+            footer
         }
         .padding(15)
+    }
+
+    private var footer: some View {
+        let presentation = BrainBarSettingsFooterPresentation(
+            config: viewModel.configReadSucceeded ? viewModel.config : nil,
+            watcher: viewModel.config.launchdJobs[.watch]?.loadState
+        )
+        return VStack(alignment: .leading, spacing: 9) {
+            Rectangle().fill(Color.brainBarBorderSoft).frame(height: 1)
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(presentation.status == "Watcher running"
+                        ? BrainBarStateTheme.active.theme.swiftUIColor : Color.brainBarTextMuted)
+                    .frame(width: 6, height: 6)
+                Text(presentation.status)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "lock")
+                Text(presentation.locality)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color.brainBarTextMuted)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private var header: some View {
@@ -598,6 +685,12 @@ struct BrainBarSettingsView: View {
             }
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
+                sectionHeading("Embedding model")
+                let residency = BrainBarModelResidencyPresentation.unavailable
+                settingsTruthRow(label: "Model", value: residency.modelName)
+                settingsTruthRow(label: "Status", value: residency.status)
+                settingsTruthRow(label: "Resident memory", value: residency.memory)
+                Divider()
                 ForEach(navigation.selected.advancedJobs) { job in
                     BrainBarJobToggle(job: job, viewModel: viewModel)
                     Divider()

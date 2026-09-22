@@ -4,6 +4,53 @@ import XCTest
 final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
+    func testFooterQualifiesCloudAndLocalConfiguration() {
+        var config = BrainLayerConfig.defaultConfig
+        config.enrichmentBackend = "groq"
+        let cloud = BrainBarSettingsFooterPresentation(config: config, watcher: .running)
+        XCTAssertEqual(cloud.status, "Watcher running")
+        XCTAssertTrue(cloud.locality.contains("Memory on this Mac"))
+        XCTAssertTrue(cloud.locality.contains("Enrichment via Groq"))
+        XCTAssertTrue(cloud.locality.contains("Backups to Drive configured"))
+        XCTAssertFalse(cloud.locality.contains("Only on this Mac"))
+
+        config.enrichmentEnabled = false
+        config.launchdJobs[.backupDaily]?.enabled = false
+        config.launchdJobs[.jsonlBackup]?.enabled = false
+        let local = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        XCTAssertTrue(local.locality.contains("Memory on this Mac"))
+        XCTAssertTrue(local.locality.contains("Enrichment off"))
+        XCTAssertTrue(local.locality.contains("Drive backups off"))
+        XCTAssertFalse(local.locality.contains("Only on this Mac"))
+        XCTAssertEqual(local.status, "Status unavailable")
+
+        let unreadable = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
+        XCTAssertTrue(unreadable.locality.contains("Cloud processing unknown"))
+        XCTAssertTrue(unreadable.locality.contains("Backups unknown"))
+    }
+
+    func testModelResidencyDoesNotInferLoadedStateFromConfigOrDaemonMemory() {
+        let residency = BrainBarModelResidencyPresentation.unavailable
+        XCTAssertEqual(residency.modelName, "Name unavailable")
+        XCTAssertEqual(residency.status, "Residency unavailable")
+        XCTAssertEqual(residency.memory, "Unavailable")
+    }
+
+    @MainActor
+    func testUnreadableConfigKeepsFooterUnknown() {
+        let store = BrainLayerConfigStore(
+            configURL: URL(fileURLWithPath: "/nonexistent/settings.env"),
+            loadDocumentOverride: { throw CocoaError(.fileReadNoPermission) }
+        )
+        let viewModel = BrainBarSettingsViewModel(store: store, refreshStatusOnLoad: false)
+        XCTAssertFalse(viewModel.configReadSucceeded)
+        XCTAssertFalse(viewModel.reloadConfigFromDisk())
+        XCTAssertFalse(viewModel.configReadSucceeded)
+        let footer = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
+        XCTAssertTrue(footer.locality.contains("Cloud processing unknown"))
+        XCTAssertTrue(footer.locality.contains("Backups unknown"))
+    }
+
     @MainActor
     func testSettingsReadsBackupTruthFromObservabilityDocument() async throws {
         let fixture = try makeFixture()
