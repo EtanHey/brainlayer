@@ -58,14 +58,27 @@ final class BadgeReadHistory: @unchecked Sendable {
 }
 
 enum BadgeStateReader {
+    static func expandedTildePath(_ path: String) -> String {
+        guard path.hasPrefix("~") else { return path }
+        let userAndSuffix = path.dropFirst()
+        let separator = userAndSuffix.firstIndex(of: "/")
+        let user = separator.map { String(userAndSuffix[..<$0]) } ?? String(userAndSuffix)
+        let suffix = separator.map { String(userAndSuffix[$0...]) } ?? ""
+        let home = user.isEmpty
+            ? FileManager.default.homeDirectoryForCurrentUser
+            : FileManager.default.homeDirectory(forUser: user)
+        guard let home else { return path }
+        return home.path + suffix
+    }
+
     static func url(
         dbPath: String,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> URL {
         if let override = environment["BRAINLAYER_BADGE_STATE_PATH"], !override.isEmpty {
-            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+            return URL(fileURLWithPath: expandedTildePath(override))
         }
-        return URL(fileURLWithPath: (dbPath as NSString).expandingTildeInPath)
+        return URL(fileURLWithPath: expandedTildePath(dbPath))
             .resolvingSymlinksInPath().deletingLastPathComponent()
             .appendingPathComponent("badge-state.json")
     }
@@ -102,6 +115,10 @@ enum BadgeStateReader {
                 )
             }
             let document = try decoder.decode(BadgeStateDocument.self, from: data)
+            let age = now.timeIntervalSince(document.generatedAt)
+            guard age >= 0 else {
+                return .failVisible("Badge state timestamp is in the future.")
+            }
             let graceUntil = history?.sleepGrace(
                 now: now, cadence: cadence, documentGeneratedAt: document.generatedAt,
                 missedPreviousRead: missedPreviousRead)
@@ -110,14 +127,13 @@ enum BadgeStateReader {
                 guard let expected = document.alerts.expectedFirstRunBy, !document.alerts.reason.isEmpty else {
                     return .failVisible("Badge pending_first_run state is invalid.")
                 }
+                guard expected <= document.generatedAt.addingTimeInterval(600) else {
+                    return .failVisible("Badge pending_first_run deadline exceeds the allowed 600 seconds.")
+                }
                 if now <= expected || sleepGraceApplies {
                     return .init(badgeOn: false, reason: document.alerts.reason, activeCodes: [])
                 }
                 return .failVisible("Badge producer missed expected_first_run_by.")
-            }
-            let age = now.timeIntervalSince(document.generatedAt)
-            guard age >= 0 else {
-                return .failVisible("Badge state timestamp is in the future.")
             }
             guard age <= cadence.interval * 2 || sleepGraceApplies else {
                 return .failVisible("Badge state is stale.")
