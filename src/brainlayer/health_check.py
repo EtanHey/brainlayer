@@ -27,6 +27,7 @@ from .drain_liveness import (
     STALLED_CODE,
     check_drain_liveness,
 )
+from .job_lifecycle_health import _escalations as job_escalations
 from .job_lifecycle_health import installed_opt_path, scan_job_lifecycle
 from .launchd_primitive import (
     LaunchdLabelDisabledError,
@@ -1304,13 +1305,8 @@ def _run_health_check_locked(
         prior_jobs = state.get("job_lifecycle", {})
         if not isinstance(prior_jobs, dict):
             prior_jobs = {}
-        for label, episode in prior_jobs.items():
-            if isinstance(episode, dict) and episode.get("failed_heals"):
-                add_issue(
-                    "job_failure",
-                    "critical",
-                    f"{label}: {episode.get('reason', 'job unhealthy')}; 3 heal attempts failed to restore a healthy job",
-                )
+        for message in job_escalations(prior_jobs):
+            add_issue("job_failure", "critical", message)
         state_payload: dict[str, Any] = dict(state)
         state_payload["ts"] = now.isoformat()
         state_payload["slow_check"] = True

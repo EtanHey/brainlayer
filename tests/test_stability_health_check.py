@@ -537,6 +537,20 @@ def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=1, vector_rows=1)
+    state_path.write_text(
+        json.dumps(
+            {
+                "job_lifecycle": {
+                    "com.brainlayer.maintenance": {
+                        "failed_heals": True,
+                        "interval": True,
+                        "last_exit_code": 1,
+                        "reason": "failed maintenance",
+                    }
+                }
+            }
+        )
+    )
     canary_called = False
 
     def interrupted_count(_db_path, **_kwargs):
@@ -560,6 +574,7 @@ def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert result.slow_check is True
     assert result.slow_check_stage == "missing_embeddings"
+    assert any(issue.code == "job_failure" and "3 failed runs" in issue.message for issue in result.issues)
     assert saved["slow_check"] is True
     assert saved["slow_check_stage"] == "missing_embeddings"
     assert saved["ts"] == "2026-07-13T09:00:00+00:00"
