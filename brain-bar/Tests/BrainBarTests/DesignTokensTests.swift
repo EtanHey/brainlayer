@@ -64,12 +64,26 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(BrainBarFlowStatusPill.fontSize * BrainBarFlowStatusPill.minimumScaleFactor, 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
         XCTAssertEqual(
-            BrainBarDesignTokens.Colors.signalCoverageStatus(coveragePercent: 100, isAvailable: true),
+            BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 1_000, eligibleCount: 1_000, isAvailable: true),
             BrainBarDesignTokens.Colors.statusOK
         )
         XCTAssertEqual(
-            BrainBarDesignTokens.Colors.signalCoverageStatus(coveragePercent: 100, isAvailable: false),
+            BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 0, eligibleCount: 1_000, isAvailable: false),
             BrainBarDesignTokens.Colors.statusUnknown
+        )
+        XCTAssertEqual(
+            BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 999, eligibleCount: 1_000, isAvailable: true),
+            BrainBarDesignTokens.Colors.statusUnknown,
+            "99.9% completeness must not show a green OK dot"
+        )
+        XCTAssertEqual(
+            BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 1_000, eligibleCount: 1_000, isAvailable: true),
+            BrainBarDesignTokens.Colors.statusOK
+        )
+        XCTAssertEqual(
+            BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 0, eligibleCount: 0, isAvailable: false),
+            BrainBarDesignTokens.Colors.statusUnknown,
+            "Computing and unavailable coverage must stay unknown"
         )
 
         let scaledFonts = [

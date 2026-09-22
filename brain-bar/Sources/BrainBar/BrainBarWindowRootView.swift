@@ -2262,7 +2262,8 @@ private struct BrainBarSignalCoveragePanel: View {
         HStack(spacing: 6) {
             Circle()
                 .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
-                    coveragePercent: signal.clampedCoveragePercent,
+                    indexedCount: signal.indexedCount,
+                    eligibleCount: signal.totalCount,
                     isAvailable: signal.isAvailable
                 )))
                 .frame(width: 7, height: 7)
@@ -2472,7 +2473,8 @@ private struct BrainBarSignalCoverageRow: View {
                 HStack(spacing: 5) {
                     Circle()
                         .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
-                            coveragePercent: signal.clampedCoveragePercent,
+                            indexedCount: signal.indexedCount,
+                            eligibleCount: signal.totalCount,
                             isAvailable: signal.isAvailable
                         )))
                         .frame(width: 6, height: 6)

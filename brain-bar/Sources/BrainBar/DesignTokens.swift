@@ -38,9 +38,14 @@ enum BrainBarDesignTokens {
         static let statusError = NSColor.brainBarHex(0xFF453A)
         static let statusUnknown = NSColor.brainBarHex(0x8A8A90)
 
-        static func signalCoverageStatus(coveragePercent: Double, isAvailable: Bool) -> NSColor {
-            guard isAvailable else { return statusUnknown }
-            return Int(min(max(coveragePercent, 0), 100).rounded()) == 100 ? statusOK : statusUnknown
+        static func signalCoverageStatus(indexedCount: Int, eligibleCount: Int, isAvailable: Bool) -> NSColor {
+            guard isAvailable,
+                  eligibleCount > 0,
+                  indexedCount >= 0,
+                  indexedCount <= eligibleCount else {
+                return statusUnknown
+            }
+            return indexedCount == eligibleCount ? statusOK : statusUnknown
         }
 
         static let seriesAgent = NSColor.brainBarHex(0x22D3EE)
