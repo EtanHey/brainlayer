@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import brainlayer.health_check as health_check
 from brainlayer.badge_state import (
     DATA_LOSS_CODES,
     SUPPRESSIBLE_CODES,
@@ -20,6 +21,7 @@ from brainlayer.badge_state import (
     write_badge_state,
 )
 from brainlayer.health_check import HealthCheckConfig, HealthCheckResult, HealthIssue, run_health_check
+from brainlayer.job_lifecycle_health import JobTick
 
 FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-v1.json"
 PENDING_FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-pending-v1.json"
@@ -33,7 +35,9 @@ def _result(*issues: HealthIssue) -> HealthCheckResult:
     )
 
 
-def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthCheckResult:
+def _run_minimal_health_check(
+    tmp_path: Path, badge_state_path: Path, *, job_opt_path: Path | None = None
+) -> HealthCheckResult:
     db_path = tmp_path / "brainlayer.db"
     with sqlite3.connect(db_path) as connection:
         connection.executescript(
@@ -60,6 +64,7 @@ def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthC
             db_path=db_path,
             state_path=tmp_path / "health-state.json",
             badge_state_path=badge_state_path,
+            job_opt_path=job_opt_path,
             source_jsonl_globs=[],
             queue_dir=tmp_path / "queue",
             offsets_path=tmp_path / "offsets.json",
@@ -72,6 +77,26 @@ def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthC
         socket_request_fn=lambda *_args: {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}},
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
     )
+
+
+def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: Path, monkeypatch, caplog) -> None:
+    message = "com.brainlayer.watch: crashloop, last exit code 1; 3 heal attempts failed to restore a healthy job"
+    monkeypatch.setattr(
+        health_check,
+        "scan_job_lifecycle",
+        lambda *_args, **_kwargs: JobTick(
+            {"com.brainlayer.watch": {"attempts": 3, "reason": "crashloop, last exit code 1"}}, [], [message]
+        ),
+    )
+    caplog.set_level("INFO", logger="brainlayer.health_check")
+    badge_path = tmp_path / "badge-state.json"
+    (tmp_path / "health-state.json").write_text('{"job_lifecycle":{"com.brainlayer.watch":{"attempts":3}}}')
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    document = json.loads(badge_path.read_text(encoding="utf-8"))
+    assert "job_failure" in [issue.code for issue in result.issues]
+    assert document["alerts"]["active"][-1]["message"] == message
+    assert document["alerts"]["badge_on"] is True
+    assert "condition=job_failure" in caplog.text and "timestamp=" in caplog.text
 
 
 def test_badge_state_path_is_db_relative_with_environment_override(tmp_path: Path) -> None:
