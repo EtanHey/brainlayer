@@ -13,6 +13,16 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+    @Published private(set) var configReadSucceeded = true
+
+    var footerPresentation: BrainBarSettingsFooterPresentation {
+        BrainBarSettingsFooterPresentation(
+            config: configReadSucceeded ? config : nil,
+            watcher: config.launchdJobs[.watch]?.loadState
+        )
+    }
+
+    static var modelResidencyPresentation: BrainBarModelResidencyPresentation { .unavailable }
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
@@ -57,6 +67,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             onePasswordReference = document.config.googleAPIKey.opReference
             backendDraft = document.config.enrichmentBackend
         } catch {
+            configReadSucceeded = false
             config = .defaultConfig
             onePasswordReference = BrainLayerConfig.defaultConfig.googleAPIKey.opReference
             backendDraft = BrainLayerConfig.defaultConfig.enrichmentBackend
@@ -209,6 +220,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let loaded = try store.loadDocument().config
             let previous = config
             config = loaded
+            configReadSucceeded = true
             if !preservingDrafts || onePasswordReference == previous.googleAPIKey.opReference {
                 onePasswordReference = loaded.googleAPIKey.opReference
             }
@@ -220,6 +232,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             if !preservingDrafts { lastSaveReceipt = nil }
             return true
         } catch {
+            configReadSucceeded = false
             errorMessage = error.localizedDescription
             return false
         }
@@ -457,6 +470,91 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 }
 
+enum BrainBarSettingsFooterState: Equatable {
+    case watcherRunning, systemOff, unavailable
+
+    var title: String {
+        switch self {
+        case .watcherRunning: "Watcher running"
+        case .systemOff: "System off"
+        case .unavailable: "Status unavailable"
+        }
+    }
+}
+
+struct BrainBarSettingsFooterPresentation {
+    let state: BrainBarSettingsFooterState
+    let locality: String
+    let showsLock: Bool
+    let symbol: String
+
+    init(config: BrainLayerConfig?, watcher: BrainLayerLaunchdLoadState?) {
+        guard let config else {
+            state = .unavailable
+            locality = "Memory on this Mac · Enrichment unknown · Backups unknown"
+            showsLock = false
+            symbol = "questionmark.circle"
+            return
+        }
+
+        if !config.systemEnabled {
+            state = .systemOff
+        } else if watcher == .running {
+            state = .watcherRunning
+        } else {
+            state = .unavailable
+        }
+
+        let enrichment: String
+        let enrichmentCloud: Bool
+        let enrichmentOff = !config.enrichmentEnabled || config.launchdJobs[.enrichment]?.enabled == false
+        if enrichmentOff {
+            enrichment = "Enrichment off"
+            enrichmentCloud = false
+        } else if config.launchdJobs[.enrichment]?.enabled == true {
+            // The realtime enrichment launchd job invokes enrich_realtime,
+            // which uses Gemini regardless of BACKEND/MODE in the env file.
+            enrichment = "Enrichment → Gemini"
+            enrichmentCloud = true
+        } else {
+            enrichment = "Enrichment unknown"
+            enrichmentCloud = false
+        }
+        let driveJobs: [BrainLayerLaunchdJob] = [.backupDaily, .jsonlBackup, .maintenanceWeekly]
+        let driveStates = driveJobs.map { config.launchdJobs[$0]?.enabled }
+        let backups: String
+        let driveConfigured: Bool
+        let backupsOff = driveStates.allSatisfy { $0 == false }
+        if driveStates.contains(where: { $0 == true }) {
+            backups = "Backups → Drive"
+            driveConfigured = true
+        } else if backupsOff {
+            backups = "Backups off"
+            driveConfigured = false
+        } else {
+            backups = "Backups unknown"
+            driveConfigured = false
+        }
+        locality = "Memory on this Mac · \(enrichment) · \(backups)"
+        showsLock = enrichmentOff && backupsOff
+        symbol = showsLock ? "lock" : (enrichmentCloud || driveConfigured ? "icloud" : "questionmark.circle")
+    }
+}
+
+struct BrainBarModelResidencyPresentation {
+    let modelName: String
+    let status: String
+    let memory: String
+
+    // No model-specific loaded state or resident bytes are exposed to BrainBar.
+    // The daemon RSS measures the entire process, not the embedding model.
+    static let unavailable = Self(
+        modelName: "Name unavailable",
+        status: "Residency unavailable",
+        memory: "Unavailable"
+    )
+}
+
 enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
     case general, jobs, backups, advanced
 
@@ -513,29 +611,33 @@ struct BrainBarSettingsView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 214)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .background(Color.brainBarGlassSecondary)
-            Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    header
-                    if let errorMessage = viewModel.errorMessage { errorBanner(errorMessage) }
-                    if let receipt = viewModel.lastSaveReceipt {
-                        VStack(alignment: .leading, spacing: 8) {
-                            sectionHeading("Last save receipt")
-                            saveReceipt(receipt)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                sidebar
+                    .frame(width: 214)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(Color.brainBarGlassSecondary)
+                Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        header
+                        if let errorMessage = viewModel.errorMessage { errorBanner(errorMessage) }
+                        if let receipt = viewModel.lastSaveReceipt {
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionHeading("Last save receipt")
+                                saveReceipt(receipt)
+                            }
                         }
+                        sectionContent
                     }
-                    sectionContent
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 25)
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 25)
-                .frame(maxWidth: 720, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .frame(maxHeight: .infinity)
+            footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.brainBarBackgroundBase)
@@ -569,6 +671,35 @@ struct BrainBarSettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(15)
+    }
+
+    private var footer: some View {
+        let presentation = viewModel.footerPresentation
+        return HStack(spacing: 12) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(presentation.state == .watcherRunning
+                        ? BrainBarStateTheme.active.theme.swiftUIColor : Color.brainBarTextMuted)
+                    .frame(width: 6, height: 6)
+                Text(presentation.state.title)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1, height: 14)
+            HStack(spacing: 6) {
+                Image(systemName: presentation.symbol)
+                Text(presentation.locality)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color.brainBarTextMuted)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.brainBarGlassSecondary)
+        .overlay(alignment: .top) { Color.brainBarBorderSoft.frame(height: 1) }
+        .accessibilityElement(children: .combine)
     }
 
     private var header: some View {
@@ -623,6 +754,12 @@ struct BrainBarSettingsView: View {
             }
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
+                sectionHeading("Embedding model")
+                let residency = BrainBarSettingsViewModel.modelResidencyPresentation
+                settingsTruthRow(label: "Model", value: residency.modelName)
+                settingsTruthRow(label: "Status", value: residency.status)
+                settingsTruthRow(label: "Resident memory", value: residency.memory)
+                Divider()
                 ForEach(navigation.selected.advancedJobs) { job in
                     BrainBarJobToggle(job: job, viewModel: viewModel)
                     Divider()

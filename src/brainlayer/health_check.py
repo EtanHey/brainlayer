@@ -26,6 +26,7 @@ from .drain_liveness import (
     STALLED_CODE,
     check_drain_liveness,
 )
+from .job_lifecycle_health import installed_opt_path, scan_job_lifecycle
 from .launchd_primitive import (
     LaunchdLabelDisabledError,
     LaunchdVerificationError,
@@ -118,6 +119,8 @@ class HealthCheckConfig:
     db_path: Path = field(default_factory=get_db_path)
     state_path: Path = field(default_factory=lambda: DEFAULT_STATE_PATH)
     badge_state_path: Path | None = None
+    job_opt_path: Path | None = field(default_factory=installed_opt_path)
+    job_plist_dir: Path = field(default_factory=lambda: Path("~/Library/LaunchAgents").expanduser())
     socket_path: Path = DEFAULT_SOCKET_PATH
     canary_query: str = DEFAULT_CANARY_QUERY
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
@@ -720,10 +723,11 @@ def _apply_heals(
         "drain_unloaded",
         "health_check_unloaded",
         "hotlane_unloaded",
-        "enrichment_unloaded",
         "observability_unloaded",
     }
     for issue_code, (label, plist_path) in issue_labels.items():
+        if label == config.enrichment_label:
+            continue
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
         details = issue_details.get(issue_code, {})
@@ -1253,6 +1257,16 @@ def run_health_check(
         result.slow_check_stage = stage
         result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
         add_issue("slow_check", "critical", message)
+        prior_jobs = state.get("job_lifecycle", {})
+        if not isinstance(prior_jobs, dict):
+            prior_jobs = {}
+        for label, episode in prior_jobs.items():
+            if isinstance(episode, dict) and episode.get("failed_heals"):
+                add_issue(
+                    "job_failure",
+                    "critical",
+                    f"{label}: {episode.get('reason', 'job unhealthy')}; 3 heal attempts failed to restore a healthy job",
+                )
         state_payload: dict[str, Any] = dict(state)
         state_payload["ts"] = now.isoformat()
         state_payload["slow_check"] = True
@@ -1405,7 +1419,6 @@ def run_health_check(
             config.watch_label,
             config.drain_label,
             config.health_check_label,
-            config.enrichment_label,
             config.observability_label,
         ):
             if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
@@ -1430,7 +1443,8 @@ def run_health_check(
             if pause_active and pause_applies_to_label(pause_payload, label):
                 continue
             add_issue(issue_code, "critical", message)
-            heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
+            if label != config.enrichment_label:
+                heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
     if slow_result := deadline_reached("launchd_status"):
         return slow_result
 
@@ -1647,6 +1661,35 @@ def run_health_check(
         config=config,
         command_runner=command_runner,
     )
+    job_tick = None
+    if config.job_opt_path is not None:
+        previous_jobs = state.get("job_lifecycle", {})
+        if not isinstance(previous_jobs, dict):
+            previous_jobs = {}
+        paused_labels = (
+            {label for label in pause_payload.get("labels", []) if isinstance(label, str)}
+            if pause_active and isinstance(pause_payload, dict)
+            else set()
+        )
+        job_tick = scan_job_lifecycle(
+            config.job_plist_dir,
+            config.job_opt_path,
+            previous_jobs,
+            now_epoch=int(now.timestamp()),
+            command_runner=command_runner,
+            uid=os.getuid(),
+            paused_labels=paused_labels,
+            heal=config.heal,
+        )
+        if job_tick.scan_error:
+            add_issue("job_scan_failed", "critical", job_tick.scan_error)
+        result.actions.extend(job_tick.actions)
+        for message in job_tick.escalations:
+            add_issue("job_failure", "critical", message)
+            label = message.split(":", 1)[0]
+            prior = previous_jobs.get(label, {})
+            if not isinstance(prior, dict) or not prior.get("failed_heals"):
+                _log_health_event("job_failure", message, timestamp=result.checked_at)
     queue_notice_signature = _report_queue_backlog(
         config=config,
         result=result,
@@ -1664,6 +1707,8 @@ def run_health_check(
     )
     state_payload: dict[str, Any] = dict(state)
     state_payload["heal_failures"] = heal_failures
+    if job_tick is not None:
+        state_payload["job_lifecycle"] = job_tick.state
     state_payload["heal_tripped"] = sorted(heal_tripped) if result.issues else []
     _record_queue_notice(state_payload, queue_notice_signature)
     state_payload["ts"] = now.isoformat()

@@ -8,11 +8,12 @@ appends from user-level daemons.
 This drop-in only rotates finite scheduled LaunchAgent jobs. Long-running jobs
 such as BrainBar, watch, and enrichment keep their `StandardOutPath` and
 `StandardErrorPath` descriptors open; macOS `newsyslog` has no post-rotate hook
-or copy-truncate mode, so those logs need a coupled launchd restart or pid-file
-signal path before they can be safely added. Drain is excluded because its
-daemon owns `drain.err.log` through a rotating Python handler; launchd captures
-stderr for the daemon's whole life in `drain.bootstrap.err.log`, including any
-uncaught traceback.
+or copy-truncate mode. The separate `com.brainlayer.log-cap` job checks installed
+BrainLayer plists every five minutes and trims oversized logs in place, keeping
+the newest 2 MiB on the inode held by launchd's append descriptor. It refuses
+symlinks, hard links, non-regular files, and files owned by another user. Drain
+also owns `drain.err.log` through a rotating Python handler; launchd captures
+stderr for the daemon's whole life in `drain.bootstrap.err.log`.
 
 Install `brainlayer.conf` into `/etc/newsyslog.d/` with:
 

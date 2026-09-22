@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 enum BrainBarRenderHarness {
     private static let environmentVariable = "BRAINBAR_RENDER_ONLY"
+    private static let sampleReceipts = BrainBarOperationReceipts()
     private static let breakpoints: [(name: String, width: CGFloat)] = [
         ("compact", 760), ("default", 960), ("wide", 1_280),
     ]
@@ -20,10 +21,13 @@ enum BrainBarRenderHarness {
         case loading
         case queueDraining
         case queueBacklogged
+        case receiptUnavailable
+        case receiptFailed
 
         var detailsStates: [Bool] {
             switch self {
-            case .loading, .stale, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged:
+            case .loading, .stale, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
+                 .receiptUnavailable, .receiptFailed:
                 [false]
             case .readable, .unreadable:
                 [false, true]
@@ -32,7 +36,7 @@ enum BrainBarRenderHarness {
 
         var breakpoints: [(name: String, width: CGFloat)] {
             switch self {
-            case .queueDraining, .queueBacklogged:
+            case .queueDraining, .queueBacklogged, .receiptUnavailable, .receiptFailed:
                 [("default", 960)]
             case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .stale, .loading:
                 BrainBarRenderHarness.breakpoints
@@ -51,14 +55,15 @@ enum BrainBarRenderHarness {
                 .queueDraining
             case .queueBacklogged:
                 .queueBacklogged
-            case .readable, .unreadable:
+            case .readable, .unreadable, .receiptUnavailable, .receiptFailed:
                 .live
             }
         }
 
         var observabilityResult: ObservabilityReadResult {
             switch self {
-            case .readable, .stale, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining, .queueBacklogged:
+            case .readable, .stale, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining,
+                 .queueBacklogged, .receiptUnavailable, .receiptFailed:
                 BrainBarDashboardFixture.readableObservabilityResult
             case .unreadable:
                 .unreadable("Database path unavailable.")
@@ -86,6 +91,12 @@ enum BrainBarRenderHarness {
             try verifyDirectionalStateCoverage()
             try verifyReadableChartMarkerContract()
             try renderUnifiedSettings(in: outputDirectory)
+            sampleReceipts.record(BrainBarOperationReceipt(
+                kind: .search, durationMillis: 142, count: 10, recordedAt: BrainBarDashboardFixture.fetchedAt
+            ))
+            sampleReceipts.record(BrainBarOperationReceipt(
+                kind: .ingest, durationMillis: 1_200, count: 1, recordedAt: BrainBarDashboardFixture.fetchedAt
+            ))
             for scenario in Scenario.allCases {
                 for breakpoint in scenario.breakpoints {
                     for detailsExpanded in scenario.detailsStates {
@@ -238,8 +249,21 @@ enum BrainBarRenderHarness {
                 agentActivity: .unavailable("fixture agent activity unavailable")
             )
             : BrainBarDashboardFixture.makeCollector(scenario.collectorState)
+        let receipts: BrainBarOperationReceipts
+        if scenario == .receiptUnavailable {
+            receipts = BrainBarOperationReceipts()
+        } else if scenario == .receiptFailed {
+            receipts = BrainBarOperationReceipts()
+            receipts.record(BrainBarOperationReceipt(
+                kind: .search, durationMillis: 42, count: nil, failed: true,
+                recordedAt: BrainBarDashboardFixture.fetchedAt.addingTimeInterval(-180)
+            ))
+        } else {
+            receipts = sampleReceipts
+        }
         let view = BrainBarDashboardPreview.make(
             collector: collector,
+            receiptStore: receipts,
             observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
             panelState: panelState
