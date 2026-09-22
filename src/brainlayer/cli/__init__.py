@@ -2070,7 +2070,7 @@ def digest(
                 result = digest_content(
                     content=text,
                     store=store,
-                    embed_fn=model.embed_query,
+                    embed_fn=lambda passage: model.embed_texts([passage])[0],
                     title=title,
                     project=project,
                     participants=participant_list,
