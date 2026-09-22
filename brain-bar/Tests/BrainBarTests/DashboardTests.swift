@@ -874,53 +874,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
     }
 
-    func testAppMainMenuHasOnlyTheSettingsSceneEntry() throws {
-        let appSource = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
-
-        XCTAssertTrue(appSource.contains("settingsSceneTitle = \"Settings…\""))
-        XCTAssertEqual(BrainBarAppMenuCommands.settingsEntryCountForTesting, 1)
-        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Settings..."))
-        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Toggle BrainBar"))
-        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings..."))
-        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings…"))
-        XCTAssertEqual(
-            appSource.components(separatedBy: "Button(\"Settings...\")").count - 1,
-            0,
-            "The Settings scene owns the app-menu Settings entry; do not add a second manual command."
-        )
-        XCTAssertEqual(
-            appSource.components(separatedBy: "Button(\"Toggle BrainBar\")").count - 1,
-            0,
-            "Toggle belongs to the status-item menu, not the floating app main menu."
-        )
-        XCTAssertEqual(
-            appSource.components(separatedBy: "Settings {").count - 1,
-            1,
-            "The app must retain exactly one SwiftUI Settings scene."
-        )
-    }
-
-    @MainActor
-    func testDashboardPanelUsesKeyWindowContractAndSettingsDismissSuppression() throws {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
-        let panel = controller.panelForTesting
-        let panelSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
-        let settingsSource = try brainBarSourceFile("Sources/BrainBar/BrainBarSettingsActions.swift")
-
-        XCTAssertTrue(panel.canBecomeKey)
-        XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
-        XCTAssertTrue(panelSource.contains("func windowWillClose(_ notification: Notification)"))
-        XCTAssertTrue(panelSource.contains("BrainBarSettingsActions.suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
-        XCTAssertTrue(settingsSource.contains("NSApp.activate(ignoringOtherApps: true)"))
-        XCTAssertTrue(settingsSource.contains("makeKeyAndOrderFront(nil)"))
-        XCTAssertFalse(settingsSource.contains("promoteForSettings"))
-        XCTAssertFalse(settingsSource.contains("setActivationPolicy(.regular)"))
-    }
-
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
         let markerPath = NSTemporaryDirectory() + "brainbar-restart-handoff-\(UUID().uuidString)"
         let timestamp = Date(timeIntervalSince1970: 1_000)

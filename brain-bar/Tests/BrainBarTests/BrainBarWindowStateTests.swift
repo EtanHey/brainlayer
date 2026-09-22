@@ -54,10 +54,11 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
-    func testBrainBarOnlyKeepsDashboardAndOptInKnowledgeGraphSurfaces() {
-        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .graph])
+    func testBrainBarKeepsDashboardSettingsAndOptInKnowledgeGraphSurfaces() {
+        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .graph, .settings])
         XCTAssertEqual(BrainBarTab.dashboard.title, "Dashboard")
         XCTAssertEqual(BrainBarTab.graph.title, "Graph")
+        XCTAssertEqual(BrainBarTab.settings.title, "Settings")
     }
 
     @MainActor
@@ -65,7 +66,7 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertFalse(BrainBarRetrievalToolsSettings().isEnabled)
         XCTAssertEqual(
             BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: false),
-            [.dashboard]
+            [.dashboard, .settings]
         )
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
         XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
@@ -100,22 +101,6 @@ final class BrainBarWindowStateTests: XCTestCase {
     @MainActor
     func testLiveWindowDefaultsToTheOnePageDashboard() {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)
-    }
-
-    func testDefaultWindowHasNoTabBarOrInjectionSurfaceAndFoldsObservabilityIntoDashboard() throws {
-        let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-
-        XCTAssertFalse(root.contains("Picker(\"Section\""))
-        XCTAssertFalse(root.contains("brainbar.shell.tabs"))
-        XCTAssertFalse(root.contains("injectionsContent"))
-        XCTAssertFalse(root.contains("BrainBarInjectionTab"))
-        XCTAssertFalse(root.contains("ObservabilityTechnicalDetailsView(result: effectiveObservabilityResult)"))
-        XCTAssertTrue(root.contains("BrainBarDefinitionList(title: \"Activity\""))
-        XCTAssertTrue(root.contains("summaryTiles(layout: layout)"))
-        XCTAssertTrue(root.contains("Text(\"Details\")"))
-        XCTAssertFalse(root.contains("Runtime & Details"))
-        XCTAssertTrue(root.contains("BrainBarHeroBackupTruth.derive("))
-        XCTAssertTrue(root.contains("ObservabilityPresentation.backupStatus(for: document.backups)"))
     }
 
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {

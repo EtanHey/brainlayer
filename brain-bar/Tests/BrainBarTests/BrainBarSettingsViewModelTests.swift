@@ -87,6 +87,19 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsReloadPreservesExternalEditBeforeSavingAnotherSetting() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var externalConfig = try fixture.store.loadDocument().config
+        externalConfig.enrichmentBackend = "mlx"
+        try fixture.store.save(externalConfig)
+        _ = fixture.viewModel.reloadConfigFromDisk()
+        fixture.viewModel.setShowRetrievalTools(true)
+        let persisted = try fixture.store.loadDocument().config
+        XCTAssertEqual(persisted.enrichmentBackend, "mlx")
+        XCTAssertTrue(persisted.showRetrievalTools)
+    }
+    @MainActor
     func testFailedSaveLeavesDisplayedConfigAtLastPersistedValue() throws {
         let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-model-\(UUID().uuidString)", isDirectory: false)
@@ -266,7 +279,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             configURL: configURL,
             loadDocumentOverride: {
                 loadCount += 1
-                if loadCount > 1 {
+                if loadCount > 2 {
                     throw CocoaError(.fileReadUnknown)
                 }
                 return BrainLayerEnvDocument(config: persisted)

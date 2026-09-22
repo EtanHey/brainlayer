@@ -194,8 +194,25 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func refreshAllStatus() {
+        _ = reloadConfigFromDisk()
         refreshLaunchdStatus()
         refreshObservabilityStatus()
+    }
+
+    func reloadConfigFromDisk() -> Bool {
+        do {
+            let loaded = try store.loadDocument().config
+            config = loaded
+            onePasswordReference = loaded.googleAPIKey.opReference
+            backendDraft = loaded.enrichmentBackend
+            applyLaunchdStates(launchdObservations.mapValues(\.loadState))
+            errorMessage = nil
+            lastSaveReceipt = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     func refreshObservabilityStatus() {
@@ -218,6 +235,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     @discardableResult
     private func updateConfig(_ apply: (inout BrainLayerConfig) -> Void) -> Bool {
+        guard reloadConfigFromDisk() else { return false }
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
@@ -245,6 +263,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             }
             activeRuntimeObservation = runtimeStatusProvider.sample()
             config = nextConfig
+            onePasswordReference = nextConfig.googleAPIKey.opReference
             backendDraft = nextConfig.enrichmentBackend
             errorMessage = nil
             previousConfigForLastSaveReceipt = previousConfig
