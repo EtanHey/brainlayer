@@ -43,7 +43,7 @@ def _run_minimal_health_check(
     with sqlite3.connect(db_path) as connection:
         connection.executescript(
             """
-            CREATE TABLE chunks (
+            CREATE TABLE IF NOT EXISTS chunks (
                 id TEXT PRIMARY KEY,
                 content TEXT,
                 archived_at TEXT,
@@ -55,9 +55,9 @@ def _run_minimal_health_check(
                 enrich_status TEXT,
                 char_count INTEGER
             );
-            CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
-            INSERT INTO chunks (id, content) VALUES ('chunk-1', 'content');
-            INSERT INTO chunk_vectors_rowids (id) VALUES ('chunk-1');
+            CREATE TABLE IF NOT EXISTS chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
+            INSERT OR IGNORE INTO chunks (id, content) VALUES ('chunk-1', 'content');
+            INSERT OR IGNORE INTO chunk_vectors_rowids (id) VALUES ('chunk-1');
             """
         )
     return run_health_check(
@@ -100,13 +100,47 @@ def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: 
     assert "condition=job_failure" in caplog.text and "timestamp=" in caplog.text
 
 
-def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path) -> None:
+def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path, monkeypatch) -> None:
+    scans = []
+
+    def scan(*_args, **_kwargs):
+        scans.append(True)
+        return JobTick({"com.brainlayer.watch": {"runs": 2, "consecutive": 0}}, [], [])
+
+    monkeypatch.setattr(health_check, "scan_job_lifecycle", scan)
     (tmp_path / "health-state.json").write_text("{broken", encoding="utf-8")
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    assert any(issue.code == "job_state_unknown" for issue in result.issues)
+    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert "state_corrupt" in json.loads((tmp_path / "health-state.json").read_text())
+    recovered = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    assert all(issue.code != "job_state_unknown" for issue in recovered.issues)
+    saved = json.loads((tmp_path / "health-state.json").read_text())
+    assert "state_corrupt" not in saved
+    assert saved["job_lifecycle"]["com.brainlayer.watch"]["runs"] == 2
+    assert len(scans) == 2
+
+
+def test_non_object_nested_job_state_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "health-state.json").write_text('{"job_lifecycle":[]}', encoding="utf-8")
     badge_path = tmp_path / "badge-state.json"
     result = _run_minimal_health_check(tmp_path, badge_path)
     assert any(issue.code == "job_state_unknown" for issue in result.issues)
     assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
-    assert "state_corrupt" in json.loads((tmp_path / "health-state.json").read_text())
+
+
+def test_prior_corruption_stays_visible_when_fresh_job_scan_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_check, "scan_job_lifecycle", lambda *_args, **_kwargs: JobTick({}, [], [], "launchd unavailable")
+    )
+    state_path = tmp_path / "health-state.json"
+    state_path.write_text('{"state_corrupt":"prior unreadable state"}', encoding="utf-8")
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    assert {issue.code for issue in result.issues} >= {"job_state_unknown", "job_scan_failed"}
+    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert json.loads(state_path.read_text())["state_corrupt"] == "prior unreadable state"
 
 
 def test_overlapping_health_check_does_not_run_second_heal(tmp_path: Path) -> None:

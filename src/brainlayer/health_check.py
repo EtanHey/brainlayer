@@ -588,11 +588,13 @@ def _load_state(path: Path) -> dict[str, Any]:
         state = json.loads(path.expanduser().read_text(encoding="utf-8"))
         if not isinstance(state, dict):
             raise ValueError("health-check state is not an object")
+        if "job_lifecycle" in state and not isinstance(state["job_lifecycle"], dict):
+            raise ValueError("health-check job_lifecycle state is not an object")
         return state
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:
-        return {"state_corrupt": f"health-check state unavailable or corrupt: {exc}"}
+        return {"state_corrupt": f"health-check state unavailable or corrupt: {exc}", "_state_corrupt_now": True}
 
 
 def _write_state(path: Path, payload: dict[str, Any]) -> None:
@@ -1276,7 +1278,7 @@ def _run_health_check_locked(
             }
         )
 
-    if state.get("state_corrupt"):
+    if state.get("_state_corrupt_now"):
         add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
 
     def publish_badge_state() -> None:
@@ -1302,12 +1304,15 @@ def _run_health_check_locked(
         result.slow_check_stage = stage
         result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
         add_issue("slow_check", "critical", message)
+        if state.get("state_corrupt") and not state.get("_state_corrupt_now"):
+            add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
         prior_jobs = state.get("job_lifecycle", {})
         if not isinstance(prior_jobs, dict):
             prior_jobs = {}
         for message in job_escalations(prior_jobs):
             add_issue("job_failure", "critical", message)
         state_payload: dict[str, Any] = dict(state)
+        state_payload.pop("_state_corrupt_now", None)
         state_payload["ts"] = now.isoformat()
         state_payload["slow_check"] = True
         state_payload["slow_check_stage"] = stage
@@ -1723,6 +1728,8 @@ def _run_health_check_locked(
         )
         if job_tick.scan_error:
             add_issue("job_scan_failed", "critical", job_tick.scan_error)
+            if state.get("state_corrupt") and not state.get("_state_corrupt_now"):
+                add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
         result.actions.extend(job_tick.actions)
         for message in job_tick.escalations:
             add_issue("job_failure", "critical", message)
@@ -1746,6 +1753,9 @@ def _run_health_check_locked(
         now=now,
     )
     state_payload: dict[str, Any] = dict(state)
+    state_payload.pop("_state_corrupt_now", None)
+    if not state.get("_state_corrupt_now") and (job_tick is None or not job_tick.scan_error):
+        state_payload.pop("state_corrupt", None)
     state_payload["heal_failures"] = heal_failures
     if job_tick is not None:
         state_payload["job_lifecycle"] = job_tick.state
