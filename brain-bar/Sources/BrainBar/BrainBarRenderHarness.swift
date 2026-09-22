@@ -15,18 +15,43 @@ enum BrainBarRenderHarness {
         case readable
         case unreadable
         case loading
+        case queueDraining
+        case queueBacklogged
 
         var detailsStates: [Bool] {
-            self == .loading ? [false] : [false, true]
+            switch self {
+            case .loading, .queueDraining, .queueBacklogged:
+                [false]
+            case .readable, .unreadable:
+                [false, true]
+            }
+        }
+
+        var breakpoints: [(name: String, width: CGFloat)] {
+            switch self {
+            case .queueDraining, .queueBacklogged:
+                [("default", 960)]
+            case .readable, .unreadable, .loading:
+                BrainBarRenderHarness.breakpoints
+            }
         }
 
         var collectorState: BrainBarDashboardFixture.OperatorState {
-            self == .loading ? .loading : .live
+            switch self {
+            case .loading:
+                .loading
+            case .queueDraining:
+                .queueDraining
+            case .queueBacklogged:
+                .queueBacklogged
+            case .readable, .unreadable:
+                .live
+            }
         }
 
         var observabilityResult: ObservabilityReadResult {
             switch self {
-            case .readable, .loading:
+            case .readable, .loading, .queueDraining, .queueBacklogged:
                 BrainBarDashboardFixture.readableObservabilityResult
             case .unreadable:
                 .unreadable("Database path unavailable.")
@@ -51,8 +76,9 @@ enum BrainBarRenderHarness {
             NSApplication.shared.setActivationPolicy(.prohibited)
             let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            try verifyDirectionalStateCoverage()
             for scenario in Scenario.allCases {
-                for breakpoint in breakpoints {
+                for breakpoint in scenario.breakpoints {
                     for detailsExpanded in scenario.detailsStates {
                         let artifact = try render(
                             breakpoint: breakpoint,
@@ -64,11 +90,39 @@ enum BrainBarRenderHarness {
                     }
                 }
             }
+            try verifyDirectionalStatesDiffer(in: outputDirectory)
             Darwin.exit(EXIT_SUCCESS)
         } catch {
             FileHandle.standardError.write(Data("[brainbar-render] ERROR: \(error.localizedDescription)\n".utf8))
             Darwin.exit(EXIT_FAILURE)
         }
+    }
+
+    private static func verifyDirectionalStateCoverage() throws {
+        let expectations: [(DashboardQueueStatus, BrainBarQueueDirectionPresentation)] = [
+            (.empty, .init(label: "Queue empty", symbol: "arrow.left.and.right", tone: .neutral)),
+            (.stable, .init(label: "Queue stable", symbol: "arrow.left.and.right", tone: .neutral)),
+            (.draining, .init(label: "Queue draining", symbol: "arrow.down.right", tone: .active)),
+            (.growing, .init(label: "Queue growing", symbol: "arrow.up.right", tone: .warning)),
+            (.backlogged, .init(label: "Queue backlogged", symbol: "arrow.up.right", tone: .warning)),
+            (.unavailable, .init(label: "Queue offline", symbol: "exclamationmark.triangle", tone: .error)),
+        ]
+        for (state, expected) in expectations {
+            let actual = BrainBarQueueDirectionPresentation.derive(state)
+            guard actual == expected else {
+                throw Failure("directional-state probe failed for \(state.rawValue): \(actual)")
+            }
+        }
+        print("[brainbar-render] directional-state coverage PASS: empty, stable, draining, growing, backlogged, unavailable")
+    }
+
+    private static func verifyDirectionalStatesDiffer(in outputDirectory: URL) throws {
+        let draining = outputDirectory.appendingPathComponent("dashboard-cli-default-queueDraining.png")
+        let backlogged = outputDirectory.appendingPathComponent("dashboard-cli-default-queueBacklogged.png")
+        guard try Data(contentsOf: draining) != Data(contentsOf: backlogged) else {
+            throw Failure("directional-state probe collapsed: draining and backlogged rendered byte-identically")
+        }
+        print("[brainbar-render] directional-state probe PASS: draining and backlogged differ")
     }
 
     private static func render(
@@ -123,7 +177,13 @@ enum BrainBarRenderHarness {
             throw Failure("\(name): refusing a blank or trivial render (\(emittedPNG.count) PNG bytes, \(colors) sampled colors)")
         }
 
-        return "\(name) \(Int(size.width))×\(Int(size.height)); wrote \(url.path) "
+        let cardHeights = panelState.renderedSummaryTileHeights
+        let cardReceipt = if let backups = cardHeights["backups"], let today = cardHeights["memory"] {
+            "; cards Backups=\(Int(backups.rounded()))pt Today=\(Int(today.rounded()))pt"
+        } else {
+            ""
+        }
+        return "\(name) \(Int(size.width))×\(Int(size.height))\(cardReceipt); wrote \(url.path) "
             + "(\(emittedPNG.count) bytes, \(colors) sampled colors)"
     }
 
