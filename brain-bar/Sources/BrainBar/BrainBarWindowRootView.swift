@@ -920,6 +920,9 @@ private struct BrainBarDashboardView: View {
             backlogCount: collector.stats.vectorBacklogCount,
             coveragePercent: collector.stats.vectorCoveragePercent,
             isAvailable: collector.stats.signalCoverageIsAvailable,
+            isRefreshing: collector.isSignalCoverageRefreshing,
+            lastError: collector.lastSignalCoverageError ?? collector.lastFetchError,
+            locale: locale,
             accentColor: .brainBarSignalVector,
             showsDetail: true,
             vectorNetDrainRatePerHour: collector.stats.vectorNetDrainRatePerHour,
@@ -1459,6 +1462,9 @@ private struct BrainBarDashboardView: View {
         BrainBarSignalCoveragePanel(
             stats: collector.stats,
             compact: layout.compactCards,
+            isRefreshing: collector.isSignalCoverageRefreshing,
+            lastError: collector.lastSignalCoverageError ?? collector.lastFetchError,
+            locale: locale,
             isExpanded: $panelState.signalCoverageExpanded,
             isVectorDetailExpanded: $vectorSignalDetailExpanded,
             onAnimationCompleted: panelState.disclosureAnimationDidComplete
@@ -2137,6 +2143,9 @@ enum BrainBarVectorDetailLayout {
 private struct BrainBarSignalCoveragePanel: View {
     let stats: BrainDatabase.DashboardStats
     let compact: Bool
+    let isRefreshing: Bool
+    let lastError: String?
+    let locale: Locale
     @Binding var isExpanded: Bool
     @Binding var isVectorDetailExpanded: Bool
     var onAnimationCompleted: () -> Void = {}
@@ -2152,6 +2161,9 @@ private struct BrainBarSignalCoveragePanel: View {
                 backlogCount: stats.vectorBacklogCount,
                 coveragePercent: stats.vectorCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
+                isRefreshing: isRefreshing,
+                lastError: lastError,
+                locale: locale,
                 accentColor: .brainBarSignalVector,
                 showsDetail: true,
                 vectorNetDrainRatePerHour: stats.vectorNetDrainRatePerHour,
@@ -2164,6 +2176,9 @@ private struct BrainBarSignalCoveragePanel: View {
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
+                isRefreshing: isRefreshing,
+                lastError: lastError,
+                locale: locale,
                 accentColor: .brainBarSignalFTS5,
                 showsDetail: false,
                 vectorNetDrainRatePerHour: nil,
@@ -2176,6 +2191,9 @@ private struct BrainBarSignalCoveragePanel: View {
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
+                isRefreshing: isRefreshing,
+                lastError: lastError,
+                locale: locale,
                 accentColor: .brainBarSignalTrigram,
                 showsDetail: false,
                 vectorNetDrainRatePerHour: nil,
@@ -2332,6 +2350,11 @@ struct BrainBarCoveragePresentation {
     let indexedCount: Int
     let eligibleCount: Int
     let isAvailable: Bool
+    var isRefreshing = false
+    var lastError: String? = nil
+    var locale: Locale = .current
+
+    private var isLoading: Bool { !isAvailable && (isRefreshing || lastError == nil) }
 
     var isMeasurable: Bool {
         isAvailable && eligibleCount > 0 && indexedCount >= 0 && indexedCount <= eligibleCount
@@ -2341,17 +2364,23 @@ struct BrainBarCoveragePresentation {
         isMeasurable ? eligibleCount - indexedCount : nil
     }
 
+    var missingText: String? { missingCount.map(formatted) }
+
     var percentText: String {
-        guard isAvailable else { return "Unavailable" }
+        guard isAvailable else { return isLoading ? "Computing…" : "Unavailable" }
         guard eligibleCount > 0 else { return indexedCount == 0 ? "No eligible" : "Unavailable" }
         guard isMeasurable else { return "Unavailable" }
         if indexedCount == eligibleCount { return "100%" }
+        if indexedCount > 0 && Double(indexedCount) / Double(eligibleCount) < 0.01 { return "<1%" }
         // An incomplete fraction must never round up to a complete-looking 100%.
         return "\(min(99, Int((Double(indexedCount) / Double(eligibleCount) * 100).rounded())))%"
     }
 
     var countText: String {
-        guard isAvailable else { return "Counts unavailable" }
+        guard isAvailable else {
+            if isLoading { return "Counting eligible chunks…" }
+            return lastError.map { "Counts unavailable: \($0)" } ?? "Counts unavailable"
+        }
         guard eligibleCount > 0 || indexedCount != 0 else { return "0 eligible chunks" }
         guard isMeasurable else { return "Counts disagree" }
         return "\(formatted(indexedCount)) / \(formatted(eligibleCount))"
@@ -2364,18 +2393,19 @@ struct BrainBarCoveragePresentation {
 
     func accessibilityLabel(for name: String) -> String {
         guard isMeasurable, let missingCount else {
+            if isLoading { return "\(name): Computing; counting eligible chunks" }
             switch countText {
             case "0 eligible chunks": return "\(name): No eligible chunks"
             case "Counts disagree":
                 return "\(name): Coverage counts disagree: \(formatted(indexedCount)) indexed, \(formatted(eligibleCount)) eligible"
-            default: return "\(name): Coverage counts unavailable"
+            default: return "\(name): \(countText)"
             }
         }
         return "\(name): \(percentText); \(formatted(indexedCount)) of \(formatted(eligibleCount)) eligible chunks indexed; \(formatted(missingCount)) not indexed"
     }
 
     private func formatted(_ value: Int) -> String {
-        value.formatted(.number.locale(Locale(identifier: "en_US")))
+        value.formatted(.number.locale(locale))
     }
 }
 
@@ -2386,6 +2416,9 @@ private struct BrainBarSignalCoverage: Identifiable {
     let backlogCount: Int
     let coveragePercent: Double
     let isAvailable: Bool
+    let isRefreshing: Bool
+    let lastError: String?
+    let locale: Locale
     let accentColor: Color
     let showsDetail: Bool
     let vectorNetDrainRatePerHour: Double?
@@ -2394,7 +2427,10 @@ private struct BrainBarSignalCoverage: Identifiable {
     var id: String { name }
 
     var presentation: BrainBarCoveragePresentation {
-        BrainBarCoveragePresentation(indexedCount: indexedCount, eligibleCount: totalCount, isAvailable: isAvailable)
+        BrainBarCoveragePresentation(
+            indexedCount: indexedCount, eligibleCount: totalCount, isAvailable: isAvailable,
+            isRefreshing: isRefreshing, lastError: lastError, locale: locale
+        )
     }
 
     var percentText: String {
@@ -2406,8 +2442,7 @@ private struct BrainBarSignalCoverage: Identifiable {
     }
 
     var backlogText: String {
-        guard let missingCount = presentation.missingCount else { return "unavailable" }
-        return NumberFormatter.localizedString(from: NSNumber(value: missingCount), number: .decimal)
+        presentation.missingText ?? "unavailable"
     }
 }
 
@@ -2449,8 +2484,9 @@ private struct BrainBarSignalCoverageRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if let missingCount = signal.presentation.missingCount, missingCount > 0 {
-                Text("\(missingCount.formatted(.number.locale(Locale(identifier: "en_US")))) not indexed")
+            if let missingCount = signal.presentation.missingCount, missingCount > 0,
+               let missingText = signal.presentation.missingText {
+                Text("\(missingText) not indexed")
                     .font(.system(size: 10))
                     .foregroundStyle(Color.brainBarTextSecondary)
                     .monospacedDigit()
@@ -2468,7 +2504,7 @@ private struct BrainBarSignalCoverageRow: View {
         .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: signal.clampedCoveragePercent)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(signal.presentation.accessibilityLabel(for: signal.name))
-        .help(signal.presentation.accessibilityLabel(for: signal.name))
+        .help(signal.showsDetail ? "Show Vector backlog details" : signal.presentation.accessibilityLabel(for: signal.name))
 #if DEBUG
         .onAppear {
             BrainBarCoverageLifecycleProbe.recordLabel(signal.id, signal.percentText)
@@ -3367,6 +3403,9 @@ private struct BrainBarPipelinePanelPreviewView: View {
                 BrainBarSignalCoveragePanel(
                     stats: stats,
                     compact: layout.compactCards,
+                    isRefreshing: false,
+                    lastError: nil,
+                    locale: .current,
                     isExpanded: $signalCoverageExpanded,
                     isVectorDetailExpanded: $vectorSignalDetailExpanded
                 )

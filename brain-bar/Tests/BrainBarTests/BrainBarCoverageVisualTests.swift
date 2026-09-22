@@ -19,6 +19,7 @@ final class BrainBarCoverageVisualTests: XCTestCase {
             ("default", 960, .live, true),
             ("wide", 1_280, .live, true),
             ("stale", 960, .stale, true),
+            ("loading", 960, .coverageLoading, true),
             ("details-collapsed", 960, .live, false),
         ]
         for (name, width, state, detailsExpanded) in cases {

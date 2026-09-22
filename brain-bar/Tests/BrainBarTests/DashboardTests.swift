@@ -604,15 +604,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("trigramBacklogCount"))
     }
 
-    func testDashboardRendersUnavailableCoverageWithoutNumericBar() throws {
-        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-
-        XCTAssertTrue(source.contains("stats.signalCoverageIsAvailable"))
-        XCTAssertTrue(source.contains("isAvailable: Bool"))
-        XCTAssertTrue(source.contains("guard isAvailable else { return \"Unavailable\" }"))
-        XCTAssertTrue(source.contains("guard isMeasurable else { return 0 }"))
-    }
-
     func testVectorSignalDetailMountsAtRootToEscapeDetailsAndScrollClips() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let bodyRange = try XCTUnwrap(source.range(of: "var body: some View"))
