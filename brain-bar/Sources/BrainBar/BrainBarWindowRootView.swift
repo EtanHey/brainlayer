@@ -1261,7 +1261,7 @@ private struct BrainBarDashboardView: View {
                         }
                     }
                 }
-                .frame(height: 48, alignment: .topLeading)
+                .frame(height: 52, alignment: .topLeading)
                 // Gated on agentWritesCount alone: a missing indexedToday must not hide a
                 // MEASURED brain_store count. One unknown never erases a known.
                 Group {
@@ -1300,18 +1300,17 @@ private struct BrainBarDashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Ingest")
-                        .font(.system(size: 13, weight: .semibold))
                     HStack(spacing: 8) {
+                        Text("Ingest").font(.system(size: 13, weight: .semibold))
                         operationReceiptRow(
                             label: "Last search", value: lastSearchReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
                             help: "Most recent brain_search handled by BrainBar."
                         )
-                        operationReceiptRow(
-                            label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
-                            help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
-                        )
                     }
+                    operationReceiptRow(
+                        label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
+                        help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
+                    )
                 }
                 Spacer(minLength: 8)
                 BrainBarSharedTimeframeSelector(
@@ -1372,7 +1371,6 @@ private struct BrainBarDashboardView: View {
             Text(label).lineLimit(1)
             Text(value).monospacedDigit().lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .font(.system(size: 12))
         .foregroundStyle(Color.brainBarTextSecondary)
         .brainBarCardShapeProbe("receipt.\(label)")
@@ -1424,11 +1422,12 @@ private struct BrainBarDashboardView: View {
             .frame(height: BrainBarIngestBandLayout.plotHeight)
             .overlay {
                 if isUnavailable || isEmpty {
-                    Group {
+                    HStack(spacing: 5) {
                         if isUnavailable {
+                            Circle().fill(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)).frame(width: 5, height: 5)
                             Text("Evidence unavailable")
                         } else {
-                            Text("No activity yet")
+                            Text("0 in window")
                         }
                     }
                         .font(.system(size: 11, weight: .medium))
@@ -2335,6 +2334,13 @@ private struct BrainBarSignalCoveragePanel: View {
                     signalColumn(for: signal)
                 }
             }
+            if !stats.signalCoverageIsAvailable, !isRefreshing, let lastError {
+                Text(lastError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .brainBarCardShapeProbe("coverage.reason")
+            }
         }
     }
 
@@ -2432,6 +2438,8 @@ struct BrainBarCoveragePresentation {
         guard isMeasurable else { return "Counts disagree" }
         return "\(formatted(indexedCount)) / \(formatted(eligibleCount))"
     }
+
+    var cellCountText: String { !isAvailable && !isLoading && lastError != nil ? "Counts unavailable" : countText }
 
     var fillPercent: Double {
         guard isMeasurable else { return 0 }
@@ -2536,7 +2544,7 @@ private struct BrainBarSignalCoverageRow: View {
                     .frame(height: 6)
             }
 
-            Text(signal.presentation.countText)
+            Text(signal.presentation.cellCountText)
                 .font(.system(size: compact ? 10 : 11))
                 .foregroundStyle(Color.brainBarTextSecondary)
                 .monospacedDigit()

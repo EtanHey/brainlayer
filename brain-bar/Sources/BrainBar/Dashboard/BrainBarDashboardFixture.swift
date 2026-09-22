@@ -44,6 +44,7 @@ enum BrainBarDashboardFixture {
     /// Fixed "data fetched at" instant. Renders only via `absoluteTimeString`.
     /// 2023-11-14 22:13:20 UTC — an arbitrary but constant epoch.
     static let fetchedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    static let coverageDBError = "open(\"/Users/fixture/.local/share/brainlayer/fixture.db\", 14)"
 
     private static let readableReplayDebt = BrainDatabase.ReplayDebtBreakdown(
         pendingStores: .init(
@@ -385,9 +386,9 @@ enum BrainBarDashboardFixture {
             lastDataFetchedAt = fetchedAt
             lastFetchError = "Fixture fetch failed"
         case .unavailable:
-            freshness = .error(message: "Fixture evidence unavailable", lastSuccessAgeSeconds: nil)
+            freshness = .error(message: coverageDBError, lastSuccessAgeSeconds: nil)
             lastDataFetchedAt = nil
-            lastFetchError = "Fixture evidence unavailable"
+            lastFetchError = coverageDBError
         case .partialReplayDebt:
             freshness = .live(ageSeconds: 0)
             lastDataFetchedAt = fetchedAt

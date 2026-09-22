@@ -617,7 +617,7 @@ struct SparklineChart: View {
                     )
                 }
 
-                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                if let hoveredBucket, !compact, presentation.plotsSeries, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
                     let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -684,7 +684,7 @@ struct SparklineChart: View {
                     }
                 }
 
-                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                if let hoveredBucket, !compact, presentation.plotsSeries, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
                     let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -715,6 +715,7 @@ struct SparklineChart: View {
                 if let hoveredBucket,
                    let hoverLocation,
                    !compact,
+                   presentation.plotsSeries,
                    !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), max(presentation.values.count - 1, 0))
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)

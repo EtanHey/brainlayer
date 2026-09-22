@@ -48,9 +48,24 @@ final class BrainBarCardShapeTests: XCTestCase {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
                 host.view.layoutSubtreeIfNeeded()
                 sizes[String(describing: state)] = panelState.renderedCardSizes
-                XCTAssertEqual(panelState.renderedCardSizes.keys.sorted(), cards.sorted(), "\(state) at \(width)")
+                let expected = state == .unavailable ? cards + ["coverage.reason"] : cards
+                XCTAssertEqual(panelState.renderedCardSizes.keys.sorted(), expected.sorted(), "\(state) at \(width)")
+                if state == .unavailable, let reason = panelState.renderedCardSizes["coverage.reason"] {
+                    let needed = (BrainBarDashboardFixture.coverageDBError as NSString).boundingRect(
+                        with: CGSize(width: reason.width, height: .greatestFiniteMagnitude),
+                        options: [.usesLineFragmentOrigin, .usesFontLeading],
+                        attributes: [.font: NSFont.systemFont(ofSize: 11)]
+                    )
+                    XCTAssertGreaterThanOrEqual(reason.height + 1, ceil(needed.height), "Coverage reason clipped at \(width)")
+                }
+                if state == .error, width == 760, let receipt = panelState.renderedCardSizes["receipt.Last store"] {
+                    let value = BrainBarOperationReceipt(kind: .ingest, durationMillis: 1_200, count: nil, failed: true, recordedAt: BrainBarDashboardFixture.fetchedAt).value(now: BrainBarDashboardFixture.fetchedAt)
+                    let font = NSFont.systemFont(ofSize: 12)
+                    let needed = ("Last store" as NSString).size(withAttributes: [.font: font]).width + 6 + (value as NSString).size(withAttributes: [.font: font]).width
+                    XCTAssertGreaterThanOrEqual(receipt.width + 2, needed, "Last store receipt clipped at 760")
+                }
             }
-            for card in cards {
+            for card in cards where !card.hasPrefix("receipt.") {
                 let measured = try states.map { state in
                     try XCTUnwrap(sizes[String(describing: state)]?[card], "\(card), \(state) at \(width)")
                 }
@@ -61,5 +76,4 @@ final class BrainBarCardShapeTests: XCTestCase {
             }
         }
     }
-
 }
