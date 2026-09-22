@@ -16,6 +16,8 @@ DEFAULT_DRAIN_LIVENESS_STALE_SECONDS = 300.0
 DEFAULT_ENRICH_DAILY_USD_CAP = 5.0
 ENRICH_DAILY_COST_COUNTER_FILENAME = "enrich-daily-cost.json"
 STALLED_CODE = "drain_liveness_stalled"
+PROGRESS_STALLED_CODE = "drain_progress_stalled"
+PROGRESS_UNKNOWN_CODE = "drain_progress_unknown"
 QUOTA_BLOCKED_CODE = "drain_liveness_quota_blocked"
 
 
@@ -116,16 +118,32 @@ def check_drain_liveness(
     enrich_cost_counter_path: Path | None = None,
     quota_or_throttle_blocker: str | None = None,
 ) -> BrainLayerAlarm | DrainLivenessIssue | None:
-    """Return a loud issue when a loaded drain has backlog but no fresh heartbeat."""
+    """Return a loud issue for stale heartbeat or reported progress failure."""
     queue_backlog = _positive_int(queue_count)
     enrichment_backlog_count = _positive_int(enrichment_backlog)
     backlog = queue_backlog + enrichment_backlog_count
-    if drain_loaded is not True or backlog <= 0:
+    if drain_loaded is not True:
         return None
 
     heartbeat_at = _parse_updated_at(drain_health.get("updated_at"))
     heartbeat_age = None if heartbeat_at is None else max(0.0, now.timestamp() - heartbeat_at.timestamp())
-    if heartbeat_age is not None and heartbeat_age < max(0.0, stale_seconds):
+    heartbeat_fresh = heartbeat_age is not None and heartbeat_age < max(0.0, stale_seconds)
+    progress_state = drain_health.get("state")
+    progress_alarm = progress_state == PROGRESS_UNKNOWN_CODE or (
+        queue_backlog and progress_state == PROGRESS_STALLED_CODE
+    )
+    if progress_alarm and (heartbeat_fresh or backlog <= 0):
+        reason = drain_health.get("reason") or "drain reported unhealthy progress without a reason"
+        condition = "unmeasurable" if progress_state == PROGRESS_UNKNOWN_CODE else "stalled"
+        return build_alarm(
+            progress_state,
+            f"DRAIN_PROGRESS_UNHEALTHY: {drain_label} queue progress {condition}; {reason}",
+            {"queue_count": queue_backlog, "drained_total": drain_health.get("drained_total"), "reason": reason},
+        )
+    if backlog <= 0:
+        return None
+
+    if heartbeat_fresh:
         return None
 
     blocker = None
