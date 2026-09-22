@@ -1934,6 +1934,40 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.relativeBucketLabel(for: 2), "10m-5m ago")
     }
 
+    func testSparklineChartPresentationDisclosesPartialLatestBucketToVoiceOver() {
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: [2, 5, 3],
+            lastBucketIsPartial: true
+        )
+
+        XCTAssertEqual(
+            presentation.accessibilityValue,
+            "latest bucket count 3, latest bucket is partial, trending down"
+        )
+    }
+
+    func testSparklineChartPresentationUsesRelativeLabelsForRestingAxes() {
+        let fetchedAt = Date(timeIntervalSince1970: 1_764_236_400)
+        let restingAxes = SparklineChartPresentation(
+            label: "Ingest",
+            values: Array(repeating: 1, count: 12),
+            activityWindowMinutes: 60,
+            fetchedAt: fetchedAt,
+            showsRestingAxes: true
+        )
+        let hoverOnlyAxes = SparklineChartPresentation(
+            label: "Other chart",
+            values: Array(repeating: 1, count: 12),
+            activityWindowMinutes: 60,
+            fetchedAt: fetchedAt
+        )
+
+        XCTAssertEqual(restingAxes.xAxisLabel(for: 0), "1h-55m ago")
+        XCTAssertEqual(restingAxes.xAxisLabel(for: 11), "last 5m")
+        XCTAssertEqual(hoverOnlyAxes.xAxisLabel(for: 0), hoverOnlyAxes.bucketLabel(for: 0))
+    }
+
     func testSparklineChartPresentationNamesHoverBucketsByRecency() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(

@@ -383,98 +383,6 @@ enum BrainBarIngestBandLayout {
     }
 }
 
-private struct BrainBarIngestBarChart: View {
-    let values: [Int]
-    let isAvailable: Bool
-    let timeframe: PipelineTimeframe
-    let accentColor: Color
-
-    private var presentation: SparklineChartPresentation {
-        SparklineChartPresentation(
-            label: "Ingest",
-            values: values,
-            activityWindowMinutes: timeframe.windowMinutes,
-            latestBucketName: "Current",
-            fetchedAt: .distantPast
-        )
-    }
-
-    private var xLabels: [String] {
-        switch timeframe {
-        case .live: ["−60m", "−30m", "now"]
-        case .threeHour: ["−3h", "−90m", "now"]
-        case .day: ["−24h", "−12h", "now"]
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 5) {
-            VStack(alignment: .trailing, spacing: 0) {
-                Text(DashboardMetricFormatter.axisTickString(presentation.axisMax))
-                Spacer(minLength: 0)
-                Text("0")
-            }
-            .font(.system(size: 9))
-            .monospacedDigit()
-            .foregroundStyle(Color.brainBarTextSecondary.opacity(0.8))
-            .frame(width: 24, height: BrainBarIngestBandLayout.plotHeight, alignment: .trailing)
-
-            VStack(spacing: 3) {
-                ZStack {
-                    VStack(spacing: 0) {
-                        Rectangle().fill(Color.brainBarBorderSoft).frame(height: 0.5)
-                        Spacer(minLength: 0)
-                        Rectangle().fill(Color.brainBarBorderSoft).frame(height: 0.5)
-                    }
-                    if isAvailable {
-                        GeometryReader { proxy in
-                            let maxValue = max(presentation.axisMax, 1)
-                            HStack(alignment: .bottom, spacing: 1) {
-                                ForEach(Array(values.enumerated()), id: \.offset) { index, value in
-                                    let isPartial = index == values.indices.last
-                                    let barHeight = max(
-                                        value == 0 ? 0 : 1,
-                                        CGFloat(value) / CGFloat(maxValue) * proxy.size.height
-                                    )
-                                    Rectangle()
-                                        .fill(accentColor.opacity(isPartial ? 0.4 : 0.85))
-                                        .frame(maxWidth: .infinity, minHeight: barHeight, maxHeight: barHeight)
-                                        .overlay(alignment: .top) {
-                                            if index == values.index(before: values.endIndex), values.count > 1 {
-                                                Circle()
-                                                    .fill(accentColor)
-                                                    .frame(width: 5, height: 5)
-                                                    .offset(y: -3)
-                                            }
-                                        }
-                                        .help(isPartial ? "partial" : "\(value) chunk rows")
-                                }
-                            }
-                        }
-                    } else {
-                        Text("Evidence unavailable")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.orange)
-                    }
-                }
-                .frame(height: BrainBarIngestBandLayout.plotHeight)
-
-                HStack {
-                    Text(xLabels[0])
-                    Spacer(minLength: 0)
-                    Text(xLabels[1])
-                    Spacer(minLength: 0)
-                    Text(xLabels[2])
-                }
-                .font(.system(size: 9))
-                .monospacedDigit()
-                .foregroundStyle(Color.brainBarTextSecondary.opacity(0.8))
-            }
-        }
-        .frame(minWidth: 240)
-    }
-}
-
 enum BrainBarOnePageStatusTone: Sendable, Equatable {
     case green
     case amber
@@ -1391,16 +1299,48 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
-            BrainBarIngestBarChart(
-                values: lane.values,
-                isAvailable: lane.status != .unavailable,
-                timeframe: displayedTimeframe,
-                accentColor: Color.brainBar(nsColor: lane.accentColor)
-            )
+            if lane.status != .unavailable {
+                BrainBarHeroSparkline(
+                    label: lane.sparklineLabel,
+                    values: lane.values,
+                    secondaryValues: [],
+                    primarySeriesLabel: nil,
+                    secondarySeriesLabel: nil,
+                    tertiaryValues: [],
+                    tertiarySeriesLabel: nil,
+                    latestBucketName: lane.latestBucketName,
+                    accentColor: lane.accentColor,
+                    secondaryAccentColor: nil,
+                    tertiaryAccentColor: nil,
+                    activityWindowMinutes: lane.activityWindowMinutes,
+                    fetchedAt: collector.lastDataFetchedAt ?? currentNow,
+                    pulseRevision: ingestPulseRevision(for: series),
+                    referenceValue: nil,
+                    metricDisclosure: disclosure.tooltipDisclosure,
+                    accessibilitySummary: disclosure.accessibilitySummary,
+                    lastBucketIsPartial: true,
+                    showsRestingAxes: true
+                )
+                .frame(height: BrainBarIngestBandLayout.plotHeight)
+            } else {
+                Text("Evidence unavailable")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                    .frame(maxWidth: .infinity, minHeight: BrainBarIngestBandLayout.plotHeight)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier(disclosure.accessibilityIdentifier)
         .accessibilityLabel(disclosure.accessibilitySummary)
+    }
+
+    private func ingestPulseRevision(for series: PipelineSeries) -> Int {
+        switch series {
+        case .allCommits: allCommitPulseRevision
+        case .agentStores: writePulseRevision
+        case .jsonlWatcher: watcherPulseRevision
+        case .enrichment: 0
+        }
     }
 
     private func ingestSeriesTitle(_ series: PipelineSeries) -> String {
@@ -3786,6 +3726,8 @@ private struct BrainBarHeroSparkline: View {
     let referenceValue: Int?
     let metricDisclosure: String?
     let accessibilitySummary: String?
+    var lastBucketIsPartial = false
+    var showsRestingAxes = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -3807,7 +3749,9 @@ private struct BrainBarHeroSparkline: View {
                     latestBucketName: latestBucketName,
                     fetchedAt: fetchedAt,
                     metricDisclosure: metricDisclosure,
-                    accessibilitySummary: accessibilitySummary
+                    accessibilitySummary: accessibilitySummary,
+                    lastBucketIsPartial: lastBucketIsPartial,
+                    showsRestingAxes: showsRestingAxes
                 ),
                 accentColor: accentColor,
                 secondaryAccentColor: secondaryAccentColor,

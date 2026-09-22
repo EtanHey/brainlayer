@@ -205,10 +205,11 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
 
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+        let sparkline = try sourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
         XCTAssertTrue(dashboard.contains("integerString(total, locale: locale)"))
         XCTAssertTrue(dashboard.contains("integerString(indexedToday, locale: locale)"))
         XCTAssertTrue(dashboard.contains("integerString(lane.values.reduce(0, +), locale: locale)"))
-        XCTAssertTrue(dashboard.contains("axisTickString(presentation.axisMax)"))
+        XCTAssertTrue(sparkline.contains("axisTickString(tick)"))
         for rawInterpolation in [
             "\\(collector.stats.chunkCount)",
             "\\(collector.stats.enrichedChunkCount)",
