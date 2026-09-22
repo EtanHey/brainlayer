@@ -1318,7 +1318,8 @@ private struct BrainBarDashboardView: View {
                     referenceValue: nil,
                     metricDisclosure: disclosure.tooltipDisclosure,
                     accessibilitySummary: disclosure.accessibilitySummary,
-                    lastBucketIsPartial: true
+                    lastBucketIsPartial: true,
+                    showsRestingAxes: true
                 )
                 .frame(height: BrainBarIngestBandLayout.plotHeight)
             } else {
@@ -3726,6 +3727,7 @@ private struct BrainBarHeroSparkline: View {
     let metricDisclosure: String?
     let accessibilitySummary: String?
     var lastBucketIsPartial = false
+    var showsRestingAxes = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -3748,7 +3750,8 @@ private struct BrainBarHeroSparkline: View {
                     fetchedAt: fetchedAt,
                     metricDisclosure: metricDisclosure,
                     accessibilitySummary: accessibilitySummary,
-                    lastBucketIsPartial: lastBucketIsPartial
+                    lastBucketIsPartial: lastBucketIsPartial,
+                    showsRestingAxes: showsRestingAxes
                 ),
                 accentColor: accentColor,
                 secondaryAccentColor: secondaryAccentColor,

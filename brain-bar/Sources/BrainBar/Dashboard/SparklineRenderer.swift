@@ -36,6 +36,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let metricDisclosure: String?
     let accessibilitySummary: String?
     let lastBucketIsPartial: Bool
+    let showsRestingAxes: Bool
 
     init(
         label: String,
@@ -50,7 +51,8 @@ struct SparklineChartPresentation: Equatable, Sendable {
         fetchedAt: Date = Date(),
         metricDisclosure: String? = nil,
         accessibilitySummary: String? = nil,
-        lastBucketIsPartial: Bool = false
+        lastBucketIsPartial: Bool = false,
+        showsRestingAxes: Bool = false
     ) {
         self.label = label
         self.values = values
@@ -65,6 +67,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.metricDisclosure = metricDisclosure
         self.accessibilitySummary = accessibilitySummary
         self.lastBucketIsPartial = lastBucketIsPartial
+        self.showsRestingAxes = showsRestingAxes
     }
 
     var points: [SparklineChartPoint] {
@@ -312,6 +315,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
         return "\(Self.durationLabel(seconds: olderSecondsAgo))-\(Self.durationLabel(seconds: newerSecondsAgo)) ago"
     }
 
+    func xAxisLabel(for bucket: Int) -> String {
+        showsRestingAxes ? relativeBucketLabel(for: bucket) : bucketLabel(for: bucket)
+    }
+
     func bucketRecencyLabel(for bucket: Int) -> String {
         guard !values.isEmpty else { return "no bucket" }
         let clampedBucket = min(max(bucket, 0), values.count - 1)
@@ -486,7 +493,7 @@ struct SparklineChart: View {
             if !compact {
                 HStack {
                     ForEach(xAxisBuckets, id: \.self) { bucket in
-                        Text(presentation.bucketLabel(for: bucket))
+                        Text(presentation.xAxisLabel(for: bucket))
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
@@ -497,7 +504,7 @@ struct SparklineChart: View {
                 }
                 .frame(height: 12)
                 .padding(.horizontal, 16)
-                .opacity(hoveredBucket == nil ? 0 : 1)
+                .opacity(presentation.showsRestingAxes || hoveredBucket != nil ? 1 : 0)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hoveredBucket)
             }
         }
@@ -516,7 +523,7 @@ struct SparklineChart: View {
                 if !compact {
                     ForEach(presentation.tightYAxisTicks, id: \.self) { tick in
                         let y = yPosition(forValue: tick, in: plotFrame)
-                        if tick == 0 || isHovering {
+                        if tick == 0 || presentation.showsRestingAxes || isHovering {
                             Path { p in
                                 p.move(to: CGPoint(x: plotFrame.minX, y: y))
                                 p.addLine(to: CGPoint(x: plotFrame.maxX, y: y))

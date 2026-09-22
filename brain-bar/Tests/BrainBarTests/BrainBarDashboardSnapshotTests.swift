@@ -104,6 +104,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.jsonlWatcher"))
         XCTAssertTrue(ingestBand.contains("BrainBarHeroSparkline("))
         XCTAssertTrue(ingestBand.contains("lastBucketIsPartial: true"))
+        XCTAssertTrue(ingestBand.contains("showsRestingAxes: true"))
         XCTAssertFalse(source.contains("private struct BrainBarIngestBarChart"))
 
         let summary = DashboardFlowSummary.derive(
