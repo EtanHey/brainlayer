@@ -99,6 +99,44 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(persisted.enrichmentBackend, "mlx")
         XCTAssertTrue(persisted.showRetrievalTools)
     }
+
+    @MainActor
+    func testSidebarSelectionDoesNotWriteAndReachesEveryJobGroup() throws {
+        let (root, store, _) = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let before = try Data(contentsOf: store.configURL)
+        let navigation = BrainBarSettingsNavigation()
+        XCTAssertEqual(navigation.selected, .general)
+        for section in BrainBarSettingsSection.allCases {
+            navigation.select(section)
+            XCTAssertEqual(navigation.selected, section)
+            XCTAssertEqual(try Data(contentsOf: store.configURL), before)
+        }
+        XCTAssertEqual(
+            Set(BrainBarSettingsSection.jobs.groups + BrainBarSettingsSection.backups.groups),
+            Set(BrainLayerLaunchdJobGroup.allCases)
+        )
+        XCTAssertEqual(BrainBarSettingsSection.advanced.advancedJobs, BrainLayerLaunchdJobGroup.advancedJobs)
+    }
+
+    @MainActor
+    func testReshowReloadKeepsUncommittedSettingsDrafts() throws {
+        let (root, store, viewModel) = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        viewModel.backendDraft = "draft-backend"
+        viewModel.onePasswordReference = "op://draft/reference"
+        viewModel.pendingPlainAPIKey = "draft-secret"
+        var external = try store.loadDocument().config
+        external.showRetrievalTools = true
+        try store.save(external)
+
+        XCTAssertTrue(viewModel.reloadConfigFromDisk(preservingDrafts: true))
+        XCTAssertTrue(viewModel.config.showRetrievalTools)
+        XCTAssertEqual(viewModel.backendDraft, "draft-backend")
+        XCTAssertEqual(viewModel.onePasswordReference, "op://draft/reference")
+        XCTAssertEqual(viewModel.pendingPlainAPIKey, "draft-secret")
+    }
+
     @MainActor
     func testFailedSaveLeavesDisplayedConfigAtLastPersistedValue() throws {
         let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)

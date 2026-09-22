@@ -163,7 +163,11 @@ enum BrainBarRenderHarness {
         let store = BrainLayerConfigStore(configURL: configURL)
         try store.save(.defaultConfig)
 
-        for breakpoint in breakpoints {
+        let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool)] =
+            BrainBarSettingsSection.allCases.map { ($0, false) } + [(.general, true)]
+        for scenario in settingsScenarios {
+          for breakpoint in breakpoints {
+            if scenario.receipt { try store.save(.defaultConfig) }
             let viewModel = BrainBarSettingsViewModel(
                 store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
@@ -173,14 +177,22 @@ enum BrainBarRenderHarness {
                 refreshStatusOnLoad: false,
                 initialObservabilityResult: .unreadable("Fixture backup status unavailable.")
             )
+            if scenario.receipt {
+                viewModel.backendDraft = "mlx"
+                viewModel.commitBackendDraft()
+                guard viewModel.lastSaveReceipt != nil else {
+                    throw Failure("Settings receipt fixture did not produce a save receipt")
+                }
+            }
             let panelState = BrainBarDashboardPanelState()
             let view = BrainBarUnifiedWindowPreview.make(
                 collector: BrainBarDashboardFixture.makeCollector(),
                 settingsViewModel: viewModel,
-                panelState: panelState
+                panelState: panelState,
+                section: scenario.section
             )
             let size = NSSize(width: breakpoint.width, height: panelState.fittingHeight)
-            let name = "unified-settings-\(breakpoint.name)"
+            let name = "unified-settings-\(scenario.receipt ? "receipt" : scenario.section.rawValue)-\(breakpoint.name)"
             let host = NSHostingView(rootView: view)
             host.frame = NSRect(origin: .zero, size: size)
             settle(host)
@@ -198,6 +210,7 @@ enum BrainBarRenderHarness {
                 throw Failure("\(name): refusing blank render (\(png.count) bytes, \(colors) colors)")
             }
             print("[brainbar-render] \(name) \(Int(size.width))×\(Int(size.height)); wrote \(url.path) (\(png.count) bytes, \(colors) sampled colors)")
+          }
         }
     }
 
