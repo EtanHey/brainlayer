@@ -223,6 +223,7 @@ struct BrainBarQueueDirectionPresentation: Equatable {
 
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
+    var receiptStore: BrainBarOperationReceipts = .shared
     @StateObject private var standalonePanelState = BrainBarDashboardPanelState()
     let hotkeyStatus: String
     var dbPath: String? = nil
@@ -238,6 +239,7 @@ private struct BrainBarDashboardContent: View {
         } else {
             BrainBarDashboardView(
                 collector: collector,
+                receiptStore: receiptStore,
                 hotkeyStatus: hotkeyStatus,
                 dbPath: dbPath,
                 observabilityResult: observabilityResult,
@@ -859,6 +861,7 @@ private struct BrainBarAppControlMenu: View {
 
 private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
+    let receiptStore: BrainBarOperationReceipts
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
@@ -881,6 +884,9 @@ private struct BrainBarDashboardView: View {
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
     @State private var vectorDetailHeight: CGFloat = 0
     @State private var ingestHelpPresented = false
+    @State private var lastSearchReceipt: BrainBarOperationReceipt?
+    @State private var lastIngestReceipt: BrainBarOperationReceipt?
+    @State private var receiptDisplayNow = Date()
 
     private var pipelineStats: BrainDatabase.DashboardStats {
         guard selectedTimeframe != .live,
@@ -1039,9 +1045,29 @@ private struct BrainBarDashboardView: View {
         }
 #endif
         .onAppear {
+            receiptStore.reload()
+            receiptDisplayNow = referenceNow ?? Date()
+            lastSearchReceipt = receiptStore.search
+            lastIngestReceipt = receiptStore.ingest
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
             previousWriteBuckets = collector.stats.recentAgentWriteBuckets
             previousWatcherBuckets = collector.stats.recentWatcherWriteBuckets
+        }
+        .onReceive(NotificationCenter.default.publisher(for: BrainBarOperationReceipts.changed)
+            .receive(on: DispatchQueue.main)) { _ in
+            lastSearchReceipt = receiptStore.search
+            lastIngestReceipt = receiptStore.ingest
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            receiptStore.reload()
+            if lastSearchReceipt != receiptStore.search { lastSearchReceipt = receiptStore.search }
+            if lastIngestReceipt != receiptStore.ingest { lastIngestReceipt = receiptStore.ingest }
+            if referenceNow == nil {
+                let now = Date()
+                if Int(now.timeIntervalSince1970 / 60) != Int(receiptDisplayNow.timeIntervalSince1970 / 60) {
+                    receiptDisplayNow = now
+                }
+            }
         }
         .onChange(of: collector.stats.recentActivityBuckets) { _, newBuckets in
             if BrainBarPipelinePulseGate.shouldPulse(
@@ -1253,9 +1279,16 @@ private struct BrainBarDashboardView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Ingest")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Each chart has its own scale")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.brainBarTextSecondary)
+                    HStack(spacing: 8) {
+                        operationReceiptRow(
+                            label: "Last search", value: lastSearchReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
+                            help: "Most recent brain_search handled by BrainBar."
+                        )
+                        operationReceiptRow(
+                            label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
+                            help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
+                        )
+                    }
                 }
                 Spacer(minLength: 8)
                 BrainBarSharedTimeframeSelector(
@@ -1284,7 +1317,7 @@ private struct BrainBarDashboardView: View {
                 }
                 .help("How ingest charts are measured")
                 .popover(isPresented: $ingestHelpPresented) {
-                    Text("Source-time charts count chunk rows. Watcher counts unique chunk IDs by ingest time. The final bucket is partial.")
+                    Text("Each chart has its own scale. Source-time charts count chunk rows. Watcher counts unique chunk IDs by ingest time. The final bucket is partial.")
                         .font(.system(size: 11))
                         .padding(12)
                         .frame(width: 260)
@@ -1308,6 +1341,17 @@ private struct BrainBarDashboardView: View {
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
         .accessibilityIdentifier("brainbar.dashboard.tile.ingest")
+    }
+
+    private func operationReceiptRow(label: String, value: String, help: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+            Text(value).monospacedDigit().lineLimit(1)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(Color.brainBarTextSecondary)
+        .accessibilityElement(children: .combine)
+        .help(help)
     }
 
     private func ingestSeriesChart(_ series: PipelineSeries) -> some View {
@@ -3053,6 +3097,7 @@ enum BrainBarDashboardPreview {
 
     static func make(
         collector: StatsCollector,
+        receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts(),
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
         now: Date? = nil,
@@ -3066,6 +3111,7 @@ enum BrainBarDashboardPreview {
                 BrainBarAppBackground()
                 BrainBarDashboardContent(
                     collector: collector,
+                    receiptStore: receiptStore,
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
                     referenceNow: now,
