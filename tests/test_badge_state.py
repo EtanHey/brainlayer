@@ -90,9 +90,7 @@ def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: 
     )
     caplog.set_level("INFO", logger="brainlayer.health_check")
     badge_path = tmp_path / "badge-state.json"
-    (tmp_path / "health-state.json").write_text(
-        json.dumps({"job_lifecycle": {"com.brainlayer.watch": {"attempts": 3, "failed_heals": False}}})
-    )
+    (tmp_path / "health-state.json").write_text('{"job_lifecycle":{"com.brainlayer.watch":{"attempts":3}}}')
     result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
     document = json.loads(badge_path.read_text(encoding="utf-8"))
     assert "job_failure" in [issue.code for issue in result.issues]
