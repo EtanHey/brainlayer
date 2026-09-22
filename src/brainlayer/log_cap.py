@@ -6,18 +6,27 @@ import argparse
 import os
 import plistlib
 import stat
+import sys
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 DEFAULT_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_KEEP_BYTES = 2 * 1024 * 1024
 
 
-def _job_log_paths(agents_dir: Path) -> set[Path]:
+def _job_log_paths(agents_dir: Path) -> tuple[set[Path], list[str]]:
     paths: set[Path] = set()
+    errors: list[str] = []
     for pattern in ("com.brainlayer.*.plist", "com.etanhey.brainlayer-*.plist"):
         for agent in agents_dir.glob(pattern):
-            with agent.open("rb") as stream:
-                plist = plistlib.load(stream)
+            try:
+                with agent.open("rb") as stream:
+                    plist = plistlib.load(stream)
+                if not isinstance(plist, dict):
+                    raise ValueError("plist root is not a dictionary")
+            except (OSError, ValueError, ExpatError) as exc:
+                errors.append(f"{agent.stem}: {type(exc).__name__}: {exc}")
+                continue
             if plist.get("Label") != agent.stem:
                 continue
             for key in ("StandardOutPath", "StandardErrorPath"):
@@ -26,7 +35,7 @@ def _job_log_paths(agents_dir: Path) -> set[Path]:
                     path = Path(value).expanduser()
                     if path.is_absolute():
                         paths.add(path)
-    return paths
+    return paths, errors
 
 
 def _cap_file(path: Path, *, max_bytes: int, keep_bytes: int) -> bool:
@@ -72,13 +81,15 @@ def cap_job_logs(
         raise ValueError("keep_bytes must be positive and less than max_bytes")
     if not agents_dir.is_dir():
         raise FileNotFoundError(f"LaunchAgents directory missing: {agents_dir}")
-    paths = _job_log_paths(agents_dir)
+    paths, errors = _job_log_paths(agents_dir)
     if not paths:
-        raise RuntimeError(f"no BrainLayer job log paths found in {agents_dir}")
+        errors.insert(0, f"no BrainLayer job log paths found in {agents_dir}")
     trimmed: list[Path] = []
     for path in sorted(paths):
         if _cap_file(path, max_bytes=max_bytes, keep_bytes=keep_bytes):
             trimmed.append(path)
+    if errors:
+        raise RuntimeError("\n".join(errors))
     return trimmed
 
 
@@ -88,7 +99,11 @@ def main() -> None:
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     parser.add_argument("--keep-bytes", type=int, default=DEFAULT_KEEP_BYTES)
     args = parser.parse_args()
-    cap_job_logs(args.agents_dir, max_bytes=args.max_bytes, keep_bytes=args.keep_bytes)
+    try:
+        cap_job_logs(args.agents_dir, max_bytes=args.max_bytes, keep_bytes=args.keep_bytes)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 
 import os
 import plistlib
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -128,6 +130,68 @@ def test_cap_reports_missing_job_inventory(tmp_path):
     agents_dir.mkdir()
     with pytest.raises(RuntimeError, match="no BrainLayer job log paths"):
         cap_job_logs(agents_dir)
+
+
+@pytest.mark.parametrize("bad_kind", ["malformed", "unreadable"])
+def test_bad_plist_reports_error_after_capping_valid_logs(tmp_path, bad_kind):
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    log_path = tmp_path / "valid.err.log"
+    log_path.write_bytes(b"v" * 200)
+    _agent(agents_dir, "valid", log_path)
+    bad = agents_dir / "com.brainlayer.bad.plist"
+    if bad_kind == "malformed":
+        bad.write_bytes(b'<?xml version="1.0"?><plist><dict>')
+    else:
+        bad.mkdir()  # Opening this matching path raises IsADirectoryError.
+
+    with pytest.raises(RuntimeError, match=r"com\.brainlayer\.bad: (ExpatError|IsADirectoryError)"):
+        cap_job_logs(agents_dir, max_bytes=100, keep_bytes=50)
+    assert log_path.read_bytes() == b"v" * 50
+
+
+def test_bad_only_plist_still_reports_missing_valid_inventory(tmp_path):
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "com.brainlayer.bad.plist").write_bytes(b"not a plist")
+
+    with pytest.raises(RuntimeError, match="no BrainLayer job log paths") as error:
+        cap_job_logs(agents_dir)
+    assert "com.brainlayer.bad: InvalidFileException" in str(error.value)
+
+
+def test_non_plist_siblings_are_not_parsed(tmp_path):
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    log_path = tmp_path / "valid.err.log"
+    log_path.write_bytes(b"v" * 200)
+    _agent(agents_dir, "valid", log_path)
+    for suffix in (".plist.loaded-keg", ".plist.bak-20260922", ".plist.PAUSED-20260922"):
+        (agents_dir / f"com.brainlayer.bad{suffix}").write_bytes(b"not a plist")
+
+    assert cap_job_logs(agents_dir, max_bytes=100, keep_bytes=50) == [log_path]
+
+
+def test_cli_caps_valid_log_and_exits_nonzero_for_each_bad_plist(tmp_path):
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    log_path = tmp_path / "valid.err.log"
+    log_path.write_bytes(b"v" * 200)
+    _agent(agents_dir, "valid", log_path)
+    for name in ("bad-one", "bad-two"):
+        (agents_dir / f"com.brainlayer.{name}.plist").write_bytes(b"not a plist")
+
+    script = Path(__file__).resolve().parents[1] / "src/brainlayer/log_cap.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--agents-dir", str(agents_dir), "--max-bytes", "100", "--keep-bytes", "50"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "com.brainlayer.bad-one: InvalidFileException" in result.stderr
+    assert "com.brainlayer.bad-two: InvalidFileException" in result.stderr
+    assert log_path.read_bytes() == b"v" * 50
 
 
 def test_cap_job_is_installed_with_the_all_mode():
