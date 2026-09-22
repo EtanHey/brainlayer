@@ -1369,9 +1369,10 @@ private struct BrainBarDashboardView: View {
 
     private func operationReceiptRow(label: String, value: String, help: String) -> some View {
         HStack(spacing: 6) {
-            Text(label)
+            Text(label).lineLimit(1)
             Text(value).monospacedDigit().lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .font(.system(size: 12))
         .foregroundStyle(Color.brainBarTextSecondary)
         .brainBarCardShapeProbe("receipt.\(label)")

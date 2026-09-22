@@ -310,6 +310,16 @@ enum BrainBarDashboardFixture {
         ]
     )
 
+    static func makeReceiptStore(_ operatorState: OperatorState) -> BrainBarOperationReceipts {
+        let store = BrainBarOperationReceipts()
+        if operatorState == .live || operatorState == .error {
+            let failed = operatorState == .error
+            store.record(.init(kind: .search, durationMillis: 142, count: failed ? nil : 10, failed: failed, recordedAt: fetchedAt))
+            store.record(.init(kind: .ingest, durationMillis: 1_200, count: failed ? nil : 1, failed: failed, recordedAt: fetchedAt))
+        }
+        return store
+    }
+
     static var state: PipelineState {
         PipelineState.derive(daemon: daemon, stats: stats)
     }

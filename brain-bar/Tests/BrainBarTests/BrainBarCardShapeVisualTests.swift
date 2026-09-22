@@ -24,6 +24,7 @@ final class BrainBarCardShapeVisualTests: XCTestCase {
                 panelState.signalCoverageExpanded = true
                 let view = BrainBarDashboardPreview.make(
                     collector: BrainBarDashboardFixture.makeCollector(state),
+                    receiptStore: BrainBarDashboardFixture.makeReceiptStore(state),
                     observabilityResult: state == .unavailable ? .unreadable("Fixture unavailable") : (state == .empty ? BrainBarDashboardFixture.emptyObservabilityResult : BrainBarDashboardFixture.readableObservabilityResult),
                     now: BrainBarDashboardFixture.fetchedAt,
                     panelState: panelState
