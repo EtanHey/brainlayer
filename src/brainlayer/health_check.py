@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -583,11 +584,14 @@ def _enrichment_backlog(
 
 def _load_state(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.expanduser().read_text(encoding="utf-8"))
+        state = json.loads(path.expanduser().read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("health-check state is not an object")
+        return state
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, ValueError) as exc:
+        return {"state_corrupt": f"health-check state unavailable or corrupt: {exc}"}
 
 
 def _write_state(path: Path, payload: dict[str, Any]) -> None:
@@ -1213,6 +1217,43 @@ def run_health_check(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> HealthCheckResult:
+    lock_path = Path(f"{config.state_path.expanduser()}.lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = lock_path.open("a+")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            lock.close()
+            raise
+    except OSError as exc:
+        return HealthCheckResult(
+            checked_at=now_fn().isoformat(),
+            ok=False,
+            issues=[HealthIssue("health_check_busy", "critical", f"health-check state lock unavailable: {exc}")],
+        )
+    try:
+        return _run_health_check_locked(
+            config,
+            ps_output_fn=ps_output_fn,
+            socket_request_fn=socket_request_fn,
+            command_runner=command_runner,
+            now_fn=now_fn,
+            monotonic_fn=monotonic_fn,
+        )
+    finally:
+        lock.close()
+
+
+def _run_health_check_locked(
+    config: HealthCheckConfig,
+    *,
+    ps_output_fn: Callable[[], str | None] = _default_ps_output,
+    socket_request_fn: SocketRequestFn = send_brainbar_search_canary,
+    command_runner: CommandRunner = _default_command_runner,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> HealthCheckResult:
     started_monotonic = monotonic_fn()
     deadline_at = started_monotonic + max(1.0, config.max_duration_seconds)
     now = now_fn()
@@ -1233,6 +1274,9 @@ def run_health_check(
                 "message": message[:500],
             }
         )
+
+    if state.get("state_corrupt"):
+        add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
 
     def publish_badge_state() -> None:
         if config.badge_state_path is None:

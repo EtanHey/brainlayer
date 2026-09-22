@@ -1596,7 +1596,7 @@ def test_health_check_surfaces_disabled_launchd_action(tmp_path, monkeypatch):
 
 
 def test_run_health_check_references_mode_d_detector_helpers():
-    source = inspect.getsource(health_check.run_health_check)
+    source = inspect.getsource(health_check._run_health_check_locked)
 
     for helper_name in ("_pause_sentinel_state", "_source_recent", "_queue_stats", "_path_age_seconds"):
         assert helper_name in source

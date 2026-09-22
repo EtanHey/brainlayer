@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sqlite3
@@ -97,6 +98,24 @@ def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: 
     assert document["alerts"]["active"][-1]["message"] == message
     assert document["alerts"]["badge_on"] is True
     assert "condition=job_failure" in caplog.text and "timestamp=" in caplog.text
+
+
+def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path) -> None:
+    (tmp_path / "health-state.json").write_text("{broken", encoding="utf-8")
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path)
+    assert any(issue.code == "job_state_unknown" for issue in result.issues)
+    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert "state_corrupt" in json.loads((tmp_path / "health-state.json").read_text())
+
+
+def test_overlapping_health_check_does_not_run_second_heal(tmp_path: Path) -> None:
+    lock_path = tmp_path / "health-state.json.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        result = _run_minimal_health_check(tmp_path, tmp_path / "badge-state.json")
+    assert any(issue.code == "health_check_busy" for issue in result.issues)
+    assert result.actions == []
 
 
 def test_badge_state_path_is_db_relative_with_environment_override(tmp_path: Path) -> None:
