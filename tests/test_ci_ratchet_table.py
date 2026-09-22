@@ -1180,6 +1180,13 @@ def test_the_signature_job_verifies_the_keg_with_the_release_script() -> None:
     assert "brew install etanhey/layers/brainlayer" in install
 
 
+def test_the_signature_job_fails_when_loadability_fails_with_valid_signatures() -> None:
+    verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]["run"]
+    assert '[[ "$rc" -ne 0 && "$invalid" -eq 0 ]]' in verify
+    assert "verdict=load_failed" in verify
+    assert "LOAD_FAILED" in verify
+
+
 def test_the_signature_job_is_trigger_gated_and_not_charged_to_every_pr() -> None:
     """A GitHub macOS runner bills at ~10x Linux minutes and this job builds a venv from source.
 
@@ -1250,7 +1257,7 @@ def test_a_non_zero_brew_install_does_not_fail_the_parity_job_by_itself() -> Non
     install = workflow_steps("signatures")["Install the published BrainLayer keg from the tap"]
     assert install["continue-on-error"] is True
     # The verdict is still able to fail it -- otherwise this would be a fail-open.
-    fail_step = workflow_steps("signatures")["Fail this job on an invalid signature"]
+    fail_step = workflow_steps("signatures")["Fail this job on invalid signatures or loadability"]
     assert "steps.verify.outputs.verdict != 'clean'" in fail_step["if"]
 
 
@@ -1328,7 +1335,7 @@ def test_the_signature_job_fails_on_anything_but_a_clean_measurement() -> None:
     which reads as a pass. AGENTS.md blocks release on an invalid `*.so`/`*.dylib`; a sweep that
     never happened proves no less than nothing.
     """
-    fail_step = workflow_steps("signatures")["Fail this job on an invalid signature"]
+    fail_step = workflow_steps("signatures")["Fail this job on invalid signatures or loadability"]
     assert "steps.verify.outputs.verdict != 'clean'" in fail_step["if"]
     assert "exit 1" in fail_step["run"]
     # ...and the two cases are distinguishable in the log, not collapsed into one message.

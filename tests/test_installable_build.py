@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import _ctypes
 import json
 import os
 import plistlib
@@ -2809,6 +2810,11 @@ def test_launchd_installer_renders_homebrew_opt_symlink_instead_of_cellar_versio
     launchd_dir = cellar_root / "libexec" / "lib" / "python3.12" / "site-packages" / "brainlayer" / "launchd"
     _copy_packaged_launchd(launchd_dir)
     native_file = _populate_fake_keg_native_root(cellar_root)
+    # This installer success fixture now passes the release gate's real dlopen pass as well.
+    shutil.copy2(_ctypes.__file__, native_file)
+    keg_python = cellar_root / "libexec" / "venv" / "bin" / "python"
+    keg_python.parent.mkdir(parents=True)
+    keg_python.symlink_to(sys.executable)
     opt_root.parent.mkdir(parents=True)
     opt_root.symlink_to(cellar_root)
     fake_bin = tmp_path / "bin"
