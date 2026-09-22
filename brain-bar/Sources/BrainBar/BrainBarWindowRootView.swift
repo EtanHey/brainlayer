@@ -1238,38 +1238,46 @@ private struct BrainBarDashboardView: View {
         let counts = onePagePresentation
         return summaryTile(title: "Today", identifier: "memory") {
             VStack(alignment: .leading, spacing: 5) {
-                if let indexedToday = counts.indexedToday {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(DashboardMetricFormatter.integerString(indexedToday, locale: locale))
-                            .font(.system(size: 28, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                        Text("indexed today")
-                            .font(.system(size: 13))
+                Group {
+                    if let indexedToday = counts.indexedToday {
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(DashboardMetricFormatter.integerString(indexedToday, locale: locale))
+                                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text("indexed today")
+                                .font(.system(size: 13))
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("—")
+                                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                            Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                                .lineLimit(1)
+                        }
                     }
-                } else {
-                    Text("—")
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                        .lineLimit(1)
                 }
+                .frame(height: 48, alignment: .topLeading)
                 // Gated on agentWritesCount alone: a missing indexedToday must not hide a
                 // MEASURED brain_store count. One unknown never erases a known.
-                if let writes = counts.agentWritesCount {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(DashboardMetricFormatter.integerString(writes, locale: locale))
-                            .font(.system(size: 20, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                        Text("brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
-                            .font(.system(size: 13))
+                Group {
+                    if let writes = counts.agentWritesCount {
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(DashboardMetricFormatter.integerString(writes, locale: locale))
+                                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text("brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
+                                .font(.system(size: 13))
+                        }
+                    } else {
+                        Text(counts.agentWritesText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                            .lineLimit(1)
                     }
-                } else {
-                    Text(counts.agentWritesText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                        .lineLimit(1)
                 }
+                .frame(height: 26, alignment: .topLeading)
             }
             if let total = counts.totalIndexedChunks {
                 Text("\(DashboardMetricFormatter.integerString(total, locale: locale)) total")
