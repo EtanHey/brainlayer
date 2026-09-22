@@ -2070,7 +2070,7 @@ def digest(
                 result = digest_content(
                     content=text,
                     store=store,
-                    embed_fn=model.embed,
+                    embed_fn=model.embed_query,
                     title=title,
                     project=project,
                     participants=participant_list,
