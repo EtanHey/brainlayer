@@ -169,6 +169,32 @@ private struct BrainBarHeaderHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+enum BrainBarQueueDirectionTone: Equatable {
+    case neutral
+    case active
+    case warning
+    case error
+}
+
+struct BrainBarQueueDirectionPresentation: Equatable {
+    let label: String
+    let symbol: String
+    let tone: BrainBarQueueDirectionTone
+
+    static func derive(_ status: DashboardQueueStatus) -> Self {
+        switch status {
+        case .empty, .stable:
+            Self(label: "Queue \(status.label)", symbol: "arrow.left.and.right", tone: .neutral)
+        case .draining:
+            Self(label: "Queue \(status.label)", symbol: "arrow.down.right", tone: .active)
+        case .growing, .backlogged:
+            Self(label: "Queue \(status.label)", symbol: "arrow.up.right", tone: .warning)
+        case .unavailable:
+            Self(label: "Queue \(status.label)", symbol: "exclamationmark.triangle", tone: .error)
+        }
+    }
+}
+
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
     @StateObject private var standalonePanelState = BrainBarDashboardPanelState()
@@ -293,7 +319,7 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
         case .offline:
             health = ("Needs attention", "Watcher is offline.", .red)
         case .stalled:
-            health = ("Needs attention", "Watcher is running, but pending work is not moving.", .red)
+            health = ("Needs attention", "Watcher flow needs attention.", .red)
         default:
             if flow.ingress.status == .unavailable {
                 health = ("Needs attention", "Ingest health is unavailable.", .red)
@@ -1050,6 +1076,11 @@ private struct BrainBarDashboardView: View {
         .onPreferenceChange(BrainBarDashboardHeightKey.self) { height in
             panelState.dashboardHeight = height
         }
+#if DEBUG
+        .onPreferenceChange(BrainBarSummaryTileHeightKey.self) { heights in
+            panelState.renderedSummaryTileHeights = heights
+        }
+#endif
         .onAppear {
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
             previousWriteBuckets = collector.stats.recentAgentWriteBuckets
@@ -1102,6 +1133,7 @@ private struct BrainBarDashboardView: View {
 
     private var statusStrip: some View {
         let status = onePagePresentation.status
+        let queueDirection = BrainBarQueueDirectionPresentation.derive(flowSummary.queue.status)
         let statusColor: Color = switch status.tone {
         case .green: .green
         case .amber: .orange
@@ -1111,21 +1143,19 @@ private struct BrainBarDashboardView: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 9, height: 9)
+            Text(status.headline)
+                .font(.system(size: 13, weight: .semibold))
             if let reason = status.reason {
-                Text(reason)
-                    .font(.system(size: 13, weight: .semibold))
+                Text("· \(reason)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary)
                     .lineLimit(1)
-                Spacer(minLength: 8)
-                Text(status.headline)
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(statusColor.opacity(0.16)))
-            } else {
-                Text(status.headline)
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer(minLength: 0)
             }
+            Spacer(minLength: 8)
+            Label(queueDirection.label, systemImage: queueDirection.symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(queueDirectionColor(queueDirection.tone))
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1136,6 +1166,19 @@ private struct BrainBarDashboardView: View {
             )
         )
         .accessibilityIdentifier("brainbar.dashboard.status")
+    }
+
+    private func queueDirectionColor(_ tone: BrainBarQueueDirectionTone) -> Color {
+        switch tone {
+        case .neutral:
+            .brainBarTextSecondary
+        case .active:
+            .brainBarAccent
+        case .warning:
+            .orange
+        case .error:
+            .red
+        }
     }
 
     @ViewBuilder
@@ -1199,7 +1242,6 @@ private struct BrainBarDashboardView: View {
                         .lineLimit(1)
                 }
             }
-            Spacer(minLength: 3)
             if let total = counts.totalIndexedChunks {
                 Text("\(DashboardMetricFormatter.integerString(total, locale: locale)) total")
                     .font(.system(size: 11))
@@ -1324,11 +1366,21 @@ private struct BrainBarDashboardView: View {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
             content()
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
+#if DEBUG
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BrainBarSummaryTileHeightKey.self,
+                    value: [identifier: proxy.size.height]
+                )
+            }
+        )
+#endif
         .accessibilityIdentifier("brainbar.dashboard.tile.\(identifier)")
     }
 
@@ -1791,6 +1843,16 @@ private struct BrainBarDashboardHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
+
+#if DEBUG
+private struct BrainBarSummaryTileHeightKey: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: max)
+    }
+}
+#endif
 
 private struct BrainBarSnapshotFreshnessBanner: View {
     let state: SnapshotFreshnessState

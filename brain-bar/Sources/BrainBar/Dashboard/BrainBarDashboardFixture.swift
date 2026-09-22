@@ -33,6 +33,8 @@ enum BrainBarDashboardFixture {
         case watcherUnknown
         case watcherRunningNoRecentFlow
         case watcherStalledWithPendingWork
+        case queueDraining
+        case queueBacklogged
     }
 
     /// Fixed "data fetched at" instant. Renders only via `absoluteTimeString`.
@@ -181,6 +183,19 @@ enum BrainBarDashboardFixture {
         watcherProcessProbeResult: .running(pid: 4242),
         watcherRecentDistinctChunkCount: 0
     )
+    static let queueDrainingStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .running(pid: 4242),
+        watcherRecentDistinctChunkCount: 0,
+        recentEnrichmentBuckets: [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6]
+    )
+    static let queueBackloggedStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .running(pid: 4242),
+        watcherRecentDistinctChunkCount: 0,
+        recentEnrichmentBuckets: Array(repeating: 0, count: 12),
+        recentEnrichmentFiveMinuteCount: 0
+    )
 
     static func makeStats(activityWindowMinutes: Int) -> DashboardStats {
         makeStats(
@@ -193,7 +208,9 @@ enum BrainBarDashboardFixture {
         replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
         activityWindowMinutes: Int = 60,
         watcherProcessProbeResult: WatcherProcessProbeResult = .running(pid: 4242),
-        watcherRecentDistinctChunkCount: Int = 14
+        watcherRecentDistinctChunkCount: Int = 14,
+        recentEnrichmentBuckets: [Int] = [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6],
+        recentEnrichmentFiveMinuteCount: Int = 22
     ) -> DashboardStats {
         let windowScale = max(activityWindowMinutes / 60, 1)
         let watcherBuckets = watcherRecentDistinctChunkCount == 0
@@ -211,9 +228,9 @@ enum BrainBarDashboardFixture {
             recentActivityBuckets: [3, 5, 2, 8, 6, 4, 9, 7, 5, 6, 8, 4].map { $0 * windowScale },
             recentAgentWriteBuckets: [1, 2, 0, 3, 2, 1, 4, 3, 1, 2, 3, 1].map { $0 * windowScale },
             recentWatcherWriteBuckets: watcherBuckets,
-            recentEnrichmentBuckets: [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6].map { $0 * windowScale },
+            recentEnrichmentBuckets: recentEnrichmentBuckets.map { $0 * windowScale },
             recentWriteFiveMinuteCount: 18,
-            recentEnrichmentFiveMinuteCount: 22,
+            recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: 12,
             liveWindowMinutes: 1,
@@ -282,6 +299,10 @@ enum BrainBarDashboardFixture {
             fixtureStats = watcherRunningNoRecentFlowStats
         case .watcherStalledWithPendingWork:
             fixtureStats = watcherStalledWithPendingWorkStats
+        case .queueDraining:
+            fixtureStats = queueDrainingStats
+        case .queueBacklogged:
+            fixtureStats = queueBackloggedStats
         case .loading, .live, .stale, .error:
             fixtureStats = stats
         }
@@ -297,7 +318,9 @@ enum BrainBarDashboardFixture {
              .watcherOffline,
              .watcherUnknown,
              .watcherRunningNoRecentFlow,
-             .watcherStalledWithPendingWork:
+             .watcherStalledWithPendingWork,
+             .queueDraining,
+             .queueBacklogged:
             freshness = .live(ageSeconds: 0)
             lastDataFetchedAt = fetchedAt
             lastFetchError = nil

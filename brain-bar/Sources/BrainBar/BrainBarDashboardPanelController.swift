@@ -87,6 +87,9 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var searchOverlayPresented = false
     @Published var graphPresented = false
     @Published private(set) var disclosureAnimationRevision = 0
+#if DEBUG
+    var renderedSummaryTileHeights: [String: CGFloat] = [:]
+#endif
     var fittingHeight: CGFloat {
         max(
             BrainBarDisclosureAnimation.windowHeight(
