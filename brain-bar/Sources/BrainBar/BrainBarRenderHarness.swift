@@ -264,7 +264,7 @@ enum BrainBarRenderHarness {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded || afterCollapse
         panelState.attentionExpanded = scenario == .attentionExpanded || scenario == .stale
-        panelState.signalCoverageExpanded = scenario == .vectorAt100
+        panelState.signalCoverageExpanded = scenario == .vectorAt100 || (scenario == .readable && detailsExpanded)
         let collector: StatsCollector
         if scenario == .vectorAt100 {
             collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.vectorAt100Stats)

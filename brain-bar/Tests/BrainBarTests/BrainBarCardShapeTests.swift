@@ -54,7 +54,7 @@ final class BrainBarCardShapeTests: XCTestCase {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
                 host.view.layoutSubtreeIfNeeded()
                 sizes[String(describing: state)] = panelState.renderedCardSizes
-                let expected = state == .unavailable ? cards + ["coverage.reason"] : cards
+                let expected = state == .unavailable || state == .error ? cards + ["coverage.reason"] : cards
                 XCTAssertEqual(panelState.renderedCardSizes.keys.sorted(), expected.sorted(), "\(state) at \(width)")
                 if state == .unavailable, let reason = panelState.renderedCardSizes["coverage.reason"] {
                     let needed = (BrainBarDashboardFixture.coverageDBError as NSString).boundingRect(

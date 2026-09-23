@@ -75,9 +75,19 @@ final class BrainDatabase: @unchecked Sendable {
 
     struct SignalCoverageSnapshot: Sendable, Equatable {
         let eligibleChunkCount: Int
+        let ftsEligibleChunkCount: Int
         let vectorIndexedChunkCount: Int
         let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
+
+        init(eligibleChunkCount: Int, ftsEligibleChunkCount: Int? = nil,
+             vectorIndexedChunkCount: Int, ftsIndexedChunkCount: Int, trigramIndexedChunkCount: Int) {
+            self.eligibleChunkCount = eligibleChunkCount
+            self.ftsEligibleChunkCount = ftsEligibleChunkCount ?? eligibleChunkCount
+            self.vectorIndexedChunkCount = vectorIndexedChunkCount
+            self.ftsIndexedChunkCount = ftsIndexedChunkCount
+            self.trigramIndexedChunkCount = trigramIndexedChunkCount
+        }
     }
 
     struct DashboardStats: Sendable, Equatable {
@@ -145,6 +155,7 @@ final class BrainDatabase: @unchecked Sendable {
         let lastWriteAt: Date?
         let lastEnrichedAt: Date?
         let signalEligibleChunkCount: Int
+        let ftsEligibleChunkCount: Int
         let vectorIndexedChunkCount: Int
         let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
@@ -181,6 +192,7 @@ final class BrainDatabase: @unchecked Sendable {
             lastWriteAt: Date? = nil,
             lastEnrichedAt: Date? = nil,
             signalEligibleChunkCount: Int? = nil,
+            ftsEligibleChunkCount: Int? = nil,
             vectorIndexedChunkCount: Int = 0,
             ftsIndexedChunkCount: Int = 0,
             trigramIndexedChunkCount: Int = 0,
@@ -218,6 +230,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.lastWriteAt = lastWriteAt
             self.lastEnrichedAt = lastEnrichedAt
             self.signalEligibleChunkCount = signalEligibleChunkCount ?? chunkCount
+            self.ftsEligibleChunkCount = ftsEligibleChunkCount ?? self.signalEligibleChunkCount
             self.vectorIndexedChunkCount = vectorIndexedChunkCount
             self.ftsIndexedChunkCount = ftsIndexedChunkCount
             self.trigramIndexedChunkCount = trigramIndexedChunkCount
@@ -264,26 +277,13 @@ final class BrainDatabase: @unchecked Sendable {
             return Double(recentWriteCount) / Double(activityWindowMinutes)
         }
 
-        var recentWriteRatePerHour: Double {
-            writeRatePerMinute * 60
-        }
-
-        var recentEnrichmentRatePerHour: Double {
-            guard activityWindowMinutes > 0 else { return 0 }
-            return (Double(recentEnrichmentCount) / Double(activityWindowMinutes)) * 60
-        }
-
-        var vectorNetDrainRatePerHour: Double {
-            // Vector rows do not currently carry per-vector timestamps. Until
-            // they do, use the real dashboard window: recent enrichment
-            // completions minus recent writes, which is the net backlog drain
-            // signal available in DashboardStats.
-            max(recentEnrichmentRatePerHour - recentWriteRatePerHour, 0)
-        }
+        // Vector rows have no completion timestamp. Enrichment completions do
+        // not measure hot-lane embedding throughput or backlog drain.
+        var vectorNetDrainRatePerHour: Double? { nil }
 
         var vectorBacklogETAHours: Double? {
-            guard vectorBacklogCount > 0, vectorNetDrainRatePerHour > 0 else { return nil }
-            return Double(vectorBacklogCount) / vectorNetDrainRatePerHour
+            guard vectorBacklogCount > 0, let rate = vectorNetDrainRatePerHour, rate > 0 else { return nil }
+            return Double(vectorBacklogCount) / rate
         }
 
         func eventIsLive(_ date: Date?, now: Date = Date()) -> Bool {
@@ -305,11 +305,11 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         var ftsBacklogCount: Int {
-            max(signalEligibleChunkCount - ftsIndexedChunkCount, 0)
+            max(ftsEligibleChunkCount - ftsIndexedChunkCount, 0)
         }
 
         var trigramBacklogCount: Int {
-            max(signalEligibleChunkCount - trigramIndexedChunkCount, 0)
+            max(ftsEligibleChunkCount - trigramIndexedChunkCount, 0)
         }
 
         var vectorCoveragePercent: Double {
@@ -317,16 +317,17 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         var ftsCoveragePercent: Double {
-            coveragePercent(indexedCount: ftsIndexedChunkCount)
+            coveragePercent(indexedCount: ftsIndexedChunkCount, eligibleCount: ftsEligibleChunkCount)
         }
 
         var trigramCoveragePercent: Double {
-            coveragePercent(indexedCount: trigramIndexedChunkCount)
+            coveragePercent(indexedCount: trigramIndexedChunkCount, eligibleCount: ftsEligibleChunkCount)
         }
 
-        private func coveragePercent(indexedCount: Int) -> Double {
-            guard signalEligibleChunkCount > 0 else { return 100 }
-            return (Double(indexedCount) / Double(signalEligibleChunkCount)) * 100
+        private func coveragePercent(indexedCount: Int, eligibleCount: Int? = nil) -> Double {
+            let denominator = eligibleCount ?? signalEligibleChunkCount
+            guard denominator > 0 else { return 100 }
+            return (Double(indexedCount) / Double(denominator)) * 100
         }
 
         /// Returns a copy whose per-series buckets + activity window are replaced
@@ -357,6 +358,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
@@ -396,6 +398,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
@@ -435,6 +438,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
@@ -474,6 +478,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: coverage.eligibleChunkCount,
+                ftsEligibleChunkCount: coverage.ftsEligibleChunkCount,
                 vectorIndexedChunkCount: coverage.vectorIndexedChunkCount,
                 ftsIndexedChunkCount: coverage.ftsIndexedChunkCount,
                 trigramIndexedChunkCount: coverage.trigramIndexedChunkCount,
@@ -494,6 +499,7 @@ final class BrainDatabase: @unchecked Sendable {
             guard signalCoverageIsAvailable else { return nil }
             return SignalCoverageSnapshot(
                 eligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount
@@ -2221,6 +2227,7 @@ final class BrainDatabase: @unchecked Sendable {
                 let counts = try dashboardSignalCoverageCounts()
                 signalCoverage = SignalCoverageSnapshot(
                     eligibleChunkCount: counts.eligibleChunkCount,
+                    ftsEligibleChunkCount: counts.ftsEligibleChunkCount,
                     vectorIndexedChunkCount: counts.vectorIndexedChunkCount,
                     ftsIndexedChunkCount: counts.ftsIndexedChunkCount,
                     trigramIndexedChunkCount: counts.trigramIndexedChunkCount
@@ -2284,6 +2291,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastEvents.lastWriteAt,
                 lastEnrichedAt: lastEvents.lastEnrichedAt,
                 signalEligibleChunkCount: signalCoverage?.eligibleChunkCount ?? 0,
+                ftsEligibleChunkCount: signalCoverage?.ftsEligibleChunkCount ?? 0,
                 vectorIndexedChunkCount: signalCoverage?.vectorIndexedChunkCount ?? 0,
                 ftsIndexedChunkCount: signalCoverage?.ftsIndexedChunkCount ?? 0,
                 trigramIndexedChunkCount: signalCoverage?.trigramIndexedChunkCount ?? 0,
@@ -2304,6 +2312,7 @@ final class BrainDatabase: @unchecked Sendable {
             let counts = try dashboardSignalCoverageCounts()
             return SignalCoverageSnapshot(
                 eligibleChunkCount: counts.eligibleChunkCount,
+                ftsEligibleChunkCount: counts.ftsEligibleChunkCount,
                 vectorIndexedChunkCount: counts.vectorIndexedChunkCount,
                 ftsIndexedChunkCount: counts.ftsIndexedChunkCount,
                 trigramIndexedChunkCount: counts.trigramIndexedChunkCount
@@ -2470,13 +2479,21 @@ final class BrainDatabase: @unchecked Sendable {
 
     private func dashboardSignalCoverageCounts() throws -> (
         eligibleChunkCount: Int,
+        ftsEligibleChunkCount: Int,
         vectorIndexedChunkCount: Int,
         ftsIndexedChunkCount: Int,
         trigramIndexedChunkCount: Int
     ) {
-        let searchableWhereClause = try searchableChunkWhereClause(alias: "c")
+        guard let db else { throw DBError.notOpen }
+        let searchableWhereClause = try searchableChunkWhereClause(alias: "c", includeHiddenSources: true)
+        // Keep this route identical to vector_store.py's knowledge FTS triggers.
+        let columns = try tableColumns(name: "chunks", on: db)
+        let knowledgeWhereClause = columns.contains("content_class")
+            ? searchableWhereClause + " AND COALESCE(c.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
+            : searchableWhereClause
         return (
             eligibleChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks AS c WHERE \(searchableWhereClause)"),
+            ftsEligibleChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks AS c WHERE \(knowledgeWhereClause)"),
             vectorIndexedChunkCount: try joinedCoverageCount(
                 tableName: "chunk_vectors_rowids",
                 idColumn: "id",
@@ -2485,12 +2502,12 @@ final class BrainDatabase: @unchecked Sendable {
             ftsIndexedChunkCount: try joinedCoverageCount(
                 tableName: "chunks_fts",
                 idColumn: "chunk_id",
-                searchableWhereClause: searchableWhereClause
+                searchableWhereClause: knowledgeWhereClause
             ),
             trigramIndexedChunkCount: try joinedCoverageCount(
                 tableName: "chunks_fts_trigram",
                 idColumn: "chunk_id",
-                searchableWhereClause: searchableWhereClause
+                searchableWhereClause: knowledgeWhereClause
             )
         )
     }
@@ -2515,7 +2532,7 @@ final class BrainDatabase: @unchecked Sendable {
         """)
     }
 
-    private func searchableChunkWhereClause(alias: String) throws -> String {
+    private func searchableChunkWhereClause(alias: String, includeHiddenSources: Bool = false) throws -> String {
         guard let db else { throw DBError.notOpen }
         let columns = try tableColumns(name: "chunks", on: db)
         var clauses: [String] = []
@@ -2532,7 +2549,7 @@ final class BrainDatabase: @unchecked Sendable {
         if columns.contains("archived_at") {
             clauses.append("\(alias).archived_at IS NULL")
         }
-        if columns.contains("source_class") {
+        if !includeHiddenSources && columns.contains("source_class") {
             clauses.append("(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'brain-worker'))")
         }
         return clauses.isEmpty ? "1 = 1" : clauses.joined(separator: " AND ")

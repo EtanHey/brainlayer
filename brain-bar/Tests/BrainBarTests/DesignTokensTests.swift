@@ -74,7 +74,13 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(
             BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 999, eligibleCount: 1_000, isAvailable: true),
             BrainBarDesignTokens.Colors.statusUnknown,
-            "99.9% completeness must not show a green OK dot"
+            "Incomplete coverage with no measured progress stays neutral"
+        )
+        XCTAssertEqual(
+            BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 999, eligibleCount: 1_000,
+                                                             isAvailable: true, lastError: "coverage query failed"),
+            BrainBarDesignTokens.Colors.statusAttention,
+            "An actual coverage failure needs an attention reason"
         )
         XCTAssertEqual(
             BrainBarDesignTokens.Colors.signalCoverageStatus(indexedCount: 1_000, eligibleCount: 1_000, isAvailable: true),

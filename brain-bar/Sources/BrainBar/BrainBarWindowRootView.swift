@@ -2201,7 +2201,6 @@ private struct BrainBarSignalCoveragePanel: View {
     @Binding var isVectorDetailExpanded: Bool
     var onAnimationCompleted: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var revealedSignalIDs: Set<String> = []
 
     private var signals: [BrainBarSignalCoverage] {
         [
@@ -2223,7 +2222,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "FTS5",
                 indexedCount: stats.ftsIndexedChunkCount,
-                totalCount: stats.signalEligibleChunkCount,
+                totalCount: stats.ftsEligibleChunkCount,
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
@@ -2238,7 +2237,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "Trigram",
                 indexedCount: stats.trigramIndexedChunkCount,
-                totalCount: stats.signalEligibleChunkCount,
+                totalCount: stats.ftsEligibleChunkCount,
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
@@ -2265,6 +2264,7 @@ private struct BrainBarSignalCoveragePanel: View {
             accessibilityIdentifier: "brainbar.dashboard.signal-coverage-disclosure",
             accessibilityLabel: "Signal coverage",
             chevronPlacement: .trailing,
+            retainsContentWhenCollapsed: true,
             onAnimationCompleted: onAnimationCompleted
         ) {
             signalBars
@@ -2295,10 +2295,8 @@ private struct BrainBarSignalCoveragePanel: View {
         .onExitCommand {
             if isVectorDetailExpanded { setVectorDetail(false) }
         }
-        .onAppear { updateRevealedSignals(animated: false) }
         .onChange(of: isExpanded) { _, expanded in
             if !expanded { setVectorDetail(false) }
-            updateRevealedSignals(animated: true)
         }
     }
 
@@ -2308,7 +2306,8 @@ private struct BrainBarSignalCoveragePanel: View {
                 .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
                     indexedCount: signal.indexedCount,
                     eligibleCount: signal.totalCount,
-                    isAvailable: signal.isAvailable
+                    isAvailable: signal.isAvailable,
+                    lastError: signal.isRefreshing ? nil : signal.lastError
                 )))
                 .frame(width: 7, height: 7)
             Text(signal.name)
@@ -2336,7 +2335,7 @@ private struct BrainBarSignalCoveragePanel: View {
                     signalColumn(for: signal)
                 }
             }
-            if !stats.signalCoverageIsAvailable, !isRefreshing, let lastError {
+            if !isRefreshing, let lastError {
                 Text(lastError)
                     .font(.system(size: 11))
                     .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
@@ -2367,7 +2366,6 @@ private struct BrainBarSignalCoveragePanel: View {
         }
         .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .topLeading)
         .brainBarCardShapeProbe("coverage.\(signal.id)")
-        .opacity(isExpanded ? (revealedSignalIDs.contains(signal.id) ? 1 : 0) : 1)
         .background {
             if signal.showsDetail {
                 GeometryReader { proxy in
@@ -2376,25 +2374,6 @@ private struct BrainBarSignalCoveragePanel: View {
                             key: BrainBarVectorSignalRootFrameKey.self,
                             value: proxy.frame(in: .named(BrainBarVectorSignalCoordinateSpace.root))
                         )
-                }
-            }
-        }
-    }
-
-    private func updateRevealedSignals(animated: Bool) {
-        guard isExpanded else {
-            revealedSignalIDs.removeAll()
-            return
-        }
-        if reduceMotion || !animated {
-            revealedSignalIDs = Set(signals.map(\.id))
-            return
-        }
-        revealedSignalIDs.removeAll()
-        for (index, signal) in signals.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.06) {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    _ = revealedSignalIDs.insert(signal.id)
                 }
             }
         }
@@ -2521,7 +2500,8 @@ private struct BrainBarSignalCoverageRow: View {
                         .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
                             indexedCount: signal.indexedCount,
                             eligibleCount: signal.totalCount,
-                            isAvailable: signal.isAvailable
+                            isAvailable: signal.isAvailable,
+                            lastError: signal.isRefreshing ? nil : signal.lastError
                         )))
                         .frame(width: 6, height: 6)
                     Text(signal.percentText)
@@ -2534,7 +2514,7 @@ private struct BrainBarSignalCoverageRow: View {
             }
 
             if signal.presentation.isMeasurable {
-                BrainBarAnimatedCoverageBar(
+                BrainBarCoverageBar(
                     signalID: signal.id,
                     percent: signal.clampedCoveragePercent,
                     accentColor: signal.accentColor
@@ -2584,12 +2564,10 @@ private struct BrainBarSignalCoverageRow: View {
     }
 }
 
-private struct BrainBarAnimatedCoverageBar: View {
+private struct BrainBarCoverageBar: View {
     let signalID: String
     let percent: Double
     let accentColor: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var displayedPercent: Double = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -2604,31 +2582,14 @@ private struct BrainBarAnimatedCoverageBar: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: proxy.size.width * min(max(displayedPercent, 0), 100) / 100)
+                    .frame(width: proxy.size.width * min(max(percent, 0), 100) / 100)
             }
         }
         .onAppear {
 #if DEBUG
-            // Count the fill lifecycle even when Reduce Motion makes it instantaneous.
+            // Retained disclosure content should present each bar only once.
             BrainBarCoverageLifecycleProbe.recordFillStart(signalID)
 #endif
-            if reduceMotion {
-                displayedPercent = percent
-            } else {
-                displayedPercent = 0
-                withAnimation(.easeOut(duration: 0.45)) {
-                    displayedPercent = percent
-                }
-            }
-        }
-        .onChange(of: percent) { _, newValue in
-            if reduceMotion {
-                displayedPercent = newValue
-            } else {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    displayedPercent = newValue
-                }
-            }
         }
     }
 }
@@ -2717,7 +2678,7 @@ private struct BrainBarVectorSignalDetail: View {
         let statusColor = isFalling
             ? Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
             : Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
-        return Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
+        return Label(isFalling ? "falling" : "Not measured", systemImage: isFalling ? "arrow.down.right" : "questionmark.circle")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(Color.brainBarTextPrimary)
             .padding(.vertical, 5)
@@ -2732,12 +2693,12 @@ private struct BrainBarVectorSignalDetail: View {
     }
 
     private var drainText: String {
-        guard let rate = signal.vectorNetDrainRatePerHour, rate > 0 else { return "n/a" }
+        guard let rate = signal.vectorNetDrainRatePerHour, rate > 0 else { return "Not measured" }
         return "~\(formatted(Int(rate.rounded())))/hr"
     }
 
     private var etaText: String {
-        guard let hours = signal.vectorBacklogETAHours, hours.isFinite, hours > 0 else { return "n/a" }
+        guard let hours = signal.vectorBacklogETAHours, hours.isFinite, hours > 0 else { return "Not measured" }
         if hours < 1 {
             return "~\(max(1, Int((hours * 60).rounded())))m"
         }
