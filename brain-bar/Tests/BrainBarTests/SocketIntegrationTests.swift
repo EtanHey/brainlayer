@@ -982,7 +982,28 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertFalse(clearedText.contains("Live push message for agent live"), "Acked chunk should no longer be unread")
     }
 
+    /// QUARANTINED in CI — see https://github.com/EtanHey/brainlayer/issues/891
+    ///
+    /// This is a FENCE, not a fix. The test is correct and the product path it covers
+    /// is not known to be broken: it passes locally in ~0.1 s against a 5 s deadline,
+    /// roughly 50x headroom. In CI it fails by losing or delaying the notification,
+    /// measured at ~55% (6 failures in 11 runs on 2026-09-22 alone) across commits
+    /// whose diffs cannot touch the socket path at all.
+    ///
+    /// It was blocking merges on unrelated PRs and caused a multi-hour hunt for a
+    /// regression that did not exist. Do NOT raise the deadline: a 0.1 s operation
+    /// missing a 5 s deadline is reporting a real synchronisation gap, and widening
+    /// it would delete the only signal we have. Fix it in its own lane, then delete
+    /// this skip.
+    ///
+    /// Run it deliberately anywhere with: BRAINLAYER_RUN_FLAKY_SOCKET_TESTS=1
     func testFlushedQueuedStoreAlsoPushesChannelNotification() throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipIf(
+            environment["CI"] == "true" && environment["BRAINLAYER_RUN_FLAKY_SOCKET_TESTS"] != "1",
+            "Quarantined in CI: brainlayer#891 lost-notification flake (~55% on 2026-09-22). "
+            + "Set BRAINLAYER_RUN_FLAKY_SOCKET_TESTS=1 to run it."
+        )
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("brainbar-flush-notify-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
