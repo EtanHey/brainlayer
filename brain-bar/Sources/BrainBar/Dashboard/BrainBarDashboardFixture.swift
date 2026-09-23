@@ -111,13 +111,24 @@ enum BrainBarDashboardFixture {
         vectorIndexedChunkCount: 297_412
     )
     static let readableObservabilityResult = makeObservabilityResult(stats: stats)
+    static let staleObservabilityResult = makeObservabilityResult(
+        stats: stats, generatedAt: fetchedAt.addingTimeInterval(-901)
+    )
+    static let growingQueueStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        recentEnrichmentBuckets: Array(repeating: 0, count: 12),
+        recentEnrichmentFiveMinuteCount: 0,
+        lastWriteAt: fetchedAt
+    )
     static let emptyObservabilityResult = makeObservabilityResult(stats: emptyStats)
 
-    private static func makeObservabilityResult(stats: DashboardStats) -> ObservabilityReadResult {
+    private static func makeObservabilityResult(
+        stats: DashboardStats, generatedAt: Date = fetchedAt
+    ) -> ObservabilityReadResult {
         .readable(
         ObservabilityDocument(
             schemaVersion: 1,
-            generatedAt: fetchedAt,
+            generatedAt: generatedAt,
             dbPath: "/fixture/brainlayer.db",
             windowHours: 24,
             stores: .init(
@@ -128,7 +139,7 @@ enum BrainBarDashboardFixture {
                 inWindow: .init(
                     count: stats.recentActivityBuckets.reduce(0, +),
                     byHour: [.init(
-                        hour: fetchedAt,
+                        hour: generatedAt,
                         count: stats.recentActivityBuckets.reduce(0, +)
                     )]
                 )
@@ -240,6 +251,7 @@ enum BrainBarDashboardFixture {
         vectorIndexedChunkCount: Int = 240_100,
         recentEnrichmentBuckets: [Int] = [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6],
         recentEnrichmentFiveMinuteCount: Int = 22,
+        lastWriteAt: Date? = nil,
         zeroFlow: Bool = false,
         agentWriteReadability: MetricEvidenceReadability = .readable,
         watcherFlowReadability: MetricEvidenceReadability = .readable,
@@ -267,7 +279,7 @@ enum BrainBarDashboardFixture {
             activityWindowMinutes: activityWindowMinutes,
             bucketCount: 12,
             liveWindowMinutes: 1,
-            lastWriteAt: nil,
+            lastWriteAt: lastWriteAt,
             lastEnrichedAt: nil,
             signalEligibleChunkCount: coverageAvailable && !zeroFlow ? 297_412 : 0,
             vectorIndexedChunkCount: coverageAvailable && !zeroFlow ? vectorIndexedChunkCount : 0,

@@ -192,6 +192,10 @@ struct BrainLayerConfig: Equatable, Sendable {
     var tuningValues: [String: String]
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
 
+    var enrichmentIsOff: Bool {
+        !enrichmentEnabled || launchdJobs[.enrichment]?.enabled == false
+    }
+
     static let defaultConfig = BrainLayerConfig(
         googleAPIKey: .missing,
         systemEnabled: true,
