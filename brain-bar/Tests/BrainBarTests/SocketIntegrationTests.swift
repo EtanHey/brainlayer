@@ -548,6 +548,115 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: targetPath + ".complete"))
     }
 
+    func testBrainStoreDuringBackupIsDurablyDeferredAndDrainsAfterSnapshot() throws {
+        server.stop()
+        db.close()
+        let databaseReady = DispatchSemaphore(value: 0)
+        let databaseCapture = BrainDatabaseCapture()
+        server = BrainBarServer(
+            socketPath: testSocketPath,
+            dbPath: tempDBPath,
+            enableHybridSearchHelper: false
+        )
+        server.onDatabaseReady = { database in
+            databaseCapture.set(database)
+            databaseReady.signal()
+        }
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath))
+        XCTAssertEqual(databaseReady.wait(timeout: .now() + 1), .success)
+        let writeDatabase = try XCTUnwrap(databaseCapture.get())
+        let subscriberFD = try connectClient()
+        defer { close(subscriberFD) }
+        try initializeClient(fd: subscriberFD, name: "snapshot-store-subscriber")
+        try sendMCPRequest(on: subscriberFD, request: [
+            "jsonrpc": "2.0", "id": 79, "method": "tools/call",
+            "params": ["name": "brain_subscribe", "arguments": [
+                "agent_id": "snapshot-store-subscriber", "tags": ["snapshot-notify"]
+            ]],
+        ])
+        let subscription = try readMCPMessage(fd: subscriberFD, timeout: 2)
+        XCTAssertNil(subscription["error"])
+        let progressGate = SQLiteProgressGate()
+        sqlite3_progress_handler(
+            writeDatabase.dbHandle, 1, blockSQLiteProgress,
+            Unmanaged.passUnretained(progressGate).toOpaque()
+        )
+        defer {
+            progressGate.release.signal()
+            sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil)
+        }
+
+        let targetPath = NSTemporaryDirectory() + "brainbar-store-snapshot-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
+        let backupFD = try connectClient()
+        defer { close(backupFD) }
+        try initializeClient(fd: backupFD, name: "snapshot-store-backup")
+        try sendMCPRequest(on: backupFD, request: [
+            "jsonrpc": "2.0", "id": 80, "method": "tools/call",
+            "params": ["name": "brain_backup_vacuum_into", "arguments": ["target_path": targetPath]],
+        ])
+        XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
+
+        let storeFD = try connectClient()
+        defer { close(storeFD) }
+        try initializeClient(fd: storeFD, name: "snapshot-store-client")
+        let content = "store during snapshot \(UUID().uuidString)"
+        let storeRequest: [String: Any] = [
+            "jsonrpc": "2.0", "id": 81, "method": "tools/call",
+            "params": ["name": "brain_store", "arguments": [
+                "content": content, "project": "snapshot-test", "tags": ["snapshot-notify"]
+            ]],
+        ]
+        try sendMCPRequest(on: storeFD, request: storeRequest)
+        let deferred = try readMCPMessage(fd: storeFD, timeout: 2)
+        XCTAssertNil(deferred["error"])
+        let receipt = try XCTUnwrap(deferred["result"] as? [String: Any])
+        XCTAssertEqual(receipt["status"] as? String, "DEFERRED")
+        let chunkID = try XCTUnwrap(receipt["chunk_id"] as? String)
+        XCTAssertFalse(chunkID.isEmpty)
+        let text = ((receipt["content"] as? [[String: Any]])?.first)?["text"] as? String ?? ""
+        XCTAssertTrue(text.contains("STORED (deferred)"), text)
+        XCTAssertTrue(text.contains("backup finishes"), text)
+        let deferredMetadata = try XCTUnwrap(receipt["deferred"] as? [String: Any])
+        XCTAssertEqual(deferredMetadata["reason"] as? String, "BACKUP_SNAPSHOT")
+        let queuePath = try XCTUnwrap(deferredMetadata["queue_path"] as? String)
+        defer { try? FileManager.default.removeItem(atPath: queuePath) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath))
+        XCTAssertEqual(writeDatabase.pendingStoreQueueSnapshot().depth, 1)
+
+        progressGate.release.signal()
+        let backupResponse = try readMCPMessage(fd: backupFD, timeout: 2)
+        XCTAssertNil(backupResponse["error"])
+        let deadline = Date().addingTimeInterval(5)
+        while writeDatabase.pendingStoreQueueSnapshot().depth != 0 && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(writeDatabase.pendingStoreQueueSnapshot().depth, 0)
+        let notification = try readMCPMessage(fd: subscriberFD, timeout: 2)
+        XCTAssertEqual(notification["method"] as? String, "notifications/claude/channel")
+        let notificationMeta = (notification["params"] as? [String: Any])?["meta"] as? [String: Any]
+        XCTAssertEqual(notificationMeta?["chunk_id"] as? String, chunkID)
+
+        try sendMCPRequest(on: storeFD, request: [
+            "jsonrpc": "2.0", "id": 82, "method": "tools/call",
+            "params": ["name": "brain_search", "arguments": ["query": content]],
+        ])
+        let search = try readMCPMessage(fd: storeFD, timeout: 2)
+        XCTAssertNil(search["error"])
+        let searchText = (((search["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first)?["text"] as? String ?? ""
+        XCTAssertTrue(searchText.contains(content), searchText)
+
+        // A client that retries despite the receipt still resolves to one row.
+        try sendMCPRequest(on: storeFD, request: storeRequest)
+        let retry = try readMCPMessage(fd: storeFD, timeout: 2)
+        XCTAssertNil(retry["error"])
+        let retryResult = try XCTUnwrap(retry["result"] as? [String: Any])
+        XCTAssertEqual(retryResult["chunk_id"] as? String, chunkID)
+        XCTAssertEqual(try queryString("SELECT COUNT(*) FROM chunks WHERE content = '\(content)'", on: writeDatabase.dbHandle), "1")
+    }
+
     func testDisconnectedBackupResponseDoesNotLeakToReusedServerDescriptor() throws {
         // Use the production topology so VACUUM and normal protocol traffic use
         // separate write/read SQLite connections.

@@ -216,9 +216,17 @@ enum Formatters {
             // The 2026-08-19 ask is met by the explicit WILL-be-stored promise, not
             // by renaming the prefix back. Machines branch on the structured status.
             let idSuffix = chunkId.isEmpty ? "" : " \u{2192} \(id)"
-            let reasonLabel = queuedReason == "DB_BUSY" ? "DB busy" : queuedReason
+            let reasonLabel: String
+            switch queuedReason {
+            case "DB_BUSY": reasonLabel = "DB busy"
+            case "BACKUP_SNAPSHOT": reasonLabel = "backup snapshot in progress"
+            default: reasonLabel = queuedReason
+            }
+            let timing = queuedReason == "BACKUP_SNAPSHOT"
+                ? "it will be saved when the backup finishes"
+                : "the drain persists it automatically"
             return "\u{2502} \u{2714} STORED (deferred): \(reasonLabel)\(idSuffix) \u{2500} durably queued; "
-                + "the drain persists it automatically \u{2500} it WILL be stored under exactly this "
+                + "\(timing) \u{2500} it WILL be stored under exactly this "
                 + "chunk_id. Do NOT re-store, do NOT retry, and do NOT save a fallback copy."
 
         case .duplicate:

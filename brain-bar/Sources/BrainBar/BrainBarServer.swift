@@ -272,6 +272,25 @@ final class BrainBarServer: @unchecked Sendable {
             hybridSearchClient: hybridClient,
             hybridSearchBudget: Self.hybridSearchBudgetSeconds,
             dbPath: dbPath,
+            onPendingStoresFlushed: { [weak self] flushedStores in
+                self?.queue.async { [weak self] in
+                    guard let self else { return }
+                    for flushed in flushedStores {
+                        self.publishStoredChunk(
+                            stored: StoreResultPayload(
+                                chunkID: flushed.storedChunk.chunkID,
+                                rowID: flushed.storedChunk.rowID,
+                                content: nil,
+                                tags: nil,
+                                importance: nil
+                            ),
+                            content: flushed.content,
+                            tags: flushed.tags,
+                            importance: flushed.importance
+                        )
+                    }
+                }
+            },
             receiptStore: BrainBarOperationReceipts(url: BrainBarOperationReceipts.fileURL(dbPath: dbPath))
         )
 
@@ -536,6 +555,13 @@ final class BrainBarServer: @unchecked Sendable {
     private func handleMessage(fd: Int32, request: [String: Any]) -> [String: Any] {
         let paletteSession = clients[fd]?.paletteSession
         if let toolCall = parseToolCall(request) {
+            if backupToolCallInProgress, toolCall.name == "brain_store" {
+                return router.handle(
+                    request,
+                    session: paletteSession,
+                    deferStoreForBackup: true
+                )
+            }
             if backupToolCallInProgress, !canHandleDuringBackup(toolCall.name) {
                 return [
                     "jsonrpc": "2.0",
@@ -629,6 +655,7 @@ final class BrainBarServer: @unchecked Sendable {
             self.queue.async { [weak self] in
                 guard let self else { return }
                 self.backupToolCallInProgress = false
+                self.router.scheduleDrainAfterBackup()
                 self.flushDeferredSubscriberDisconnects()
                 guard self.clients[fd]?.paletteSession === paletteSession else {
                     self.onDeferredBackupResponseDropped?(self.clients[fd] != nil)
