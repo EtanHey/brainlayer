@@ -38,6 +38,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.37] - 2026-09-23
+
+- #905: Quarantine the #891 socket-notification CI flake behind an opt-in test.
+- #927: Keep long BrainBar Details facts visible in flat rows.
+- #932: Add semantic BrainBar status tokens and enforce the 9 pt text floor.
+- #934: Stabilize the BrainBar panel frame and scroll anchor across Details toggles.
+- #936: Keep BrainBar dashboard card shapes steady across data states.
+- #937: Open BrainBar Dashboard and Settings through URL routes.
+
 ## [1.5.36] - 2026-09-23
 
 - #909: Expose backup import dependency failures in observability diagnostics.
