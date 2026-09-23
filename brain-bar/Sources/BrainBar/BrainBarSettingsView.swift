@@ -597,8 +597,10 @@ struct BrainBarSettingsView: View {
         ObservabilityReader.url(dbPath: databasePath, environment: environment)
     }
 
-    init(databasePath: String, activationRevision: Int = 0) {
+    init(databasePath: String, activationRevision: Int = 0,
+         navigation: BrainBarSettingsNavigation = BrainBarSettingsNavigation()) {
         self.activationRevision = activationRevision
+        _navigation = StateObject(wrappedValue: navigation)
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
             observabilityURL: Self.observabilityURL(databasePath: databasePath)
         ))

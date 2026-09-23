@@ -269,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func isReadyToHandleBrainBarURL() -> Bool {
-        true
+        dashboardPanel != nil && statusPopoverController != nil
     }
 
     private func handleBrainBarURL(_ url: URL) {
@@ -283,6 +283,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             runtime.handleToggleRequest()
         case .search:
             showSearchPanel()
+        case .dashboard, .settings:
+            dashboardPanel?.showURLDestination(action)
         }
     }
 }

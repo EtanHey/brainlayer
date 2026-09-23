@@ -388,6 +388,22 @@ final class QuickCaptureTests: XCTestCase {
         let url = URL(string: "https://example.com")!
         XCTAssertNil(BrainBarURLAction.parse(url: url))
     }
+
+    func testBrainBarURLParsesDestinationsAndDefaultsUnknownSettingsSection() {
+        let cases: [(String, BrainBarURLAction)] = [
+            ("brainbar://dashboard", .dashboard),
+            ("brainbar://settings", .settings(.general)),
+            ("brainbar://settings/general", .settings(.general)),
+            ("brainbar://settings/jobs", .settings(.jobs)),
+            ("brainbar://settings/backups", .settings(.backups)),
+            ("brainbar://settings/advanced", .settings(.advanced)),
+            ("brainbar://settings/unknown", .settings(.general)),
+            ("brainbar:///settings/jobs", .settings(.jobs)),
+        ]
+        for (address, expected) in cases {
+            XCTAssertEqual(BrainBarURLAction.parse(url: URL(string: address)!), expected, address)
+        }
+    }
 }
 
 private func updatePreviewText(path: String, chunkID: String, previewText: String) throws {
