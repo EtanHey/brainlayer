@@ -25,6 +25,7 @@ from ..content_class import content_class_is_default_hidden, normalize_content_c
 from ..lexical_defense import _normalize_surface, load_lexical_defense_dictionary
 from ..search_fanout import run_fan_out
 from ..search_repo import _is_audit_recursion_metadata, _metadata_matches_project_scope
+from ..socket_hygiene import refuse_production_brainbar_socket
 
 # Retry settings for DB lock resilience on reads
 _RETRY_MAX_ATTEMPTS = 3
@@ -285,6 +286,7 @@ def _forward_to_helper(sock_path: str, query: str, **kwargs) -> dict[str, Any]:
     request = {"method": "brain_search", "arguments": arguments}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(_HELPER_SOCKET_TIMEOUT_SECONDS)
+        refuse_production_brainbar_socket(sock_path)
         client.connect(sock_path)
         client.sendall(json.dumps(request).encode("utf-8") + b"\n")
         buffer = b""

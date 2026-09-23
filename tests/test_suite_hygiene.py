@@ -48,6 +48,7 @@ def test_unmarked_tests_redirect_brainbar_and_arm_connect_guard() -> None:
     assert os.environ.get("BRAINLAYER_FORBID_BRAINBAR_SOCKET") == "1"
     assert os.environ.get("BRAINBAR_SOCKET_PATH") != "/tmp/brainbar.sock"
     assert os.environ.get("BRAINLAYER_MCP_SOCKET") == os.environ.get("BRAINBAR_SOCKET_PATH")
+    assert len(os.fsencode(os.environ["BRAINBAR_SOCKET_PATH"])) < 104
     assert getattr(socket.socket.connect, "_brainlayer_hygiene_guard", False) is True
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -83,9 +84,33 @@ def test_brainbar_socket_refusal_survives_python_subprocess(tmp_path) -> None:
     assert "REFUSED: suite hygiene" in result.stdout
 
 
+def test_brainbar_runtime_guard_survives_replaced_pythonpath(tmp_path) -> None:
+    program = textwrap.dedent(
+        """
+        from brainlayer.socket_hygiene import refuse_production_brainbar_socket
+        for path in ('/tmp/brainbar.sock', '/tmp/brainbar-hybrid-abc.sock'):
+            try:
+                refuse_production_brainbar_socket(path)
+            except RuntimeError as exc:
+                assert 'production BrainBar socket' in str(exc)
+            else:
+                raise SystemExit(f'unguarded: {path}')
+        refuse_production_brainbar_socket('/tmp/pytest-own-socket.sock')
+        """
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")  # Deliberately drops test-only sitecustomize.
+    result = subprocess.run([sys.executable, "-c", program], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.integration
 def test_integration_marker_lifts_brainbar_socket_guard() -> None:
     assert os.environ.get("BRAINLAYER_FORBID_BRAINBAR_SOCKET") != "1"
+    from brainlayer import backup_daily
+
+    assert "brainlayer-pytest-" not in str(backup_daily._brainbar_socket_path())
+    assert "brainlayer-pytest-" not in os.environ.get("BRAINLAYER_MCP_SOCKET", "")
 
 
 @pytest.mark.embedding_model

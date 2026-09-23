@@ -21,6 +21,8 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import BinaryIO
 
+from .socket_hygiene import refuse_production_brainbar_socket
+
 DEFAULT_SOCKET_PATH = "/tmp/brainbar.sock"
 DEFAULT_RECONNECT_MS = 250
 DEFAULT_MAX_RECONNECT_MS = 2000
@@ -296,6 +298,7 @@ def run_bridge(
         candidate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         candidate.setblocking(False)
         try:
+            refuse_production_brainbar_socket(config.socket_path)
             candidate.connect(config.socket_path)
         except BlockingIOError:
             sock = candidate

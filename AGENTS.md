@@ -87,7 +87,10 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
   `BRAINLAYER_FORBID_EMBEDDING_MODEL=1` (checked at every model-load site, and inherited by
   subprocesses) and a refusal on `sqlite3.connect`/`apsw.Connection` against
   `~/.local/share/brainlayer`. It also redirects BrainBar socket resolution to a nonexistent
-  path and refuses connects to `/tmp/brainbar.sock`, including in inherited Python subprocesses.
+  path and refuses connects to `/tmp/brainbar.sock` in-process and in Python subprocesses that
+  inherit PYTHONPATH and site initialization. The five Python BrainBar connector sites also check
+  `BRAINLAYER_FORBID_BRAINBAR_SOCKET`, including when a child replaces PYTHONPATH but keeps the
+  guard flag. A clean environment or non-Python socket client does not inherit that guard.
   The only escape is a declared marker:
   `@pytest.mark.embedding_model` for a test that really needs a real model (deselected by
   `scripts/run_tests.sh`, still run in CI, which warms the HF cache on purpose), or
