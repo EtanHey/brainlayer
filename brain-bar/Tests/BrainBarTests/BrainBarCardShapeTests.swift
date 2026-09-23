@@ -4,11 +4,14 @@ import XCTest
 
 @testable import BrainBar
 
+#if DEBUG
 final class BrainBarCardShapeTests: XCTestCase {
+    @MainActor
     func testEmptyChartRetainsBucketAxesWithoutPlottingAFalseZeroSeries() {
         let chart = SparklineChartPresentation(
             label: "Agent-origin chunks by source time over 1 hour",
             values: Array(repeating: 0, count: 12),
+            accessibilitySummary: "0 in window",
             showsRestingAxes: true,
             plotsSeries: false
         )
@@ -16,6 +19,9 @@ final class BrainBarCardShapeTests: XCTestCase {
         XCTAssertFalse(chart.shouldPlotSeries(.primary))
         XCTAssertTrue(chart.showsRestingAxes)
         XCTAssertEqual(chart.points.count, 12)
+        XCTAssertEqual(chart.accessibilityValue, "0 in window")
+        XCTAssertEqual(BrainBarDashboardFixture.emptyStats.recentWriteFiveMinuteCount, 0)
+        XCTAssertEqual(BrainBarDashboardFixture.emptyStats.recentEnrichmentFiveMinuteCount, 0)
     }
 
     @MainActor
@@ -77,3 +83,4 @@ final class BrainBarCardShapeTests: XCTestCase {
         }
     }
 }
+#endif
