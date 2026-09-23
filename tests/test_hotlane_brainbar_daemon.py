@@ -769,7 +769,8 @@ def test_split_cycle_bootstraps_missing_db_before_readonly_open(tmp_path):
 
 
 @pytest.mark.parametrize("committed_prefix", [0, 1])
-def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatch, committed_prefix):
+@pytest.mark.parametrize("lock_error", ["BusyError", "LockedError"])
+def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatch, committed_prefix, lock_error):
     hotlane = _load_hotlane_module()
     db_path = tmp_path / "brainlayer.db"
     conn = sqlite3.connect(db_path)
@@ -803,7 +804,7 @@ def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatc
             conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_id,))
         conn.commit()
         if len(writes) == 1:
-            raise hotlane.apsw.BusyError("database is locked")
+            raise getattr(hotlane.apsw, lock_error)("database is locked")
         return len(chunk_ids)
 
     def cycle():
@@ -820,13 +821,75 @@ def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatc
         )
 
     try:
-        with pytest.raises(hotlane.apsw.BusyError, match="database is locked"):
+        with pytest.raises(getattr(hotlane.apsw, lock_error), match="database is locked"):
             cycle()
         assert state.active is False
         assert state.after_created_at is None
         assert state.after_rowid == 0
         assert cycle().embedded == 2
         assert writes == [["a", "b"], (["a", "b"] if committed_prefix == 0 else ["b", "c"])]
+    finally:
+        conn.close()
+
+
+def test_split_cycle_skips_poison_row_after_non_lock_write_error(tmp_path, monkeypatch, caplog):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)",
+        [(chunk_id, f"text {chunk_id}", f"2026-09-23T00:00:0{index}Z") for index, chunk_id in enumerate("ab")],
+    )
+    state = hotlane.PendingCandidateScanState()
+    monkeypatch.setattr(hotlane, "PENDING_CANDIDATE_SCAN_STATE", state)
+    writes = []
+
+    def write_vectors(_path, vectors):
+        chunk_ids = [vector.chunk_id for vector in vectors]
+        writes.append(chunk_ids)
+        if "a" in chunk_ids:
+            raise ValueError("poison vector")
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_ids[0],))
+        conn.commit()
+        return len(chunk_ids)
+
+    def cycle():
+        return hotlane._run_split_cycle(
+            db_path=db_path,
+            vector_store_cls=lambda _path, readonly=False: SimpleNamespace(conn=conn, close=lambda: None),
+            embed_fn=lambda _text: [0.0],
+            recent_limit=0,
+            backlog_batch=1,
+            enrich_limit=0,
+            enrich_since_hours=8760,
+            write_vectors_fn=write_vectors,
+        )
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="brainlayer.hotlane_brainbar"):
+            with pytest.raises(ValueError, match="poison vector"):
+                cycle()
+        assert state.active is True
+        assert state.after_created_at == "2026-09-23T00:00:00Z"
+        assert cycle().embedded == 1
+        assert writes == [["a"], ["b"]]
+        assert "chunk_ids=['a']" in caplog.text
+        assert "ValueError" in caplog.text
     finally:
         conn.close()
 
@@ -932,7 +995,7 @@ def test_write_embedded_vectors_clears_search_cache_after_partial_commit(monkeyp
         lambda db_path: cleared.append(db_path),
     )
 
-    with pytest.raises(RuntimeError, match="second vector failed"):
+    assert (
         hotlane._write_embedded_vectors(
             FakeStore(),
             [
@@ -940,9 +1003,48 @@ def test_write_embedded_vectors_clears_search_cache_after_partial_commit(monkeyp
                 hotlane.EmbeddedVector("chunk-2", "content two", [0.2]),
             ],
         )
+        == 1
+    )
 
     assert upserted == ["chunk-1", "chunk-2"]
     assert cleared == [Path("/tmp/brainlayer.db")]
+
+
+def test_write_embedded_vectors_skips_poison_row_within_same_batch(monkeypatch, caplog):
+    hotlane = _load_hotlane_module()
+    upserted = []
+
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            if sql.strip().startswith("SELECT 1"):
+                return SimpleNamespace(fetchone=lambda: (1,))
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        db_path = Path("/tmp/brainlayer.db")
+        conn = FakeConn()
+
+        def _upsert_chunk_vector(self, _cursor, chunk_id, _embedding):
+            upserted.append(chunk_id)
+            if chunk_id == "poison":
+                raise ValueError("poison vector")
+
+    monkeypatch.setattr("brainlayer.search_repo.clear_hybrid_search_cache", lambda _db_path: None)
+    vectors = [
+        hotlane.EmbeddedVector("poison", "bad content", [0.1]),
+        hotlane.EmbeddedVector("valid", "good content", [0.2]),
+    ]
+    with caplog.at_level(logging.ERROR, logger="brainlayer.hotlane_brainbar"):
+        count = hotlane._write_embedded_vectors(FakeStore(), vectors)
+
+    assert count == 1
+    assert upserted == ["poison", "valid"]
+    assert "chunk_id=poison" in caplog.text
+    assert "ValueError" in caplog.text
 
 
 def test_write_embedded_vectors_path_upserts_without_vectorstore_writer_pidfile(tmp_path, monkeypatch):

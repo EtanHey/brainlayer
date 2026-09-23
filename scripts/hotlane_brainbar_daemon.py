@@ -666,7 +666,16 @@ def _write_embedded_vectors(store_or_path: VectorStore | Path | str, vectors: li
                 if transaction_started:
                     cursor.execute("ROLLBACK")
                 telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
-                raise
+                if isinstance(exc, (apsw.BusyError, apsw.LockedError)):
+                    raise
+                LOGGER.error(
+                    "hotlane vector write skipped chunk_id=%s error_type=%s error=%s",
+                    chunk_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                if vector_index < len(vectors) - 1:
+                    _sleep(VECTOR_WRITE_YIELD_SECONDS)
     finally:
         if conn is not None:
             conn.close()
@@ -765,11 +774,18 @@ def _run_split_cycle(
     if vectors:
         try:
             embedded += write_vectors_fn(db_path, vectors)
-        except Exception:
-            if pending_scan_checkpoint is not None and pending_scan_state is not None:
+        except Exception as exc:
+            is_lock_error = isinstance(exc, (apsw.BusyError, apsw.LockedError))
+            if is_lock_error and pending_scan_checkpoint is not None and pending_scan_state is not None:
                 # Earlier one-row commits stay indexed; retry only rows still missing vectors.
                 pending_scan_state.active, pending_scan_state.after_created_at, pending_scan_state.after_rowid = (
                     pending_scan_checkpoint
+                )
+            elif not is_lock_error:
+                LOGGER.error(
+                    "hotlane vector write failed; pending scan cursor remains advanced past chunk_ids=%s error_type=%s",
+                    [candidate.chunk_id for candidate in pending_rows],
+                    type(exc).__name__,
                 )
             raise
 
