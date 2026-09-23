@@ -19,6 +19,9 @@ enum BrainBarRenderHarness {
         case attentionExpanded = "readable-attention-expanded"
         case unreadable
         case stale
+        case staleDocument
+        case pausedGrowing
+        case runningGrowing
         case loading
         case queueDraining
         case queueBacklogged
@@ -28,12 +31,13 @@ enum BrainBarRenderHarness {
 
         var detailsStates: [Bool] {
             switch self {
-            case .loading, .stale, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
+            case .loading, .stale, .pausedGrowing, .runningGrowing,
+                 .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
                  .receiptUnavailable, .receiptFailed:
                 [false]
             case .vectorAt100:
                 [true]
-            case .readable, .unreadable:
+            case .readable, .unreadable, .staleDocument:
                 [false, true]
             }
         }
@@ -42,7 +46,8 @@ enum BrainBarRenderHarness {
             switch self {
             case .queueDraining, .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 [("default", 960)]
-            case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .stale, .loading:
+            case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .stale,
+                 .staleDocument, .pausedGrowing, .runningGrowing, .loading:
                 BrainBarRenderHarness.breakpoints
             }
         }
@@ -53,7 +58,7 @@ enum BrainBarRenderHarness {
                 .loading
             case .stale:
                 .stale
-            case .attentionCollapsed, .attentionExpanded:
+            case .attentionCollapsed, .attentionExpanded, .staleDocument, .pausedGrowing, .runningGrowing:
                 .live
             case .queueDraining:
                 .queueDraining
@@ -68,7 +73,10 @@ enum BrainBarRenderHarness {
 
         var observabilityResult: ObservabilityReadResult {
             switch self {
-            case .readable, .stale, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining,
+            case .staleDocument:
+                BrainBarDashboardFixture.staleObservabilityResult
+            case .readable, .stale, .pausedGrowing, .runningGrowing,
+                 .attentionCollapsed, .attentionExpanded, .loading, .queueDraining,
                  .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 BrainBarDashboardFixture.readableObservabilityResult
             case .unreadable:
@@ -278,9 +286,11 @@ enum BrainBarRenderHarness {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded || afterCollapse
         panelState.attentionExpanded = scenario == .attentionExpanded || scenario == .stale
-        panelState.signalCoverageExpanded = scenario == .vectorAt100
+        panelState.signalCoverageExpanded = scenario == .vectorAt100 || (scenario == .readable && detailsExpanded)
         let collector: StatsCollector
-        if scenario == .vectorAt100 {
+        if scenario == .pausedGrowing || scenario == .runningGrowing {
+            collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.growingQueueStats)
+        } else if scenario == .vectorAt100 {
             collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.vectorAt100Stats)
         } else if scenario == .attentionCollapsed || scenario == .attentionExpanded {
             collector = BrainBarDashboardFixture.makeCollector(
@@ -307,7 +317,8 @@ enum BrainBarRenderHarness {
             receiptStore: receipts,
             observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
-            panelState: panelState
+            panelState: panelState,
+            enrichmentPausedOverride: scenario == .pausedGrowing ? true : false
         )
         // The XCTest renderer owns dashboard-<breakpoint>.png. Include the CLI
         // state in every filename so the two producers cannot overwrite each other.
