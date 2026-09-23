@@ -177,9 +177,7 @@ jobs:
           RUNNER_LABEL: macos-15/${{ runner.arch }}
         run: |
           set -euo pipefail
-          # One verdict, three values, and only `clean` lets this job go green: `invalid` means
-          # files failed codesign, `unmeasured` means the job ran and produced no counts. Deriving
-          # the pass/fail from the count alone left `unmeasured` looking like a pass.
+          # Only `clean` lets this job go green: signatures, loadability, and inventory must pass.
           verdict=unmeasured
           invalid=""
           keg=""
@@ -230,6 +228,14 @@ jobs:
               # -- two CI statuses contradicting each other about the same measurement.
               if [[ "$valid" -eq 0 && "$invalid" -eq 0 ]]; then
                 verdict=unmeasured
+              elif [[ "$rc" -ne 0 && "$invalid" -eq 0 ]]; then
+                # Signatures can all be valid while dyld refuses a malformed native extension.
+                verdict=load_failed
+                detail="$(grep -m1 '^LOAD_FAILED ' "$out" || awk 'NF { print; exit }' "$err")"
+                report="$(jq -nc \
+                  --arg stage 'trusted/scripts/release-verify-signatures.sh' \
+                  --arg detail "loadability gate exited ${rc}: ${detail:-no diagnostic}" \
+                  '{status: "failed", stage: $stage, detail: $detail}')"
               else
                 verdict=clean
                 [[ "$invalid" -eq 0 ]] || verdict=invalid
@@ -263,7 +269,7 @@ jobs:
       # pass at a glance -- and AGENTS.md is explicit that an invalid `*.so`/`*.dylib` blocks
       # release and deploy. `unmeasured` fails for the same reason: a job that was asked to measure
       # and did not is a finding, not a quiet success.
-      - name: Fail this job on an invalid signature
+      - name: Fail this job on invalid signatures or loadability
         if: ${{ !cancelled() && steps.verify.outputs.verdict != 'clean' }}
         env:
           VERDICT: ${{ steps.verify.outputs.verdict }}
@@ -271,6 +277,8 @@ jobs:
         run: |
           if [[ "$VERDICT" == "invalid" ]]; then
             echo "::error title=Invalid keg signature::${INVALID} native extension(s) failed codesign --verify; see the ratchet table."
+          elif [[ "$VERDICT" == "load_failed" ]]; then
+            echo "::error title=Native loadability failed::a signed extension failed the bounded dlopen gate; see the ratchet table."
           else
             echo "::error title=Signatures unmeasured::the parity job produced no codesign counts (verdict: ${VERDICT:-none}); see the ratchet table."
           fi
