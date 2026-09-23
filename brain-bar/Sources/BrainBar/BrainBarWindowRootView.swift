@@ -3762,37 +3762,6 @@ struct BrainBarDashboardLayout {
     }
 }
 
-// AIDEV-NOTE: User-facing indicator that a BrainBar surface is reading from a
-// degraded source (transient ReadOnly / busy / locked errors from the writer-
-// pidfile contention introduced by PR #309 + amplified post-PR #312). Shown as
-// an unobtrusive amber pill so the user sees "data may be stale" rather than
-// "blank screen" or "warming memory" lingering — per Etan-mandate 2026-05-22:
-// "WITHOUT DEGRATION!" (no blank states, but visible when degraded).
-struct DegradationBadge: View {
-    let reason: String?
-    static let labelFontSize: CGFloat = 11
-    static let minimumLabelScaleFactor = BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: labelFontSize)
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10, weight: .semibold))
-            Text("Degraded")
-                .font(.system(size: Self.labelFontSize, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(Self.minimumLabelScaleFactor)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .frame(maxWidth: 180, alignment: .leading)
-        .background(
-            Capsule().fill(BrainBarStateTheme.degraded.theme.swiftUIColor.opacity(0.85))
-        )
-        .help(reason ?? "Data source temporarily degraded.")
-    }
-}
-
 private struct BrainBarMetricCard: View {
     let title: String
     let value: String

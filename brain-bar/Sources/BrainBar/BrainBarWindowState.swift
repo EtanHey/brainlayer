@@ -54,8 +54,6 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Hashable, Identifiable {
     }
 }
 
-@MainActor
-
 enum BrainBarSparklineStyle: Equatable {
     case active
     case idle

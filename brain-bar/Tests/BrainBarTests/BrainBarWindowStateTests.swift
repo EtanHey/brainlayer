@@ -66,10 +66,6 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarAppMenuCommands.manualCommandTitles, ["Settings…"])
     }
 
-
-
-
-
     @MainActor
     func testLiveWindowDefaultsToTheOnePageDashboard() {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)
@@ -330,12 +326,6 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(preferred, candidates[1])
     }
-
-
-
-
-
-
 }
 
 private final class FakeKeyValueStore: BrainBarKeyValueStoring {

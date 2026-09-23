@@ -3,18 +3,22 @@ import io
 import json
 import os
 import queue
+import signal
 import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from brainlayer.backup_daily import _request_macos_purge as _real_macos_purge
 from tests.drive_listing_assertions import (
     assert_non_trashed_drive_files_only_grow_or_are_trashed,
     snapshot_non_trashed_drive_ids,
@@ -22,11 +26,14 @@ from tests.drive_listing_assertions import (
 
 
 @pytest.fixture(autouse=True)
-def _stable_backup_machine_id(monkeypatch):
+def _stable_backup_machine_id(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "test-machine")
+    monkeypatch.setenv("BRAINBAR_SOCKET_PATH", str(tmp_path / "no-brainbar.sock"))
     from brainlayer import backup_daily
 
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda _path, _bytes: None, raising=False)
+    monkeypatch.setattr(backup_daily, "POST_PURGE_POLL_SECONDS", 0, raising=False)
 
 
 def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
@@ -1131,20 +1138,23 @@ def test_create_snapshot_accepts_space_for_raw_and_gzip(tmp_path, monkeypatch):
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
 
 
-def test_create_snapshot_uses_important_usage_capacity(tmp_path, monkeypatch, capsys):
+def test_create_snapshot_requests_purge_before_writer(tmp_path, monkeypatch, capsys):
     from brainlayer import backup_daily
 
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = 2 * 1024 * 1024 * 1024
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: db_size)
-    available = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
-
-    class Disk:
-        free = 5 * 1024 * 1024 * 1024
-
-    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
-    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: available)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    raw_before = 5 * 1024 * 1024 * 1024
+    raw_after = required + backup_daily.COPY_CHUNK_BYTES
+    readings = iter([raw_before, raw_after])
+    requested = []
+    monkeypatch.setattr(
+        backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, raw_after))
+    )
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda path, amount: requested.append((path, amount)))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 10**12)
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1153,9 +1163,258 @@ def test_create_snapshot_uses_important_usage_capacity(tmp_path, monkeypatch, ca
 
     with pytest.raises(RuntimeError, match="writer reached"):
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    assert requested == [(tmp_path / "out", required - raw_before + backup_daily.COPY_CHUNK_BYTES)]
     output = capsys.readouterr().out
-    assert f"raw={Disk.free}" in output
-    assert f"important_usage={available}" in output
+    assert f"raw_before={raw_before}" in output
+    assert f"raw_after={raw_after}" in output
+
+
+def test_create_snapshot_skips_purge_when_raw_is_sufficient(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=required))
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: pytest.fail("purge not needed"))
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+
+    with pytest.raises(RuntimeError, match="writer reached"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+
+
+def test_create_snapshot_rejects_insufficient_purge_with_both_raw_readings(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    raw_before = required // 2
+    raw_after = required - 1
+    readings = iter([raw_before, raw_after])
+    requested = []
+    monkeypatch.setattr(
+        backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, raw_after))
+    )
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 10**12)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda path, amount: requested.append(amount))
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: pytest.fail("writer must not run"),
+    )
+
+    with pytest.raises(RuntimeError, match=rf"raw_before={raw_before}.*raw_after={raw_after}.*required={required}"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    assert requested == [required - raw_before + backup_daily.COPY_CHUNK_BYTES]
+
+
+def test_create_snapshot_reports_unavailable_purge_api(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    raw = required - 1
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    monkeypatch.setattr(
+        backup_daily,
+        "_request_macos_purge",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("CacheDelete unavailable")),
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: pytest.fail("writer must not run"),
+    )
+
+    with pytest.raises(
+        RuntimeError, match=rf"raw_before={raw} raw_after={raw}.*required={required}.*CacheDelete unavailable"
+    ):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+
+
+def test_create_snapshot_accepts_raw_gain_despite_purge_error(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    readings = iter([required - 1, required])
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    monkeypatch.setattr(
+        backup_daily, "_request_macos_purge", lambda *_args: (_ for _ in ()).throw(RuntimeError("API failed"))
+    )
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+
+    with pytest.raises(RuntimeError, match="writer reached"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+
+
+def test_create_snapshot_waits_for_delayed_raw_gain(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    readings = iter([required - 1, required - 1, required - 1, required])
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: None)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+
+    with pytest.raises(RuntimeError, match="writer reached"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+
+
+def test_create_snapshot_waits_beyond_one_second_for_raw_gain(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    readings = iter([required - 1, *([required - 1] * 8), required])
+    waited = []
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: None)
+    monkeypatch.setattr(backup_daily, "POST_PURGE_POLL_SECONDS", 0.5, raising=False)
+    monkeypatch.setattr(backup_daily.time, "sleep", lambda seconds: waited.append(seconds))
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+
+    with pytest.raises(RuntimeError, match="writer reached"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    assert sum(waited) > 1
+
+
+def test_cachedelete_does_not_relabel_backup_timeout(monkeypatch, tmp_path):
+    from brainlayer import backup_daily
+
+    monkeypatch.setattr(backup_daily.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        backup_daily.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(backup_daily.BackupTimeoutError("deadline")),
+    )
+    with pytest.raises(backup_daily.BackupTimeoutError, match="deadline"):
+        _real_macos_purge(tmp_path, 1)
+
+
+def test_backup_run_lock_rejects_overlapping_run(tmp_path):
+    from brainlayer import backup_daily
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    @backup_daily._serialized_backup_run
+    def held_run(staging_dir, log_path):  # noqa: ARG001
+        entered.set()
+        assert release.wait(3)
+        return {"verified": True}
+
+    log_path = tmp_path / "backup.log"
+    worker = threading.Thread(target=held_run, args=(tmp_path, log_path))
+    worker.start()
+    try:
+        assert entered.wait(2)
+        with pytest.raises(RuntimeError, match="backup already running"):
+            held_run(tmp_path, log_path)
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    refusal = json.loads(log_path.read_text().splitlines()[-1])
+    assert refusal["error_type"] == "BackupAlreadyRunningError"
+    assert refusal["verified"] is False
+    assert datetime.fromisoformat(refusal["attempted_at"]).tzinfo is not None
+
+
+def test_create_snapshot_does_not_purge_without_enough_important_capacity(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    raw = required - 1
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required - 1)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: pytest.fail("purge not viable"))
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: pytest.fail("writer must not run"),
+    )
+
+    with pytest.raises(RuntimeError, match=rf"raw_before={raw}.*raw_after={raw}.*required={required}"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("writer failed"), pytest.param("timeout", id="timeout")])
+def test_snapshot_temp_dir_is_removed_on_exception_or_timeout(tmp_path, monkeypatch, failure):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    error = backup_daily.BackupTimeoutError("deadline") if failure == "timeout" else failure
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(type(error), match=str(error)):
+        backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+    assert list(output_dir.glob("brainlayer-backup-*")) == []
+
+
+def test_abandoned_db_temp_removed_only_after_newer_verified_snapshot(tmp_path):
+    from brainlayer import backup_daily
+
+    abandoned = tmp_path / "brainlayer-backup-abandoned"
+    abandoned.mkdir()
+    (abandoned / ".backup-date").write_text("2026-05-13", encoding="ascii")
+    (abandoned / "2026-05-13.db").write_bytes(b"old private snapshot")
+    unmarked = tmp_path / "brainlayer-backup-unmarked"
+    unmarked.mkdir()
+    (unmarked / "2026-05-13.db").write_bytes(b"unproven")
+    future = tmp_path / "brainlayer-backup-future"
+    future.mkdir()
+    (future / ".backup-date").write_text("2026-05-15", encoding="ascii")
+    (future / "2026-05-15.db").write_bytes(b"future")
+    verified = tmp_path / "2026-05-14.db.gz"
+    verified.write_bytes(b"verified by caller")
+
+    assert backup_daily._prune_owned_temps_after_verified(tmp_path, verified) == [abandoned.name]
+    assert not abandoned.exists()
+    assert unmarked.exists()
+    assert future.exists()
 
 
 def test_create_snapshot_rejects_one_raw_byte_despite_important_capacity(tmp_path, monkeypatch):
@@ -1171,7 +1430,7 @@ def test_create_snapshot_rejects_one_raw_byte_despite_important_capacity(tmp_pat
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
     )
 
-    with pytest.raises(RuntimeError, match="raw=1.*important_usage=1000000000000"):
+    with pytest.raises(RuntimeError, match="raw_before=1 raw_after=1 important_usage=1000000000000"):
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out")
 
 
@@ -1283,7 +1542,7 @@ def test_backup_capacity_probe_error_falls_back_and_logs_both_readings(tmp_path,
         lambda _path: (_ for _ in ()).throw(RuntimeError("probe failed")),
     )
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": 1})())
-    with pytest.raises(RuntimeError, match="raw=1 important_usage=None"):
+    with pytest.raises(RuntimeError, match="raw_before=1 raw_after=1 important_usage=None"):
         backup_daily.run_backup(db_path=source, staging_dir=output_dir, log_path=log_path, upload=False)
     result = json.loads(log_path.read_text().splitlines()[-1])
     assert result["raw_free_bytes"] == 1
@@ -2248,11 +2507,191 @@ def test_backup_supervisor_enforces_timeout_outside_python_signal_delivery(tmp_p
     elapsed = time.monotonic() - started
 
     assert exit_code == 124
-    assert elapsed < 5
+    assert elapsed < 13  # 1s deadline plus the parent's 10s graceful cleanup window.
     receipt = json.loads(log_path.read_text().strip())
     assert receipt["backup_log_provenance"] == "pytest"
     assert receipt["verified"] is False
     assert receipt["uploaded"] is False
     assert receipt["error_type"] == "BackupTimeoutError"
+    assert datetime.fromisoformat(receipt["attempted_at"]).tzinfo is not None
     assert receipt["timeout_seconds"] == 1
     assert "timed out after 1s" in capsys.readouterr().out
+
+
+def test_backup_supervisor_sigterm_unwinds_snapshot_temp_dir(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import signal\n"
+        "import tempfile\n"
+        "from pathlib import Path\n"
+        "from brainlayer import backup_daily\n"
+        f"Path({str(output_dir / 'imported-from')!r}).write_text(str(Path(backup_daily.__file__).resolve()))\n"
+        "def run_backup(**kwargs):\n"
+        f"    with tempfile.TemporaryDirectory(prefix='brainlayer-backup-', dir={str(output_dir)!r}) as name:\n"
+        "        (Path(name) / 'snapshot.db').write_bytes(b'private')\n"
+        f"        Path({str(output_dir / 'ready')!r}).touch()\n"
+        "        while True:\n"
+        "            signal.pause()\n"
+        "backup_daily.run_backup = run_backup\n"
+        "raise SystemExit(backup_daily._run_backup_process(30))\n"
+    )
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "backup.log"))
+    worktree_src = Path(__file__).resolve().parents[1] / "src"
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, (str(worktree_src), os.environ.get("PYTHONPATH")))))
+
+    assert backup_daily._supervise_backup_process(2, command=[sys.executable, str(child)]) == 124
+    assert (output_dir / "ready").exists()
+    assert (output_dir / "imported-from").read_text() == str(Path(backup_daily.__file__).resolve())
+    assert list(output_dir.glob("brainlayer-backup-*")) == []
+
+
+def test_backup_child_distinguishes_sigterm_stop_from_timeout(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    def stopped_backup(**kwargs):  # noqa: ARG001
+        with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=tmp_path):
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    log_path = tmp_path / "backup.log"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log_path))
+    monkeypatch.setattr(backup_daily, "run_backup", stopped_backup)
+
+    assert backup_daily._run_backup_process(30) == 143
+    assert list(tmp_path.glob("brainlayer-backup-*")) == []
+    receipt = json.loads(log_path.read_text().splitlines()[-1])
+    assert receipt["error_type"] == "BackupStoppedError"
+    assert receipt["stop_signal"] == "SIGTERM"
+    assert datetime.fromisoformat(receipt["attempted_at"]).tzinfo is not None
+
+
+def test_supervisor_forwards_launchd_stop_without_timeout_receipt(tmp_path, monkeypatch):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import signal\nimport tempfile\nfrom pathlib import Path\nfrom brainlayer import backup_daily\n"
+        "def run_backup(**kwargs):\n"
+        f"    with tempfile.TemporaryDirectory(prefix='brainlayer-backup-', dir={str(output_dir)!r}):\n"
+        f"        Path({str(output_dir / 'ready')!r}).touch()\n"
+        "        while True: signal.pause()\n"
+        "backup_daily.run_backup = run_backup\n"
+        "raise SystemExit(backup_daily._run_backup_process(30))\n"
+    )
+    parent = tmp_path / "parent.py"
+    parent.write_text(
+        "import sys\nfrom brainlayer import backup_daily\n"
+        "raise SystemExit(backup_daily._supervise_backup_process(30, command=[sys.executable, sys.argv[1]]))\n"
+    )
+    log_path = tmp_path / "backup.log"
+    env = os.environ.copy()
+    env["BRAINLAYER_BACKUP_LOG_PATH"] = str(log_path)
+    env["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parents[1] / "src"), env.get("PYTHONPATH", "")))
+    process = subprocess.Popen([sys.executable, str(parent), str(child)], env=env)
+    try:
+        deadline = time.monotonic() + 5
+        while not (output_dir / "ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert (output_dir / "ready").exists()
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=5) == 143
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    deadline = time.monotonic() + 5
+    while list(output_dir.glob("brainlayer-backup-*")) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert list(output_dir.glob("brainlayer-backup-*")) == []
+    receipts = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert receipts[-1]["error_type"] == "BackupStoppedError"
+    assert all(receipt.get("error_type") != "BackupTimeoutError" for receipt in receipts)
+
+
+def test_stop_during_purge_never_reaches_writer(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source)
+    required = backup_daily._peak_backup_required_bytes(2 * 1024**3, 2 * 1024**3, 0, full=False)
+    monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda *_args: None)
+    monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda *_args: 2 * 1024**3)
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda *_args: SimpleNamespace(free=required - 1))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda *_args: required + 1)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: os.kill(os.getpid(), signal.SIGTERM))
+    monkeypatch.setattr(
+        backup_daily, "request_brainbar_vacuum_into", lambda *_args, **_kwargs: pytest.fail("writer reached")
+    )
+    previous = signal.signal(signal.SIGTERM, backup_daily._raise_backup_stopped)
+    try:
+        with pytest.raises(backup_daily.BackupStoppedError):
+            backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_stop_during_vacuum_never_retries(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    requests = []
+
+    def stop_on_request(*_args, **_kwargs):
+        requests.append(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", stop_on_request)
+    previous = signal.signal(signal.SIGTERM, backup_daily._raise_backup_stopped)
+    try:
+        with pytest.raises(backup_daily.BackupStoppedError):
+            backup_daily.request_brainbar_vacuum_into(tmp_path / "snapshot.db", max_attempts=3, retry_backoff_seconds=0)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert len(requests) == 1
+
+
+def test_lock_refusal_does_not_replace_running_backup_observability():
+    from brainlayer.observability_backup import _daily_snapshot
+
+    success = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-09-22T02:00:00+00:00",
+        "verified": True,
+        "uploaded": True,
+        "drive_file": "verified.db.gz",
+    }
+    refusal = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-09-23T02:00:00+00:00",
+        "error_type": "BackupAlreadyRunningError",
+        "error": "backup already running",
+    }
+    snapshot, error_type, all_errors = _daily_snapshot([success, refusal])
+    assert snapshot is not None and snapshot["destination"] == "verified.db.gz"
+    assert error_type is None
+    assert all_errors is False
+
+
+def test_real_backup_stop_writes_one_complete_receipt(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    db_path = tmp_path / "brainlayer.db"
+    _create_source_db(db_path)
+    log_path = tmp_path / "backup.log"
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(tmp_path / "staging"))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log_path))
+    monkeypatch.setattr(
+        backup_daily,
+        "create_sqlite_backup_artifact",
+        lambda *_args, **_kwargs: os.kill(os.getpid(), signal.SIGTERM),
+    )
+
+    assert backup_daily._run_backup_process(30) == 143
+    receipts = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert len(receipts) == 1
+    assert receipts[0]["error_type"] == "BackupStoppedError"
+    assert receipts[0]["stop_signal"] == "SIGTERM"
+    assert datetime.fromisoformat(receipts[0]["attempted_at"]).tzinfo is not None

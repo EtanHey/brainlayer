@@ -33,6 +33,16 @@ enum DashboardMetricFormatter {
         return formatter
     }()
 
+    private static let jobDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, HH:mm"
+        return formatter
+    }()
+
+    static func jobDateTimeString(_ date: Date) -> String {
+        jobDateTimeFormatter.string(from: date)
+    }
+
     static func speedString(ratePerMinute: Double) -> String {
         liveBadgeString(ratePerMinute: ratePerMinute)
     }

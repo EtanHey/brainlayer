@@ -49,6 +49,37 @@ def _write_jsonl(path: Path, line: str = '{"type":"message"}\n', *, mtime: float
     return path
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("tar failed"), pytest.param("timeout", id="timeout")])
+def test_bundle_partial_is_removed_on_exception_or_timeout(tmp_path, monkeypatch, failure):
+    from brainlayer import jsonl_backup
+
+    source_root = tmp_path / "sessions"
+    _write_jsonl(source_root / "session.jsonl", mtime=time.time() - 3600)
+    candidates = jsonl_backup._discover_jsonl_candidates([source_root])
+    staging = tmp_path / "staging"
+    error = jsonl_backup.backup_daily.BackupTimeoutError("deadline") if failure == "timeout" else failure
+
+    def fail_tar_open(path, mode):  # noqa: ARG001
+        Path(path).write_bytes(b"partial private tar")
+        raise error
+
+    monkeypatch.setattr(jsonl_backup.tarfile, "open", fail_tar_open)
+    with pytest.raises(type(error), match=str(error)):
+        jsonl_backup.create_jsonl_bundle_with_digests(candidates, staging, date_stamp="2026-05-14")
+    assert list(staging.glob(".claude-jsonl-*.tmp")) == []
+
+
+def test_crash_partial_is_reported_and_preserved_without_coverage_proof(tmp_path, capsys):
+    from brainlayer import jsonl_backup
+
+    partial = tmp_path / ".claude-jsonl-2026-05-13.tar.gz.abcd.tmp"
+    partial.write_bytes(b"private partial")
+    jsonl_backup._audit_staging_temps(tmp_path)
+
+    assert f"name={partial.name} bytes={partial.stat().st_size}" in capsys.readouterr().err
+    assert partial.exists()
+
+
 def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = None) -> None:
     monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: object())
     monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: object())

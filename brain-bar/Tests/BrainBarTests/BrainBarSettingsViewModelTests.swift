@@ -133,8 +133,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.backupStatusReason, "Newest status")
     }
 
-
-
     @MainActor
     func testSettingsReloadPreservesExternalEditBeforeSavingAnotherSetting() throws {
         let fixture = try makeFixture()
