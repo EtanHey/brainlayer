@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import datetime as dt
 import fcntl
+import functools
 import gzip
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -592,6 +594,8 @@ def _request_macos_purge(path: Path, amount_bytes: int) -> None:
             check=False,
             timeout=180,
         )
+    except BackupTimeoutError:
+        raise
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"macOS CacheDelete request unavailable: {exc}") from exc
     if completed.returncode != 0:
@@ -719,6 +723,11 @@ def create_sqlite_backup_artifact(
         except RuntimeError as exc:
             purge_error = str(exc)
         raw_free_bytes = shutil.disk_usage(output_dir).free
+        for _ in range(5):
+            if raw_free_bytes >= required_bytes:
+                break
+            time.sleep(0.2)
+            raw_free_bytes = shutil.disk_usage(output_dir).free
     free_bytes = raw_free_bytes
     if capacity_status_callback is not None:
         capacity_status_callback(raw_free_bytes, important_free_bytes, free_bytes, required_bytes)
@@ -728,7 +737,7 @@ def create_sqlite_backup_artifact(
         f"purge_error={purge_error}",
         flush=True,
     )
-    if purge_error is not None or raw_free_bytes < required_bytes:
+    if raw_free_bytes < required_bytes:
         reason = purge_error or (
             "important-usage capacity unavailable or below required"
             if important_free_bytes is None or important_free_bytes < required_bytes
@@ -1491,6 +1500,26 @@ def prune_drive_backups(
     return trashed
 
 
+def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    @functools.wraps(func)
+    def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        bound = inspect.signature(func).bind_partial(*args, **kwargs)
+        staging_dir = Path(bound.arguments.get("staging_dir", DEFAULT_STAGING_DIR)).expanduser()
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        with (staging_dir / ".backup.lock").open("a+b") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError(f"backup already running in {staging_dir}") from exc
+            try:
+                return func(*args, **kwargs)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    return wrapped
+
+
+@_serialized_backup_run
 def run_backup(
     db_path: Path | None = None,
     staging_dir: Path = DEFAULT_STAGING_DIR,
@@ -1664,7 +1693,9 @@ def run_backup(
 def _run_backup_process(timeout_seconds: int) -> int:
     previous_alarm_handler = None
     previous_alarm_handler = signal.getsignal(signal.SIGALRM)
+    previous_term_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGALRM, _raise_backup_timeout)
+    signal.signal(signal.SIGTERM, _raise_backup_timeout)
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         resolved_db_path = get_db_path()
@@ -1693,6 +1724,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
+        signal.signal(signal.SIGTERM, previous_term_handler)
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0 if result.get("verified", True) else 1
 
