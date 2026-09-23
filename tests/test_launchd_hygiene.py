@@ -414,10 +414,17 @@ def test_launchd_run_record_uses_label_when_watchdog_shares_watch_gate(tmp_path)
 
     result = subprocess.run(
         [str(loader), "/usr/bin/true"],
-        env={**os.environ, "HOME": str(tmp_path), "BRAINLAYER_ENV_FILE": str(env_file),
-             "BRAINLAYER_LAUNCHD_SERVICE": "watch",
-             "XPC_SERVICE_NAME": "com.brainlayer.throughput-watchdog"},
-        capture_output=True, text=True, timeout=2, check=False,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "watch",
+            "XPC_SERVICE_NAME": "com.brainlayer.throughput-watchdog",
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
     )
 
     assert result.returncode == 0, result.stderr
@@ -434,10 +441,17 @@ def test_launchd_run_record_updates_even_when_env_gate_exits_78(tmp_path):
 
     result = subprocess.run(
         [str(loader), "/usr/bin/true"],
-        env={**os.environ, "HOME": str(tmp_path),
-             "BRAINLAYER_ENV_FILE": str(tmp_path / "missing.env"),
-             "BRAINLAYER_LAUNCHD_SERVICE": "index", "XPC_SERVICE_NAME": "com.brainlayer.index"},
-        capture_output=True, text=True, timeout=2, check=False,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "BRAINLAYER_ENV_FILE": str(tmp_path / "missing.env"),
+            "BRAINLAYER_LAUNCHD_SERVICE": "index",
+            "XPC_SERVICE_NAME": "com.brainlayer.index",
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
     )
 
     assert result.returncode == 78
