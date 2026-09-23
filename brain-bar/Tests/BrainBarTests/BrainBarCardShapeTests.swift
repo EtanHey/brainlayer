@@ -71,7 +71,8 @@ final class BrainBarCardShapeTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(receipt.width + 2, needed, "Last store receipt clipped at 760")
                 }
             }
-            for card in cards where !card.hasPrefix("receipt.") {
+            // Details fact lists may grow to wrap long values; coverage cells stay fixed.
+            for card in cards where !card.hasPrefix("receipt.") && card != "activity" && card != "runtime" {
                 let measured = try states.map { state in
                     try XCTUnwrap(sizes[String(describing: state)]?[card], "\(card), \(state) at \(width)")
                 }
