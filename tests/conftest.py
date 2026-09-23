@@ -167,6 +167,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
     _install_db_open_guards()
+    from tests.socket_hygiene.sitecustomize import install_brainbar_socket_guard
+
+    install_brainbar_socket_guard()
+    os.environ["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = "1"
+    missing_socket = f"/tmp/brainlayer-pytest-{uuid.uuid4().hex}.sock"
+    os.environ["BRAINBAR_SOCKET_PATH"] = missing_socket
+    os.environ["BRAINLAYER_MCP_SOCKET"] = missing_socket
+    socket_hygiene_dir = str(Path(__file__).resolve().parent / "socket_hygiene")
+    os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (socket_hygiene_dir, os.environ.get("PYTHONPATH"))))
     config.addinivalue_line(
         "markers",
         "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
@@ -271,6 +280,18 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+
+@pytest.fixture(autouse=True)
+def forbid_live_brainbar_socket(monkeypatch, tmp_path, request):
+    """Redirect BrainBar resolution and refuse direct live connects, including child Pythons."""
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
+        monkeypatch.delenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", raising=False)
+        return
+    missing_socket = str(tmp_path / "no-brainbar.sock")
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    monkeypatch.setenv("BRAINBAR_SOCKET_PATH", missing_socket)
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", missing_socket)
 
 
 # --------------------------------------------------------------------------------------------

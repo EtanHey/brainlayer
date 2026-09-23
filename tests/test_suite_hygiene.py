@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import os
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -41,6 +42,50 @@ def test_unmarked_tests_are_forbidden_from_loading_an_embedding_model() -> None:
 
     with pytest.raises(RuntimeError, match=FORBID_MODEL_LOAD_ENV):
         guard_embedding_model_load("BAAI/bge-m3")
+
+
+def test_unmarked_tests_redirect_brainbar_and_arm_connect_guard() -> None:
+    assert os.environ.get("BRAINLAYER_FORBID_BRAINBAR_SOCKET") == "1"
+    assert os.environ.get("BRAINBAR_SOCKET_PATH") != "/tmp/brainbar.sock"
+    assert os.environ.get("BRAINLAYER_MCP_SOCKET") == os.environ.get("BRAINBAR_SOCKET_PATH")
+    assert getattr(socket.socket.connect, "_brainlayer_hygiene_guard", False) is True
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        with pytest.raises(RuntimeError, match="production BrainBar socket"):
+            client.connect("/tmp/brainbar.sock")
+        with pytest.raises(RuntimeError, match="production BrainBar socket"):
+            client.connect_ex("/tmp/brainbar.sock")
+        if os.path.realpath("/private/tmp/brainbar.sock") == os.path.realpath("/tmp/brainbar.sock"):
+            with pytest.raises(RuntimeError, match="production BrainBar socket"):
+                client.connect_ex("/private/tmp/brainbar.sock")
+
+
+def test_brainbar_socket_refusal_survives_python_subprocess(tmp_path) -> None:
+    program = textwrap.dedent(
+        """
+        import os
+        import socket
+        if not getattr(socket.socket.connect, '_brainlayer_hygiene_guard', False):
+            raise SystemExit('inherited socket guard missing')
+        if os.environ.get('BRAINLAYER_FORBID_BRAINBAR_SOCKET') != '1':
+            raise SystemExit('inherited socket env missing')
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            try:
+                client.connect('/tmp/brainbar.sock')
+            except RuntimeError as exc:
+                print('REFUSED:', exc)
+            else:
+                raise SystemExit('production socket was reachable')
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", program], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REFUSED: suite hygiene" in result.stdout
+
+
+@pytest.mark.integration
+def test_integration_marker_lifts_brainbar_socket_guard() -> None:
+    assert os.environ.get("BRAINLAYER_FORBID_BRAINBAR_SOCKET") != "1"
 
 
 @pytest.mark.embedding_model
