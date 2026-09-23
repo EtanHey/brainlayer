@@ -3341,7 +3341,8 @@ def test_jsonl_backup_launchd_plist_and_docstring_install_note_are_committed():
     assert "Archives/claude-sessions" not in plist
     assert "Archives/claude-sessions" not in script_plist
     assert "1800" in plist
-    assert "1800" in wrapper
+    assert "7200" in wrapper
+    assert "DEFAULT_TIMEOUT_SECONDS = 7200" in module
     assert ".local/share/brainlayer/logs/jsonl-backup.log" in plist
     assert "jsonl-backup" in install
     assert "install_jsonl_backup_script" in install

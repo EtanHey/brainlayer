@@ -133,18 +133,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.backupStatusReason, "Newest status")
     }
 
-    @MainActor
-    func testRetrievalToolsSettingPersistsEnabledState() throws {
-        let fixture = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-        defer { BrainBarRetrievalToolsSettings.shared.update(enabled: false) }
 
-        XCTAssertFalse(fixture.viewModel.config.showRetrievalTools)
-        fixture.viewModel.setShowRetrievalTools(true)
-
-        XCTAssertTrue(fixture.viewModel.config.showRetrievalTools)
-        XCTAssertTrue(try fixture.store.loadDocument().config.showRetrievalTools)
-    }
 
     @MainActor
     func testSettingsReloadPreservesExternalEditBeforeSavingAnotherSetting() throws {
@@ -154,10 +143,10 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         externalConfig.enrichmentBackend = "mlx"
         try fixture.store.save(externalConfig)
         _ = fixture.viewModel.reloadConfigFromDisk()
-        fixture.viewModel.setShowRetrievalTools(true)
+        fixture.viewModel.setSystemEnabled(false)
         let persisted = try fixture.store.loadDocument().config
         XCTAssertEqual(persisted.enrichmentBackend, "mlx")
-        XCTAssertTrue(persisted.showRetrievalTools)
+        XCTAssertFalse(persisted.systemEnabled)
     }
 
     @MainActor
@@ -187,11 +176,11 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         viewModel.onePasswordReference = "op://draft/reference"
         viewModel.pendingPlainAPIKey = "draft-secret"
         var external = try store.loadDocument().config
-        external.showRetrievalTools = true
+        external.systemEnabled = false
         try store.save(external)
 
         XCTAssertTrue(viewModel.reloadConfigFromDisk(preservingDrafts: true))
-        XCTAssertTrue(viewModel.config.showRetrievalTools)
+        XCTAssertFalse(viewModel.config.systemEnabled)
         XCTAssertEqual(viewModel.backendDraft, "draft-backend")
         XCTAssertEqual(viewModel.onePasswordReference, "op://draft/reference")
         XCTAssertEqual(viewModel.pendingPlainAPIKey, "draft-secret")

@@ -37,7 +37,7 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         XCTAssertNotNil(
             runtime.database,
             "Regression guard: BrainBarApp must not pass nil database to runtime.install — "
-            + "the UI gates 'Warming memory…' / QuickCaptureViewModel on database != nil. "
+            + "the UI gates 'Warming memory…' on database != nil. "
             + "See PR #312 (FastAPI daemon removal) — UI process must open SQLite directly."
         )
         XCTAssertNotNil(runtime.collector)
