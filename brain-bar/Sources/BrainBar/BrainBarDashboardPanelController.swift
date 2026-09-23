@@ -272,6 +272,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
 
     var selectedTabForTesting: BrainBarTab { panelState.selectedTab }
+
 #if BRAINBAR_UI
     var selectedSettingsSectionForTesting: BrainBarSettingsSection { panelState.settingsNavigation.selected }
 #endif
