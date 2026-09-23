@@ -768,6 +768,69 @@ def test_split_cycle_bootstraps_missing_db_before_readonly_open(tmp_path):
     assert opened_modes == [False, True]
 
 
+@pytest.mark.parametrize("committed_prefix", [0, 1])
+def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatch, committed_prefix):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)",
+        [(chunk_id, f"text {chunk_id}", f"2026-09-23T00:00:0{index}Z") for index, chunk_id in enumerate("abc")],
+    )
+    state = hotlane.PendingCandidateScanState()
+    monkeypatch.setattr(hotlane, "PENDING_CANDIDATE_SCAN_STATE", state)
+    writes = []
+
+    def write_vectors(_path, vectors):
+        chunk_ids = [vector.chunk_id for vector in vectors]
+        writes.append(chunk_ids)
+        for chunk_id in chunk_ids[:committed_prefix] if len(writes) == 1 else chunk_ids:
+            conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_id,))
+        conn.commit()
+        if len(writes) == 1:
+            raise hotlane.apsw.BusyError("database is locked")
+        return len(chunk_ids)
+
+    def cycle():
+        return hotlane._run_split_cycle(
+            db_path=db_path,
+            vector_store_cls=lambda _path, readonly=False: SimpleNamespace(conn=conn, close=lambda: None),
+            embed_fn=lambda _text: [0.0],
+            embed_batch_fn=lambda texts: [[0.0] for _text in texts],
+            recent_limit=0,
+            backlog_batch=2,
+            enrich_limit=0,
+            enrich_since_hours=8760,
+            write_vectors_fn=write_vectors,
+        )
+
+    try:
+        with pytest.raises(hotlane.apsw.BusyError, match="database is locked"):
+            cycle()
+        assert state.active is False
+        assert state.after_created_at is None
+        assert state.after_rowid == 0
+        assert cycle().embedded == 2
+        assert writes == [["a", "b"], (["a", "b"] if committed_prefix == 0 else ["b", "c"])]
+    finally:
+        conn.close()
+
+
 def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
     hotlane = _load_hotlane_module()
     events = []

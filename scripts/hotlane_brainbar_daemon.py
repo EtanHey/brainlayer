@@ -738,6 +738,12 @@ def _run_split_cycle(
     embedded = 0
     hot_rows: list[EmbedCandidate] = []
     pending_rows: list[EmbedCandidate] = []
+    pending_scan_state = PENDING_CANDIDATE_SCAN_STATE if pending_rows_fn is _pending_chunk_rows_with_resume else None
+    pending_scan_checkpoint = (
+        (pending_scan_state.active, pending_scan_state.after_created_at, pending_scan_state.after_rowid)
+        if pending_scan_state is not None and backlog_batch > 0
+        else None
+    )
 
     if recent_limit > 0 or backlog_batch > 0:
         if not db_path.exists():
@@ -757,7 +763,15 @@ def _run_split_cycle(
     vectors = _embed_candidates(hot_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn)
     vectors.extend(_embed_candidates(pending_rows, embed_fn=embed_fn, embed_batch_fn=embed_batch_fn))
     if vectors:
-        embedded += write_vectors_fn(db_path, vectors)
+        try:
+            embedded += write_vectors_fn(db_path, vectors)
+        except Exception:
+            if pending_scan_checkpoint is not None and pending_scan_state is not None:
+                # Earlier one-row commits stay indexed; retry only rows still missing vectors.
+                pending_scan_state.active, pending_scan_state.after_created_at, pending_scan_state.after_rowid = (
+                    pending_scan_checkpoint
+                )
+            raise
 
     if enrich_limit <= 0:
         return CycleResult(embedded=embedded)
