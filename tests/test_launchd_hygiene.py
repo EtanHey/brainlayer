@@ -426,6 +426,33 @@ def test_launchd_env_loader_honors_service_disable_toggle(tmp_path):
     assert "disabled by config" in result.stderr
 
 
+@pytest.mark.parametrize("enabled, expected_exit", [("0", 0), ("1", 42)])
+def test_launchd_env_loader_honors_hotlane_toggle(tmp_path, enabled, expected_exit):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        f"BRAINLAYER_LAUNCHD_HOTLANE_ENABLED={enabled}\nBRAINLAYER_DISABLED_SLEEP_SECONDS=0\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/bin/sh", "-c", "exit 42"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "hotlane-brainbar",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_exit, result.stderr
+    if enabled == "0":
+        assert "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED" in result.stderr
+
+
 def test_launchd_env_loader_normalizes_auto_enrich_false_values(tmp_path):
     loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
     env_file = tmp_path / "brainlayer.env"
