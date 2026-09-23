@@ -106,41 +106,5 @@ final class SearchResultDateTests: XCTestCase {
 @MainActor
 final class EnterKeySearchTests: XCTestCase {
 
-    func testSubmitInSearchModeWithResultsSelectsFirst() throws {
-        let tempDBPath = NSTemporaryDirectory() + "brainbar-enter-test-\(UUID().uuidString).db"
-        let db = BrainDatabase(path: tempDBPath)
-        defer {
-            db.close()
-            try? FileManager.default.removeItem(atPath: tempDBPath)
-            try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
-            try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
-        }
 
-        try db.insertChunk(
-            id: "c1", content: "React Server Components",
-            sessionId: "s1", project: "test", contentType: "ai_code", importance: 7
-        )
-
-        let panelState = QuickCapturePanelState()
-        let vm = QuickCaptureViewModel(db: db, panelState: panelState)
-
-        // Switch to search mode and populate results
-        vm.setMode(.search)
-        vm.inputText = "React"
-        vm.submit()
-
-        // Verify we have results and no selection yet is OK — submit should select first
-        guard !vm.results.isEmpty else {
-            XCTFail("Search should have returned results")
-            return
-        }
-
-        // Now press Enter — should copy result, NOT switch to capture mode
-        vm.submit()
-
-        // After submit in search mode with results: result should be activated
-        // The mode should remain search OR the content should be copied to clipboard
-        // It should NOT just switch to capture mode with the title in the input
-        XCTAssertNotNil(vm.copiedResultID, "Enter on search result should copy it")
-    }
 }

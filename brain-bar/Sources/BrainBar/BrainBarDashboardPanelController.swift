@@ -84,8 +84,6 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var signalCoverageExpanded = false
     @Published var dashboardHeight: CGFloat = 0
     @Published var headerHeight: CGFloat = 0
-    @Published var searchOverlayPresented = false
-    @Published var graphPresented = false
     @Published var selectedTab: BrainBarTab = .dashboard
     @Published var settingsActivationRevision = 0
 #if BRAINBAR_UI
@@ -102,7 +100,7 @@ final class BrainBarDashboardPanelState: ObservableObject {
                 containerHeight: dashboardHeight,
                 chromeAndSurroundingContentHeight: headerHeight
             ),
-            searchOverlayPresented || graphPresented ? 640 : 300
+            300
         )
     }
 
@@ -205,7 +203,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         switch action {
         case .dashboard: showDashboard()
         case .settings(let section): showSettings(section: section)
-        case .toggle, .search: break
+        case .toggle: break
         }
     }
 #endif
@@ -272,7 +270,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
-    func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
+
     var selectedTabForTesting: BrainBarTab { panelState.selectedTab }
 #if BRAINBAR_UI
     var selectedSettingsSectionForTesting: BrainBarSettingsSection { panelState.settingsNavigation.selected }

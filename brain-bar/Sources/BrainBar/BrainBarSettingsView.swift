@@ -92,12 +92,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
         updateConfig { $0.systemEnabled = enabled }
     }
 
-    func setShowRetrievalTools(_ enabled: Bool) {
-        if updateConfig({ $0.showRetrievalTools = enabled }) {
-            BrainBarRetrievalToolsSettings.shared.update(enabled: enabled)
-        }
-    }
-
     func setEnrichmentMode(_ mode: BrainLayerEnrichmentMode) {
         updateConfig { $0.enrichmentMode = mode }
     }
@@ -731,18 +725,9 @@ struct BrainBarSettingsView: View {
         switch navigation.selected {
         case .general:
             VStack(alignment: .leading, spacing: 12) {
-                sectionHeading("Interface")
-                HStack {
-                    Text("Show retrieval tools")
-                    Spacer()
-                    Toggle("Show retrieval tools", isOn: Binding(
-                        get: { viewModel.config.showRetrievalTools },
-                        set: { viewModel.setShowRetrievalTools($0) }
-                    )).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                }
-                Divider()
-                Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
-                    .font(.system(size: 11)).foregroundStyle(Color.brainBarTextMuted)
+                sectionHeading("BrainBar")
+                Text("Monitor memory activity on Dashboard. Manage services in Jobs and Backups.")
+                    .foregroundStyle(Color.brainBarTextMuted)
             }
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {

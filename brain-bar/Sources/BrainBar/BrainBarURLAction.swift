@@ -2,7 +2,6 @@ import Foundation
 
 enum BrainBarURLAction: Equatable {
     case toggle
-    case search
 #if BRAINBAR_UI
     case dashboard
     case settings(BrainBarSettingsSection)
@@ -19,8 +18,6 @@ enum BrainBarURLAction: Equatable {
         switch target {
         case "toggle":
             return .toggle
-        case "search":
-            return .search
 #if BRAINBAR_UI
         case "dashboard" where remainder.isEmpty:
             return .dashboard
