@@ -452,6 +452,63 @@ def _sweep_stale_backup_attempts(
     return deleted, surviving
 
 
+_OWNED_TEMP_PREFIXES = ("brainlayer-backup-", "brainlayer-restore-verify-")
+
+
+def _owned_temp_inventory(output_dir: Path) -> list[tuple[str, int]]:
+    """Measure only this job's abandoned temporary directories; never follow links."""
+    inventory: list[tuple[str, int]] = []
+    for path in sorted(output_dir.iterdir()):
+        if not path.name.startswith(_OWNED_TEMP_PREFIXES) or path.is_symlink() or not path.is_dir():
+            continue
+        size = 0
+        for item in path.rglob("*"):
+            if item.is_file() and not item.is_symlink():
+                try:
+                    size += item.stat().st_size
+                except FileNotFoundError:
+                    pass
+        inventory.append((path.name, size))
+    return inventory
+
+
+def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path) -> list[str]:
+    """Remove old job-owned crash remnants only after a newer Drive backup verified."""
+    verified_date = _parse_snapshot_date(verified_snapshot.name)
+    if verified_date is None:
+        return []
+    verified_mtime = verified_snapshot.stat().st_mtime
+    removed: list[str] = []
+    for directory in sorted(output_dir.iterdir()):
+        if not directory.name.startswith(_OWNED_TEMP_PREFIXES) or directory.is_symlink() or not directory.is_dir():
+            continue
+        marker = directory / ".backup-date"
+        if not marker.is_file() or marker.is_symlink():
+            continue
+        try:
+            marked_date = dt.date.fromisoformat(marker.read_text(encoding="ascii").strip())
+        except (OSError, UnicodeError, ValueError):
+            continue
+        if marked_date > verified_date or directory.stat().st_mtime > verified_mtime:
+            continue
+        contents = list(directory.iterdir())
+        if any(
+            item.is_symlink()
+            or not item.is_file()
+            or item.name
+            not in {".backup-date", "restored.db", f"{marked_date.isoformat()}.db", f"{marked_date.isoformat()}.db.gz"}
+            for item in contents
+        ):
+            continue
+        try:
+            shutil.rmtree(directory)
+        except OSError as exc:
+            print(f"Backup temp cleanup deferred: name={directory.name} error={exc}", flush=True)
+        else:
+            removed.append(directory.name)
+    return removed
+
+
 def _backup_attempt_completion_marker(attempt_path: Path) -> Path:
     return attempt_path.with_name(f"{attempt_path.name}.complete")
 
@@ -522,6 +579,26 @@ def _important_usage_capacity_bytes(path: Path) -> int | None:
         return None
 
 
+def _request_macos_purge(path: Path, amount_bytes: int) -> None:
+    """Ask macOS CacheDelete to reclaim its own purgeable content before VACUUM INTO."""
+    if sys.platform != "darwin":
+        raise RuntimeError("macOS CacheDelete is unavailable on this platform")
+    helper = Path(__file__).with_name("cachedelete_purge.swift")
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/swift", str(helper), str(path), str(amount_bytes)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"macOS CacheDelete request unavailable: {exc}") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"macOS CacheDelete request failed: {detail or f'exit {completed.returncode}'}")
+
+
 def _estimated_gzip_bytes(output_dir: Path, db_size: int) -> int:
     dated = [
         (_parse_snapshot_date(path.name), path)
@@ -588,6 +665,8 @@ def create_sqlite_backup_artifact(
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    for name, size in _owned_temp_inventory(output_dir):
+        print(f"Backup crash remnant: name={name} bytes={size}; retained until a newer backup verifies", flush=True)
     writer_probe_error: str | None = None
     try:
         writer_started_at = _brainbar_writer_started_at(socket_path)
@@ -622,28 +701,44 @@ def create_sqlite_backup_artifact(
         _peak_backup_required_bytes(db_size, estimated_gzip, raw_reclaimed, full=_should_run_full_verify(date_stamp))
         + surviving_attempt_growth_reserve_bytes
     )
-    raw_free_bytes = shutil.disk_usage(output_dir).free
+    raw_before_purge = shutil.disk_usage(output_dir).free
     try:
         important_free_bytes = _important_usage_capacity_bytes(output_dir)
     except (OSError, RuntimeError, ValueError):
         important_free_bytes = None
-    free_bytes = raw_free_bytes if raw_free_bytes >= required_bytes else important_free_bytes or raw_free_bytes
+    purge_error: str | None = None
+    raw_free_bytes = raw_before_purge
+    if (
+        raw_before_purge < required_bytes
+        and important_free_bytes is not None
+        and important_free_bytes >= required_bytes
+    ):
+        request_bytes = required_bytes - raw_before_purge + COPY_CHUNK_BYTES
+        try:
+            _request_macos_purge(output_dir, request_bytes)
+        except RuntimeError as exc:
+            purge_error = str(exc)
+        raw_free_bytes = shutil.disk_usage(output_dir).free
+    free_bytes = raw_free_bytes
     if capacity_status_callback is not None:
         capacity_status_callback(raw_free_bytes, important_free_bytes, free_bytes, required_bytes)
     print(
-        f"Backup capacity: raw={raw_free_bytes} important_usage={important_free_bytes} "
-        f"selected={free_bytes} required={required_bytes}",
+        f"Backup capacity: raw_before={raw_before_purge} raw_after={raw_free_bytes} "
+        f"important_usage={important_free_bytes} selected={free_bytes} required={required_bytes} "
+        f"purge_error={purge_error}",
         flush=True,
     )
-    if raw_free_bytes < required_bytes and (
-        important_free_bytes is None
-        or important_free_bytes < required_bytes
-        or raw_free_bytes < db_size + surviving_attempt_growth_reserve_bytes + MIN_RAW_FREE_BYTES
-    ):
+    if purge_error is not None or raw_free_bytes < required_bytes:
+        reason = purge_error or (
+            "important-usage capacity unavailable or below required"
+            if important_free_bytes is None or important_free_bytes < required_bytes
+            else "macOS reclaimed too little purgeable space"
+        )
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "
-            f"raw={raw_free_bytes} important_usage={important_free_bytes} "
-            f"selected={free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES}; "
+            f"raw_before={raw_before_purge} raw_after={raw_free_bytes} "
+            f"important_usage={important_free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES}; "
+            f"{reason}; "
             f"{len(surviving_attempt_paths)} recent attempts reserve "
             f"{surviving_attempt_growth_reserve_bytes} growth bytes"
         )
@@ -653,6 +748,7 @@ def create_sqlite_backup_artifact(
     uncompressed_path: Path | None = None
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
+        (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         _require_raw_floor(output_dir)
@@ -1277,6 +1373,7 @@ def verify_sqlite_backup_artifact(
         result["local_md5"] = local_md5
         with tempfile.TemporaryDirectory(prefix="brainlayer-restore-verify-", dir=artifact.gzip_path.parent) as tmp:
             tmp_dir = Path(tmp)
+            (tmp_dir / ".backup-date").write_text(artifact.gzip_path.name[:10], encoding="ascii")
             if full:
                 if service is None or not file_id:
                     result["verification_error"] = "full verification requires Drive service and file_id"
@@ -1513,6 +1610,9 @@ def run_backup(
                 )
             )
             if result["verified"]:
+                result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
+                    snapshot.parent, snapshot
+                )
                 if remove_local_after_upload:
                     snapshot.unlink()
                     result["local_removed"] = True
