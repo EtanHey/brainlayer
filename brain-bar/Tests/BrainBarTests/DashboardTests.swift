@@ -723,15 +723,12 @@ final class DashboardTests: XCTestCase {
         )
     }
 
-    func testDetailsDisclosureAnimationRetainsContentAndHasOneWindowHeightWriter() throws {
+    func testDetailsDisclosureAnimationRetainsContentWithoutResettingScrollOrWindow() throws {
         let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let controllerSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
         let rowRange = try XCTUnwrap(rootSource.range(of: "private struct BrainBarDisclosureRow"))
         let rowEnd = try XCTUnwrap(rootSource[rowRange.upperBound...].range(of: "enum BrainBarDisclosureRowPreview"))
         let rowSource = String(rootSource[rowRange.lowerBound..<rowEnd.lowerBound])
-        let fitRange = try XCTUnwrap(controllerSource.range(of: "private func fitPanelToContent()"))
-        let fitEnd = try XCTUnwrap(controllerSource[fitRange.upperBound...].range(of: "private static func makePanel"))
-        let fitSource = String(controllerSource[fitRange.lowerBound..<fitEnd.lowerBound])
         let animationRange = try XCTUnwrap(controllerSource.range(of: "enum BrainBarDisclosureAnimation"))
         let animationEnd = try XCTUnwrap(controllerSource[animationRange.upperBound...].range(of: "final class BrainBarDashboardPanel"))
         let animationSource = String(controllerSource[animationRange.lowerBound..<animationEnd.lowerBound])
@@ -760,16 +757,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(
             panelStateSource.contains("BrainBarDisclosureAnimation.windowHeight("),
             "The panel driver must consume the same coupling model as the disclosure container."
-        )
-        XCTAssertEqual(
-            fitSource.components(separatedBy: "panel.setContentSize(").count - 1,
-            1,
-            "The disclosure interaction must have exactly one panel-height writer."
-        )
-        XCTAssertTrue(
-            rootSource.contains("detailsExpanded: panelState.detailsExpanded")
-                && rootSource.contains("signalCoverageExpanded: panelState.signalCoverageExpanded"),
-            "Every disclosure height change must explicitly clear the enclosing NSScrollView offset that clipped the banner."
         )
     }
 

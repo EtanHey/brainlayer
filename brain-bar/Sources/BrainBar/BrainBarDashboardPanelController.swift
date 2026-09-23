@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 enum BrainBarDisclosureAnimation {
@@ -89,7 +88,6 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var graphPresented = false
     @Published var selectedTab: BrainBarTab = .dashboard
     @Published var settingsActivationRevision = 0
-    @Published private(set) var disclosureAnimationRevision = 0
 #if DEBUG
     var renderedSummaryTileHeights: [String: CGFloat] = [:]
 #endif
@@ -104,9 +102,7 @@ final class BrainBarDashboardPanelState: ObservableObject {
         )
     }
 
-    func disclosureAnimationDidComplete() {
-        disclosureAnimationRevision += 1
-    }
+    func disclosureAnimationDidComplete() {}
 }
 
 @MainActor
@@ -121,11 +117,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     let panelForTesting: NSPanel
     let contentViewControllerForTesting: NSViewController
     var isShownForTesting: Bool { panel.isVisible }
-    var measuredContentHeightForTesting: CGFloat { panelState.headerHeight + panelState.dashboardHeight }
+    var naturalDashboardHeightForTesting: CGFloat { panelState.dashboardHeight }
 
     private let panel: NSPanel
     private let panelState = BrainBarDashboardPanelState()
-    private var sizingObservation: AnyCancellable?
+    private weak var lastShownAnchor: NSView?
+    private var lastAnchorScreenRect: NSRect?
+    private weak var lastAnchorScreen: NSScreen?
     private var clickOutsideMonitor: Any?
     private var localClickMonitor: Any?
     private var shownAt: Date = .distantPast
@@ -149,9 +147,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         BrainBarSettingsActions.installOpenHandler { [weak self] in
             self?.showSettings()
         }
-        sizingObservation = panelState.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.fitPanelToContent() }
-        }
     }
 
     func toggle(anchoredTo anchorView: NSView? = nil) {
@@ -165,7 +160,15 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func show(anchoredTo anchorView: NSView? = nil) {
         guard let anchorView else { return }
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
-        positionPanel(below: anchorView)
+        let anchorWindow = anchorView.window
+        let anchorRect = anchorWindow?.convertToScreen(anchorView.convert(anchorView.bounds, to: nil))
+        let anchorScreen = anchorWindow?.screen
+        if lastShownAnchor !== anchorView || lastAnchorScreenRect != anchorRect || lastAnchorScreen !== anchorScreen {
+            positionPanel(below: anchorView)
+            lastShownAnchor = anchorView
+            lastAnchorScreenRect = anchorRect
+            lastAnchorScreen = anchorScreen
+        }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
@@ -231,8 +234,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         removeClickOutsideMonitor()
     }
 
-    func windowDidResize(_ notification: Notification) { fitPanelToContent() }
-
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(width: max(frameSize.width, Self.minSize.width), height: sender.frame.height)
     }
@@ -241,24 +242,6 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
     var selectedTabForTesting: BrainBarTab { panelState.selectedTab }
-
-    private func fitPanelToContent() {
-        let width = panel.contentLayoutRect.width
-        let visibleHeight = statusItemButton?.window?.screen?.visibleFrame.height ?? Self.maxSize.height
-        let titlebarInset = max((panel.contentView?.frame.height ?? panel.contentLayoutRect.height)
-            - panel.contentLayoutRect.height, 0)
-        let usableHeight = min(panelState.fittingHeight, max(visibleHeight - titlebarInset, 0))
-        let contentHeight = usableHeight + titlebarInset
-        let needsResize = abs(panel.contentLayoutRect.height - usableHeight) > 0.5
-        if needsResize {
-            panel.contentMinSize = NSSize(width: Self.minSize.width, height: 0)
-            panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: Self.maxSize.height)
-            panel.setContentSize(NSSize(width: width, height: contentHeight))
-        }
-        panel.contentMinSize = NSSize(width: Self.minSize.width, height: contentHeight)
-        panel.contentMaxSize = NSSize(width: Self.maxSize.width, height: contentHeight)
-        if needsResize, let statusItemButton { positionPanel(below: statusItemButton) }
-    }
 
     private static func makePanel(contentViewController: NSViewController) -> NSPanel {
         let panel = BrainBarDashboardPanel(
@@ -292,17 +275,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
         let anchorRectInWindow = anchorView.convert(anchorView.bounds, to: nil)
         let anchorRect = anchorWindow.convertToScreen(anchorRectInWindow)
-        let visibleFrame = screen.visibleFrame
-        let panelSize = panel.frame.size
+        panel.setFrameOrigin(Self.anchorOrigin(anchorRect: anchorRect, panelSize: panel.frame.size, visibleFrame: screen.visibleFrame))
+    }
+
+    static func anchorOrigin(anchorRect: NSRect, panelSize: NSSize, visibleFrame: NSRect) -> NSPoint {
         let gap = BrainBarWindowPlacement.menuBarIconGap
-        let targetX = min(
-            max(anchorRect.maxX - panelSize.width, visibleFrame.minX),
-            visibleFrame.maxX - panelSize.width
-        )
-        let targetY = max(
-            min(anchorRect.minY - gap - panelSize.height, visibleFrame.maxY - panelSize.height),
-            visibleFrame.minY
-        )
-        panel.setFrameOrigin(NSPoint(x: targetX, y: targetY))
+        let targetX = min(max(anchorRect.maxX - panelSize.width, visibleFrame.minX), visibleFrame.maxX - panelSize.width)
+        let targetY = max(min(anchorRect.minY - gap - panelSize.height, visibleFrame.maxY - panelSize.height), visibleFrame.minY)
+        return NSPoint(x: targetX, y: targetY)
     }
 }

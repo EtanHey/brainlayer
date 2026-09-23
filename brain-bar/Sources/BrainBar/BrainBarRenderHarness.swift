@@ -2,6 +2,7 @@
 import AppKit
 import Darwin
 import SwiftUI
+import Vision
 
 @MainActor
 enum BrainBarRenderHarness {
@@ -113,6 +114,15 @@ enum BrainBarRenderHarness {
                         )
                         print("[brainbar-render] \(artifact)")
                     }
+                }
+            }
+            for breakpoint in breakpoints {
+                for (expanded, afterCollapse) in [(false, false), (true, false), (false, true)] {
+                    let artifact = try render(
+                        breakpoint: breakpoint, scenario: .readable, detailsExpanded: expanded,
+                        outputDirectory: outputDirectory, fixedHeight: 640, afterCollapse: afterCollapse
+                    )
+                    print("[brainbar-render] \(artifact)")
                 }
             }
             try verifyDirectionalStatesDiffer(in: outputDirectory)
@@ -239,14 +249,20 @@ enum BrainBarRenderHarness {
         print("[brainbar-render] directional-state probe PASS: draining and backlogged differ")
     }
 
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
+    }
+
     private static func render(
         breakpoint: (name: String, width: CGFloat),
         scenario: Scenario,
         detailsExpanded: Bool,
-        outputDirectory: URL
+        outputDirectory: URL,
+        fixedHeight: CGFloat? = nil,
+        afterCollapse: Bool = false
     ) throws -> String {
         let panelState = BrainBarDashboardPanelState()
-        panelState.detailsExpanded = detailsExpanded
+        panelState.detailsExpanded = detailsExpanded || afterCollapse
         panelState.attentionExpanded = scenario == .attentionExpanded || scenario == .stale
         panelState.signalCoverageExpanded = scenario == .vectorAt100
         let collector: StatsCollector
@@ -282,12 +298,13 @@ enum BrainBarRenderHarness {
         // The XCTest renderer owns dashboard-<breakpoint>.png. Include the CLI
         // state in every filename so the two producers cannot overwrite each other.
         let suffix = detailsExpanded ? "-details-expanded" : ""
-        let name = "dashboard-cli-\(breakpoint.name)-\(scenario.rawValue)\(suffix)"
+        let name = fixedHeight == nil ? "dashboard-cli-\(breakpoint.name)-\(scenario.rawValue)\(suffix)"
+            : "dashboard-fixed-\(breakpoint.name)-\(afterCollapse ? "after-collapse" : detailsExpanded ? "expanded" : "collapsed")"
 
         let measuringHost = NSHostingView(rootView: view)
         measuringHost.frame = NSRect(x: 0, y: 0, width: breakpoint.width, height: 10_000)
         settle(measuringHost)
-        let height = ceil(panelState.fittingHeight)
+        let height = fixedHeight ?? ceil(panelState.fittingHeight)
         guard height.isFinite, height > 0 else {
             throw Failure("\(name): dashboard reported invalid fitting height \(height)")
         }
@@ -295,7 +312,33 @@ enum BrainBarRenderHarness {
         let size = NSSize(width: breakpoint.width, height: height)
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: size)
+        var window: NSPanel?
+        defer { window?.orderOut(nil) }
+        if fixedHeight != nil {
+            window = NSPanel(contentRect: NSRect(origin: NSPoint(x: -2_000, y: -2_000), size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+            window?.alphaValue = 0
+            window?.contentView = host
+            window?.orderFront(nil)
+        }
         settle(host)
+        if fixedHeight != nil {
+            guard let scroll = scrollViews(in: host).first(where: { ($0.documentView?.bounds.height ?? 0) > 0 }),
+                  let document = scroll.documentView else { throw Failure("\(name): dashboard scroll view is missing") }
+            let clip = scroll.contentView
+            if afterCollapse {
+                clip.scroll(to: NSPoint(x: 0, y: max(document.bounds.maxY - clip.bounds.height, 0)))
+                scroll.reflectScrolledClipView(clip)
+                panelState.detailsExpanded = false
+                settle(host)
+                clip.scroll(to: .zero)
+                scroll.reflectScrolledClipView(clip)
+                settle(host)
+            }
+            let bottom = document.isFlipped ? max(document.bounds.maxY - clip.bounds.height, document.bounds.minY) : document.bounds.minY
+            clip.scroll(to: NSPoint(x: 0, y: bottom))
+            scroll.reflectScrolledClipView(clip)
+            settle(host)
+        }
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             throw Failure("\(name): AppKit could not allocate an off-screen bitmap")
         }
@@ -315,6 +358,17 @@ enum BrainBarRenderHarness {
         guard emittedPNG.count > 5_000, colors > 16 else {
             try? FileManager.default.removeItem(at: url)
             throw Failure("\(name): refusing a blank or trivial render (\(emittedPNG.count) PNG bytes, \(colors) sampled colors)")
+        }
+        if fixedHeight != nil {
+            guard emittedBitmap.pixelsWide * Int(height) == emittedBitmap.pixelsHigh * Int(breakpoint.width), let image = emittedBitmap.cgImage else { throw Failure("\(name): invalid fixed-height bitmap") }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            for label in ["Details", detailsExpanded ? "Last seen" : "Details"] {
+                guard request.results?.contains(where: {
+                    $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(label) == true && $0.boundingBox.minY > 0.025
+                }) == true else { throw Failure("\(name): \(label) or bottom padding clipped") }
+            }
         }
 
         let cardHeights = panelState.renderedSummaryTileHeights
