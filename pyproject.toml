@@ -141,6 +141,7 @@ exclude = [
 "scripts/hotlane_brainbar_daemon.py" = "brainlayer/launchd/hotlane_brainbar_daemon.py"
 "scripts/tier0-watchdog.sh" = "brainlayer/launchd/tier0-watchdog.sh"
 "scripts/release-verify-signatures.sh" = "brainlayer/launchd/release-verify-signatures.sh"
+"src/brainlayer/cachedelete_purge.swift" = "brainlayer/cachedelete_purge.swift"
 
 [tool.hatch.build.targets.sdist]
 only-include = [
