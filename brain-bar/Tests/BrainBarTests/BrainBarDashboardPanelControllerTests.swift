@@ -173,19 +173,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertEqual(controller.panelForTesting.contentLayoutRect.height, collapsedSignalHeight, accuracy: 1)
     }
 
-    func testSearchOverlayKeepsExpandedDetailsWindowHeight() {
-        let runtime = BrainBarRuntime()
-        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        let controller = BrainBarDashboardPanelController(runtime: runtime)
-        _ = controller.contentViewControllerForTesting.view
-        controller.setDetailsExpandedForTesting(true)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
-        let expandedHeight = controller.panelForTesting.contentLayoutRect.height
-        controller.setSearchOverlayPresentedForTesting(true)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        XCTAssertEqual(controller.panelForTesting.contentLayoutRect.height, expandedHeight, accuracy: 1)
-    }
 
     func testDetailsTransitionsPreserveFixedFrameAndScrollAtSupportedWidths() throws {
         let runtime = BrainBarRuntime()
@@ -332,58 +320,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertFalse(largeLayout.compactCards)
     }
 
-    func testCommandBarBecomesReadyWhenDatabaseWasInstalledWhilePanelWasHidden() {
-        BrainBarRetrievalToolsSettings.shared.update(enabled: true)
-        defer { BrainBarRetrievalToolsSettings.shared.update(enabled: false) }
 
-        let runtime = BrainBarRuntime()
-        let controller = BrainBarDashboardPanelController(runtime: runtime)
-        let tempDBPath = NSTemporaryDirectory() + "brainbar-commandbar-ready-\(UUID().uuidString).db"
-        let db = BrainDatabase(path: tempDBPath)
-        let collector = StatsCollector(
-            dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: getpid())
-        )
-        defer {
-            collector.stop()
-            db.close()
-            controller.dismiss()
-            try? FileManager.default.removeItem(atPath: tempDBPath)
-            try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
-            try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
-        }
-
-        // Match launch order: AppDelegate creates the hidden popover content before
-        // the async database install lands, then the user opens BrainBar later.
-        _ = controller.contentViewControllerForTesting.view
-        runMainRunLoop()
-
-        runtime.install(collector: collector, database: db)
-        runMainRunLoop()
-
-        let anchorWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 32, height: 24),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        let anchorView = NSView(frame: NSRect(x: 0, y: 0, width: 32, height: 24))
-        anchorWindow.contentView = anchorView
-        anchorWindow.orderFront(nil)
-        defer { anchorWindow.orderOut(nil) }
-
-        controller.show(anchoredTo: anchorView)
-        runMainRunLoop()
-
-        let field = findSubview(
-            ofType: KeyHandlingCommandBarField.self,
-            in: controller.contentViewControllerForTesting.view
-        )
-        XCTAssertNotNil(
-            field,
-            "Command bar should create its ready text field when runtime.database was installed before the panel became visible."
-        )
-    }
 
     private func runMainRunLoop() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))

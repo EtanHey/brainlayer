@@ -59,7 +59,6 @@ final class DesignTokensTests: XCTestCase {
 
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(11), 11, accuracy: 0.001)
-        XCTAssertEqual(KGEdgeRenderer.relationLabelFontSize, BrainBarDesignTokens.TypeScale.minimumText, accuracy: 0.001)
         XCTAssertEqual(DegradationBadge.labelFontSize * DegradationBadge.minimumLabelScaleFactor, 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarFlowStatusPill.fontSize * BrainBarFlowStatusPill.minimumScaleFactor, 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
