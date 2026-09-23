@@ -132,4 +132,21 @@ if [ "${BRAINLAYER_REQUIRE_GOOGLE_API_KEY:-0}" = "1" ] \
     exit 78
 fi
 
+# Record the actual launch before exec so Jobs can show its time without
+# mistaking a rotated or manually touched output log for a run.
+service="${BRAINLAYER_LAUNCHD_SERVICE:-}"
+if [[ "$service" =~ ^[a-z0-9-]+$ ]]; then
+    record_dir="$HOME/.local/share/brainlayer/job-runs"
+    record_tmp="$record_dir/com.brainlayer.$service.started.$$"
+    if mkdir -p "$record_dir" && date +%s > "$record_tmp"; then
+        if ! mv -f "$record_tmp" "$record_dir/com.brainlayer.$service.started"; then
+            echo "WARN: unable to record launch time for $service" >&2
+            rm -f "$record_tmp"
+        fi
+    else
+        echo "WARN: unable to record launch time for $service" >&2
+        rm -f "$record_tmp"
+    fi
+fi
+
 exec "$@"

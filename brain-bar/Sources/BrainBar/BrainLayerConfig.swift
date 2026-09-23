@@ -166,6 +166,7 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
 
     var launchdLabel: String {
         switch self {
+        case .hotlane: "com.brainlayer.hotlane-brainbar"
         case .backupDaily: "com.brainlayer.backup-daily"
         case .jsonlBackup: "com.brainlayer.jsonl-backup"
         case .maintenanceNightly: "com.brainlayer.maintenance-nightly"
@@ -653,20 +654,23 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
 
     private let commandRunner: CommandRunner
     private let uidProvider: @Sendable () -> uid_t
-    private let fileModificationDate: @Sendable (URL) -> Date?
+    private let runRecordDate: @Sendable (BrainLayerLaunchdJob) -> Date?
+    private let schedule: @Sendable (BrainLayerLaunchdJob) -> DateComponents?
     private let calendar: Calendar
     private let now: @Sendable () -> Date
 
     init(
         commandRunner: @escaping CommandRunner = BrainLayerLaunchdStatusProvider.run,
         uidProvider: @escaping @Sendable () -> uid_t = getuid,
-        fileModificationDate: @escaping @Sendable (URL) -> Date? = BrainLayerLaunchdStatusProvider.modificationDate,
+        runRecordDate: @escaping @Sendable (BrainLayerLaunchdJob) -> Date? = { readRunRecord($0) },
+        schedule: @escaping @Sendable (BrainLayerLaunchdJob) -> DateComponents? = { readSchedule($0) },
         calendar: Calendar = .current,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.commandRunner = commandRunner
         self.uidProvider = uidProvider
-        self.fileModificationDate = fileModificationDate
+        self.runRecordDate = runRecordDate
+        self.schedule = schedule
         self.calendar = calendar
         self.now = now
     }
@@ -683,17 +687,14 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         let target = "gui/\(uidProvider())/\(job.launchdLabel)"
         let result = commandRunner(["/bin/launchctl", "print", target])
         if result.terminationStatus == 0 {
-            let hour = integer(named: "Hour", in: result.output)
-            let minute = integer(named: "Minute", in: result.output)
-            let weekday = integer(named: "Weekday", in: result.output)
-            let paths = ["stdout path", "stderr path"].compactMap { path(named: $0, in: result.output) }
+            let components = schedule(job)
             return BrainLayerLaunchdJobObservation(
                 loadState: result.output.contains("pid =") ? .running : .loaded,
                 runs: integerLine(named: "runs", in: result.output),
                 lastExitCode: integerLine(named: "last exit code", in: result.output).map(Int32.init),
-                lastRunAt: paths.compactMap { fileModificationDate(URL(fileURLWithPath: $0)) }.max(),
-                nextRunAt: nextRun(hour: hour, minute: minute, weekday: weekday),
-                isContinuous: hour == nil && job.isContinuous
+                lastRunAt: runRecordDate(job),
+                nextRunAt: nextRun(components: components),
+                isContinuous: components == nil && job.isContinuous
             )
         }
 
@@ -702,11 +703,6 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             return .stateOnly(.unloaded)
         }
         return .stateOnly(.probeError("launchctl exited \(result.terminationStatus)"))
-    }
-
-    private func integer(named key: String, in output: String) -> Int? {
-        let pattern = "\\\"\(NSRegularExpression.escapedPattern(for: key))\\\"\\s*=>\\s*(-?\\d+)"
-        return firstInteger(matching: pattern, in: output)
     }
 
     private func integerLine(named key: String, in output: String) -> Int? {
@@ -722,22 +718,36 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         return Int(output[range])
     }
 
-    private func path(named key: String, in output: String) -> String? {
-        let prefix = "\(key) = "
-        return output.split(separator: "\n").compactMap { line -> String? in
-            let value = line.trimmingCharacters(in: .whitespaces)
-            guard value.hasPrefix(prefix) else { return nil }
-            return String(value.dropFirst(prefix.count))
-        }.first
+    private func nextRun(components: DateComponents?) -> Date? {
+        guard var components, components.hour != nil, components.minute != nil else { return nil }
+        components.second = 0
+        return calendar.nextDate(after: now(), matching: components, matchingPolicy: .nextTime)
     }
 
-    private func nextRun(hour: Int?, minute: Int?, weekday: Int?) -> Date? {
-        guard let hour, let minute else { return nil }
-        var components = DateComponents(hour: hour, minute: minute, second: 0)
-        if let weekday {
-            components.weekday = (weekday % 7) + 1
-        }
-        return calendar.nextDate(after: now(), matching: components, matchingPolicy: .nextTime)
+    static func readRunRecord(
+        _ job: BrainLayerLaunchdJob,
+        in directory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/brainlayer/job-runs")
+    ) -> Date? {
+        let path = directory.appendingPathComponent("\(job.launchdLabel).started")
+        guard let raw = try? String(contentsOf: path, encoding: .utf8),
+              let seconds = TimeInterval(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func readSchedule(
+        _ job: BrainLayerLaunchdJob,
+        in directory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+    ) -> DateComponents? {
+        let path = directory.appendingPathComponent("\(job.launchdLabel).plist")
+        guard let data = try? Data(contentsOf: path),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let interval = plist["StartCalendarInterval"] as? [String: Int],
+              let hour = interval["Hour"], let minute = interval["Minute"] else { return nil }
+        var components = DateComponents(hour: hour, minute: minute)
+        if let weekday = interval["Weekday"] { components.weekday = (weekday % 7) + 1 }
+        return components
     }
 
     private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
@@ -763,9 +773,6 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         }
     }
 
-    private static func modificationDate(_ url: URL) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
-    }
 }
 
 private extension BrainLayerLaunchdJob {

@@ -200,6 +200,20 @@ enum BrainBarRenderHarness {
                 runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
                     observation: .unknown("Fixture runtime state unavailable.")
                 ),
+                initialLaunchdObservations: scenario.section == .jobs ? [
+                    .watch: .init(loadState: .running, runs: 7, lastExitCode: 0,
+                                  lastRunAt: Date(timeIntervalSince1970: 1_790_164_800), nextRunAt: nil,
+                                  isContinuous: true),
+                    .index: .init(loadState: .loaded, runs: 4, lastExitCode: 1,
+                                  lastRunAt: Date(timeIntervalSince1970: 1_790_161_200),
+                                  nextRunAt: Date(timeIntervalSince1970: 1_790_208_900), isContinuous: false),
+                    .maintenanceNightly: .init(loadState: .loaded, runs: 0, lastExitCode: nil,
+                                               lastRunAt: nil, nextRunAt: Date(timeIntervalSince1970: 1_790_211_600),
+                                               isContinuous: false),
+                    .maintenanceWeekly: .init(loadState: .loaded, runs: 2, lastExitCode: 0,
+                                              lastRunAt: Date(timeIntervalSince1970: 1_789_866_900),
+                                              nextRunAt: Date(timeIntervalSince1970: 1_790_471_700), isContinuous: false),
+                ] : [:],
                 refreshStatusOnLoad: false,
                 initialObservabilityResult: .unreadable("Fixture backup status unavailable.")
             )

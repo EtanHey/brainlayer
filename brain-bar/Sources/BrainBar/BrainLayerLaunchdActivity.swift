@@ -22,11 +22,13 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
 
 enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
     case healthy
+    case awaitingRun
     case unhealthy
 
     var title: String {
         switch self {
         case .healthy: "Healthy"
+        case .awaitingRun: "Awaiting next run"
         case .unhealthy: "Needs attention"
         }
     }
@@ -34,6 +36,7 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
 
 struct BrainLayerLaunchdGroupStatus: Equatable, Sendable {
     let health: BrainLayerLaunchdGroupHealth
+    let attentionReason: String?
     let lastRunText: String
     let nextRunText: String
 }
@@ -82,23 +85,33 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation],
         formatDate: (Date) -> String
     ) -> BrainLayerLaunchdGroupStatus {
-        let healthy = jobs.allSatisfy { job in
-            guard settings[job]?.enabled == true, let observation = observations[job] else { return false }
+        let reason = jobs.compactMap { job -> String? in
+            guard settings[job]?.enabled == true else { return "\(job.humanGroupLabel) is disabled." }
+            guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
             switch observation.loadState {
             case .running:
-                return true
+                return nil
             case .loaded:
-                return observation.runs.map { $0 > 0 } == true &&
-                    observation.lastExitCode == 0 &&
-                    observation.lastRunAt != nil
-            case .unloaded, .unknown, .probeError:
-                return false
+                if let code = observation.lastExitCode, code != 0 {
+                    let when = observation.lastRunAt.map { " at \(formatDate($0))" } ?? ""
+                    return "\(job.humanGroupLabel) last run exited \(code)\(when)."
+                }
+                return nil // launchd resets run counters when a job is reloaded.
+            case .unloaded:
+                return "\(job.humanGroupLabel) is unloaded."
+            case .unknown, .probeError:
+                return "\(job.humanGroupLabel) status is unavailable."
             }
+        }.first
+        let awaitingRun = jobs.contains { job in
+            guard let observation = observations[job] else { return false }
+            return observation.loadState == .loaded && observation.runs == 0 && observation.lastExitCode == nil
         }
         return BrainLayerLaunchdGroupStatus(
-            health: healthy ? .healthy : .unhealthy,
+            health: reason != nil ? .unhealthy : awaitingRun ? .awaitingRun : .healthy,
+            attentionReason: reason,
             lastRunText: jobs.map { job in
-                "\(job.humanGroupLabel) \(observations[job]?.lastRunAt.map(formatDate) ?? "Unavailable")"
+                "\(job.humanGroupLabel) \(observations[job]?.lastRunAt.map(formatDate) ?? "No run recorded")"
             }.joined(separator: " · "),
             nextRunText: jobs.map { job in
                 let observation = observations[job]

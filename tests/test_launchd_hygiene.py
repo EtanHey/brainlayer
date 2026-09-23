@@ -5,6 +5,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -372,6 +373,32 @@ def test_launchd_env_loader_required_google_key_allows_op_backed_declaration_wit
     )
 
     assert result.returncode == 0
+
+
+def test_launchd_env_loader_records_real_start_before_exec(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    record_dir = tmp_path / ".local/share/brainlayer/job-runs"
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "index",
+            "HOME": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    recorded = int((record_dir / "com.brainlayer.index.started").read_text().strip())
+    assert abs(recorded - time.time()) < 5
 
 
 def test_launchd_env_loader_rejects_world_writable_env_file(tmp_path):
