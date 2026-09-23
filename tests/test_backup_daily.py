@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1350,6 +1351,7 @@ def test_backup_run_lock_rejects_overlapping_run(tmp_path):
     refusal = json.loads(log_path.read_text().splitlines()[-1])
     assert refusal["error_type"] == "BackupAlreadyRunningError"
     assert refusal["verified"] is False
+    assert datetime.fromisoformat(refusal["attempted_at"]).tzinfo is not None
 
 
 def test_create_snapshot_does_not_purge_without_enough_important_capacity(tmp_path, monkeypatch):
@@ -2511,6 +2513,7 @@ def test_backup_supervisor_enforces_timeout_outside_python_signal_delivery(tmp_p
     assert receipt["verified"] is False
     assert receipt["uploaded"] is False
     assert receipt["error_type"] == "BackupTimeoutError"
+    assert datetime.fromisoformat(receipt["attempted_at"]).tzinfo is not None
     assert receipt["timeout_seconds"] == 1
     assert "timed out after 1s" in capsys.readouterr().out
 
@@ -2562,6 +2565,7 @@ def test_backup_child_distinguishes_sigterm_stop_from_timeout(tmp_path, monkeypa
     receipt = json.loads(log_path.read_text().splitlines()[-1])
     assert receipt["error_type"] == "BackupStoppedError"
     assert receipt["stop_signal"] == "SIGTERM"
+    assert datetime.fromisoformat(receipt["attempted_at"]).tzinfo is not None
 
 
 def test_supervisor_forwards_launchd_stop_without_timeout_receipt(tmp_path, monkeypatch):
@@ -2605,3 +2609,89 @@ def test_supervisor_forwards_launchd_stop_without_timeout_receipt(tmp_path, monk
     receipts = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert receipts[-1]["error_type"] == "BackupStoppedError"
     assert all(receipt.get("error_type") != "BackupTimeoutError" for receipt in receipts)
+
+
+def test_stop_during_purge_never_reaches_writer(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source)
+    required = backup_daily._peak_backup_required_bytes(2 * 1024**3, 2 * 1024**3, 0, full=False)
+    monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda *_args: None)
+    monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda *_args: 2 * 1024**3)
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda *_args: SimpleNamespace(free=required - 1))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda *_args: required + 1)
+    monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: os.kill(os.getpid(), signal.SIGTERM))
+    monkeypatch.setattr(
+        backup_daily, "request_brainbar_vacuum_into", lambda *_args, **_kwargs: pytest.fail("writer reached")
+    )
+    previous = signal.signal(signal.SIGTERM, backup_daily._raise_backup_stopped)
+    try:
+        with pytest.raises(backup_daily.BackupStoppedError):
+            backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_stop_during_vacuum_never_retries(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    requests = []
+
+    def stop_on_request(*_args, **_kwargs):
+        requests.append(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", stop_on_request)
+    previous = signal.signal(signal.SIGTERM, backup_daily._raise_backup_stopped)
+    try:
+        with pytest.raises(backup_daily.BackupStoppedError):
+            backup_daily.request_brainbar_vacuum_into(tmp_path / "snapshot.db", max_attempts=3, retry_backoff_seconds=0)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert len(requests) == 1
+
+
+def test_lock_refusal_does_not_replace_running_backup_observability():
+    from brainlayer.observability_backup import _daily_snapshot
+
+    success = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-09-22T02:00:00+00:00",
+        "verified": True,
+        "uploaded": True,
+        "drive_file": "verified.db.gz",
+    }
+    refusal = {
+        "backup_log_provenance": "real",
+        "attempted_at": "2026-09-23T02:00:00+00:00",
+        "error_type": "BackupAlreadyRunningError",
+        "error": "backup already running",
+    }
+    snapshot, error_type, all_errors = _daily_snapshot([success, refusal])
+    assert snapshot is not None and snapshot["destination"] == "verified.db.gz"
+    assert error_type is None
+    assert all_errors is False
+
+
+def test_real_backup_stop_writes_one_complete_receipt(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    db_path = tmp_path / "brainlayer.db"
+    _create_source_db(db_path)
+    log_path = tmp_path / "backup.log"
+    monkeypatch.setenv("BRAINLAYER_DB", str(db_path))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_STAGING_DIR", str(tmp_path / "staging"))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(log_path))
+    monkeypatch.setattr(
+        backup_daily,
+        "create_sqlite_backup_artifact",
+        lambda *_args, **_kwargs: os.kill(os.getpid(), signal.SIGTERM),
+    )
+
+    assert backup_daily._run_backup_process(30) == 143
+    receipts = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert len(receipts) == 1
+    assert receipts[0]["error_type"] == "BackupStoppedError"
+    assert receipts[0]["stop_signal"] == "SIGTERM"
+    assert datetime.fromisoformat(receipts[0]["attempted_at"]).tzinfo is not None

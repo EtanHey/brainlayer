@@ -193,7 +193,7 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
-class BackupStoppedError(RuntimeError):
+class BackupStoppedError(BaseException):
     def __init__(self, signum: int):
         self.signum = signum
         super().__init__(f"backup stopped by {signal.Signals(signum).name}")
@@ -1526,6 +1526,7 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
                 _append_json_log(
                     _backup_log_path(bound.arguments.get("log_path"), db_path=resolved_db_path),
                     {
+                        "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
                         "db": str(resolved_db_path),
                         "verified": False,
                         "uploaded": False,
@@ -1695,6 +1696,16 @@ def run_backup(
                     "local_gzip_retention_deleted": local_gzip_deleted,
                 }
             )
+    except BackupStoppedError as exc:
+        result.update(
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "stop_signal": signal.Signals(exc.signum).name,
+            }
+        )
+        exc.receipt_logged = True
+        raise
     except Exception as exc:
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
         error_code = getattr(exc, "error_code", None)
@@ -1742,18 +1753,20 @@ def _run_backup_process(timeout_seconds: int) -> int:
             log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
         )
     except BackupStoppedError as exc:
-        _append_json_log(
-            _backup_log_path(None, db_path=get_db_path(), env=os.environ),
-            {
-                "db": str(get_db_path()),
-                "verified": False,
-                "uploaded": False,
-                "backup_log_provenance": _backup_log_provenance(),
-                "error_type": "BackupStoppedError",
-                "error": str(exc),
-                "stop_signal": signal.Signals(exc.signum).name,
-            },
-        )
+        if not getattr(exc, "receipt_logged", False):
+            _append_json_log(
+                _backup_log_path(None, db_path=get_db_path(), env=os.environ),
+                {
+                    "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                    "db": str(get_db_path()),
+                    "verified": False,
+                    "uploaded": False,
+                    "backup_log_provenance": _backup_log_provenance(),
+                    "error_type": "BackupStoppedError",
+                    "error": str(exc),
+                    "stop_signal": signal.Signals(exc.signum).name,
+                },
+            )
         return 128 + exc.signum
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
@@ -1804,6 +1817,7 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
             _append_json_log(
                 _backup_log_path(None, db_path=resolved_db_path, env=os.environ),
                 {
+                    "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
                     "db": str(get_db_path()),
                     "uploaded": False,
                     "local_removed": False,
