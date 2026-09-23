@@ -1682,7 +1682,9 @@ final class BrainDatabase: @unchecked Sendable {
         )
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
-        try appendPendingStoreLine(line, to: path)
+        if let existing = try appendPendingStoreLine(line, item: item, to: path) {
+            return existing
+        }
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
@@ -4418,7 +4420,11 @@ final class BrainDatabase: @unchecked Sendable {
         (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
 
-    private static func appendPendingStoreLine(_ line: Data, to path: URL) throws {
+    private static func appendPendingStoreLine(
+        _ line: Data,
+        item: PendingStoreItem,
+        to path: URL
+    ) throws -> (queueID: String, queuedAt: String, chunkID: String)? {
         try Self.withPendingStoreProcessLock(for: path) {
             let fd = open(path.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
             guard fd >= 0 else {
@@ -4428,7 +4434,24 @@ final class BrainDatabase: @unchecked Sendable {
             defer { Darwin.close(fd) }
             try Self.enforcePendingStoreFileMode(fd: fd, path: path)
 
-            let existingLineCount = Self.pendingStoreLines(from: Self.readPendingStoreData(at: path) ?? Data()).count
+            let existingLines = Self.pendingStoreLines(from: Self.readPendingStoreData(at: path) ?? Data())
+            // A retry of a deferred store must promise the same eventual row.
+            // Keep this lookup under the cross-process queue lock, before the cap.
+            if let conversationID = item.conversationID, !conversationID.isEmpty {
+                let contentHash = Self.bodySHA256(item.content)
+                let decoder = JSONDecoder()
+                for existingLine in existingLines {
+                    guard let existing = try? decoder.decode(PendingStoreItem.self, from: existingLine),
+                          existing.conversationID == conversationID,
+                          existing.project == item.project,
+                          Self.bodySHA256(existing.content) == contentHash,
+                          let queueID = existing.queueID,
+                          let queuedAt = existing.queuedAt,
+                          let chunkID = existing.chunkID else { continue }
+                    return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
+                }
+            }
+            let existingLineCount = existingLines.count
             let maxLines = Self.pendingStoreMaxLines()
             guard existingLineCount < maxLines else {
                 throw DBError.exec(
@@ -4438,6 +4461,7 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             try Self.writeAll(line, to: fd, context: "append pending store queue line")
+            return nil
         }
     }
 

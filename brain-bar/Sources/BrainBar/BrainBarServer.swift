@@ -272,6 +272,27 @@ final class BrainBarServer: @unchecked Sendable {
             hybridSearchClient: hybridClient,
             hybridSearchBudget: Self.hybridSearchBudgetSeconds,
             dbPath: dbPath,
+            onPendingStoresFlushed: { [weak self] flushedStores in
+                self?.queue.async { [weak self] in
+                    guard let self else { return }
+                    var publishedRows = Set<Int64>()
+                    for flushed in flushedStores {
+                        guard publishedRows.insert(flushed.storedChunk.rowID).inserted else { continue }
+                        self.publishStoredChunk(
+                            stored: StoreResultPayload(
+                                chunkID: flushed.storedChunk.chunkID,
+                                rowID: flushed.storedChunk.rowID,
+                                content: nil,
+                                tags: nil,
+                                importance: nil
+                            ),
+                            content: flushed.content,
+                            tags: flushed.tags,
+                            importance: flushed.importance
+                        )
+                    }
+                }
+            },
             receiptStore: BrainBarOperationReceipts(url: BrainBarOperationReceipts.fileURL(dbPath: dbPath))
         )
 
@@ -536,6 +557,13 @@ final class BrainBarServer: @unchecked Sendable {
     private func handleMessage(fd: Int32, request: [String: Any]) -> [String: Any] {
         let paletteSession = clients[fd]?.paletteSession
         if let toolCall = parseToolCall(request) {
+            if backupToolCallInProgress, toolCall.name == "brain_store" {
+                return router.handle(
+                    request,
+                    session: paletteSession,
+                    deferStoreForBackup: true
+                )
+            }
             if backupToolCallInProgress, !canHandleDuringBackup(toolCall.name) {
                 return [
                     "jsonrpc": "2.0",
@@ -619,6 +647,7 @@ final class BrainBarServer: @unchecked Sendable {
         }
         guard let paletteSession = clients[fd]?.paletteSession else { return }
 
+        router.backupSnapshotStarted()
         backupToolCallInProgress = true
         let requestBox = SendableBox(request)
         backupToolQueue.async { [weak self] in
@@ -629,6 +658,8 @@ final class BrainBarServer: @unchecked Sendable {
             self.queue.async { [weak self] in
                 guard let self else { return }
                 self.backupToolCallInProgress = false
+                self.router.backupSnapshotFinished()
+                self.router.scheduleDrainAfterBackup()
                 self.flushDeferredSubscriberDisconnects()
                 guard self.clients[fd]?.paletteSession === paletteSession else {
                     self.onDeferredBackupResponseDropped?(self.clients[fd] != nil)
