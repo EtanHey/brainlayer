@@ -66,10 +66,6 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarAppMenuCommands.manualCommandTitles, ["Settings…"])
     }
 
-
-
-
-
     @MainActor
     func testLiveWindowDefaultsToTheOnePageDashboard() {
         XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)

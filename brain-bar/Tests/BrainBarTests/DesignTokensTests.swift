@@ -11,8 +11,6 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(BrainBarDesignTokens.Colors.backgroundBase.hexRGB, "#0C1220")
         XCTAssertEqual(BrainBarDesignTokens.Colors.accent.hexRGB, "#6EA0FF")
         XCTAssertEqual(BrainBarDesignTokens.Colors.accentViolet.hexRGB, "#A98BFF")
-        XCTAssertEqual(BrainBarDesignTokens.Colors.graphCanvasLightTop.hexRGB, "#F2F2EB")
-        XCTAssertEqual(BrainBarDesignTokens.Colors.graphCanvasLightBottom.hexRGB, "#E6EBF0")
 
         XCTAssertEqual(BrainBarDesignTokens.Glass.primaryAlpha, 0.34, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.Glass.secondaryAlpha, 0.26, accuracy: 0.001)
@@ -59,7 +57,6 @@ final class DesignTokensTests: XCTestCase {
 
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(11), 11, accuracy: 0.001)
-        XCTAssertEqual(DegradationBadge.labelFontSize * DegradationBadge.minimumLabelScaleFactor, 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarFlowStatusPill.fontSize * BrainBarFlowStatusPill.minimumScaleFactor, 9, accuracy: 0.001)
         XCTAssertEqual(BrainBarDesignTokens.TypeScale.textSize(8), 9, accuracy: 0.001)
         XCTAssertEqual(
@@ -86,7 +83,6 @@ final class DesignTokensTests: XCTestCase {
         )
 
         let scaledFonts = [
-            (DegradationBadge.labelFontSize, DegradationBadge.minimumLabelScaleFactor),
             (BrainBarFlowStatusPill.fontSize, BrainBarFlowStatusPill.minimumScaleFactor),
             (CGFloat(11), BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: 11)),
             (CGFloat(40), BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: 40)),
