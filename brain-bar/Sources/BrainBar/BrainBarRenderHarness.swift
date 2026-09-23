@@ -31,13 +31,13 @@ enum BrainBarRenderHarness {
 
         var detailsStates: [Bool] {
             switch self {
-            case .loading, .stale, .staleDocument, .pausedGrowing, .runningGrowing,
+            case .loading, .stale, .pausedGrowing, .runningGrowing,
                  .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
                  .receiptUnavailable, .receiptFailed:
                 [false]
             case .vectorAt100:
                 [true]
-            case .readable, .unreadable:
+            case .readable, .unreadable, .staleDocument:
                 [false, true]
             }
         }

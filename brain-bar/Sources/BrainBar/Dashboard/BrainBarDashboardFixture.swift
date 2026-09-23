@@ -139,7 +139,7 @@ enum BrainBarDashboardFixture {
                 inWindow: .init(
                     count: stats.recentActivityBuckets.reduce(0, +),
                     byHour: [.init(
-                        hour: fetchedAt,
+                        hour: generatedAt,
                         count: stats.recentActivityBuckets.reduce(0, +)
                     )]
                 )

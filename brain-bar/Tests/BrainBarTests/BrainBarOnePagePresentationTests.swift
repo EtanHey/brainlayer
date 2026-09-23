@@ -19,6 +19,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         let offline = BrainBarQueueDirectionPresentation.derive(.unavailable, backlogCount: 42, enrichmentPaused: true)
         XCTAssertEqual(offline.label, "Queue offline")
         XCTAssertEqual(offline.tone, .error)
+        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.empty, backlogCount: 0, enrichmentPaused: true).label, "Queue empty")
+        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.draining, backlogCount: 42, enrichmentPaused: true).tone, .neutral)
     }
 
     @MainActor
@@ -62,11 +64,12 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertNil(presentation.indexedToday)
         XCTAssertEqual(
             presentation.indexedTodayUnavailableText,
-            "Indexed today unavailable: observability as of 23:50"
+            "not measured yet today"
         )
+        XCTAssertEqual(presentation.agentWritesCount, 175)
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes · last measured 2026-09-13 23:50 (stale)"
+            "brain_store writes (24 h) · as of 2026-09-13 23:50 (stale)"
         )
     }
 
@@ -77,15 +80,29 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             now: BrainBarOnePageTestFixture.now
         )
 
-        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(presentation.indexedToday, 99)
         XCTAssertEqual(
             presentation.indexedTodayUnavailableText,
-            "Indexed today unavailable: observability as of 14:45"
+            "as of 14:45 (stale)"
         )
+        XCTAssertEqual(presentation.agentWritesCount, 175)
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes · last measured 14:45 (stale)"
+            "brain_store writes (24 h) · as of 14:45 (stale)"
         )
+        XCTAssertEqual(presentation.agentWritesDetailText(locale: Locale(identifier: "en_US")), "175 · as of 14:45 (stale)")
+    }
+
+    @MainActor
+    func testStaleUnmeasuredDocumentShowsNoInventedCounts() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.staleUnmeasuredResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(presentation.indexedTodayUnavailableText, "not measured yet today")
+        XCTAssertNil(presentation.agentWritesCount)
+        XCTAssertEqual(presentation.agentWritesText, "brain_store writes · not measured yet")
     }
 
     @MainActor
@@ -105,8 +122,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 "stale",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-901)),
                 "A decoded document can exceed the two-cadence age bound.",
-                "observability as of 23:47",
-                "brain_store writes · last measured 2026-09-14 23:47 (stale)"
+                "not measured yet today",
+                "brain_store writes (24 h) · as of 2026-09-14 23:47 (stale)"
             ),
             (
                 "future-dated",
@@ -147,7 +164,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 "pre-midnight-today-scope",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-300)),
                 "Fresh evidence from 23:58 is outside the 00:03 today window but valid for rolling 24 h.",
-                "observability as of 23:58",
+                "not measured yet today",
                 "175 writes via brain_store in 24 h"
             ),
         ]
@@ -158,10 +175,12 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             XCTAssertNil(presentation.indexedToday, context)
             XCTAssertEqual(
                 presentation.indexedTodayUnavailableText,
-                "Indexed today unavailable: \(item.indexedReason)",
+                ["stale", "pre-midnight-today-scope"].contains(item.name)
+                    ? item.indexedReason : "Indexed today unavailable: \(item.indexedReason)",
                 context
             )
             XCTAssertEqual(presentation.agentWritesText, item.agentWritesText, context)
+            if item.name == "stale" { XCTAssertEqual(presentation.agentWritesCount, 175, context) }
         }
     }
 
@@ -419,6 +438,10 @@ enum BrainBarOnePageTestFixture {
         ))
     }
 
+    static func staleUnmeasuredResult() throws -> ObservabilityReadResult {
+        .readable(try document(byHour: nil, generatedAt: now.addingTimeInterval(-900), measured: false))
+    }
+
     static func result(generatedAt: Date) throws -> ObservabilityReadResult {
         .readable(try document(
             byHour: [.init(hour: generatedAt, count: 9)],
@@ -459,7 +482,8 @@ enum BrainBarOnePageTestFixture {
     private static func document(
         byHour: [ObservabilityDocument.HourBucket]?,
         generatedAt: Date = now,
-        backupsVerified: Bool = true
+        backupsVerified: Bool = true,
+        measured: Bool = true
     ) throws -> ObservabilityDocument {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
@@ -475,17 +499,17 @@ enum BrainBarOnePageTestFixture {
             dbPath: base.dbPath,
             windowHours: base.windowHours,
             stores: .init(
-                state: "measured",
-                reason: "",
+                state: measured ? "measured" : "unmeasurable",
+                reason: measured ? "" : "no sample",
                 inputs: [],
-                totalChunks: 797_727,
-                inWindow: .init(count: 18, byHour: byHour)
+                totalChunks: measured ? 797_727 : nil,
+                inWindow: measured ? .init(count: 18, byHour: byHour) : nil
             ),
             emitters: .init(
-                state: "measured",
-                reason: "",
+                state: measured ? "measured" : "unmeasurable",
+                reason: measured ? "" : "no sample",
                 inputs: [],
-                byEmitter: [.init(emitter: "mcp", countInWindow: 175)],
+                byEmitter: measured ? [.init(emitter: "mcp", countInWindow: 175)] : nil,
                 bySourceClass: base.emitters.bySourceClass,
                 hiddenFromDefaultSearch: base.emitters.hiddenFromDefaultSearch
             ),
