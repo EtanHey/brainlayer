@@ -5,6 +5,24 @@ set -euo pipefail
 ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:${PATH:-}"
 
+# XPC_SERVICE_NAME is the launchd label. The service gate name is shared by
+# other jobs (for example throughput-watchdog uses watch) and is not a run key.
+# Write before the gates so exit 78 still points at the failed launch.
+label="${XPC_SERVICE_NAME:-}"
+if [[ "$label" =~ ^com[.]brainlayer[.][a-z0-9-]+$ ]]; then
+    record_dir="$HOME/.local/share/brainlayer/job-runs"
+    record_tmp="$record_dir/$label.started.$$"
+    if mkdir -p "$record_dir" && date +%s > "$record_tmp"; then
+        if ! mv -f "$record_tmp" "$record_dir/$label.started"; then
+            echo "WARN: unable to record launch time for $label" >&2
+            rm -f "$record_tmp" || true
+        fi
+    else
+        echo "WARN: unable to record launch time for $label" >&2
+        rm -f "$record_tmp" || true
+    fi
+fi
+
 if [ ! -f "$ENV_FILE" ]; then
     echo "ERROR: BrainLayer env file not found at $ENV_FILE" >&2
     echo "Run 'brainlayer init' or create it from scripts/launchd/brainlayer.env.example." >&2

@@ -91,6 +91,10 @@ final class BrainBarL0StateTests: XCTestCase {
             pump(host)
             panelState.detailsExpanded = true
             pump(host)
+            panelState.signalCoverageExpanded = false
+            pump(host)
+            panelState.signalCoverageExpanded = true
+            pump(host)
         }
 
         XCTAssertEqual(provider.callCount, 1, "Presentation-only toggles must not refetch exact coverage.")

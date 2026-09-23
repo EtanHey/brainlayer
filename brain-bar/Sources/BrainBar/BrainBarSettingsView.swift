@@ -167,7 +167,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         group.status(
             settings: config.launchdJobs,
             observations: launchdObservations,
-            formatDate: DashboardMetricFormatter.shortAbsoluteTimeString
+            formatDate: DashboardMetricFormatter.jobDateTimeString
         )
     }
 
@@ -501,7 +501,7 @@ struct BrainBarSettingsFooterPresentation {
 
         let enrichment: String
         let enrichmentCloud: Bool
-        let enrichmentOff = !config.enrichmentEnabled || config.launchdJobs[.enrichment]?.enabled == false
+        let enrichmentOff = config.enrichmentIsOff
         if enrichmentOff {
             enrichment = "Enrichment off"
             enrichmentCloud = false
@@ -838,13 +838,16 @@ private struct BrainBarJobGroupCard: View {
                 Spacer()
                 Label(
                     status.health.title,
-                    systemImage: status.health == .healthy ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    systemImage: status.health == .healthy ? "checkmark.circle.fill" :
+                        status.health == .awaitingRun ? "clock.fill" : "exclamationmark.triangle.fill"
                 )
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(
                         status.health == .healthy
                             ? BrainBarStateTheme.active.theme.swiftUIColor
-                            : BrainBarStateTheme.error.theme.swiftUIColor
+                            : status.health == .awaitingRun
+                                ? BrainBarStateTheme.loading.theme.swiftUIColor
+                                : BrainBarStateTheme.error.theme.swiftUIColor
                     )
                 Toggle(group.title, isOn: Binding(
                     get: { viewModel.isGroupEnabled(group) },
@@ -854,6 +857,11 @@ private struct BrainBarJobGroupCard: View {
             Text(group.summary)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)
+            if let reason = status.attentionReason {
+                Text(reason)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(BrainBarStateTheme.error.theme.swiftUIColor)
+            }
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)
         }

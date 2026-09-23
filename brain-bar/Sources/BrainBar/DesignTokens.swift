@@ -35,7 +35,9 @@ enum BrainBarDesignTokens {
         static let statusError = NSColor.brainBarHex(0xFF453A)
         static let statusUnknown = NSColor.brainBarHex(0x8A8A90)
 
-        static func signalCoverageStatus(indexedCount: Int, eligibleCount: Int, isAvailable: Bool) -> NSColor {
+        static func signalCoverageStatus(indexedCount: Int, eligibleCount: Int, isAvailable: Bool,
+                                         lastError: String? = nil) -> NSColor {
+            if lastError != nil { return statusAttention }
             guard isAvailable,
                   eligibleCount > 0,
                   indexedCount >= 0,
