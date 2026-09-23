@@ -106,6 +106,38 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         XCTAssertFalse(NSApp.windows.contains { $0.title == "BrainLayer Settings" })
     }
 
+    func testURLDestinationsShowSamePanelAndSelectRequestedSettingsSection() {
+        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        controller.statusItemButton = anchor
+        defer {
+            controller.dismiss()
+            BrainBarSettingsActions.installOpenHandler {}
+        }
+        let panel = controller.panelForTesting
+
+        for section in BrainBarSettingsSection.allCases {
+            let action = BrainBarURLAction.parse(url: URL(string: "brainbar://settings/\(section.rawValue)")!)!
+            controller.showURLDestination(action)
+            XCTAssertTrue(controller.isShownForTesting)
+            XCTAssertTrue(controller.panelForTesting === panel)
+            XCTAssertEqual(controller.selectedTabForTesting, .settings)
+            XCTAssertEqual(controller.selectedSettingsSectionForTesting, section)
+        }
+
+        BrainBarSettingsActions.openSettingsWindow(databasePath: nil)
+        XCTAssertEqual(controller.selectedSettingsSectionForTesting, .advanced)
+        controller.showURLDestination(.dashboard)
+        controller.showURLDestination(.dashboard)
+        XCTAssertTrue(controller.isShownForTesting)
+        XCTAssertTrue(controller.panelForTesting === panel)
+        XCTAssertEqual(controller.selectedTabForTesting, .dashboard)
+        controller.showURLDestination(BrainBarURLAction.parse(url: URL(string: "brainbar://settings/unknown")!)!)
+        controller.showURLDestination(BrainBarURLAction.parse(url: URL(string: "brainbar://settings")!)!)
+        XCTAssertTrue(controller.isShownForTesting)
+        XCTAssertEqual(controller.selectedSettingsSectionForTesting, .general)
+    }
+
     func testDashboardPanelKeepsRestingHeightWhenDetailsExpands() {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)

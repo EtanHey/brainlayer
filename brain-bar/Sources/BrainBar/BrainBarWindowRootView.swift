@@ -14,8 +14,8 @@ struct BrainBarWindowRootView: View {
     @StateObject private var windowObserver: BrainBarWindowObserver
     @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 #if BRAINBAR_UI
-    private var settingsViewFactory: (String, Int) -> AnyView = {
-        AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1))
+    private var settingsViewFactory: (String, Int, BrainBarSettingsNavigation) -> AnyView = {
+        AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1, navigation: $2))
     }
 #endif
 
@@ -32,7 +32,7 @@ struct BrainBarWindowRootView: View {
 #if BRAINBAR_UI
     init(runtime: BrainBarRuntime, managesWindowFrame: Bool,
          panelState: BrainBarDashboardPanelState,
-         settingsViewFactory: @escaping (String, Int) -> AnyView) {
+         settingsViewFactory: @escaping (String, Int, BrainBarSettingsNavigation) -> AnyView) {
         self.init(runtime: runtime, managesWindowFrame: managesWindowFrame, panelState: panelState)
         self.settingsViewFactory = settingsViewFactory
     }
@@ -152,7 +152,8 @@ struct BrainBarWindowRootView: View {
 
 #if BRAINBAR_UI
     private var settingsContent: some View {
-        settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath(), panelState.settingsActivationRevision)
+        settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath(),
+                            panelState.settingsActivationRevision, panelState.settingsNavigation)
     }
 #endif
 
@@ -3336,7 +3337,7 @@ enum BrainBarUnifiedWindowPreview {
                 runtime: runtime,
                 managesWindowFrame: false,
                 panelState: panelState,
-                settingsViewFactory: { _, _ in
+                settingsViewFactory: { _, _, _ in
                     AnyView(BrainBarSettingsView(viewModel: settingsViewModel, initialSection: section))
                 }
             )

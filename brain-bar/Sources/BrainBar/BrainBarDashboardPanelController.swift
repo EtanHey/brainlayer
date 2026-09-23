@@ -88,6 +88,9 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var graphPresented = false
     @Published var selectedTab: BrainBarTab = .dashboard
     @Published var settingsActivationRevision = 0
+#if BRAINBAR_UI
+    let settingsNavigation = BrainBarSettingsNavigation()
+#endif
 #if DEBUG
     var renderedSummaryTileHeights: [String: CGFloat] = [:]
     var renderedCardSizes: [String: CGSize] = [:]
@@ -182,11 +185,39 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panel.orderOut(nil)
     }
 
+    func showDashboard() {
+        panelState.selectedTab = .dashboard
+        showCurrentTab()
+    }
+
     func showSettings() {
         panelState.selectedTab = .settings
+        showCurrentTab()
+    }
+
+#if BRAINBAR_UI
+    func showSettings(section: BrainBarSettingsSection) {
+        panelState.settingsNavigation.select(section)
+        showSettings()
+    }
+
+    func showURLDestination(_ action: BrainBarURLAction) {
+        switch action {
+        case .dashboard: showDashboard()
+        case .settings(let section): showSettings(section: section)
+        case .toggle, .search: break
+        }
+    }
+#endif
+
+    private func showCurrentTab() {
         if panel.isVisible {
-            NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            if let statusItemButton {
+                show(anchoredTo: statusItemButton)
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+            }
         } else {
             show(anchoredTo: statusItemButton)
         }
@@ -243,6 +274,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
     var selectedTabForTesting: BrainBarTab { panelState.selectedTab }
+#if BRAINBAR_UI
+    var selectedSettingsSectionForTesting: BrainBarSettingsSection { panelState.settingsNavigation.selected }
+#endif
 
     private static func makePanel(contentViewController: NSViewController) -> NSPanel {
         let panel = BrainBarDashboardPanel(
