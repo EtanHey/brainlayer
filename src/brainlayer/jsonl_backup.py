@@ -37,9 +37,11 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -1261,6 +1263,27 @@ def create_jsonl_bundle(candidates: list[JsonlCandidate], staging_dir: Path, *, 
     return archive_path
 
 
+def _partial_bundle_date(name: str) -> dt.date | None:
+    match = re.fullmatch(r"\.claude-jsonl-(\d{4}-\d{2}-\d{2})\.tar\.gz\.[^.]+\.tmp", name)
+    if match is None:
+        return None
+    try:
+        return dt.date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def _audit_staging_temps(staging_dir: Path) -> None:
+    for path in sorted(Path(staging_dir).iterdir()):
+        if path.is_symlink():
+            continue
+        if path.is_file() and _partial_bundle_date(path.name) is not None:
+            print(f"JSONL crash remnant: name={path.name} bytes={path.stat().st_size}", file=sys.stderr)
+        elif path.is_dir() and path.name.startswith(".forever-"):
+            size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file() and not item.is_symlink())
+            print(f"JSONL forever crash remnant: name={path.name} bytes={size}", file=sys.stderr)
+
+
 def _compare_member_to_source(extracted: Any, source_path: Path, *, bundle_digest: str | None = None) -> str:
     """Compare archived bytes with the live source, or their bundle-time digest if it vanished."""
     try:
@@ -1493,6 +1516,7 @@ def run_backup(
     icloud_dir: Path | None = None,
 ) -> dict[str, Any]:
     date_stamp = date_stamp or _today()
+    _audit_staging_temps(Path(staging_dir).expanduser())
     now = time.time() if now is None else now
     attempted_at = dt.datetime.fromtimestamp(now, dt.UTC).isoformat()
     retention_enabled = _retention_enabled()
