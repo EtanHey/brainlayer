@@ -18,9 +18,9 @@
 		<string>--recent-limit</string>
 		<string>5</string>
 		<string>--backlog-interval</string>
-		<string>10.0</string>
+		<string>7.0</string>
 		<string>--backlog-batch</string>
-		<string>4</string>
+		<string>16</string>
 		<string>--enrich-interval</string>
 		<string>10.0</string>
 		<string>--enrich-limit</string>
