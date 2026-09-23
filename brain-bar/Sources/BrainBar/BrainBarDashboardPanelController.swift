@@ -87,12 +87,15 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var headerHeight: CGFloat = 0
     @Published var searchOverlayPresented = false
     @Published var graphPresented = false
+    @Published var selectedTab: BrainBarTab = .dashboard
+    @Published var settingsActivationRevision = 0
     @Published private(set) var disclosureAnimationRevision = 0
 #if DEBUG
     var renderedSummaryTileHeights: [String: CGFloat] = [:]
 #endif
     var fittingHeight: CGFloat {
-        max(
+        if selectedTab == .settings { return 720 }
+        return max(
             BrainBarDisclosureAnimation.windowHeight(
                 containerHeight: dashboardHeight,
                 chromeAndSurroundingContentHeight: headerHeight
@@ -143,6 +146,9 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         panelForTesting = panel
         super.init()
         panel.delegate = self
+        BrainBarSettingsActions.installOpenHandler { [weak self] in
+            self?.showSettings()
+        }
         sizingObservation = panelState.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.fitPanelToContent() }
         }
@@ -158,6 +164,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func show(anchoredTo anchorView: NSView? = nil) {
         guard let anchorView else { return }
+        if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
         positionPanel(below: anchorView)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -169,6 +176,16 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func dismiss() {
         removeClickOutsideMonitor()
         panel.orderOut(nil)
+    }
+
+    func showSettings() {
+        panelState.selectedTab = .settings
+        if panel.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            show(anchoredTo: statusItemButton)
+        }
     }
 
     private func installClickOutsideMonitor() {
@@ -192,13 +209,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     private func dismissIfClickOutside() {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
-        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
+        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
         dismiss()
     }
 
     private func dismissIfLocalClickOutside(_ event: NSEvent) {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
-        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
+        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
         if event.window === panel { return }
         if let button = statusItemButton, event.window === button.window { return }   // let toggle() own the menubar click
         dismiss()
@@ -206,7 +223,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
-        guard !BrainBarSettingsActions.suppressDashboardResignDismiss else { return }
+        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
         dismiss()
     }
 
@@ -223,6 +240,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
     func setSearchOverlayPresentedForTesting(_ presented: Bool) { panelState.searchOverlayPresented = presented }
+    var selectedTabForTesting: BrainBarTab { panelState.selectedTab }
 
     private func fitPanelToContent() {
         let width = panel.contentLayoutRect.width

@@ -25,6 +25,7 @@ import Foundation
 enum BrainBarDashboardFixture {
     enum OperatorState: CaseIterable, Equatable {
         case loading
+        case coverageLoading
         case live
         case stale
         case error
@@ -100,6 +101,11 @@ enum BrainBarDashboardFixture {
     )
 
     static let stats = makeStats(replayDebtBreakdown: readableReplayDebt)
+    static let loadingStats = makeStats(replayDebtBreakdown: readableReplayDebt, coverageAvailable: false)
+    static let vectorAt100Stats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        vectorIndexedChunkCount: 297_412
+    )
     static let readableObservabilityResult: ObservabilityReadResult = .readable(
         ObservabilityDocument(
             schemaVersion: 1,
@@ -206,9 +212,11 @@ enum BrainBarDashboardFixture {
 
     private static func makeStats(
         replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
+        coverageAvailable: Bool = true,
         activityWindowMinutes: Int = 60,
         watcherProcessProbeResult: WatcherProcessProbeResult = .running(pid: 4242),
         watcherRecentDistinctChunkCount: Int = 14,
+        vectorIndexedChunkCount: Int = 240_100,
         recentEnrichmentBuckets: [Int] = [4, 6, 3, 7, 5, 8, 6, 9, 7, 5, 8, 6],
         recentEnrichmentFiveMinuteCount: Int = 22
     ) -> DashboardStats {
@@ -236,10 +244,11 @@ enum BrainBarDashboardFixture {
             liveWindowMinutes: 1,
             lastWriteAt: nil,
             lastEnrichedAt: nil,
-            signalEligibleChunkCount: 297_412,
-            vectorIndexedChunkCount: 240_100,
-            ftsIndexedChunkCount: 296_980,
-            trigramIndexedChunkCount: 210_540,
+            signalEligibleChunkCount: coverageAvailable ? 297_412 : 0,
+            vectorIndexedChunkCount: coverageAvailable ? vectorIndexedChunkCount : 0,
+            ftsIndexedChunkCount: coverageAvailable ? 296_980 : 0,
+            trigramIndexedChunkCount: coverageAvailable ? 210_540 : 0,
+            signalCoverageIsAvailable: coverageAvailable,
             pendingStoreQueueDepth: replayDebtBreakdown.deduplicatedTotal,
             pendingStoreFlushQueueDepth: replayDebtBreakdown.pendingStores.snapshot.depth,
             pendingStoreOldestQueuedAt: nil,
@@ -289,6 +298,8 @@ enum BrainBarDashboardFixture {
     ) -> StatsCollector {
         let fixtureStats: DashboardStats
         switch operatorState {
+        case .loading, .coverageLoading:
+            fixtureStats = loadingStats
         case .partialReplayDebt:
             fixtureStats = partialReplayDebtStats
         case .watcherOffline:
@@ -303,7 +314,7 @@ enum BrainBarDashboardFixture {
             fixtureStats = queueDrainingStats
         case .queueBacklogged:
             fixtureStats = queueBackloggedStats
-        case .loading, .live, .stale, .error:
+        case .live, .stale, .error:
             fixtureStats = stats
         }
         let freshness: SnapshotFreshnessState
@@ -315,6 +326,7 @@ enum BrainBarDashboardFixture {
             lastDataFetchedAt = nil
             lastFetchError = nil
         case .live,
+             .coverageLoading,
              .watcherOffline,
              .watcherUnknown,
              .watcherRunningNoRecentFlow,
@@ -347,6 +359,18 @@ enum BrainBarDashboardFixture {
             lastDataFetchedAt: lastDataFetchedAt,
             lastFetchError: lastFetchError,
             snapshotFreshnessState: freshness
+        )
+    }
+
+    static func makeCollector(stats: DashboardStats) -> StatsCollector {
+        StatsCollector.fixture(
+            stats: stats,
+            daemon: daemon,
+            agentActivity: agentActivity,
+            state: PipelineState.derive(daemon: daemon, stats: stats),
+            heartbeat: .empty,
+            lastDataFetchedAt: fetchedAt,
+            snapshotFreshnessState: .live(ageSeconds: 0)
         )
     }
 }

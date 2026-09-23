@@ -13,6 +13,16 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+    @Published private(set) var configReadSucceeded = true
+
+    var footerPresentation: BrainBarSettingsFooterPresentation {
+        BrainBarSettingsFooterPresentation(
+            config: configReadSucceeded ? config : nil,
+            watcher: config.launchdJobs[.watch]?.loadState
+        )
+    }
+
+    static var modelResidencyPresentation: BrainBarModelResidencyPresentation { .unavailable }
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
@@ -20,6 +30,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let now: @Sendable () -> Date
     private let observabilityURL: URL?
     private let observabilityRead: @Sendable (URL) async -> ObservabilityReadResult
+    private let confirmAPIKeyOverwrite: (() -> Bool)?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
 
@@ -33,6 +44,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         now: @escaping @Sendable () -> Date = Date.init,
         observabilityURL: URL? = nil,
         initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable."),
+        confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
             await Task.detached { ObservabilityReader.read(url: url) }.value
         }
@@ -43,6 +55,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.now = now
         self.observabilityURL = observabilityURL
         self.observabilityRead = observabilityRead
+        self.confirmAPIKeyOverwrite = confirmAPIKeyOverwrite
         observabilityResult = initialObservabilityResult
         launchdObservations = initialLaunchdObservations.isEmpty
             ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
@@ -54,6 +67,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             onePasswordReference = document.config.googleAPIKey.opReference
             backendDraft = document.config.enrichmentBackend
         } catch {
+            configReadSucceeded = false
             config = .defaultConfig
             onePasswordReference = BrainLayerConfig.defaultConfig.googleAPIKey.opReference
             backendDraft = BrainLayerConfig.defaultConfig.enrichmentBackend
@@ -116,8 +130,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func storePlainAPIKey() {
         let value = pendingPlainAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        guard confirmGoogleAPIKeyOverwriteIfNeeded() else { return }
-        if updateConfig({ $0.googleAPIKey = .plain(value) }) {
+        if updateConfig({ $0.googleAPIKey = .plain(value) }, beforeUpdate: confirmGoogleAPIKeyOverwriteIfNeeded) {
             pendingPlainAPIKey = ""
         }
     }
@@ -125,10 +138,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func storeOnePasswordReference() {
         let reference = onePasswordReference.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reference.isEmpty else { return }
-        if config.googleAPIKey != .onePasswordReference(reference) {
-            guard confirmGoogleAPIKeyOverwriteIfNeeded() else { return }
-        }
-        _ = updateConfig { $0.googleAPIKey = .onePasswordReference(reference) }
+        let draft = onePasswordReference
+        _ = updateConfig({ $0.googleAPIKey = .onePasswordReference(reference) }, beforeUpdate: {
+            let accepted = self.config.googleAPIKey == .onePasswordReference(reference)
+                || self.confirmGoogleAPIKeyOverwriteIfNeeded()
+            if !accepted { self.onePasswordReference = draft }
+            return accepted
+        })
     }
 
     func clearGoogleAPIKey() {
@@ -194,8 +210,32 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func refreshAllStatus() {
+        _ = reloadConfigFromDisk()
         refreshLaunchdStatus()
         refreshObservabilityStatus()
+    }
+
+    func reloadConfigFromDisk(preservingDrafts: Bool = false) -> Bool {
+        do {
+            let loaded = try store.loadDocument().config
+            let previous = config
+            config = loaded
+            configReadSucceeded = true
+            if !preservingDrafts || onePasswordReference == previous.googleAPIKey.opReference {
+                onePasswordReference = loaded.googleAPIKey.opReference
+            }
+            if !preservingDrafts || backendDraft == previous.enrichmentBackend {
+                backendDraft = loaded.enrichmentBackend
+            }
+            applyLaunchdStates(launchdObservations.mapValues(\.loadState))
+            errorMessage = nil
+            if !preservingDrafts { lastSaveReceipt = nil }
+            return true
+        } catch {
+            configReadSucceeded = false
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     func refreshObservabilityStatus() {
@@ -217,7 +257,27 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     @discardableResult
-    private func updateConfig(_ apply: (inout BrainLayerConfig) -> Void) -> Bool {
+    private func updateConfig(
+        _ apply: (inout BrainLayerConfig) -> Void,
+        beforeUpdate: (() -> Bool)? = nil
+    ) -> Bool {
+        let confirmedReferenceDraft = beforeUpdate == nil ? nil : onePasswordReference
+        guard reloadConfigFromDisk() else { return false }
+        let apiKeyBeforeConfirmation = config.googleAPIKey
+        guard beforeUpdate?() ?? true else { return false }
+        if beforeUpdate != nil {
+            guard reloadConfigFromDisk() else {
+                if let confirmedReferenceDraft { onePasswordReference = confirmedReferenceDraft }
+                return false
+            }
+            guard config.googleAPIKey == apiKeyBeforeConfirmation else {
+                if let confirmedReferenceDraft { onePasswordReference = confirmedReferenceDraft }
+                recordValidationFailure(
+                    "API key changed while overwrite confirmation was open. Review it and try again."
+                )
+                return false
+            }
+        }
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
@@ -245,6 +305,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             }
             activeRuntimeObservation = runtimeStatusProvider.sample()
             config = nextConfig
+            onePasswordReference = nextConfig.googleAPIKey.opReference
             backendDraft = nextConfig.enrichmentBackend
             errorMessage = nil
             previousConfigForLastSaveReceipt = previousConfig
@@ -399,6 +460,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     private func confirmGoogleAPIKeyOverwriteIfNeeded() -> Bool {
         guard config.googleAPIKey.kind != .missing else { return true }
+        if let confirmAPIKeyOverwrite { return confirmAPIKeyOverwrite() }
         let alert = NSAlert()
         alert.messageText = "Replace existing Gemini API key?"
         alert.informativeText = "BrainBar will update the BrainLayer config file without displaying the current value."
@@ -408,9 +470,125 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 }
 
+enum BrainBarSettingsFooterState: Equatable {
+    case watcherRunning, systemOff, unavailable
+
+    var title: String {
+        switch self {
+        case .watcherRunning: "Watcher running"
+        case .systemOff: "System off"
+        case .unavailable: "Status unavailable"
+        }
+    }
+}
+
+struct BrainBarSettingsFooterPresentation {
+    let state: BrainBarSettingsFooterState
+    let locality: String
+    let showsLock: Bool
+    let symbol: String
+
+    init(config: BrainLayerConfig?, watcher: BrainLayerLaunchdLoadState?) {
+        guard let config else {
+            state = .unavailable
+            locality = "Memory on this Mac · Enrichment unknown · Backups unknown"
+            showsLock = false
+            symbol = "questionmark.circle"
+            return
+        }
+
+        if !config.systemEnabled {
+            state = .systemOff
+        } else if watcher == .running {
+            state = .watcherRunning
+        } else {
+            state = .unavailable
+        }
+
+        let enrichment: String
+        let enrichmentCloud: Bool
+        let enrichmentOff = !config.enrichmentEnabled || config.launchdJobs[.enrichment]?.enabled == false
+        if enrichmentOff {
+            enrichment = "Enrichment off"
+            enrichmentCloud = false
+        } else if config.launchdJobs[.enrichment]?.enabled == true {
+            // The realtime enrichment launchd job invokes enrich_realtime,
+            // which uses Gemini regardless of BACKEND/MODE in the env file.
+            enrichment = "Enrichment → Gemini"
+            enrichmentCloud = true
+        } else {
+            enrichment = "Enrichment unknown"
+            enrichmentCloud = false
+        }
+        let driveJobs: [BrainLayerLaunchdJob] = [.backupDaily, .jsonlBackup, .maintenanceWeekly]
+        let driveStates = driveJobs.map { config.launchdJobs[$0]?.enabled }
+        let backups: String
+        let driveConfigured: Bool
+        let backupsOff = driveStates.allSatisfy { $0 == false }
+        if driveStates.contains(where: { $0 == true }) {
+            backups = "Backups → Drive"
+            driveConfigured = true
+        } else if backupsOff {
+            backups = "Backups off"
+            driveConfigured = false
+        } else {
+            backups = "Backups unknown"
+            driveConfigured = false
+        }
+        locality = "Memory on this Mac · \(enrichment) · \(backups)"
+        showsLock = enrichmentOff && backupsOff
+        symbol = showsLock ? "lock" : (enrichmentCloud || driveConfigured ? "icloud" : "questionmark.circle")
+    }
+}
+
+struct BrainBarModelResidencyPresentation {
+    let modelName: String
+    let status: String
+    let memory: String
+
+    // No model-specific loaded state or resident bytes are exposed to BrainBar.
+    // The daemon RSS measures the entire process, not the embedding model.
+    static let unavailable = Self(
+        modelName: "Name unavailable",
+        status: "Residency unavailable",
+        memory: "Unavailable"
+    )
+}
+
+enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
+    case general, jobs, backups, advanced
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .general: "slider.horizontal.3"
+        case .jobs: "clock.arrow.circlepath"
+        case .backups: "externaldrive"
+        case .advanced: "gearshape.2"
+        }
+    }
+    var groups: [BrainLayerLaunchdJobGroup] {
+        switch self {
+        case .jobs: [.ingest, .maintenance]
+        case .backups: [.backups]
+        case .general, .advanced: []
+        }
+    }
+    var advancedJobs: [BrainLayerLaunchdJob] { self == .advanced ? BrainLayerLaunchdJobGroup.advancedJobs : [] }
+}
+
+@MainActor
+final class BrainBarSettingsNavigation: ObservableObject {
+    @Published private(set) var selected: BrainBarSettingsSection = .general
+    init(selected: BrainBarSettingsSection = .general) { self.selected = selected }
+    func select(_ section: BrainBarSettingsSection) { selected = section }
+}
+
 struct BrainBarSettingsView: View {
     @StateObject var viewModel: BrainBarSettingsViewModel
-    @State private var isAdvancedExpanded = BrainBarSettingsPresentation.defaultAdvancedExpanded
+    @StateObject private var navigation = BrainBarSettingsNavigation()
+    private let activationRevision: Int
 
     static func observabilityURL(
         databasePath: String,
@@ -419,65 +597,116 @@ struct BrainBarSettingsView: View {
         ObservabilityReader.url(dbPath: databasePath, environment: environment)
     }
 
-    init(databasePath: String) {
+    init(databasePath: String, activationRevision: Int = 0) {
+        self.activationRevision = activationRevision
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
             observabilityURL: Self.observabilityURL(databasePath: databasePath)
         ))
     }
 
-    init(viewModel: BrainBarSettingsViewModel) {
+    init(viewModel: BrainBarSettingsViewModel, initialSection: BrainBarSettingsSection = .general) {
+        activationRevision = 0
         _viewModel = StateObject(wrappedValue: viewModel)
+        _navigation = StateObject(wrappedValue: BrainBarSettingsNavigation(selected: initialSection))
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                if let errorMessage = viewModel.errorMessage {
-                    errorBanner(errorMessage)
-                }
-                if let receipt = viewModel.lastSaveReceipt {
-                    BrainBarSettingsPanel(title: "Last save receipt") {
-                        saveReceipt(receipt)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                sidebar
+                    .frame(width: 214)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(Color.brainBarGlassSecondary)
+                Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        header
+                        if let errorMessage = viewModel.errorMessage { errorBanner(errorMessage) }
+                        if let receipt = viewModel.lastSaveReceipt {
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionHeading("Last save receipt")
+                                saveReceipt(receipt)
+                            }
+                        }
+                        sectionContent
                     }
-                }
-                BrainBarSettingsPanel(title: "Backup Status") {
-                    backupStatus
-                }
-                BrainBarSettingsPanel(title: "System Jobs") {
-                    jobsGrid
-                }
-                BrainBarSettingsPanel(title: "Interface") {
-                    Toggle(
-                        "Show retrieval tools",
-                        isOn: Binding(
-                            get: { viewModel.config.showRetrievalTools },
-                            set: { viewModel.setShowRetrievalTools($0) }
-                        )
-                    )
-                    Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.brainBarTextMuted)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 25)
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
-            .padding(22)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(maxHeight: .infinity)
+            footer
         }
-        .frame(width: 700)
-        .frame(minHeight: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.brainBarBackgroundBase)
         .foregroundStyle(Color.brainBarTextPrimary)
         .environment(\.colorScheme, .dark)
+        .onChange(of: activationRevision) { _, _ in
+            _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
+            viewModel.refreshLaunchdStatus()
+            viewModel.refreshObservabilityStatus()
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(BrainBarSettingsSection.allCases) { section in
+                Button {
+                    navigation.select(section)
+                } label: {
+                    Label(section.title, systemImage: section.symbol)
+                        .font(.system(size: 13, weight: navigation.selected == section ? .semibold : .medium))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 9)
+                        .background(navigation.selected == section ? Color.brainBarGlassPrimary : .clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(navigation.selected == section ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+    }
+
+    private var footer: some View {
+        let presentation = viewModel.footerPresentation
+        return HStack(spacing: 12) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(presentation.state == .watcherRunning
+                        ? BrainBarStateTheme.active.theme.swiftUIColor : Color.brainBarTextMuted)
+                    .frame(width: 6, height: 6)
+                Text(presentation.state.title)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1, height: 14)
+            HStack(spacing: 6) {
+                Image(systemName: presentation.symbol)
+                Text(presentation.locality)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color.brainBarTextMuted)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.brainBarGlassSecondary)
+        .overlay(alignment: .top) { Color.brainBarBorderSoft.frame(height: 1) }
+        .accessibilityElement(children: .combine)
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "gearshape.2")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(Color.brainBarAccentBright)
             VStack(alignment: .leading, spacing: 3) {
-                Text("BrainLayer Settings")
-                    .font(.system(size: 22, weight: .semibold))
+                Text(navigation.selected.title)
+                    .font(.system(size: 25, weight: .semibold))
                 Text(BrainLayerConfigStore.defaultConfigURL().path)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.brainBarTextMuted)
@@ -493,6 +722,54 @@ struct BrainBarSettingsView: View {
             .controlSize(.small)
             .disabled(viewModel.isRefreshingLaunchdStatus)
         }
+    }
+
+    @ViewBuilder
+    private var sectionContent: some View {
+        switch navigation.selected {
+        case .general:
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeading("Interface")
+                HStack {
+                    Text("Show retrieval tools")
+                    Spacer()
+                    Toggle("Show retrieval tools", isOn: Binding(
+                        get: { viewModel.config.showRetrievalTools },
+                        set: { viewModel.setShowRetrievalTools($0) }
+                    )).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+                Divider()
+                Text("Shows Search, Knowledge Graph, and Quick Capture in BrainBar.")
+                    .font(.system(size: 11)).foregroundStyle(Color.brainBarTextMuted)
+            }
+        case .jobs:
+            VStack(alignment: .leading, spacing: 16) {
+                jobsGrid
+            }
+        case .backups:
+            VStack(alignment: .leading, spacing: 16) {
+                BrainBarJobGroupCard(group: .backups, viewModel: viewModel)
+                Divider()
+                backupStatus
+            }
+        case .advanced:
+            VStack(alignment: .leading, spacing: 16) {
+                sectionHeading("Embedding model")
+                let residency = BrainBarSettingsViewModel.modelResidencyPresentation
+                settingsTruthRow(label: "Model", value: residency.modelName)
+                settingsTruthRow(label: "Status", value: residency.status)
+                settingsTruthRow(label: "Resident memory", value: residency.memory)
+                Divider()
+                ForEach(navigation.selected.advancedJobs) { job in
+                    BrainBarJobToggle(job: job, viewModel: viewModel)
+                    Divider()
+                }
+            }
+        }
+    }
+
+    private func sectionHeading(_ title: String) -> some View {
+        Text(title).font(.system(size: 14, weight: .semibold))
     }
 
     private func saveReceipt(_ receipt: BrainLayerSettingsSaveReceipt) -> some View {
@@ -515,32 +792,20 @@ struct BrainBarSettingsView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.brainBarTextMuted)
                 .frame(width: 110, alignment: .leading)
+            Spacer(minLength: 12)
             Text(value)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextSecondary)
                 .textSelection(.enabled)
         }
+        .padding(.vertical, 5)
     }
 
     private var jobsGrid: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(BrainLayerLaunchdJobGroup.allCases) { group in
+            ForEach(navigation.selected.groups) { group in
                 BrainBarJobGroupCard(group: group, viewModel: viewModel)
-            }
-            DisclosureGroup(isExpanded: $isAdvancedExpanded) {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 205), spacing: 12)],
-                    alignment: .leading,
-                    spacing: 12
-                ) {
-                    ForEach(BrainBarSettingsPresentation.visibleAdvancedJobs(isExpanded: isAdvancedExpanded)) { job in
-                        BrainBarJobToggle(job: job, viewModel: viewModel)
-                    }
-                }
-                .padding(.top, 8)
-            } label: {
-                Text("Advanced")
-                    .font(.system(size: 12, weight: .semibold))
+                Divider()
             }
         }
     }
@@ -582,13 +847,7 @@ private struct BrainBarJobGroupCard: View {
         let status = viewModel.groupStatus(group)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Toggle(
-                    group.title,
-                    isOn: Binding(
-                        get: { viewModel.isGroupEnabled(group) },
-                        set: { viewModel.setGroup(group, enabled: $0) }
-                    )
-                )
+                Text(group.title).font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Label(
                     status.health.title,
@@ -600,6 +859,10 @@ private struct BrainBarJobGroupCard: View {
                             ? BrainBarStateTheme.active.theme.swiftUIColor
                             : BrainBarStateTheme.error.theme.swiftUIColor
                     )
+                Toggle(group.title, isOn: Binding(
+                    get: { viewModel.isGroupEnabled(group) },
+                    set: { viewModel.setGroup(group, enabled: $0) }
+                )).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             Text(group.summary)
                 .font(.system(size: 11, weight: .medium))
@@ -607,49 +870,21 @@ private struct BrainBarJobGroupCard: View {
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)
         }
-        .padding(12)
-        .background(Color.brainBarGlassSecondary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.brainBarBorderSoft, lineWidth: 1)
-        )
+        .padding(.vertical, 6)
     }
 
     private func groupTiming(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
                 .font(.system(size: 9, weight: .bold))
                 .tracking(0.6)
                 .foregroundStyle(Color.brainBarTextMuted)
+                .frame(width: 72, alignment: .leading)
             Text(value)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.brainBarTextSecondary)
+            Spacer(minLength: 0)
         }
-    }
-}
-
-private struct BrainBarSettingsPanel<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.brainBarTextPrimary)
-            VStack(alignment: .leading, spacing: 12) {
-                content
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.brainBarGlassPrimary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.brainBarBorderEdge, lineWidth: 1)
-        )
     }
 }
 
@@ -660,13 +895,14 @@ private struct BrainBarJobToggle: View {
     var body: some View {
         let setting = viewModel.config.launchdJobs[job] ?? BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown)
         VStack(alignment: .leading, spacing: 7) {
-            Toggle(
-                job.title,
-                isOn: Binding(
+            HStack {
+                Text(job.title).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Toggle(job.title, isOn: Binding(
                     get: { viewModel.config.launchdJobs[job]?.enabled ?? true },
                     set: { viewModel.setJob(job, enabled: $0) }
-                )
-            )
+                )).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
             HStack(spacing: 6) {
                 Circle()
                     .fill(loadStateColor(setting.loadState))
@@ -679,13 +915,7 @@ private struct BrainBarJobToggle: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)
         }
-        .padding(12)
-        .background(Color.brainBarGlassSecondary)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.brainBarBorderSoft, lineWidth: 1)
-        )
+        .padding(.vertical, 7)
     }
 
     private func loadStateColor(_ state: BrainLayerLaunchdLoadState) -> Color {

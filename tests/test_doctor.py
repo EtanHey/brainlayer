@@ -360,6 +360,7 @@ def _doctor_config(tmp_path: Path, db_path: Path):
         queue_dir=queue_dir,
         watcher_health_path=watcher_health_path,
         drain_health_path=drain_health_path,
+        pause_sentinel_path=tmp_path / "pause.sentinel",
         deploy_provenance_dir=tmp_path / "daemon-provenance",
         queue_movement_sample_seconds=0,
         version_check_enabled=False,
@@ -1299,6 +1300,51 @@ def test_run_doctor_does_not_treat_recent_drain_heartbeat_as_queue_movement(tmp_
     assert result.exit_code == 1
     assert any(issue.code == "queue_not_moving_with_backlog" for issue in result.issues)
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
+
+
+@pytest.mark.parametrize(
+    ("kind", "paused", "stale", "expected_code"),
+    [
+        ("watcher_chunk", False, False, "drain_progress_stalled"),
+        ("enrichment_update", True, False, "queue_paused_enrichment"),
+        ("enrichment_update", True, True, "drain_liveness_stalled"),
+    ],
+)
+def test_run_doctor_distinguishes_stalled_watcher_from_paused_enrichment(tmp_path, kind, paused, stale, expected_code):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "queue-progress.db"
+    _build_db(db_path)
+    config = _doctor_config(tmp_path, db_path)
+    (config.queue_dir / "queue.jsonl").write_text(json.dumps({"kind": kind}) + "\n", encoding="utf-8")
+    if paused:
+        config.pause_sentinel_path.write_text(json.dumps({"labels": [config.enrichment_label]}), encoding="utf-8")
+    config.drain_health_path.write_text(
+        json.dumps(
+            {
+                "drained_total": 40,
+                "updated_at": (NOW - timedelta(minutes=10) if stale else NOW).isoformat(),
+                "state": "drain_progress_stalled",
+                "reason": "queue_count=1 oldest_age_seconds=600 last_progress_age_seconds=600",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_doctor(
+        config,
+        ps_output_fn=_hotlane_ps,
+        command_runner=_loaded_launchctl,
+        now_fn=lambda: NOW,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == expected_code)
+    assert issue.severity == ("warning" if paused and not stale else "fatal")
+    if paused:
+        assert "drain_progress_stalled" not in [item.code for item in result.issues]
+        assert "queue_not_moving_with_backlog" not in [item.code for item in result.issues]
+    else:
+        assert "queue_count=1" in issue.message
 
 
 def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):

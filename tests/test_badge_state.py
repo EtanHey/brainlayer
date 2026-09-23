@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sqlite3
@@ -11,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import brainlayer.health_check as health_check
 from brainlayer.badge_state import (
     DATA_LOSS_CODES,
     SUPPRESSIBLE_CODES,
@@ -20,6 +22,7 @@ from brainlayer.badge_state import (
     write_badge_state,
 )
 from brainlayer.health_check import HealthCheckConfig, HealthCheckResult, HealthIssue, run_health_check
+from brainlayer.job_lifecycle_health import JobTick
 
 FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-v1.json"
 PENDING_FIXTURE = Path(__file__).parent / "fixtures/badge-state/badge-state-pending-v1.json"
@@ -33,12 +36,14 @@ def _result(*issues: HealthIssue) -> HealthCheckResult:
     )
 
 
-def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthCheckResult:
+def _run_minimal_health_check(
+    tmp_path: Path, badge_state_path: Path, *, job_opt_path: Path | None = None
+) -> HealthCheckResult:
     db_path = tmp_path / "brainlayer.db"
     with sqlite3.connect(db_path) as connection:
         connection.executescript(
             """
-            CREATE TABLE chunks (
+            CREATE TABLE IF NOT EXISTS chunks (
                 id TEXT PRIMARY KEY,
                 content TEXT,
                 archived_at TEXT,
@@ -50,9 +55,9 @@ def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthC
                 enrich_status TEXT,
                 char_count INTEGER
             );
-            CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
-            INSERT INTO chunks (id, content) VALUES ('chunk-1', 'content');
-            INSERT INTO chunk_vectors_rowids (id) VALUES ('chunk-1');
+            CREATE TABLE IF NOT EXISTS chunk_vectors_rowids (id TEXT PRIMARY KEY, chunk_id INTEGER);
+            INSERT OR IGNORE INTO chunks (id, content) VALUES ('chunk-1', 'content');
+            INSERT OR IGNORE INTO chunk_vectors_rowids (id) VALUES ('chunk-1');
             """
         )
     return run_health_check(
@@ -60,6 +65,7 @@ def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthC
             db_path=db_path,
             state_path=tmp_path / "health-state.json",
             badge_state_path=badge_state_path,
+            job_opt_path=job_opt_path,
             source_jsonl_globs=[],
             queue_dir=tmp_path / "queue",
             offsets_path=tmp_path / "offsets.json",
@@ -72,6 +78,78 @@ def _run_minimal_health_check(tmp_path: Path, badge_state_path: Path) -> HealthC
         socket_request_fn=lambda *_args: {"result": {"content": [{"type": "text", "text": "1 of 1 shown"}]}},
         command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="state = running", stderr=""),
     )
+
+
+def test_failed_job_heals_reach_unsuppressible_badge_and_incident_log(tmp_path: Path, monkeypatch, caplog) -> None:
+    message = "com.brainlayer.watch: crashloop, last exit code 1; 3 heal attempts failed to restore a healthy job"
+    monkeypatch.setattr(
+        health_check,
+        "scan_job_lifecycle",
+        lambda *_args, **_kwargs: JobTick(
+            {"com.brainlayer.watch": {"attempts": 3, "reason": "crashloop, last exit code 1"}}, [], [message]
+        ),
+    )
+    caplog.set_level("INFO", logger="brainlayer.health_check")
+    badge_path = tmp_path / "badge-state.json"
+    (tmp_path / "health-state.json").write_text('{"job_lifecycle":{"com.brainlayer.watch":{"attempts":3}}}')
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    document = json.loads(badge_path.read_text(encoding="utf-8"))
+    assert "job_failure" in [issue.code for issue in result.issues]
+    assert document["alerts"]["active"][-1]["message"] == message
+    assert document["alerts"]["badge_on"] is True
+    assert "condition=job_failure" in caplog.text and "timestamp=" in caplog.text
+
+
+def test_corrupt_health_state_keeps_badge_on_with_reason(tmp_path: Path, monkeypatch) -> None:
+    scans = []
+
+    def scan(*_args, **_kwargs):
+        scans.append(True)
+        return JobTick({"com.brainlayer.watch": {"runs": 2, "consecutive": 0}}, [], [])
+
+    monkeypatch.setattr(health_check, "scan_job_lifecycle", scan)
+    (tmp_path / "health-state.json").write_text("{broken", encoding="utf-8")
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    assert any(issue.code == "job_state_unknown" for issue in result.issues)
+    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert "state_corrupt" in json.loads((tmp_path / "health-state.json").read_text())
+    recovered = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    assert all(issue.code != "job_state_unknown" for issue in recovered.issues)
+    saved = json.loads((tmp_path / "health-state.json").read_text())
+    assert "state_corrupt" not in saved
+    assert saved["job_lifecycle"]["com.brainlayer.watch"]["runs"] == 2
+    assert len(scans) == 2
+
+
+def test_non_object_nested_job_state_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "health-state.json").write_text('{"job_lifecycle":[]}', encoding="utf-8")
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path)
+    assert any(issue.code == "job_state_unknown" for issue in result.issues)
+    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+
+
+def test_prior_corruption_stays_visible_when_fresh_job_scan_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_check, "scan_job_lifecycle", lambda *_args, **_kwargs: JobTick({}, [], [], "launchd unavailable")
+    )
+    state_path = tmp_path / "health-state.json"
+    state_path.write_text('{"state_corrupt":"prior unreadable state"}', encoding="utf-8")
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=tmp_path)
+    assert {issue.code for issue in result.issues} >= {"job_state_unknown", "job_scan_failed"}
+    assert json.loads(badge_path.read_text())["alerts"]["badge_on"] is True
+    assert json.loads(state_path.read_text())["state_corrupt"] == "prior unreadable state"
+
+
+def test_overlapping_health_check_does_not_run_second_heal(tmp_path: Path) -> None:
+    lock_path = tmp_path / "health-state.json.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        result = _run_minimal_health_check(tmp_path, tmp_path / "badge-state.json")
+    assert any(issue.code == "health_check_busy" for issue in result.issues)
+    assert result.actions == []
 
 
 def test_badge_state_path_is_db_relative_with_environment_override(tmp_path: Path) -> None:

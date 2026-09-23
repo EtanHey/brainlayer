@@ -153,7 +153,8 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         ] {
             XCTAssertTrue(dashboard.contains(identifier), "Missing stable Dashboard accessibility identifier: \(identifier)")
         }
-        XCTAssertFalse(dashboard.contains("brainbar.shell.tabs"), "The one-page shell must not render a tab bar.")
+        XCTAssertFalse(dashboard.contains("brainbar.shell.tabs"), "The one-page Dashboard must not restore section tabs.")
+        XCTAssertTrue(dashboard.contains("brainbar.shell.destination"), "The shell still exposes destination navigation.")
         XCTAssertTrue(sparkline.contains("metricDisclosure"))
         XCTAssertTrue(sparkline.contains("Text(metricDisclosure)"), "Pointer tooltip must name window, count unit, and clock.")
         XCTAssertTrue(dashboard.contains("accessibilitySummary"), "Charts need a non-pointer semantic summary.")
@@ -205,10 +206,11 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
 
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
+        let sparkline = try sourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
         XCTAssertTrue(dashboard.contains("integerString(total, locale: locale)"))
         XCTAssertTrue(dashboard.contains("integerString(indexedToday, locale: locale)"))
         XCTAssertTrue(dashboard.contains("integerString(lane.values.reduce(0, +), locale: locale)"))
-        XCTAssertTrue(dashboard.contains("axisTickString(presentation.axisMax)"))
+        XCTAssertTrue(sparkline.contains("axisTickString(tick)"))
         for rawInterpolation in [
             "\\(collector.stats.chunkCount)",
             "\\(collector.stats.enrichedChunkCount)",

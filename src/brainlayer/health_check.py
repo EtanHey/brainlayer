@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -21,9 +22,13 @@ from typing import Any, Callable
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
     ENRICH_DAILY_COST_COUNTER_FILENAME,
+    PROGRESS_STALLED_CODE,
+    PROGRESS_UNKNOWN_CODE,
     STALLED_CODE,
     check_drain_liveness,
 )
+from .job_lifecycle_health import _escalations as job_escalations
+from .job_lifecycle_health import installed_opt_path, scan_job_lifecycle
 from .launchd_primitive import (
     LaunchdLabelDisabledError,
     LaunchdVerificationError,
@@ -32,7 +37,12 @@ from .launchd_primitive import (
     launchd_target,
 )
 from .paths import get_db_path
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .pause import (
+    DEFAULT_PAUSE_SENTINEL_PATH,
+    pause_applies_to_label,
+    pause_sentinel_state,
+    queue_contains_only_enrichment,
+)
 from .watcher import default_watch_roots
 
 DEFAULT_SOCKET_PATH = Path("/tmp/brainbar.sock")
@@ -111,6 +121,8 @@ class HealthCheckConfig:
     db_path: Path = field(default_factory=get_db_path)
     state_path: Path = field(default_factory=lambda: DEFAULT_STATE_PATH)
     badge_state_path: Path | None = None
+    job_opt_path: Path | None = field(default_factory=installed_opt_path)
+    job_plist_dir: Path = field(default_factory=lambda: Path("~/Library/LaunchAgents").expanduser())
     socket_path: Path = DEFAULT_SOCKET_PATH
     canary_query: str = DEFAULT_CANARY_QUERY
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
@@ -227,6 +239,7 @@ class HealthCheckResult:
     stalled_ticks: int = 0
     lock_holder: LockHolder | None = None
     canary_ok: bool = False
+    canary_status: str | None = None
     canary_result_count: int | None = None
     duration_seconds: float = 0.0
     slow_check: bool = False
@@ -572,11 +585,16 @@ def _enrichment_backlog(
 
 def _load_state(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.expanduser().read_text(encoding="utf-8"))
+        state = json.loads(path.expanduser().read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("health-check state is not an object")
+        if "job_lifecycle" in state and not isinstance(state["job_lifecycle"], dict):
+            raise ValueError("health-check job_lifecycle state is not an object")
+        return state
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, ValueError) as exc:
+        return {"state_corrupt": f"health-check state unavailable or corrupt: {exc}", "_state_corrupt_now": True}
 
 
 def _write_state(path: Path, payload: dict[str, Any]) -> None:
@@ -613,12 +631,25 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
     return json.loads(data.decode("utf-8"))
 
 
-def _canary_text(response: dict[str, Any]) -> tuple[bool, str]:
+def _canary_text(response: Any) -> tuple[bool, str]:
+    if not isinstance(response, dict):
+        return False, "BrainBar response is not a JSON object"
     if response.get("error"):
         return False, str(response["error"])
-    result = response.get("result") or {}
-    content = result.get("content") or []
-    text = "\n".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return False, "BrainBar response missing a result object"
+    content = result.get("content")
+    if not isinstance(content, list):
+        return False, "BrainBar result missing a content array"
+    if not content:
+        return False, "BrainBar result returned an empty content array"
+    if any(not isinstance(item, dict) or item.get("type") != "text" for item in content):
+        return False, "BrainBar result contains malformed content"
+    text_items = [item.get("text") for item in content]
+    if any(not isinstance(item, str) for item in text_items):
+        return False, "BrainBar result contains malformed text content"
+    text = "\n".join(text_items)
     if result.get("isError"):
         return False, text or "BrainBar returned isError=true"
     return True, text
@@ -699,10 +730,11 @@ def _apply_heals(
         "drain_unloaded",
         "health_check_unloaded",
         "hotlane_unloaded",
-        "enrichment_unloaded",
         "observability_unloaded",
     }
     for issue_code, (label, plist_path) in issue_labels.items():
+        if label == config.enrichment_label:
+            continue
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
         details = issue_details.get(issue_code, {})
@@ -1039,30 +1071,7 @@ def _paused_enrichment_queue_explanation(
 
 
 def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
-    if expected_count <= 0:
-        return False
-    try:
-        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
-    except OSError:
-        return False
-    return len(paths) == expected_count and all(_queue_file_is_paused_enrichment(path) for path in paths)
-
-
-def _queue_file_is_paused_enrichment(path: Path) -> bool:
-    """Return true only when every drain-visible event is an enrichment update."""
-    try:
-        saw_event = False
-        with path.open(encoding="utf-8") as queue_file:
-            for line in queue_file:
-                if not line.strip():
-                    continue
-                event = json.loads(line)
-                saw_event = True
-                if not isinstance(event, dict) or event.get("kind") != "enrichment_update":
-                    return False
-    except (OSError, json.JSONDecodeError):
-        return False
-    return saw_event
+    return queue_contains_only_enrichment(queue_dir, expected_count)
 
 
 def _queue_heal_summary(
@@ -1211,6 +1220,43 @@ def run_health_check(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> HealthCheckResult:
+    lock_path = Path(f"{config.state_path.expanduser()}.lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = lock_path.open("a+")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            lock.close()
+            raise
+    except OSError as exc:
+        return HealthCheckResult(
+            checked_at=now_fn().isoformat(),
+            ok=False,
+            issues=[HealthIssue("health_check_busy", "critical", f"health-check state lock unavailable: {exc}")],
+        )
+    try:
+        return _run_health_check_locked(
+            config,
+            ps_output_fn=ps_output_fn,
+            socket_request_fn=socket_request_fn,
+            command_runner=command_runner,
+            now_fn=now_fn,
+            monotonic_fn=monotonic_fn,
+        )
+    finally:
+        lock.close()
+
+
+def _run_health_check_locked(
+    config: HealthCheckConfig,
+    *,
+    ps_output_fn: Callable[[], str | None] = _default_ps_output,
+    socket_request_fn: SocketRequestFn = send_brainbar_search_canary,
+    command_runner: CommandRunner = _default_command_runner,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> HealthCheckResult:
     started_monotonic = monotonic_fn()
     deadline_at = started_monotonic + max(1.0, config.max_duration_seconds)
     now = now_fn()
@@ -1231,6 +1277,9 @@ def run_health_check(
                 "message": message[:500],
             }
         )
+
+    if state.get("_state_corrupt_now"):
+        add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
 
     def publish_badge_state() -> None:
         if config.badge_state_path is None:
@@ -1255,7 +1304,15 @@ def run_health_check(
         result.slow_check_stage = stage
         result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
         add_issue("slow_check", "critical", message)
+        if state.get("state_corrupt") and not state.get("_state_corrupt_now"):
+            add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
+        prior_jobs = state.get("job_lifecycle", {})
+        if not isinstance(prior_jobs, dict):
+            prior_jobs = {}
+        for message in job_escalations(prior_jobs):
+            add_issue("job_failure", "critical", message)
         state_payload: dict[str, Any] = dict(state)
+        state_payload.pop("_state_corrupt_now", None)
         state_payload["ts"] = now.isoformat()
         state_payload["slow_check"] = True
         state_payload["slow_check_stage"] = stage
@@ -1373,28 +1430,27 @@ def run_health_check(
     try:
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
         canary_success, text = _canary_text(response)
-        result.canary_result_count = _canary_count(text) if canary_success else 0
-        result.canary_ok = canary_success and (result.canary_result_count or 0) > 0
-        if not result.canary_ok:
-            code = "brain_search_canary_failed" if not canary_success else "brain_search_canary_empty"
+        if canary_success:
+            result.canary_result_count = _canary_count(text)
+            result.canary_ok = True
+            # This is request liveness, not recall quality: a well-formed empty search
+            # proves the request path worked without claiming the corpus should match.
+            result.canary_status = "results" if (result.canary_result_count or 0) > 0 else "empty"
+        else:
+            result.canary_ok = False
+            result.canary_status = "retrieval_failed"
             add_issue(
-                code,
+                "brain_search_canary_failed",
                 "critical",
-                f"BrainBar brain_search canary returned no usable results: {text[:240]}",
+                f"BrainBar brain_search canary retrieval failed: {text[:240]}",
             )
-            # Only a canary that did not COME BACK is evidence about the daemon. An empty
-            # result set means the socket answered -- which proves the daemon is alive and
-            # serving -- and that the index simply holds nothing for this query. Restarting
-            # a healthy daemon cannot add content to an index: on the M1 that remedy ran 97
-            # consecutive times without once changing the answer. Report the gap, never heal
-            # the daemon for it.
-            if not canary_success:
-                heal_issue_labels[code] = (
-                    config.brainbar_daemon_label,
-                    _plist_for_label(config, config.brainbar_daemon_label),
-                )
+            heal_issue_labels["brain_search_canary_failed"] = (
+                config.brainbar_daemon_label,
+                _plist_for_label(config, config.brainbar_daemon_label),
+            )
     except Exception as exc:
         result.canary_ok = False
+        result.canary_status = "transport_failed"
         add_issue("brain_search_canary_failed", "critical", f"BrainBar brain_search canary failed: {exc}")
         heal_issue_labels["brain_search_canary_failed"] = (
             config.brainbar_daemon_label,
@@ -1408,7 +1464,6 @@ def run_health_check(
             config.watch_label,
             config.drain_label,
             config.health_check_label,
-            config.enrichment_label,
             config.observability_label,
         ):
             if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
@@ -1430,8 +1485,11 @@ def run_health_check(
         if issue_code == "drain_unloaded":
             drain_loaded = loaded
         if loaded is False:
+            if pause_active and pause_applies_to_label(pause_payload, label):
+                continue
             add_issue(issue_code, "critical", message)
-            heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
+            if label != config.enrichment_label:
+                heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
     if slow_result := deadline_reached("launchd_status"):
         return slow_result
 
@@ -1564,12 +1622,20 @@ def run_health_check(
         stale_seconds=config.drain_liveness_stale_seconds,
         enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
-    if drain_liveness_issue is not None:
-        severity = "critical" if drain_liveness_issue.code == STALLED_CODE else drain_liveness_issue.severity
+    if drain_liveness_issue is not None and not (
+        drain_liveness_issue.code == PROGRESS_STALLED_CODE and queue_pause_explanation
+    ):
+        drain_stalled_codes = {STALLED_CODE, PROGRESS_STALLED_CODE, PROGRESS_UNKNOWN_CODE}
+        severity = "critical" if drain_liveness_issue.code in drain_stalled_codes else drain_liveness_issue.severity
         add_issue(drain_liveness_issue.code, severity, drain_liveness_issue.message)
-        if drain_liveness_issue.code == STALLED_CODE:
+        if drain_liveness_issue.code in drain_stalled_codes:
             drain_starved = True
-    if queue_count > 0 and isinstance(drain_total, int) and drain_total == previous_drain_total:
+    if (
+        queue_count > 0
+        and queue_pause_explanation is None
+        and isinstance(drain_total, int)
+        and drain_total == previous_drain_total
+    ):
         add_issue(
             "drain_no_progress",
             "critical",
@@ -1640,6 +1706,37 @@ def run_health_check(
         config=config,
         command_runner=command_runner,
     )
+    job_tick = None
+    if config.job_opt_path is not None:
+        previous_jobs = state.get("job_lifecycle", {})
+        if not isinstance(previous_jobs, dict):
+            previous_jobs = {}
+        paused_labels = (
+            {label for label in pause_payload.get("labels", []) if isinstance(label, str)}
+            if pause_active and isinstance(pause_payload, dict)
+            else set()
+        )
+        job_tick = scan_job_lifecycle(
+            config.job_plist_dir,
+            config.job_opt_path,
+            previous_jobs,
+            now_epoch=int(now.timestamp()),
+            command_runner=command_runner,
+            uid=os.getuid(),
+            paused_labels=paused_labels,
+            heal=config.heal,
+        )
+        if job_tick.scan_error:
+            add_issue("job_scan_failed", "critical", job_tick.scan_error)
+            if state.get("state_corrupt") and not state.get("_state_corrupt_now"):
+                add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
+        result.actions.extend(job_tick.actions)
+        for message in job_tick.escalations:
+            add_issue("job_failure", "critical", message)
+            label = message.split(":", 1)[0]
+            prior = previous_jobs.get(label, {})
+            if not isinstance(prior, dict) or not prior.get("failed_heals"):
+                _log_health_event("job_failure", message, timestamp=result.checked_at)
     queue_notice_signature = _report_queue_backlog(
         config=config,
         result=result,
@@ -1656,7 +1753,12 @@ def run_health_check(
         now=now,
     )
     state_payload: dict[str, Any] = dict(state)
+    state_payload.pop("_state_corrupt_now", None)
+    if not state.get("_state_corrupt_now") and (job_tick is None or not job_tick.scan_error):
+        state_payload.pop("state_corrupt", None)
     state_payload["heal_failures"] = heal_failures
+    if job_tick is not None:
+        state_payload["job_lifecycle"] = job_tick.state
     state_payload["heal_tripped"] = sorted(heal_tripped) if result.issues else []
     _record_queue_notice(state_payload, queue_notice_signature)
     state_payload["ts"] = now.isoformat()
@@ -1677,6 +1779,11 @@ def run_health_check(
         state_payload["lock_holder_held_ticks"] = 0
     if pause_payload:
         state_payload["pause_sentinel"] = pause_payload
+    state_payload["canary_status"] = result.canary_status
+    if result.canary_result_count is not None:
+        state_payload["canary_result_count"] = result.canary_result_count
+    else:
+        state_payload.pop("canary_result_count", None)
     result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
     result.slow_check = result.duration_seconds >= config.max_duration_seconds
     state_payload["duration_seconds"] = result.duration_seconds

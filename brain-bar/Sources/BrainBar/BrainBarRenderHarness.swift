@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 enum BrainBarRenderHarness {
     private static let environmentVariable = "BRAINBAR_RENDER_ONLY"
+    private static let sampleReceipts = BrainBarOperationReceipts()
     private static let breakpoints: [(name: String, width: CGFloat)] = [
         ("compact", 760), ("default", 960), ("wide", 1_280),
     ]
@@ -16,14 +17,21 @@ enum BrainBarRenderHarness {
         case attentionCollapsed = "readable-attention"
         case attentionExpanded = "readable-attention-expanded"
         case unreadable
+        case stale
         case loading
         case queueDraining
         case queueBacklogged
+        case receiptUnavailable
+        case receiptFailed
+        case vectorAt100 = "vector-at-100"
 
         var detailsStates: [Bool] {
             switch self {
-            case .loading, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged:
+            case .loading, .stale, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
+                 .receiptUnavailable, .receiptFailed:
                 [false]
+            case .vectorAt100:
+                [true]
             case .readable, .unreadable:
                 [false, true]
             }
@@ -31,9 +39,9 @@ enum BrainBarRenderHarness {
 
         var breakpoints: [(name: String, width: CGFloat)] {
             switch self {
-            case .queueDraining, .queueBacklogged:
+            case .queueDraining, .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 [("default", 960)]
-            case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .loading:
+            case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .stale, .loading:
                 BrainBarRenderHarness.breakpoints
             }
         }
@@ -42,20 +50,25 @@ enum BrainBarRenderHarness {
             switch self {
             case .loading:
                 .loading
+            case .stale:
+                .stale
             case .attentionCollapsed, .attentionExpanded:
                 .live
             case .queueDraining:
                 .queueDraining
             case .queueBacklogged:
                 .queueBacklogged
-            case .readable, .unreadable:
+            case .readable, .unreadable, .receiptUnavailable, .receiptFailed:
+                .live
+            case .vectorAt100:
                 .live
             }
         }
 
         var observabilityResult: ObservabilityReadResult {
             switch self {
-            case .readable, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining, .queueBacklogged:
+            case .readable, .stale, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining,
+                 .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 BrainBarDashboardFixture.readableObservabilityResult
             case .unreadable:
                 .unreadable("Database path unavailable.")
@@ -81,6 +94,14 @@ enum BrainBarRenderHarness {
             let outputDirectory = URL(fileURLWithPath: path, isDirectory: true)
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
             try verifyDirectionalStateCoverage()
+            try verifyReadableChartMarkerContract()
+            try renderUnifiedSettings(in: outputDirectory)
+            sampleReceipts.record(BrainBarOperationReceipt(
+                kind: .search, durationMillis: 142, count: 10, recordedAt: BrainBarDashboardFixture.fetchedAt
+            ))
+            sampleReceipts.record(BrainBarOperationReceipt(
+                kind: .ingest, durationMillis: 1_200, count: 1, recordedAt: BrainBarDashboardFixture.fetchedAt
+            ))
             for scenario in Scenario.allCases {
                 for breakpoint in scenario.breakpoints {
                     for detailsExpanded in scenario.detailsStates {
@@ -121,6 +142,94 @@ enum BrainBarRenderHarness {
         print("[brainbar-render] directional-state coverage PASS: empty, stable, draining, growing, backlogged, unavailable")
     }
 
+    private static func verifyReadableChartMarkerContract() throws {
+        let stats = BrainBarDashboardFixture.stats
+        let charts = [
+            ("All chunks", stats.recentActivityBuckets),
+            ("Agent", stats.recentAgentWriteBuckets),
+            ("Watcher", stats.recentWatcherWriteBuckets),
+        ]
+
+        for (name, values) in charts {
+            let presentation = SparklineChartPresentation(
+                label: name,
+                values: values,
+                lastBucketIsPartial: true
+            )
+            let markerIndices = presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket)
+            guard markerIndices.count == 1 else {
+                throw Failure("\(name) chart rendered \(markerIndices.count) point markers; expected exactly one")
+            }
+            guard markerIndices[0] == values.count - 2 else {
+                throw Failure(
+                    "\(name) chart partial bucket \(values.count - 1) has 2 marks (series + point marker); "
+                        + "marker landed on bucket \(markerIndices[0]), expected latest complete bucket \(values.count - 2)"
+                )
+            }
+        }
+        print("[brainbar-render] chart-marker contract PASS: All chunks, Agent, Watcher each have one marker on the latest complete bucket")
+    }
+
+    private static func renderUnifiedSettings(in outputDirectory: URL) throws {
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-settings-render-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let configURL = fixtureDirectory.appendingPathComponent("settings-render-fixture.env")
+        let store = BrainLayerConfigStore(configURL: configURL)
+        try store.save(.defaultConfig)
+
+        let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool)] =
+            BrainBarSettingsSection.allCases.map { ($0, false) } + [(.general, true)]
+        for scenario in settingsScenarios {
+          for breakpoint in breakpoints {
+            if scenario.receipt { try store.save(.defaultConfig) }
+            let viewModel = BrainBarSettingsViewModel(
+                store: store,
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
+                    observation: .unknown("Fixture runtime state unavailable.")
+                ),
+                refreshStatusOnLoad: false,
+                initialObservabilityResult: .unreadable("Fixture backup status unavailable.")
+            )
+            if scenario.receipt {
+                viewModel.backendDraft = "mlx"
+                viewModel.commitBackendDraft()
+                guard viewModel.lastSaveReceipt != nil else {
+                    throw Failure("Settings receipt fixture did not produce a save receipt")
+                }
+            }
+            let panelState = BrainBarDashboardPanelState()
+            let view = BrainBarUnifiedWindowPreview.make(
+                collector: BrainBarDashboardFixture.makeCollector(),
+                settingsViewModel: viewModel,
+                panelState: panelState,
+                section: scenario.section
+            )
+            let size = NSSize(width: breakpoint.width, height: panelState.fittingHeight)
+            let name = "unified-settings-\(scenario.receipt ? "receipt" : scenario.section.rawValue)-\(breakpoint.name)"
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(origin: .zero, size: size)
+            settle(host)
+            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+                throw Failure("\(name): AppKit could not allocate an off-screen bitmap")
+            }
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else {
+                throw Failure("\(name): AppKit could not encode PNG data")
+            }
+            let url = outputDirectory.appendingPathComponent("\(name).png")
+            try png.write(to: url, options: .atomic)
+            let colors = distinctSampledColorCount(in: bitmap)
+            guard png.count > 5_000, colors > 16 else {
+                throw Failure("\(name): refusing blank render (\(png.count) bytes, \(colors) colors)")
+            }
+            print("[brainbar-render] \(name) \(Int(size.width))×\(Int(size.height)); wrote \(url.path) (\(png.count) bytes, \(colors) sampled colors)")
+          }
+        }
+    }
+
     private static func verifyDirectionalStatesDiffer(in outputDirectory: URL) throws {
         let draining = outputDirectory.appendingPathComponent("dashboard-cli-default-queueDraining.png")
         let backlogged = outputDirectory.appendingPathComponent("dashboard-cli-default-queueBacklogged.png")
@@ -138,15 +247,34 @@ enum BrainBarRenderHarness {
     ) throws -> String {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded
-        panelState.attentionExpanded = scenario == .attentionExpanded
-        let collector = scenario == .attentionCollapsed || scenario == .attentionExpanded
-            ? BrainBarDashboardFixture.makeCollector(
+        panelState.attentionExpanded = scenario == .attentionExpanded || scenario == .stale
+        panelState.signalCoverageExpanded = scenario == .vectorAt100
+        let collector: StatsCollector
+        if scenario == .vectorAt100 {
+            collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.vectorAt100Stats)
+        } else if scenario == .attentionCollapsed || scenario == .attentionExpanded {
+            collector = BrainBarDashboardFixture.makeCollector(
                 scenario.collectorState,
                 agentActivity: .unavailable("fixture agent activity unavailable")
             )
-            : BrainBarDashboardFixture.makeCollector(scenario.collectorState)
+        } else {
+            collector = BrainBarDashboardFixture.makeCollector(scenario.collectorState)
+        }
+        let receipts: BrainBarOperationReceipts
+        if scenario == .receiptUnavailable {
+            receipts = BrainBarOperationReceipts()
+        } else if scenario == .receiptFailed {
+            receipts = BrainBarOperationReceipts()
+            receipts.record(BrainBarOperationReceipt(
+                kind: .search, durationMillis: 42, count: nil, failed: true,
+                recordedAt: BrainBarDashboardFixture.fetchedAt.addingTimeInterval(-180)
+            ))
+        } else {
+            receipts = sampleReceipts
+        }
         let view = BrainBarDashboardPreview.make(
             collector: collector,
+            receiptStore: receipts,
             observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
             panelState: panelState

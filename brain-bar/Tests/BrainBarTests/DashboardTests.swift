@@ -604,15 +604,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("trigramBacklogCount"))
     }
 
-    func testDashboardRendersUnavailableCoverageAsComputingWithoutNumericBar() throws {
-        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-
-        XCTAssertTrue(source.contains("stats.signalCoverageIsAvailable"))
-        XCTAssertTrue(source.contains("isAvailable: Bool"))
-        XCTAssertTrue(source.contains("return \"computing…\""))
-        XCTAssertTrue(source.contains("if signal.isAvailable"))
-    }
-
     func testVectorSignalDetailMountsAtRootToEscapeDetailsAndScrollClips() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let bodyRange = try XCTUnwrap(source.range(of: "var body: some View"))
@@ -841,7 +832,7 @@ final class DashboardTests: XCTestCase {
     func testDashboardCardTopHighlightIsClippedInsideRoundedCorners() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let styleRange = try XCTUnwrap(source.range(of: "private struct BrainBarDashboardCardStyle"))
-        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "private struct BrainBarFlowStatusPill"))
+        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "struct BrainBarFlowStatusPill"))
         let styleSource = String(source[styleRange.lowerBound..<nextStructRange.lowerBound])
 
         XCTAssertFalse(
@@ -872,53 +863,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(processSource.contains("FileManager.default.fileExists"))
         XCTAssertTrue(processSource.contains("URL(fileURLWithPath: \"/usr/bin/open\")"))
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
-    }
-
-    func testAppMainMenuHasOnlyTheSettingsSceneEntry() throws {
-        let appSource = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
-
-        XCTAssertTrue(appSource.contains("settingsSceneTitle = \"Settings…\""))
-        XCTAssertEqual(BrainBarAppMenuCommands.settingsEntryCountForTesting, 1)
-        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Settings..."))
-        XCTAssertFalse(BrainBarAppMenuCommands.manualCommandTitles.contains("Toggle BrainBar"))
-        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings..."))
-        XCTAssertTrue(BrainBarAppMenuCommands.isSettingsTitle("Settings…"))
-        XCTAssertEqual(
-            appSource.components(separatedBy: "Button(\"Settings...\")").count - 1,
-            0,
-            "The Settings scene owns the app-menu Settings entry; do not add a second manual command."
-        )
-        XCTAssertEqual(
-            appSource.components(separatedBy: "Button(\"Toggle BrainBar\")").count - 1,
-            0,
-            "Toggle belongs to the status-item menu, not the floating app main menu."
-        )
-        XCTAssertEqual(
-            appSource.components(separatedBy: "Settings {").count - 1,
-            1,
-            "The app must retain exactly one SwiftUI Settings scene."
-        )
-    }
-
-    @MainActor
-    func testDashboardPanelUsesKeyWindowContractAndSettingsDismissSuppression() throws {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
-        let panel = controller.panelForTesting
-        let panelSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
-        let settingsSource = try brainBarSourceFile("Sources/BrainBar/BrainBarSettingsActions.swift")
-
-        XCTAssertTrue(panel.canBecomeKey)
-        XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
-        XCTAssertTrue(panelSource.contains("func windowWillClose(_ notification: Notification)"))
-        XCTAssertTrue(panelSource.contains("BrainBarSettingsActions.suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
-        XCTAssertTrue(settingsSource.contains("NSApp.activate(ignoringOtherApps: true)"))
-        XCTAssertTrue(settingsSource.contains("makeKeyAndOrderFront(nil)"))
-        XCTAssertFalse(settingsSource.contains("promoteForSettings"))
-        XCTAssertFalse(settingsSource.contains("setActivationPolicy(.regular)"))
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
@@ -1934,6 +1878,40 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.relativeBucketLabel(for: 2), "10m-5m ago")
     }
 
+    func testSparklineChartPresentationDisclosesPartialLatestBucketToVoiceOver() {
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: [2, 5, 3],
+            lastBucketIsPartial: true
+        )
+
+        XCTAssertEqual(
+            presentation.accessibilityValue,
+            "latest bucket count 3, latest bucket is partial, trending down"
+        )
+    }
+
+    func testSparklineChartPresentationUsesRelativeLabelsForRestingAxes() {
+        let fetchedAt = Date(timeIntervalSince1970: 1_764_236_400)
+        let restingAxes = SparklineChartPresentation(
+            label: "Ingest",
+            values: Array(repeating: 1, count: 12),
+            activityWindowMinutes: 60,
+            fetchedAt: fetchedAt,
+            showsRestingAxes: true
+        )
+        let hoverOnlyAxes = SparklineChartPresentation(
+            label: "Other chart",
+            values: Array(repeating: 1, count: 12),
+            activityWindowMinutes: 60,
+            fetchedAt: fetchedAt
+        )
+
+        XCTAssertEqual(restingAxes.xAxisLabel(for: 0), "1h-55m ago")
+        XCTAssertEqual(restingAxes.xAxisLabel(for: 11), "last 5m")
+        XCTAssertEqual(hoverOnlyAxes.xAxisLabel(for: 0), hoverOnlyAxes.bucketLabel(for: 0))
+    }
+
     func testSparklineChartPresentationNamesHoverBucketsByRecency() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
@@ -2063,9 +2041,9 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(sparse.nonZeroFraction(.primary), 0.2, accuracy: 0.001)
         XCTAssertFalse(sparse.isDense(.primary))
         XCTAssertTrue(sparse.isDense(.secondary))
-        XCTAssertEqual(sparse.axisMax, 5)
-        XCTAssertEqual(sparse.tightAxisMax, 3)
-        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 3])
+        XCTAssertEqual(sparse.axisMax, 4)
+        XCTAssertEqual(sparse.tightAxisMax, 4)
+        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 4])
 
         let larger = SparklineChartPresentation(
             label: "Writes over 30m",
@@ -2076,6 +2054,51 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(larger.tightAxisMax, larger.axisMax)
         XCTAssertEqual(larger.axisMax, 10)
+    }
+
+    func testSparklineAxisCeilingStaysJustAboveTheObservedPeak() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 51, 71],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.axisMax, 80)
+        XCTAssertEqual(presentation.tightAxisMax, 80)
+        XCTAssertGreaterThan(presentation.axisMax, presentation.maxValue)
+        XCTAssertLessThanOrEqual(Double(presentation.axisMax) / Double(presentation.maxValue), 1.15)
+        XCTAssertEqual(presentation.tightYAxisTicks, [0, 40, 80])
+    }
+
+    func testSparklineAxisCeilingKeepsBoundedHeadroomAcrossMagnitudeBoundaries() {
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "Single write", values: [1]).axisMax,
+            1,
+            "A peak of one is the intentional integer exception to strict headroom."
+        )
+
+        let examples = [
+            (peak: 11, ceiling: 12),
+            (peak: 101, ceiling: 120),
+            (peak: 1_001, ceiling: 1_200),
+        ]
+
+        for example in examples {
+            let presentation = SparklineChartPresentation(
+                label: "Writes over 30m",
+                values: [0, example.peak],
+                activityWindowMinutes: 30,
+                fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+            )
+
+            XCTAssertEqual(presentation.axisMax, example.ceiling)
+            XCTAssertGreaterThan(presentation.axisMax, example.peak)
+            XCTAssertLessThanOrEqual(
+                Double(presentation.axisMax) / Double(example.peak),
+                1.20
+            )
+        }
     }
 
     func testSparklineCompactMarkersPreferLatestPointForSparseSeries() {

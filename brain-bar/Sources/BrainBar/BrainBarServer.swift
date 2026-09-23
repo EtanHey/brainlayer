@@ -271,7 +271,8 @@ final class BrainBarServer: @unchecked Sendable {
         router = MCPRouter(
             hybridSearchClient: hybridClient,
             hybridSearchBudget: Self.hybridSearchBudgetSeconds,
-            dbPath: dbPath
+            dbPath: dbPath,
+            receiptStore: BrainBarOperationReceipts(url: BrainBarOperationReceipts.fileURL(dbPath: dbPath))
         )
 
         // 2. Bind socket BEFORE database init.

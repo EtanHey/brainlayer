@@ -48,6 +48,31 @@ provenance_app = typer.Typer(help="Resolve provenance conflicts and pending conf
 app.add_typer(provenance_app, name="provenance")
 sandbox_app = typer.Typer(help="Manage isolated sandbox BrainLayer databases")
 app.add_typer(sandbox_app, name="sandbox")
+jobs_app = typer.Typer(help="Inspect and restart installed BrainLayer LaunchAgents")
+app.add_typer(jobs_app, name="jobs")
+
+
+@jobs_app.command("restart")
+def jobs_restart_command(
+    all_jobs: bool = typer.Option(False, "--all", help="Select loaded BrainLayer jobs."),
+    verify: bool = typer.Option(False, "--verify", help="Verify every running job maps the current keg."),
+) -> None:
+    """Restart loaded resident jobs after a Homebrew upgrade; emit a JSON receipt."""
+    from ..jobs import installed_opt_path, restart_loaded_jobs
+
+    if not all_jobs or not verify:
+        raise typer.BadParameter("jobs restart requires --all --verify")
+    try:
+        report = restart_loaded_jobs(
+            Path.home() / "Library" / "LaunchAgents",
+            installed_opt_path(),
+            uid=os.getuid(),
+        )
+    except (OSError, ValueError) as exc:
+        report = {"ok": False, "errors": {"restart": str(exc)}}
+    typer.echo(json.dumps(report, sort_keys=True))
+    if not report["ok"]:
+        raise typer.Exit(1)
 
 
 def _version_callback(value: bool) -> None:
@@ -2070,7 +2095,7 @@ def digest(
                 result = digest_content(
                     content=text,
                     store=store,
-                    embed_fn=model.embed,
+                    embed_fn=lambda passage: model.embed_texts([passage])[0],
                     title=title,
                     project=project,
                     participants=participant_list,

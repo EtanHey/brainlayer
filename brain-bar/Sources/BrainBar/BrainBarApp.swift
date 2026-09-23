@@ -4,10 +4,10 @@ import SwiftUI
 
 enum BrainBarAppMenuCommands {
     static let settingsSceneTitle = "Settings…"
-    static let settingsSceneEntryCount = 1
+    static let settingsSceneEntryCount = 0
     static let searchTitle = "Search BrainLayer"
     static let captureTitle = "Capture Note"
-    static let manualCommandTitles = [searchTitle, captureTitle]
+    static let manualCommandTitles = [settingsSceneTitle, searchTitle, captureTitle]
 
     static func isSettingsTitle(_ title: String) -> Bool {
         title.replacingOccurrences(of: "...", with: "…") == settingsSceneTitle
@@ -293,9 +293,15 @@ struct BrainBarApp: App {
 
     var body: some Scene {
         Settings {
-            BrainBarSettingsView(databasePath: appDelegate.runtime.databasePath ?? BrainBarServer.defaultDBPath())
+            EmptyView()
         }
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button(BrainBarAppMenuCommands.settingsSceneTitle) {
+                    BrainBarSettingsActions.openSettingsWindow(databasePath: appDelegate.runtime.databasePath)
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+            }
             CommandGroup(after: .appInfo) {
                 if retrievalTools.isEnabled {
                     Button(BrainBarAppMenuCommands.searchTitle) {

@@ -4,6 +4,66 @@ import XCTest
 final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
+    func testFooterQualifiesCloudAndLocalConfiguration() {
+        var config = BrainLayerConfig.defaultConfig
+        config.enrichmentMode = .local
+        config.enrichmentBackend = "mlx"
+        let cloud = BrainBarSettingsFooterPresentation(config: config, watcher: .running)
+        XCTAssertEqual(cloud.state, .watcherRunning)
+        XCTAssertTrue(cloud.locality.contains("Memory on this Mac"))
+        XCTAssertTrue(cloud.locality.contains("Enrichment → Gemini"))
+        XCTAssertFalse(cloud.locality.contains("Local enrichment"))
+        XCTAssertFalse(cloud.showsLock)
+        XCTAssertEqual(cloud.symbol, "icloud")
+
+        config.launchdJobs[.backupDaily]?.enabled = false
+        config.launchdJobs[.jsonlBackup]?.enabled = false
+        let weeklyOnly = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        XCTAssertTrue(weeklyOnly.locality.contains("Backups → Drive"))
+        XCTAssertFalse(weeklyOnly.showsLock)
+
+        config.enrichmentEnabled = false
+        config.launchdJobs[.enrichment]?.enabled = false
+        config.launchdJobs[.maintenanceWeekly]?.enabled = false
+        let local = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        XCTAssertTrue(local.locality.contains("Memory on this Mac"))
+        XCTAssertTrue(local.locality.contains("Enrichment off"))
+        XCTAssertTrue(local.locality.contains("Backups off"))
+        XCTAssertTrue(local.showsLock)
+        XCTAssertEqual(local.symbol, "lock")
+        XCTAssertEqual(local.state, .unavailable)
+
+        let unreadable = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
+        XCTAssertTrue(unreadable.locality.contains("Enrichment unknown"))
+        XCTAssertTrue(unreadable.locality.contains("Backups unknown"))
+        XCTAssertFalse(unreadable.showsLock)
+        XCTAssertEqual(unreadable.symbol, "questionmark.circle")
+    }
+
+    @MainActor
+    func testModelResidencyDoesNotInferLoadedStateFromConfigOrDaemonMemory() {
+        let residency = BrainBarSettingsViewModel.modelResidencyPresentation
+        XCTAssertEqual(residency.modelName, "Name unavailable")
+        XCTAssertEqual(residency.status, "Residency unavailable")
+        XCTAssertEqual(residency.memory, "Unavailable")
+    }
+
+    @MainActor
+    func testUnreadableConfigKeepsFooterUnknown() {
+        let store = BrainLayerConfigStore(
+            configURL: URL(fileURLWithPath: "/nonexistent/settings.env"),
+            loadDocumentOverride: { throw CocoaError(.fileReadNoPermission) }
+        )
+        let viewModel = BrainBarSettingsViewModel(store: store, refreshStatusOnLoad: false)
+        XCTAssertFalse(viewModel.configReadSucceeded)
+        XCTAssertFalse(viewModel.reloadConfigFromDisk())
+        XCTAssertFalse(viewModel.configReadSucceeded)
+        let footer = viewModel.footerPresentation
+        XCTAssertTrue(footer.locality.contains("Enrichment unknown"))
+        XCTAssertTrue(footer.locality.contains("Backups unknown"))
+        XCTAssertEqual(footer.state, .unavailable)
+    }
+
     @MainActor
     func testSettingsReadsBackupTruthFromObservabilityDocument() async throws {
         let fixture = try makeFixture()
@@ -84,6 +144,57 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
         XCTAssertTrue(fixture.viewModel.config.showRetrievalTools)
         XCTAssertTrue(try fixture.store.loadDocument().config.showRetrievalTools)
+    }
+
+    @MainActor
+    func testSettingsReloadPreservesExternalEditBeforeSavingAnotherSetting() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var externalConfig = try fixture.store.loadDocument().config
+        externalConfig.enrichmentBackend = "mlx"
+        try fixture.store.save(externalConfig)
+        _ = fixture.viewModel.reloadConfigFromDisk()
+        fixture.viewModel.setShowRetrievalTools(true)
+        let persisted = try fixture.store.loadDocument().config
+        XCTAssertEqual(persisted.enrichmentBackend, "mlx")
+        XCTAssertTrue(persisted.showRetrievalTools)
+    }
+
+    @MainActor
+    func testSidebarSelectionDoesNotWriteAndReachesEveryJobGroup() throws {
+        let (root, store, _) = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let before = try Data(contentsOf: store.configURL)
+        let navigation = BrainBarSettingsNavigation()
+        XCTAssertEqual(navigation.selected, .general)
+        for section in BrainBarSettingsSection.allCases {
+            navigation.select(section)
+            XCTAssertEqual(navigation.selected, section)
+            XCTAssertEqual(try Data(contentsOf: store.configURL), before)
+        }
+        XCTAssertEqual(
+            Set(BrainBarSettingsSection.jobs.groups + BrainBarSettingsSection.backups.groups),
+            Set(BrainLayerLaunchdJobGroup.allCases)
+        )
+        XCTAssertEqual(BrainBarSettingsSection.advanced.advancedJobs, BrainLayerLaunchdJobGroup.advancedJobs)
+    }
+
+    @MainActor
+    func testReshowReloadKeepsUncommittedSettingsDrafts() throws {
+        let (root, store, viewModel) = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        viewModel.backendDraft = "draft-backend"
+        viewModel.onePasswordReference = "op://draft/reference"
+        viewModel.pendingPlainAPIKey = "draft-secret"
+        var external = try store.loadDocument().config
+        external.showRetrievalTools = true
+        try store.save(external)
+
+        XCTAssertTrue(viewModel.reloadConfigFromDisk(preservingDrafts: true))
+        XCTAssertTrue(viewModel.config.showRetrievalTools)
+        XCTAssertEqual(viewModel.backendDraft, "draft-backend")
+        XCTAssertEqual(viewModel.onePasswordReference, "op://draft/reference")
+        XCTAssertEqual(viewModel.pendingPlainAPIKey, "draft-secret")
     }
 
     @MainActor
@@ -266,7 +377,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             configURL: configURL,
             loadDocumentOverride: {
                 loadCount += 1
-                if loadCount > 1 {
+                if loadCount > 2 {
                     throw CocoaError(.fileReadUnknown)
                 }
                 return BrainLayerEnvDocument(config: persisted)
@@ -350,6 +461,74 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertNotNil(fixture.viewModel.lastSaveReceipt)
         XCTAssertFalse(String(reflecting: fixture.viewModel.lastSaveReceipt).contains(secret))
         XCTAssertFalse(String(reflecting: fixture.viewModel.config.googleAPIKey).contains(secret))
+    }
+
+    @MainActor
+    func testCancelledAPIKeyOverwritePreservesExternallyAddedKey() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var confirmationCount = 0
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            refreshStatusOnLoad: false,
+            confirmAPIKeyOverwrite: {
+                confirmationCount += 1
+                return false
+            }
+        )
+        var external = try fixture.store.loadDocument().config
+        external.googleAPIKey = .onePasswordReference("op://Private/Existing/key")
+        try fixture.store.save(external)
+
+        viewModel.pendingPlainAPIKey = "replacement-secret"
+        viewModel.storePlainAPIKey()
+
+        XCTAssertEqual(confirmationCount, 1)
+        XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, external.googleAPIKey)
+        XCTAssertEqual(viewModel.pendingPlainAPIKey, "replacement-secret")
+
+        viewModel.onePasswordReference = "op://Private/Replacement/key"
+        viewModel.storeOnePasswordReference()
+        XCTAssertEqual(confirmationCount, 2)
+        XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, external.googleAPIKey)
+        XCTAssertEqual(viewModel.onePasswordReference, "op://Private/Replacement/key")
+    }
+
+    @MainActor
+    func testOnePasswordOverwriteDoesNotReplaceExternalEditMadeDuringConfirmation() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var external = try fixture.store.loadDocument().config
+        external.googleAPIKey = .onePasswordReference("op://Private/InitiallySaved/key")
+        try fixture.store.save(external)
+        var externalDuringConfirmation = external
+        externalDuringConfirmation.googleAPIKey = .onePasswordReference("op://Private/ExternalEdit/key")
+        var confirmationWriteError: Error?
+        let viewModel = BrainBarSettingsViewModel(
+            store: fixture.store,
+            refreshStatusOnLoad: false,
+            confirmAPIKeyOverwrite: {
+                do {
+                    try fixture.store.save(externalDuringConfirmation)
+                } catch {
+                    confirmationWriteError = error
+                    return false
+                }
+                return true
+            }
+        )
+
+        viewModel.onePasswordReference = "op://Private/Replacement/key"
+        viewModel.storeOnePasswordReference()
+
+        XCTAssertNil(confirmationWriteError)
+        XCTAssertEqual(try fixture.store.loadDocument().config.googleAPIKey, externalDuringConfirmation.googleAPIKey)
+        XCTAssertEqual(viewModel.config.googleAPIKey, externalDuringConfirmation.googleAPIKey)
+        XCTAssertEqual(viewModel.onePasswordReference, "op://Private/Replacement/key")
+        XCTAssertEqual(
+            viewModel.lastSaveReceipt?.validation,
+            .failed("API key changed while overwrite confirmation was open. Review it and try again.")
+        )
     }
 
     @MainActor

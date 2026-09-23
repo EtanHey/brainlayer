@@ -90,6 +90,43 @@ jobs:
           PYTHONPATH: src
         run: pytest tests/test_fleet_watchdog.py -v --tb=short
 
+  installed-import-gate:
+    name: installed wheel imports (python 3.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build wheel
+        run: |
+          set -euo pipefail
+          python -m pip install build
+          python -m build --wheel --outdir "$RUNNER_TEMP/dist"
+      - name: Install and import every module and hook
+        run: |
+          set -euo pipefail
+          wheel="$(find "$RUNNER_TEMP/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          scripts/installed_import_gate.sh "$wheel" "$GITHUB_WORKSPACE/hooks" "$RUNNER_TEMP/brainlayer-import-venv"
+      - name: Prove an arbitrary missing transitive dependency fails the gate
+        run: |
+          set -euo pipefail
+          wheel="$(find "$RUNNER_TEMP/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          venv="$RUNNER_TEMP/brainlayer-import-venv"
+          urllib3_dir="$("$venv/bin/python" -I -c 'import pathlib, urllib3; print(pathlib.Path(urllib3.__file__).resolve().parent)')"
+          poisoned="${urllib3_dir}.import-sweep-poisoned"
+          mv "$urllib3_dir" "$poisoned"
+          trap 'mv "$poisoned" "$urllib3_dir"' EXIT
+          if output="$(cd "$RUNNER_TEMP" && "$venv/bin/python" -m brainlayer.import_sweep \
+            --wheel "$wheel" --hooks-dir "$GITHUB_WORKSPACE/hooks" --timeout 60 --jobs 4 2>&1)"; then
+            echo "::error::import sweep passed with urllib3 source removed"
+            exit 1
+          fi
+          printf '%s\n' "$output"
+          grep -F "No module named 'urllib3'" <<<"$output"
+
   test:
     runs-on: ubuntu-latest
     strategy:

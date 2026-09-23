@@ -295,12 +295,12 @@ brainlayer enrich
 - Skip/summarize: `noise` (skip), `build_log` (summarize), `dir_listing` (structure only)
 - Chunking: AST-aware (tree-sitter); never split stack traces; mask large tool output
 
-<!-- ARCHITECTURE: primary enrichment backend=Groq (cloud); fallback=Gemini via enrichment_controller.py; override via BRAINLAYER_ENRICH_BACKEND env var -->
+<!-- ARCHITECTURE: enrichment_controller.enrich_realtime uses Gemini only; BRAINLAYER_ENRICH_BACKEND selects the separate pipeline/enrichment.py backend -->
 ## Enrichment
-- Primary backend: **Groq** (cloud, configured in launchd plist)
-- Fallback: Gemini via `enrichment_controller.py`, Ollama as offline last-resort
-- Override with `BRAINLAYER_ENRICH_BACKEND=ollama|mlx|groq`
-- Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 5.0 req/s = 300 RPM; see `enrichment_controller.py:RATE_LIMITS`)
+- `enrichment_controller.enrich_realtime` uses Gemini 2.5 Flash-Lite through `_get_gemini_client`; it does **not** read `BRAINLAYER_ENRICH_BACKEND` or fall back to Groq/Ollama. `enrich_single` also uses Gemini.
+- The separate `pipeline/enrichment.py` backend selection reads `BRAINLAYER_ENRICH_BACKEND`; do not infer that it changes the realtime path.
+- Realtime rate is configurable via `BRAINLAYER_ENRICH_RATE` (default 5.0 req/s = 300 RPM; see `enrichment_controller.py:RATE_LIMITS`).
+- Operational state at the 2026-09-23 P0 handoff: enrichment is deliberately paused. This release metadata change does not resume it.
 - Adds 15 metadata fields (summary, key_facts, tags, importance, intent, primary_symbols, resolved_queries, epistemic_level, version_scope, debt_impact, external_deps, entities, sentiment_label, sentiment_score, sentiment_signals); session enrichment captures decisions/corrections
 
 <!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 17 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
