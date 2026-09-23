@@ -9,8 +9,9 @@ with a larger wall-clock budget, for example::
     /path/to/installed/jsonl-backup.sh
 
 The wrapper preserves the explicit timeout and the module reads it through
-``_configured_backup_timeout_seconds``. The LaunchAgent's ordinary 7200-second
-wall-clock limit remains unchanged for nightly runs. Set
+``_configured_backup_timeout_seconds``. The wrapper defaults to a 7200-second
+run limit. The LaunchAgent's 1800-second ``ExitTimeOut`` is only its stop grace.
+Set
 ``BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS`` to replace the default
 per-copy floor; archive-size scaling still applies when it requires more time.
 
