@@ -494,6 +494,32 @@ def _database_logical_size_bytes(db_path: Path) -> int:
     return max(main_file_size, page_count * page_size)
 
 
+def _important_usage_capacity_bytes(path: Path) -> int | None:
+    """Ask macOS for capacity including purgeable space; None means use statfs."""
+    if sys.platform != "darwin":
+        return None
+    script = (
+        'function run(argv) { ObjC.import("Foundation"); '
+        "var url = $.NSURL.fileURLWithPath(argv[0]); "
+        "var key = $.NSURLVolumeAvailableCapacityForImportantUsageKey; "
+        "var values = url.resourceValuesForKeysError($.NSArray.arrayWithObject(key), null); "
+        'if (!values) return "unavailable"; '
+        "var number = values.objectForKey(key); "
+        'return number ? ObjC.unwrap(number).toString() : "unavailable"; }'
+    )
+    try:
+        output = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", script, str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        ).stdout.strip()
+        return int(output) if output.isdecimal() else None
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
 def create_sqlite_backup_artifact(
     db_path: Path,
     output_dir: Path,
@@ -541,7 +567,14 @@ def create_sqlite_backup_artifact(
     # The snapshot and its gzip coexist during compression. Each is at most
     # roughly the logical DB size; the fixed margin covers gzip overhead.
     required_bytes = (db_size * 2) + (512 * 1024 * 1024) + surviving_attempt_growth_reserve_bytes
-    free_bytes = shutil.disk_usage(output_dir).free
+    raw_free_bytes = shutil.disk_usage(output_dir).free
+    important_free_bytes = _important_usage_capacity_bytes(output_dir)
+    free_bytes = important_free_bytes if important_free_bytes is not None else raw_free_bytes
+    print(
+        f"Backup capacity: raw={raw_free_bytes} important_usage={important_free_bytes} "
+        f"selected={free_bytes} required={required_bytes}",
+        flush=True,
+    )
     if free_bytes < required_bytes:
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "

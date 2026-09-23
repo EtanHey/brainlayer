@@ -1035,6 +1035,7 @@ def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypat
         free = base_required
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
 
     with pytest.raises(RuntimeError, match="1 recent attempts reserve"):
         backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
@@ -1073,6 +1074,7 @@ def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
         free = 1
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: LowDisk())
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
 
     with pytest.raises(RuntimeError, match="Insufficient free space"):
         backup_daily.create_sqlite_backup_gzip(source, tmp_path / "out", date_stamp="2026-05-13")
@@ -1089,6 +1091,7 @@ def test_create_snapshot_accepts_space_for_raw_and_gzip(tmp_path, monkeypatch):
         free = (db_size * 2) + (512 * 1024 * 1024)
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
 
     def reached_writer(*args, **kwargs):  # noqa: ARG001
         raise RuntimeError("writer reached")
@@ -1096,6 +1099,32 @@ def test_create_snapshot_accepts_space_for_raw_and_gzip(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", reached_writer)
     with pytest.raises(RuntimeError, match="writer reached"):
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+
+
+def test_create_snapshot_uses_important_usage_capacity(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+    available = (db_size * 2) + (512 * 1024 * 1024)
+
+    class Disk:
+        free = 1
+
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: available)
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+
+    with pytest.raises(RuntimeError, match="writer reached"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
+    output = capsys.readouterr().out
+    assert "raw=1" in output
+    assert f"important_usage={available}" in output
 
 
 def test_ensure_drive_folder_chain_creates_missing_folders():
