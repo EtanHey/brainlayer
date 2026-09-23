@@ -36,6 +36,7 @@ from typing import Any
 import requests
 
 from .paths import get_db_path
+from .socket_hygiene import refuse_production_brainbar_socket
 
 _sleep = time.sleep
 
@@ -925,6 +926,7 @@ def _send_brainbar_json_request(
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)
+        refuse_production_brainbar_socket(socket_path)
         client.connect(str(socket_path))
         client.sendall(payload)
         data = b""

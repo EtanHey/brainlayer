@@ -22,6 +22,8 @@ import uuid
 from pathlib import Path
 
 _PROTECTED_TEST_HOME = Path.home().resolve()
+_OPERATOR_BRAINBAR_SOCKET_PATH = os.environ.get("BRAINBAR_SOCKET_PATH")
+_OPERATOR_MCP_SOCKET = os.environ.get("BRAINLAYER_MCP_SOCKET")
 
 # Some test modules import brainlayer.config during collection. Import it first while HOME points
 # at an empty directory so its production entrypoint behavior cannot load the developer's env file
@@ -167,6 +169,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
     _install_db_open_guards()
+    helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
+    if helper.is_file():
+        spec = importlib.util.spec_from_file_location("_brainlayer_test_socket_hygiene", helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    os.environ["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = "1"
+    missing_socket = f"/tmp/brainlayer-pytest-{uuid.uuid4().hex}.sock"
+    os.environ["BRAINBAR_SOCKET_PATH"] = missing_socket
+    os.environ["BRAINLAYER_MCP_SOCKET"] = missing_socket
+    if helper.is_file():
+        os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (str(helper.parent), os.environ.get("PYTHONPATH"))))
     config.addinivalue_line(
         "markers",
         "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
@@ -271,6 +284,26 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+
+@pytest.fixture(autouse=True)
+def forbid_live_brainbar_socket(monkeypatch, request):
+    """Redirect BrainBar resolution and refuse direct live connects, including child Pythons."""
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
+        monkeypatch.delenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", raising=False)
+        for key, original in (
+            ("BRAINBAR_SOCKET_PATH", _OPERATOR_BRAINBAR_SOCKET_PATH),
+            ("BRAINLAYER_MCP_SOCKET", _OPERATOR_MCP_SOCKET),
+        ):
+            if original is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, original)
+        return
+    missing_socket = f"/tmp/brainlayer-pytest-{uuid.uuid4().hex}.sock"
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    monkeypatch.setenv("BRAINBAR_SOCKET_PATH", missing_socket)
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", missing_socket)
 
 
 # --------------------------------------------------------------------------------------------

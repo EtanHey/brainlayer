@@ -81,14 +81,19 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 ## Tests
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
-- **Suite hygiene, enforced not just written down: no test loads an embedding model, and no test
-  opens the canonical DB.** `tests/conftest.py` arms both guards for every unmarked test —
+- **Suite hygiene is enforced for unmarked tests.** `tests/conftest.py` guards embedding model
+  loads, canonical DB opens, and production BrainBar socket connects —
   `BRAINLAYER_FORBID_EMBEDDING_MODEL=1` (checked at every model-load site, and inherited by
   subprocesses) and a refusal on `sqlite3.connect`/`apsw.Connection` against
-  `~/.local/share/brainlayer`. The only escape is a declared marker:
+  `~/.local/share/brainlayer`. It also redirects BrainBar socket resolution to a nonexistent
+  path and refuses connects to `/tmp/brainbar.sock` in-process and in Python subprocesses that
+  inherit PYTHONPATH and site initialization. The five Python BrainBar connector sites also check
+  `BRAINLAYER_FORBID_BRAINBAR_SOCKET`, including when a child replaces PYTHONPATH but keeps the
+  guard flag. A clean environment or non-Python socket client does not inherit that guard.
+  The only escape is a declared marker:
   `@pytest.mark.embedding_model` for a test that really needs a real model (deselected by
   `scripts/run_tests.sh`, still run in CI, which warms the HF cache on purpose), or
-  `integration`/`live` for a deliberate production-DB check.
+  `integration`/`live` for a deliberate production-DB or BrainBar socket check.
 - **The guard's one contract:** in `tests/`, reach an embedding model through
   `brainlayer.embeddings` or a module attribute — never `from sentence_transformers import X`. A
   direct alias binds the real class at import time, before any fixture, and reaches neither the

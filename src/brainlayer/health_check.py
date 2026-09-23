@@ -43,6 +43,7 @@ from .pause import (
     pause_sentinel_state,
     queue_contains_only_enrichment,
 )
+from .socket_hygiene import refuse_production_brainbar_socket
 from .watcher import default_watch_roots
 
 DEFAULT_SOCKET_PATH = Path("/tmp/brainbar.sock")
@@ -618,6 +619,7 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)
+        refuse_production_brainbar_socket(socket_path.expanduser())
         client.connect(str(socket_path.expanduser()))
         client.sendall(payload)
         data = b""
