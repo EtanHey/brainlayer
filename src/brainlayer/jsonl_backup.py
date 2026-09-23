@@ -9,8 +9,9 @@ with a larger wall-clock budget, for example::
     /path/to/installed/jsonl-backup.sh
 
 The wrapper preserves the explicit timeout and the module reads it through
-``_configured_backup_timeout_seconds``. The LaunchAgent's ordinary 1800-second
-wall-clock limit remains unchanged for nightly runs. Set
+``_configured_backup_timeout_seconds``. The wrapper defaults to a 7200-second
+run limit. The LaunchAgent's 1800-second ``ExitTimeOut`` is only its stop grace.
+Set
 ``BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS`` to replace the default
 per-copy floor; archive-size scaling still applies when it requires more time.
 
@@ -61,7 +62,7 @@ DEFAULT_ICLOUD_DIR = (
 )
 # A distinct sibling of golems' reserved path avoids shared naming/pruning ownership.
 DEFAULT_ACTIVE_SKIP_SECONDS = 10 * 60
-DEFAULT_TIMEOUT_SECONDS = 1800
+DEFAULT_TIMEOUT_SECONDS = 7200
 DEFAULT_ICLOUD_TIMEOUT_SECONDS = 300
 # 20 MiB/s is a conservative local iCloud Drive floor. It keeps a large seed
 # from receiving only the fixed five-minute budget while avoiding optimistic
