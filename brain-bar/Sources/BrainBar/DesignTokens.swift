@@ -20,7 +20,6 @@ enum BrainBarDesignTokens {
         static let textSecondary = NSColor.brainBarHex(0xAEBBD4)
         static let textMuted = NSColor.brainBarHex(0x6B7A98)
 
-
         static let accent = NSColor.brainBarHex(0x6EA0FF)
         static let accentBright = NSColor.brainBarHex(0x8FB6FF)
         static let accentDeep = NSColor.brainBarHex(0x3F6FE0)

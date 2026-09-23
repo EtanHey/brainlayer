@@ -283,6 +283,59 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(columns.contains("sender"))
     }
 
+    func testReadOnlyLegacyChunksSchemaExpandChunkWithoutSenderColumn() throws {
+        let legacyPath = NSTemporaryDirectory() + "brainbar-readonly-legacy-sender-\(UUID().uuidString).db"
+        try sqliteExecWrite(
+            path: legacyPath,
+            sql: """
+                CREATE TABLE chunks (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    conversation_id TEXT,
+                    project TEXT,
+                    content_type TEXT,
+                    importance REAL,
+                    created_at TEXT,
+                    summary TEXT,
+                    tags TEXT
+                );
+                INSERT INTO chunks (
+                    id, content, metadata, conversation_id, project, content_type,
+                    importance, created_at, summary, tags
+                ) VALUES
+                    ('legacy-user-1', 'User asks for copy', '{}', 'legacy-thread', 'brainlayer', 'user_message', 5, '2026-05-28T21:00:00Z', '', '[]'),
+                    ('legacy-assistant', 'Make your next big call with confidence.', '{}', 'legacy-thread', 'brainlayer', 'user_message', 5, '2026-05-28T21:01:00Z', '', '[]'),
+                    ('legacy-user-2', 'Only this line was user-authored.', '{}', 'legacy-thread', 'brainlayer', 'user_message', 5, '2026-05-28T21:02:00Z', '', '[]');
+            """
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: legacyPath)
+            try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
+            try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
+        }
+
+        let legacyReader = BrainDatabase(
+            path: legacyPath,
+            openConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
+        )
+        defer { legacyReader.close() }
+
+        XCTAssertTrue(legacyReader.isOpen)
+        XCTAssertFalse(try sqliteTableColumns(path: legacyPath, table: "chunks").contains("sender"))
+
+        let expanded = try legacyReader.expandChunk(
+            id: "legacy-assistant", before: 1, after: 1, includeFullTargetContent: true
+        )
+        let target = try XCTUnwrap(expanded["target"] as? [String: Any])
+        let context = try XCTUnwrap(expanded["context"] as? [[String: Any]])
+
+        XCTAssertEqual(target["chunk_id"] as? String, "legacy-assistant")
+        XCTAssertEqual(target["content"] as? String, "Make your next big call with confidence.")
+        XCTAssertNil(target["sender"] as? String)
+        XCTAssertEqual(context.compactMap { $0["chunk_id"] as? String }, ["legacy-user-1", "legacy-user-2"])
+    }
+
     func testReadOnlyOpenConfigurationAllowsDashboardReadsButRejectsWrites() throws {
         try db.insertChunk(
             id: "readonly-seed",

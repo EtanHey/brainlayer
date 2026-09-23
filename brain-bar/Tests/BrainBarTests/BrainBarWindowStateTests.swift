@@ -326,12 +326,6 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(preferred, candidates[1])
     }
-
-
-
-
-
-
 }
 
 private final class FakeKeyValueStore: BrainBarKeyValueStoring {
