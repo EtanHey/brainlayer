@@ -105,7 +105,11 @@ def _retention_status() -> str:
 
 
 def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None, bool]:
-    real = [record for record in records if record.get("backup_log_provenance") == "real"]
+    real = [
+        record
+        for record in records
+        if record.get("backup_log_provenance") == "real" and record.get("error_type") != "BackupAlreadyRunningError"
+    ]
     if not real:
         return None, None, False
     all_errors = all(record.get("error") or record.get("error_type") for record in real)

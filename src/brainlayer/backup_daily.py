@@ -50,6 +50,7 @@ DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
+POST_PURGE_POLL_SECONDS = 0.5  # 60 polls give APFS up to 30s to release reclaimed bytes.
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
@@ -192,6 +193,12 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
+class BackupStoppedError(BaseException):
+    def __init__(self, signum: int):
+        self.signum = signum
+        super().__init__(f"backup stopped by {signal.Signals(signum).name}")
+
+
 class DriveUploadStalledError(RuntimeError):
     error_code = "drive_upload_stalled"
 
@@ -313,6 +320,10 @@ def _drive_put_with_deadline(session: Any, url: str, *, headers: dict[str, str],
 
 def _raise_backup_timeout(signum, frame) -> None:  # noqa: ARG001
     raise BackupTimeoutError("backup exceeded configured wall-clock timeout")
+
+
+def _raise_backup_stopped(signum, frame) -> None:  # noqa: ARG001
+    raise BackupStoppedError(signum)
 
 
 def _sqlite_pragma_check(db_path: Path, pragma_name: str) -> str:
@@ -723,10 +734,10 @@ def create_sqlite_backup_artifact(
         except RuntimeError as exc:
             purge_error = str(exc)
         raw_free_bytes = shutil.disk_usage(output_dir).free
-        for _ in range(5):
+        for _ in range(60):
             if raw_free_bytes >= required_bytes:
                 break
-            time.sleep(0.2)
+            time.sleep(POST_PURGE_POLL_SECONDS)
             raw_free_bytes = shutil.disk_usage(output_dir).free
     free_bytes = raw_free_bytes
     if capacity_status_callback is not None:
@@ -1510,7 +1521,21 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
-                raise RuntimeError(f"backup already running in {staging_dir}") from exc
+                error = f"backup already running in {staging_dir}"
+                resolved_db_path = bound.arguments.get("db_path") or get_db_path()
+                _append_json_log(
+                    _backup_log_path(bound.arguments.get("log_path"), db_path=resolved_db_path),
+                    {
+                        "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                        "db": str(resolved_db_path),
+                        "verified": False,
+                        "uploaded": False,
+                        "backup_log_provenance": _backup_log_provenance(),
+                        "error_type": "BackupAlreadyRunningError",
+                        "error": error,
+                    },
+                )
+                raise RuntimeError(error) from exc
             try:
                 return func(*args, **kwargs)
             finally:
@@ -1671,6 +1696,16 @@ def run_backup(
                     "local_gzip_retention_deleted": local_gzip_deleted,
                 }
             )
+    except BackupStoppedError as exc:
+        result.update(
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "stop_signal": signal.Signals(exc.signum).name,
+            }
+        )
+        exc.receipt_logged = True
+        raise
     except Exception as exc:
         result.update({"error_type": type(exc).__name__, "error": str(exc)})
         error_code = getattr(exc, "error_code", None)
@@ -1694,8 +1729,10 @@ def _run_backup_process(timeout_seconds: int) -> int:
     previous_alarm_handler = None
     previous_alarm_handler = signal.getsignal(signal.SIGALRM)
     previous_term_handler = signal.getsignal(signal.SIGTERM)
+    previous_int_handler = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGALRM, _raise_backup_timeout)
-    signal.signal(signal.SIGTERM, _raise_backup_timeout)
+    signal.signal(signal.SIGTERM, _raise_backup_stopped)
+    signal.signal(signal.SIGINT, _raise_backup_stopped)
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         resolved_db_path = get_db_path()
@@ -1715,6 +1752,22 @@ def _run_backup_process(timeout_seconds: int) -> int:
             ),
             log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
         )
+    except BackupStoppedError as exc:
+        if not getattr(exc, "receipt_logged", False):
+            _append_json_log(
+                _backup_log_path(None, db_path=get_db_path(), env=os.environ),
+                {
+                    "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                    "db": str(get_db_path()),
+                    "verified": False,
+                    "uploaded": False,
+                    "backup_log_provenance": _backup_log_provenance(),
+                    "error_type": "BackupStoppedError",
+                    "error": str(exc),
+                    "stop_signal": signal.Signals(exc.signum).name,
+                },
+            )
+        return 128 + exc.signum
     except BackupTimeoutError:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
         return 124
@@ -1725,6 +1778,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
+        signal.signal(signal.SIGINT, previous_int_handler)
     print(json.dumps(result, sort_keys=True), flush=True)
     return 0 if result.get("verified", True) else 1
 
@@ -1752,7 +1806,7 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
             return child.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             if child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
+                os.killpg(child.pid, signal.SIGALRM)
                 try:
                     child.wait(timeout=10)
                 except subprocess.TimeoutExpired:
@@ -1763,6 +1817,7 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
             _append_json_log(
                 _backup_log_path(None, db_path=resolved_db_path, env=os.environ),
                 {
+                    "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
                     "db": str(get_db_path()),
                     "uploaded": False,
                     "local_removed": False,
