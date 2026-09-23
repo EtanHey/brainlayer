@@ -126,7 +126,6 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
     func testChartsExposeVisibleTruthTooltipsAndKeyboardAccessIdentifiers() throws {
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let sparkline = try sourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
-        let commandBar = try sourceFile("Sources/BrainBar/BrainBarCommandBar.swift")
 
         for forbidden in ["All commits", "Agent MCP stores", "JSONL watcher"] {
             XCTAssertFalse(
@@ -160,10 +159,6 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(dashboard.contains("accessibilitySummary"), "Charts need a non-pointer semantic summary.")
         XCTAssertTrue(dashboard.contains(".focusEffectDisabled()"), "Dashboard controls must suppress AppKit's pointer focus ring.")
         XCTAssertTrue(dashboard.contains(".focused("), "Dashboard controls still need a keyboard focus path.")
-        XCTAssertTrue(commandBar.contains("brainbar.command.mode.capture"))
-        XCTAssertTrue(commandBar.contains("brainbar.command.mode.search"))
-        XCTAssertTrue(commandBar.contains("brainbar.command.input"))
-        XCTAssertFalse(commandBar.contains(".focusable(false)"))
     }
 
     func testReplayDebtIsDecomposedOneActionFromTheAggregate() throws {
@@ -295,7 +290,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let onePageSource = try sourceSlice(
             from: "struct BrainBarOnePagePresentation",
-            throughBefore: "@MainActor\nprivate final class BrainBarCommandBarViewModelProvider",
+            throughBefore: "private extension View",
             in: dashboard
         )
         let dashboardView = try sourceSlice(

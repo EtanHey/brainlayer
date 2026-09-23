@@ -2,28 +2,16 @@ import XCTest
 @testable import BrainBar
 
 final class BrainLayerConfigTests: XCTestCase {
-    func testRetrievalToolsDefaultHiddenAndRoundTripWhenEnabled() throws {
-        XCTAssertFalse(BrainLayerConfig.defaultConfig.showRetrievalTools)
 
-        var document = BrainLayerEnvDocument(config: .defaultConfig)
-        document.update { $0.showRetrievalTools = true }
+
+
+
+    func testRetiredRetrievalKeyRemainsUnmanagedOnRender() throws {
+        let input = "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=1\nBRAINLAYER_SYSTEM_ENABLED=1\n"
+        let document = try BrainLayerEnvDocument(text: input)
         let rendered = document.rendered()
-        let reloaded = try BrainLayerEnvDocument(text: rendered).config
-
         XCTAssertTrue(rendered.contains("BRAINLAYER_SHOW_RETRIEVAL_TOOLS=1"))
-        XCTAssertTrue(reloaded.showRetrievalTools)
-        XCTAssertTrue(reloaded.persistedValuesEqual(to: document.config))
-    }
-
-    func testRetrievalToolsRequireAnExplicitTrueValue() throws {
-        for raw in ["1", "true", "TRUE", "'TrUe'", "\"1\""] {
-            let document = try BrainLayerEnvDocument(text: "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=\(raw)\n")
-            XCTAssertTrue(document.config.showRetrievalTools, raw)
-        }
-        for raw in ["", "0", "false", "FALSE", "garbage", "yes", "on", "disabled"] {
-            let document = try BrainLayerEnvDocument(text: "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=\(raw)\n")
-            XCTAssertFalse(document.config.showRetrievalTools, raw)
-        }
+        XCTAssertEqual(rendered.components(separatedBy: "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=").count, 2)
     }
 
     func testProviderAvailabilityOnlyExposesRuntimeWiredChoices() {

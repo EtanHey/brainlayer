@@ -31,8 +31,7 @@ enum BrainBarLaunchMode: Equatable {
 
 enum BrainBarTab: Int, CaseIterable, Equatable, Hashable, Identifiable {
     case dashboard = 0
-    case graph = 1
-    case settings = 2
+    case settings = 1
 
     var id: Int { rawValue }
 
@@ -40,8 +39,6 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Hashable, Identifiable {
         switch self {
         case .dashboard:
             return "Dashboard"
-        case .graph:
-            return "Graph"
         case .settings:
             return "Settings"
         }
@@ -51,49 +48,13 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Hashable, Identifiable {
         switch self {
         case .dashboard:
             return "gauge"
-        case .graph:
-            return "point.3.connected.trianglepath.dotted"
         case .settings:
             return "gearshape"
         }
     }
 }
 
-enum BrainBarRetrievalToolsPolicy {
-    static func visibleTabs(showRetrievalTools: Bool) -> [BrainBarTab] {
-        showRetrievalTools ? BrainBarTab.allCases : BrainBarTab.allCases.filter { tab in
-            tab != .graph
-        }
-    }
-
-    static func showsCommandBar(showRetrievalTools: Bool) -> Bool {
-        showRetrievalTools
-    }
-
-    static func allowsQuickActions(showRetrievalTools: Bool) -> Bool {
-        showRetrievalTools
-    }
-
-    static func selectedTab(_ selectedTab: BrainBarTab, showRetrievalTools: Bool) -> BrainBarTab {
-        visibleTabs(showRetrievalTools: showRetrievalTools).contains(selectedTab) ? selectedTab : .dashboard
-    }
-}
-
 @MainActor
-final class BrainBarRetrievalToolsSettings: ObservableObject {
-    static let shared = BrainBarRetrievalToolsSettings()
-
-    @Published private(set) var isEnabled = false
-
-    func update(enabled: Bool) {
-        isEnabled = enabled
-    }
-}
-
-enum BrainBarQuickAction: Equatable {
-    case capture
-    case search
-}
 
 enum BrainBarSparklineStyle: Equatable {
     case active

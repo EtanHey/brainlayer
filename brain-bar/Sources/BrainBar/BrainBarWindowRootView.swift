@@ -9,10 +9,7 @@ struct BrainBarWindowRootView: View {
     private let managesWindowFrame: Bool
     @ObservedObject private var panelState: BrainBarDashboardPanelState
 
-    @State private var hasActivatedGraphTab = false
-    @State private var commandBarProvider = BrainBarCommandBarViewModelProvider()
     @StateObject private var windowObserver: BrainBarWindowObserver
-    @ObservedObject private var retrievalTools = BrainBarRetrievalToolsSettings.shared
 #if BRAINBAR_UI
     private var settingsViewFactory: (String, Int, BrainBarSettingsNavigation) -> AnyView = {
         AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1, navigation: $2))
@@ -43,9 +40,7 @@ struct BrainBarWindowRootView: View {
             BrainBarWindowHeader(
                 collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                commandBarViewModel: commandBarViewModel,
                 databasePath: runtime.databasePath,
-                showRetrievalTools: retrievalTools.isEnabled,
                 selectedTab: $panelState.selectedTab
             )
             .background(GeometryReader { proxy in
@@ -56,11 +51,6 @@ struct BrainBarWindowRootView: View {
                 dashboardContent
                     .brainBarTabVisibility(panelState.selectedTab == .dashboard)
 
-                if hasActivatedGraphTab || panelState.selectedTab == .graph {
-                    graphContent
-                        .brainBarTabVisibility(panelState.selectedTab == .graph)
-                }
-
 #if BRAINBAR_UI
                 if panelState.selectedTab == .settings {
                     settingsContent
@@ -69,16 +59,6 @@ struct BrainBarWindowRootView: View {
 #endif
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay {
-                // Overlay carries its own full-area tap-catcher and only
-                // renders when the user is on the Dashboard tab with a
-                // non-empty search query that hasn't been dismissed.
-                BrainBarCommandBarResultsOverlay(
-                    viewModel: commandBarViewModel,
-                    isOnActiveTab: panelState.selectedTab == .dashboard,
-                    panelState: panelState
-                )
-            }
         }
         .frame(
             minWidth: 760,
@@ -92,29 +72,9 @@ struct BrainBarWindowRootView: View {
         .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
             activate(tab: panelState.selectedTab, refreshDashboard: true)
-            if let action = runtime.requestedQuickAction {
-                handleRequestedQuickAction(action)
-            }
         }
         .onChange(of: panelState.selectedTab) { oldTab, newTab in
-            panelState.graphPresented = newTab == .graph
             activate(tab: newTab, refreshDashboard: oldTab != .settings)
-        }
-        .onChange(of: retrievalTools.isEnabled) { _, enabled in
-            panelState.selectedTab = BrainBarRetrievalToolsPolicy.selectedTab(
-                panelState.selectedTab,
-                showRetrievalTools: enabled
-            )
-        }
-        .onChange(of: runtime.database != nil, initial: true) { _, _ in
-            // DB just became available — replay any pending request that was
-            // left in runtime.requestedQuickAction while we were still warming.
-            if let action = runtime.requestedQuickAction {
-                handleRequestedQuickAction(action)
-            }
-        }
-        .onReceive(runtime.$requestedQuickAction.compactMap { $0 }) { action in
-            handleRequestedQuickAction(action)
         }
     }
 
@@ -141,15 +101,6 @@ struct BrainBarWindowRootView: View {
         }
     }
 
-    @ViewBuilder
-    private var graphContent: some View {
-        if let database = runtime.database {
-            BrainBarGraphTab(database: database, isActive: panelState.selectedTab == .graph && windowObserver.isWindowVisible)
-        } else {
-            BrainBarLoadingView(title: "Graph", subtitle: "Knowledge graph unavailable.")
-        }
-    }
-
 #if BRAINBAR_UI
     private var settingsContent: some View {
         settingsViewFactory(runtime.databasePath ?? BrainBarServer.defaultDBPath(),
@@ -157,35 +108,12 @@ struct BrainBarWindowRootView: View {
     }
 #endif
 
-    private var commandBarViewModel: QuickCaptureViewModel? {
-        guard BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: retrievalTools.isEnabled) else {
-            return nil
-        }
-        return commandBarProvider.viewModel(database: runtime.database)
-    }
-
-    private func handleRequestedQuickAction(_ action: BrainBarQuickAction) {
-        guard BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: retrievalTools.isEnabled) else {
-            runtime.clearQuickActionRequest()
-            return
-        }
-        // If the DB isn't ready yet, leave the request in flight and replay
-        // when the runtime database readiness token changes.
-        guard let vm = commandBarViewModel else { return }
-        panelState.selectedTab = .dashboard
-        vm.setMode(action == .capture ? .capture : .search)
-        vm.panelDidAppear()
-        runtime.clearQuickActionRequest()
-    }
-
     private func activate(tab: BrainBarTab, refreshDashboard: Bool) {
         switch tab {
         case .dashboard:
             if refreshDashboard {
                 runtime.collector?.requestRefresh(force: true, trigger: .tabSwitch)
             }
-        case .graph:
-            hasActivatedGraphTab = true
         case .settings: break
         }
     }
@@ -208,8 +136,14 @@ struct BrainBarQueueDirectionPresentation: Equatable {
     let symbol: String
     let tone: BrainBarQueueDirectionTone
 
-    static func derive(_ status: DashboardQueueStatus) -> Self {
-        switch status {
+    static func derive(_ status: DashboardQueueStatus, backlogCount: Int = 0, enrichmentPaused: Bool? = nil) -> Self {
+        if status != .unavailable, enrichmentPaused == true, backlogCount > 0 {
+            return Self(
+                label: "Enrichment paused · \(DashboardMetricFormatter.integerString(backlogCount)) queued",
+                symbol: "pause.circle", tone: .neutral
+            )
+        }
+        return switch status {
         case .empty, .stable:
             Self(label: "Queue \(status.label)", symbol: "arrow.left.and.right", tone: .neutral)
         case .draining:
@@ -233,6 +167,7 @@ private struct BrainBarDashboardContent: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
+    var enrichmentPausedOverride: Bool? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -247,7 +182,8 @@ private struct BrainBarDashboardContent: View {
                 referenceNow: referenceNow,
                 calendar: calendar,
                 locale: locale,
-                panelState: panelState ?? standalonePanelState
+                panelState: panelState ?? standalonePanelState,
+                enrichmentPausedOverride: enrichmentPausedOverride
             )
         }
     }
@@ -435,6 +371,15 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
     let agentWritesWindowHours: Int?
     let agentWritesText: String
 
+    func agentWritesDetailText(locale: Locale) -> String {
+        guard let agentWritesCount else { return agentWritesText }
+        let count = DashboardMetricFormatter.integerString(agentWritesCount, locale: locale)
+        guard agentWritesWindowHours == nil else { return count }
+        let freshness = agentWritesText.split(separator: "·", maxSplits: 1).last?
+            .trimmingCharacters(in: .whitespaces) ?? agentWritesText
+        return "\(count) · \(freshness)"
+    }
+
     static func derive(
         snapshotFreshness: SnapshotFreshnessState,
         hero: BrainBarHeroPresentation,
@@ -560,9 +505,13 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 calendar: calendar,
                 locale: locale
             )
-            if case let .untrustworthy(reason) = trust {
+            let staleSameDay: Bool = if case let .untrustworthy(reason) = trust {
+                reason.hasPrefix("observability as of ") && document.generatedAt >= midnight
+            } else { false }
+            if case let .untrustworthy(reason) = trust, !staleSameDay {
                 indexedToday = nil
-                indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
+                indexedTodayUnavailableText = reason.hasPrefix("observability as of ")
+                    ? "not measured yet today" : "Indexed today unavailable: \(reason)"
             } else if let buckets = document.stores.inWindow?.byHour {
                 let todayCount = buckets
                     .filter { $0.hour >= midnight && $0.hour <= now }
@@ -573,7 +522,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                     }
                 if let todayCount {
                     indexedToday = todayCount
-                    indexedTodayUnavailableText = nil
+                    indexedTodayUnavailableText = staleSameDay
+                        ? "as of \(staleMoment(document.generatedAt, now: now, calendar: calendar, locale: locale)) (stale)" : nil
                 } else {
                     indexedToday = nil
                     indexedTodayUnavailableText = "Indexed today unavailable: hourly observability count overflow"
@@ -585,7 +535,9 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         } else {
             totalIndexedChunks = stats.chunkCount
             indexedToday = nil
-            if case let .unreadable(reason) = observability {
+            if case .readable = observability {
+                indexedTodayUnavailableText = "not measured yet today"
+            } else if case let .unreadable(reason) = observability {
                 indexedTodayUnavailableText = "Indexed today unavailable: \(reason)"
             } else {
                 indexedTodayUnavailableText = "Indexed today unavailable: observability unmeasurable"
@@ -605,9 +557,16 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 locale: locale
             )
             if case let .untrustworthy(reason) = trust {
-                agentWritesCount = nil
-                agentWritesWindowHours = nil
-                agentWritesText = "brain_store writes unavailable: \(reason)"
+                if reason.hasPrefix("observability as of "), document.emitters.state == "measured",
+                   let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
+                    agentWritesCount = mcp.countInWindow
+                    agentWritesWindowHours = nil
+                    agentWritesText = "brain_store writes (\(document.windowHours) h) · as of \(staleMoment(document.generatedAt, now: now, calendar: calendar, locale: locale)) (stale)"
+                } else {
+                    agentWritesCount = nil
+                    agentWritesWindowHours = nil
+                    agentWritesText = "brain_store writes · not measured yet"
+                }
             } else if document.emitters.state == "measured" {
                 if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
                     agentWritesCount = mcp.countInWindow
@@ -616,22 +575,21 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 } else {
                     agentWritesCount = nil
                     agentWritesWindowHours = nil
-                    agentWritesText = "brain_store writes unavailable: no MCP count in observability"
+                    agentWritesText = "brain_store writes · not measured yet"
                 }
             } else {
-                let reason = document.emitters.reason.isEmpty ? "emitter measurement unavailable" : document.emitters.reason
                 agentWritesCount = nil
                 agentWritesWindowHours = nil
-                agentWritesText = "brain_store writes unavailable: \(reason)"
+                agentWritesText = "brain_store writes · not measured yet"
             }
-        } else if case let .unreadable(reason) = observability {
+        } else if case .unreadable = observability {
             agentWritesCount = nil
             agentWritesWindowHours = nil
-            agentWritesText = "brain_store writes unavailable: \(reason)"
+            agentWritesText = "brain_store writes · not measured yet"
         } else {
             agentWritesCount = nil
             agentWritesWindowHours = nil
-            agentWritesText = "brain_store writes unavailable: observability document unreadable"
+            agentWritesText = "brain_store writes · not measured yet"
         }
 
         return Self(
@@ -685,6 +643,18 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         return formatter.string(from: date)
     }
 
+    private static func staleMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        if calendar.isDate(date, inSameDayAs: now) {
+            return shortTime(date, calendar: calendar, locale: locale)
+        }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+
     private static func ageText(_ seconds: Int) -> String {
         if seconds < 60 { return "\(seconds) s" }
         if seconds < 3_600 { return "\(seconds / 60) min" }
@@ -704,20 +674,6 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
     }
 }
 
-@MainActor
-private final class BrainBarCommandBarViewModelProvider {
-    private let panelState = QuickCapturePanelState()
-    private var currentViewModel: QuickCaptureViewModel?
-
-    func viewModel(database: BrainDatabase?) -> QuickCaptureViewModel? {
-        guard let database else { return currentViewModel }
-        if currentViewModel == nil {
-            currentViewModel = QuickCaptureViewModel(db: database, panelState: panelState)
-        }
-        return currentViewModel
-    }
-}
-
 private extension View {
     @ViewBuilder
     func brainBarTabVisibility(_ isVisible: Bool) -> some View {
@@ -730,9 +686,7 @@ private extension View {
 private struct BrainBarWindowHeader: View {
     let collector: StatsCollector?
     let hotkeyStatus: String
-    let commandBarViewModel: QuickCaptureViewModel?
     let databasePath: String?
-    let showRetrievalTools: Bool
     @Binding var selectedTab: BrainBarTab
 
     var body: some View {
@@ -742,22 +696,18 @@ private struct BrainBarWindowHeader: View {
                 Spacer(minLength: 12)
                 if selectedTab == .dashboard { refreshControls }
                 Picker("Section", selection: $selectedTab) {
-                    ForEach(BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: showRetrievalTools)) { tab in
+                    ForEach(BrainBarTab.allCases) { tab in
                         Label(tab.title, systemImage: tab.systemImage)
                             .tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: showRetrievalTools ? 280 : 190)
+                .frame(width: 190)
                 .accessibilityIdentifier("brainbar.shell.destination")
                 BrainBarAppControlMenu(databasePath: databasePath)
             }
 
-            if selectedTab == .dashboard,
-               BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools) {
-                BrainBarCommandBar(viewModel: commandBarViewModel)
-            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
@@ -870,6 +820,7 @@ private struct BrainBarDashboardView: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     @ObservedObject var panelState: BrainBarDashboardPanelState
+    var enrichmentPausedOverride: Bool? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
@@ -916,6 +867,11 @@ private struct BrainBarDashboardView: View {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: currentNow)
     }
 
+    private var signalCoverageError: String? {
+        collector.lastSignalCoverageError
+            ?? (collector.stats.signalCoverageIsAvailable ? nil : collector.lastFetchError)
+    }
+
     private var vectorSignal: BrainBarSignalCoverage {
         BrainBarSignalCoverage(
             name: "Vector",
@@ -925,7 +881,7 @@ private struct BrainBarDashboardView: View {
             coveragePercent: collector.stats.vectorCoveragePercent,
             isAvailable: collector.stats.signalCoverageIsAvailable,
             isRefreshing: collector.isSignalCoverageRefreshing,
-            lastError: collector.lastSignalCoverageError ?? collector.lastFetchError,
+            lastError: signalCoverageError,
             locale: locale,
             accentColor: .brainBarSignalVector,
             showsDetail: true,
@@ -1127,7 +1083,12 @@ private struct BrainBarDashboardView: View {
 
     private var statusStrip: some View {
         let status = onePagePresentation.status
-        let queueDirection = BrainBarQueueDirectionPresentation.derive(flowSummary.queue.status)
+        let enrichmentPaused = enrichmentPausedOverride ?? observedEnrichmentPaused
+        let queueDirection = BrainBarQueueDirectionPresentation.derive(
+            flowSummary.queue.status,
+            backlogCount: flowSummary.queue.backlogCount,
+            enrichmentPaused: enrichmentPaused
+        )
         let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
         case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
@@ -1214,6 +1175,14 @@ private struct BrainBarDashboardView: View {
         }
     }
 
+    private var observedEnrichmentPaused: Bool? {
+#if BRAINBAR_UI
+        (try? BrainLayerConfigStore().loadDocument().config).map(\.enrichmentIsOff)
+#else
+        nil
+#endif
+    }
+
     @ViewBuilder
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
         Group {
@@ -1250,6 +1219,11 @@ private struct BrainBarDashboardView: View {
                                 .monospacedDigit()
                             Text("indexed today")
                                 .font(.system(size: 13))
+                            if let staleText = counts.indexedTodayUnavailableText {
+                                Text("· \(staleText)")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.brainBarTextSecondary)
+                            }
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 5) {
@@ -1257,7 +1231,8 @@ private struct BrainBarDashboardView: View {
                                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                             Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
                                 .font(.system(size: 11))
-                                .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                                .foregroundStyle(counts.indexedTodayUnavailableText == "not measured yet today"
+                                    ? Color.brainBarTextSecondary : Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
                                 .lineLimit(1)
                         }
                     }
@@ -1271,14 +1246,26 @@ private struct BrainBarDashboardView: View {
                             Text(DashboardMetricFormatter.integerString(writes, locale: locale))
                                 .font(.system(size: 20, weight: .semibold, design: .rounded))
                                 .monospacedDigit()
-                            Text("brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
+                            if counts.agentWritesWindowHours == nil {
+                                Circle().fill(Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown))
+                                    .frame(width: 6, height: 6)
+                            }
+                            Text(counts.agentWritesWindowHours == nil
+                                 ? counts.agentWritesText : "brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
                                 .font(.system(size: 13))
+                                .foregroundStyle(counts.agentWritesWindowHours == nil
+                                    ? Color.brainBarTextSecondary : Color.brainBarTextPrimary)
                         }
                     } else {
-                        Text(counts.agentWritesText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown))
+                                .frame(width: 6, height: 6)
+                            Text(counts.agentWritesText)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.brainBarTextSecondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 .frame(height: 26, alignment: .topLeading)
@@ -1501,7 +1488,7 @@ private struct BrainBarDashboardView: View {
             stats: collector.stats,
             compact: layout.compactCards,
             isRefreshing: collector.isSignalCoverageRefreshing,
-            lastError: collector.lastSignalCoverageError ?? collector.lastFetchError,
+            lastError: signalCoverageError,
             locale: locale,
             isExpanded: $panelState.signalCoverageExpanded,
             isVectorDetailExpanded: $vectorSignalDetailExpanded,
@@ -1547,7 +1534,7 @@ private struct BrainBarDashboardView: View {
     private func diagnostics(layout: BrainBarDashboardLayout) -> some View {
         let activityRows = [
             ("Indexed in window", flowSummary.allCommits.volumeText),
-            ("Agent writes (24 h)", onePagePresentation.agentWritesCount.map { DashboardMetricFormatter.integerString($0, locale: locale) } ?? onePagePresentation.agentWritesText),
+            ("Agent writes (24 h)", onePagePresentation.agentWritesDetailText(locale: locale)),
             ("DB size", ByteCountFormatter.string(
                 fromByteCount: collector.stats.databaseSizeBytes,
                 countStyle: .file
@@ -2201,7 +2188,6 @@ private struct BrainBarSignalCoveragePanel: View {
     @Binding var isVectorDetailExpanded: Bool
     var onAnimationCompleted: () -> Void = {}
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var revealedSignalIDs: Set<String> = []
 
     private var signals: [BrainBarSignalCoverage] {
         [
@@ -2223,7 +2209,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "FTS5",
                 indexedCount: stats.ftsIndexedChunkCount,
-                totalCount: stats.signalEligibleChunkCount,
+                totalCount: stats.ftsEligibleChunkCount,
                 backlogCount: stats.ftsBacklogCount,
                 coveragePercent: stats.ftsCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
@@ -2238,7 +2224,7 @@ private struct BrainBarSignalCoveragePanel: View {
             BrainBarSignalCoverage(
                 name: "Trigram",
                 indexedCount: stats.trigramIndexedChunkCount,
-                totalCount: stats.signalEligibleChunkCount,
+                totalCount: stats.ftsEligibleChunkCount,
                 backlogCount: stats.trigramBacklogCount,
                 coveragePercent: stats.trigramCoveragePercent,
                 isAvailable: stats.signalCoverageIsAvailable,
@@ -2265,6 +2251,7 @@ private struct BrainBarSignalCoveragePanel: View {
             accessibilityIdentifier: "brainbar.dashboard.signal-coverage-disclosure",
             accessibilityLabel: "Signal coverage",
             chevronPlacement: .trailing,
+            retainsContentWhenCollapsed: true,
             onAnimationCompleted: onAnimationCompleted
         ) {
             signalBars
@@ -2295,10 +2282,8 @@ private struct BrainBarSignalCoveragePanel: View {
         .onExitCommand {
             if isVectorDetailExpanded { setVectorDetail(false) }
         }
-        .onAppear { updateRevealedSignals(animated: false) }
         .onChange(of: isExpanded) { _, expanded in
             if !expanded { setVectorDetail(false) }
-            updateRevealedSignals(animated: true)
         }
     }
 
@@ -2308,7 +2293,8 @@ private struct BrainBarSignalCoveragePanel: View {
                 .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
                     indexedCount: signal.indexedCount,
                     eligibleCount: signal.totalCount,
-                    isAvailable: signal.isAvailable
+                    isAvailable: signal.isAvailable,
+                    lastError: signal.isRefreshing ? nil : signal.lastError
                 )))
                 .frame(width: 7, height: 7)
             Text(signal.name)
@@ -2336,7 +2322,7 @@ private struct BrainBarSignalCoveragePanel: View {
                     signalColumn(for: signal)
                 }
             }
-            if !stats.signalCoverageIsAvailable, !isRefreshing, let lastError {
+            if !isRefreshing, let lastError {
                 Text(lastError)
                     .font(.system(size: 11))
                     .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
@@ -2367,7 +2353,6 @@ private struct BrainBarSignalCoveragePanel: View {
         }
         .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .topLeading)
         .brainBarCardShapeProbe("coverage.\(signal.id)")
-        .opacity(isExpanded ? (revealedSignalIDs.contains(signal.id) ? 1 : 0) : 1)
         .background {
             if signal.showsDetail {
                 GeometryReader { proxy in
@@ -2376,25 +2361,6 @@ private struct BrainBarSignalCoveragePanel: View {
                             key: BrainBarVectorSignalRootFrameKey.self,
                             value: proxy.frame(in: .named(BrainBarVectorSignalCoordinateSpace.root))
                         )
-                }
-            }
-        }
-    }
-
-    private func updateRevealedSignals(animated: Bool) {
-        guard isExpanded else {
-            revealedSignalIDs.removeAll()
-            return
-        }
-        if reduceMotion || !animated {
-            revealedSignalIDs = Set(signals.map(\.id))
-            return
-        }
-        revealedSignalIDs.removeAll()
-        for (index, signal) in signals.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.06) {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    _ = revealedSignalIDs.insert(signal.id)
                 }
             }
         }
@@ -2507,7 +2473,6 @@ private struct BrainBarSignalCoverageRow: View {
     let signal: BrainBarSignalCoverage
     let compact: Bool
     let isSelected: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 7 : 8) {
@@ -2521,7 +2486,8 @@ private struct BrainBarSignalCoverageRow: View {
                         .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
                             indexedCount: signal.indexedCount,
                             eligibleCount: signal.totalCount,
-                            isAvailable: signal.isAvailable
+                            isAvailable: signal.isAvailable,
+                            lastError: signal.isRefreshing ? nil : signal.lastError
                         )))
                         .frame(width: 6, height: 6)
                     Text(signal.percentText)
@@ -2534,7 +2500,7 @@ private struct BrainBarSignalCoverageRow: View {
             }
 
             if signal.presentation.isMeasurable {
-                BrainBarAnimatedCoverageBar(
+                BrainBarCoverageBar(
                     signalID: signal.id,
                     percent: signal.clampedCoveragePercent,
                     accentColor: signal.accentColor
@@ -2569,7 +2535,6 @@ private struct BrainBarSignalCoverageRow: View {
         }
         .shadow(color: isSelected ? signal.accentColor.opacity(0.18) : .clear, radius: 12, y: 2)
         .scaleEffect(isSelected ? 0.98 : 1)
-        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: signal.clampedCoveragePercent)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(signal.presentation.accessibilityLabel(for: signal.name))
         .help(signal.showsDetail ? "Show Vector backlog details" : signal.presentation.accessibilityLabel(for: signal.name))
@@ -2584,12 +2549,10 @@ private struct BrainBarSignalCoverageRow: View {
     }
 }
 
-private struct BrainBarAnimatedCoverageBar: View {
+private struct BrainBarCoverageBar: View {
     let signalID: String
     let percent: Double
     let accentColor: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var displayedPercent: Double = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -2604,31 +2567,14 @@ private struct BrainBarAnimatedCoverageBar: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: proxy.size.width * min(max(displayedPercent, 0), 100) / 100)
+                    .frame(width: proxy.size.width * min(max(percent, 0), 100) / 100)
             }
         }
         .onAppear {
 #if DEBUG
-            // Count the fill lifecycle even when Reduce Motion makes it instantaneous.
+            // Retained disclosure content should present each bar only once.
             BrainBarCoverageLifecycleProbe.recordFillStart(signalID)
 #endif
-            if reduceMotion {
-                displayedPercent = percent
-            } else {
-                displayedPercent = 0
-                withAnimation(.easeOut(duration: 0.45)) {
-                    displayedPercent = percent
-                }
-            }
-        }
-        .onChange(of: percent) { _, newValue in
-            if reduceMotion {
-                displayedPercent = newValue
-            } else {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    displayedPercent = newValue
-                }
-            }
         }
     }
 }
@@ -2717,7 +2663,7 @@ private struct BrainBarVectorSignalDetail: View {
         let statusColor = isFalling
             ? Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
             : Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
-        return Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
+        return Label(isFalling ? "falling" : "Not measured", systemImage: isFalling ? "arrow.down.right" : "questionmark.circle")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(Color.brainBarTextPrimary)
             .padding(.vertical, 5)
@@ -2732,12 +2678,12 @@ private struct BrainBarVectorSignalDetail: View {
     }
 
     private var drainText: String {
-        guard let rate = signal.vectorNetDrainRatePerHour, rate > 0 else { return "n/a" }
+        guard let rate = signal.vectorNetDrainRatePerHour, rate > 0 else { return "Not measured" }
         return "~\(formatted(Int(rate.rounded())))/hr"
     }
 
     private var etaText: String {
-        guard let hours = signal.vectorBacklogETAHours, hours.isFinite, hours > 0 else { return "n/a" }
+        guard let hours = signal.vectorBacklogETAHours, hours.isFinite, hours > 0 else { return "Not measured" }
         if hours < 1 {
             return "~\(max(1, Int((hours * 60).rounded())))m"
         }
@@ -3289,6 +3235,7 @@ enum BrainBarDashboardPreview {
         calendar: Calendar = goldenCalendar,
         locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil,
+        enrichmentPausedOverride: Bool? = false,
         disablesAnimations: Bool = true
     ) -> AnyView {
         let dashboard =
@@ -3302,7 +3249,8 @@ enum BrainBarDashboardPreview {
                     referenceNow: now,
                     calendar: calendar,
                     locale: locale,
-                    panelState: panelState
+                    panelState: panelState,
+                    enrichmentPausedOverride: enrichmentPausedOverride
                 )
             }
             .environment(\.colorScheme, .dark)
@@ -3814,31 +3762,6 @@ struct BrainBarDashboardLayout {
     }
 }
 
-private struct BrainBarGraphTab: View {
-    let isActive: Bool
-    @StateObject private var viewModel: KGViewModel
-
-    init(database: BrainDatabase, isActive: Bool) {
-        self.isActive = isActive
-        _viewModel = StateObject(wrappedValue: KGViewModel(database: database))
-    }
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            NonWindowDraggableHostingView {
-                KGCanvasView(viewModel: viewModel, isActive: isActive)
-            }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if viewModel.degradationState.isDegraded {
-                DegradationBadge(reason: viewModel.degradationState.reason)
-                    .padding(.top, 12)
-                    .padding(.trailing, 12)
-            }
-        }
-    }
-}
-
 // AIDEV-NOTE: User-facing indicator that a BrainBar surface is reading from a
 // degraded source (transient ReadOnly / busy / locked errors from the writer-
 // pidfile contention introduced by PR #309 + amplified post-PR #312). Shown as
@@ -4259,28 +4182,6 @@ private final class DragHandleView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.performDrag(with: event)
-    }
-}
-
-private struct NonWindowDraggableHostingView<Content: View>: NSViewRepresentable {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    func makeNSView(context: Context) -> NoWindowDragHostingView<Content> {
-        NoWindowDragHostingView(rootView: content)
-    }
-
-    func updateNSView(_ nsView: NoWindowDragHostingView<Content>, context: Context) {
-        nsView.rootView = content
-    }
-}
-
-private final class NoWindowDragHostingView<Content: View>: NSHostingView<Content> {
-    override var mouseDownCanMoveWindow: Bool {
-        false
     }
 }
 

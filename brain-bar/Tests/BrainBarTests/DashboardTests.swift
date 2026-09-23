@@ -214,6 +214,40 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.trigramCoveragePercent, 66.666, accuracy: 0.01)
     }
 
+    func testLexicalCoverageExcludesClassesRoutedAwayFromKnowledgeIndexes() throws {
+        db.exec("ALTER TABLE chunks ADD COLUMN source_class TEXT")
+        for (id, route) in [("knowledge", "knowledge"), ("desktop", "knowledge"),
+                            ("operational", "operational"),
+                            ("test", "test"), ("benchmark", "benchmark"), ("cold", "cold")] {
+            try db.insertChunk(id: id, content: "Coverage \(id)", sessionId: "dashboard",
+                               project: "brainlayer", contentType: "assistant_text", importance: 5)
+            db.exec("UPDATE chunks SET content_class = '\(route)' WHERE id = '\(id)'")
+        }
+        db.exec("UPDATE chunks SET source_class = 'desktop' WHERE id = 'desktop'")
+        db.exec("CREATE TABLE IF NOT EXISTS chunk_vectors_rowids(id TEXT PRIMARY KEY)")
+        for id in ["knowledge", "desktop", "operational", "test", "benchmark", "cold"] {
+            db.exec("INSERT INTO chunk_vectors_rowids(id) VALUES ('\(id)')")
+        }
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+        XCTAssertEqual(stats.signalEligibleChunkCount, 6)
+        XCTAssertEqual(stats.ftsEligibleChunkCount, 2)
+        XCTAssertEqual(stats.vectorCoveragePercent, 100)
+        XCTAssertEqual(stats.ftsCoveragePercent, 100)
+        XCTAssertEqual(stats.trigramCoveragePercent, 100)
+        XCTAssertEqual(stats.ftsBacklogCount, 0)
+        XCTAssertEqual(stats.trigramBacklogCount, 0)
+    }
+
+    func testCoverageReadsLegacyChunksWithoutContentClass() throws {
+        try db.insertChunk(id: "legacy-class", content: "Legacy class coverage",
+                           sessionId: "dashboard", project: "brainlayer",
+                           contentType: "assistant_text", importance: 5)
+        db.exec("ALTER TABLE chunks RENAME COLUMN content_class TO legacy_content_class")
+        let coverage = try db.dashboardSignalCoverageSnapshot()
+        XCTAssertEqual(coverage.eligibleChunkCount, 1)
+        XCTAssertEqual(coverage.ftsEligibleChunkCount, 1)
+    }
+
     func testDashboardStatsCanSkipSignalCoverageForHotSnapshot() throws {
         try db.insertChunk(
             id: "hot-snapshot",
@@ -486,7 +520,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertNil(summary.ingress.tertiaryAccentColor)
     }
 
-    func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {
+    func testDashboardStatsDoesNotTreatEnrichmentAsVectorThroughput() {
         let stats = DashboardStats(
             chunkCount: 10_105,
             enrichedChunkCount: 0,
@@ -502,8 +536,8 @@ final class DashboardTests: XCTestCase {
             vectorIndexedChunkCount: 0
         )
 
-        XCTAssertEqual(stats.vectorNetDrainRatePerHour, 3_300, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(stats.vectorBacklogETAHours), 10_105.0 / 3_300.0, accuracy: 0.001)
+        XCTAssertNil(stats.vectorNetDrainRatePerHour)
+        XCTAssertNil(stats.vectorBacklogETAHours)
     }
 
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {

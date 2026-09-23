@@ -3,6 +3,38 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarOnePagePresentationTests: XCTestCase {
+    func testQueueDirectionDistinguishesPausedFromRunningEnrichment() {
+        let paused = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: true)
+        XCTAssertEqual(paused.label, "Enrichment paused · 42 queued")
+        XCTAssertEqual(paused.tone, .neutral)
+
+        let running = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: false)
+        XCTAssertEqual(running.label, "Queue growing")
+        XCTAssertEqual(running.tone, .warning)
+
+        let unknown = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: nil)
+        XCTAssertEqual(unknown.label, "Queue growing")
+        XCTAssertEqual(unknown.tone, .warning)
+
+        let offline = BrainBarQueueDirectionPresentation.derive(.unavailable, backlogCount: 42, enrichmentPaused: true)
+        XCTAssertEqual(offline.label, "Queue offline")
+        XCTAssertEqual(offline.tone, .error)
+        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.empty, backlogCount: 0, enrichmentPaused: true).label, "Queue empty")
+        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.draining, backlogCount: 42, enrichmentPaused: true).tone, .neutral)
+    }
+
+    @MainActor
+    func testRenderFixtureActuallyHasGrowingBacklog() {
+        let collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.growingQueueStats)
+        let flow = DashboardFlowSummary.derive(
+            daemon: collector.daemon,
+            stats: collector.stats,
+            now: BrainBarDashboardFixture.fetchedAt
+        )
+        XCTAssertEqual(flow.queue.status, .growing)
+        XCTAssertEqual(flow.queue.backlogCount, 12_840)
+    }
+
     @MainActor
     func testHealthyPresentationNamesIndexedChunksAndSeparatesAgentWrites() throws {
         let now = BrainBarOnePageTestFixture.now
@@ -32,11 +64,12 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertNil(presentation.indexedToday)
         XCTAssertEqual(
             presentation.indexedTodayUnavailableText,
-            "Indexed today unavailable: observability as of 23:50"
+            "not measured yet today"
         )
+        XCTAssertEqual(presentation.agentWritesCount, 175)
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes unavailable: observability as of 23:50"
+            "brain_store writes (24 h) · as of 2026-09-13 23:50 (stale)"
         )
     }
 
@@ -47,15 +80,29 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             now: BrainBarOnePageTestFixture.now
         )
 
-        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(presentation.indexedToday, 99)
         XCTAssertEqual(
             presentation.indexedTodayUnavailableText,
-            "Indexed today unavailable: observability as of 14:45"
+            "as of 14:45 (stale)"
         )
+        XCTAssertEqual(presentation.agentWritesCount, 175)
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes unavailable: observability as of 14:45"
+            "brain_store writes (24 h) · as of 14:45 (stale)"
         )
+        XCTAssertEqual(presentation.agentWritesDetailText(locale: Locale(identifier: "en_US")), "175 · as of 14:45 (stale)")
+    }
+
+    @MainActor
+    func testStaleUnmeasuredDocumentShowsNoInventedCounts() throws {
+        let presentation = try makePresentation(
+            result: BrainBarOnePageTestFixture.staleUnmeasuredResult(),
+            now: BrainBarOnePageTestFixture.now
+        )
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(presentation.indexedTodayUnavailableText, "not measured yet today")
+        XCTAssertNil(presentation.agentWritesCount)
+        XCTAssertEqual(presentation.agentWritesText, "brain_store writes · not measured yet")
     }
 
     @MainActor
@@ -75,49 +122,49 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 "stale",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-901)),
                 "A decoded document can exceed the two-cadence age bound.",
-                "observability as of 23:47",
-                "brain_store writes unavailable: observability as of 23:47"
+                "not measured yet today",
+                "brain_store writes (24 h) · as of 2026-09-14 23:47 (stale)"
             ),
             (
                 "future-dated",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(300)),
                 "Clock skew can decode to a generated_at later than now.",
                 "observability generated_at is in the future",
-                "brain_store writes unavailable: observability generated_at is in the future"
+                "brain_store writes · not measured yet"
             ),
             (
                 "missing",
                 missing.result,
                 "The non-optional Date cannot be constructed; ObservabilityReader returns unreadable.",
                 missing.reason,
-                "brain_store writes unavailable: \(missing.reason)"
+                "brain_store writes · not measured yet"
             ),
             (
                 "null",
                 null.result,
                 "The non-optional Date cannot decode null; ObservabilityReader returns unreadable.",
                 null.reason,
-                "brain_store writes unavailable: \(null.reason)"
+                "brain_store writes · not measured yet"
             ),
             (
                 "unparseable",
                 unparseable.result,
                 "The custom ISO-8601 decoder rejects invalid text before a document exists.",
                 unparseable.reason,
-                "brain_store writes unavailable: \(unparseable.reason)"
+                "brain_store writes · not measured yet"
             ),
             (
                 "epoch-sentinel",
                 try BrainBarOnePageTestFixture.result(generatedAt: Date(timeIntervalSince1970: 0)),
                 "A syntactically valid epoch sentinel can decode but is not trustworthy evidence.",
                 "observability generated_at is zero or epoch sentinel",
-                "brain_store writes unavailable: observability generated_at is zero or epoch sentinel"
+                "brain_store writes · not measured yet"
             ),
             (
                 "pre-midnight-today-scope",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-300)),
                 "Fresh evidence from 23:58 is outside the 00:03 today window but valid for rolling 24 h.",
-                "observability as of 23:58",
+                "not measured yet today",
                 "175 writes via brain_store in 24 h"
             ),
         ]
@@ -128,10 +175,12 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             XCTAssertNil(presentation.indexedToday, context)
             XCTAssertEqual(
                 presentation.indexedTodayUnavailableText,
-                "Indexed today unavailable: \(item.indexedReason)",
+                ["stale", "pre-midnight-today-scope"].contains(item.name)
+                    ? item.indexedReason : "Indexed today unavailable: \(item.indexedReason)",
                 context
             )
             XCTAssertEqual(presentation.agentWritesText, item.agentWritesText, context)
+            if item.name == "stale" { XCTAssertEqual(presentation.agentWritesCount, 175, context) }
         }
     }
 
@@ -389,6 +438,10 @@ enum BrainBarOnePageTestFixture {
         ))
     }
 
+    static func staleUnmeasuredResult() throws -> ObservabilityReadResult {
+        .readable(try document(byHour: nil, generatedAt: now.addingTimeInterval(-900), measured: false))
+    }
+
     static func result(generatedAt: Date) throws -> ObservabilityReadResult {
         .readable(try document(
             byHour: [.init(hour: generatedAt, count: 9)],
@@ -429,7 +482,8 @@ enum BrainBarOnePageTestFixture {
     private static func document(
         byHour: [ObservabilityDocument.HourBucket]?,
         generatedAt: Date = now,
-        backupsVerified: Bool = true
+        backupsVerified: Bool = true,
+        measured: Bool = true
     ) throws -> ObservabilityDocument {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70",
@@ -445,17 +499,17 @@ enum BrainBarOnePageTestFixture {
             dbPath: base.dbPath,
             windowHours: base.windowHours,
             stores: .init(
-                state: "measured",
-                reason: "",
+                state: measured ? "measured" : "unmeasurable",
+                reason: measured ? "" : "no sample",
                 inputs: [],
-                totalChunks: 797_727,
-                inWindow: .init(count: 18, byHour: byHour)
+                totalChunks: measured ? 797_727 : nil,
+                inWindow: measured ? .init(count: 18, byHour: byHour) : nil
             ),
             emitters: .init(
-                state: "measured",
-                reason: "",
+                state: measured ? "measured" : "unmeasurable",
+                reason: measured ? "" : "no sample",
                 inputs: [],
-                byEmitter: [.init(emitter: "mcp", countInWindow: 175)],
+                byEmitter: measured ? [.init(emitter: "mcp", countInWindow: 175)] : nil,
                 bySourceClass: base.emitters.bySourceClass,
                 hiddenFromDefaultSearch: base.emitters.hiddenFromDefaultSearch
             ),

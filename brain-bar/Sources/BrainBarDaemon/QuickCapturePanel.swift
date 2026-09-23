@@ -1,1 +1,0 @@
-../BrainBar/QuickCapturePanel.swift
