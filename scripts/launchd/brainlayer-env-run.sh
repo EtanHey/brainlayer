@@ -132,6 +132,10 @@ if [ "${BRAINLAYER_SKIP_DISABLE_GATES:-0}" != "1" ]; then
 
     if [ -n "${BRAINLAYER_LAUNCHD_SERVICE:-}" ]; then
         service_key="$(printf '%s' "$BRAINLAYER_LAUNCHD_SERVICE" | tr '[:lower:]-' '[:upper:]_')"
+        # BrainBar exposes this job as Hotlane while its launchd label keeps the binary suffix.
+        if [ "$BRAINLAYER_LAUNCHD_SERVICE" = "hotlane-brainbar" ]; then
+            service_key="HOTLANE"
+        fi
         service_enabled_var="BRAINLAYER_LAUNCHD_${service_key}_ENABLED"
         service_enabled="${!service_enabled_var:-1}"
         if is_false "$service_enabled"; then

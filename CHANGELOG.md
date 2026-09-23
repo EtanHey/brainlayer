@@ -38,6 +38,10 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.38] - 2026-09-23
+
+- #939: Make the database backup's free-space check measure macOS available capacity with a protected raw floor, and give transcript backups a 2-hour limit.
+
 ## [1.5.37] - 2026-09-23
 
 - #905: Quarantine the #891 socket-notification CI flake behind an opt-in test.

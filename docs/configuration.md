@@ -48,7 +48,7 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 | Variable | Default | Controls |
 |----------|---------|----------|
 | `BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED` | `1` | `com.brainlayer.enrichment` |
-| `BRAINLAYER_LAUNCHD_HOTLANE_ENABLED` | `1` | Reserved for the hotlane LaunchAgent when installed by the deploy path. |
+| `BRAINLAYER_LAUNCHD_HOTLANE_ENABLED` | `1` | Gates `com.brainlayer.hotlane-brainbar`. |
 | `BRAINLAYER_LAUNCHD_DECAY_ENABLED` | `1` | `com.brainlayer.decay` |
 | `BRAINLAYER_LAUNCHD_DRAIN_ENABLED` | `1` | `com.brainlayer.drain` |
 | `BRAINLAYER_LAUNCHD_WATCH_ENABLED` | `1` | `com.brainlayer.watch` |

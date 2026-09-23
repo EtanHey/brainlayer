@@ -9,11 +9,8 @@ final class BrainBarRuntime: ObservableObject {
     @Published private(set) var collector: StatsCollector?
     @Published private(set) var database: BrainDatabase?
     private(set) var databasePath: String?
-    @Published private(set) var requestedQuickAction: BrainBarQuickAction?
 
     var onToggleRequested: (() -> Void)?
-    var onSearchRequested: (() -> Void)?
-    var onQuickCaptureRequested: (() -> Void)?
 
     init(
         launchMode: BrainBarLaunchMode = BrainBarLaunchMode.resolve(),
@@ -37,19 +34,4 @@ final class BrainBarRuntime: ObservableObject {
         onToggleRequested?()
     }
 
-    func showSearchPanel() {
-        onSearchRequested?()
-    }
-
-    func showQuickCapturePanel() {
-        onQuickCaptureRequested?()
-    }
-
-    func presentQuickAction(_ action: BrainBarQuickAction) {
-        requestedQuickAction = action
-    }
-
-    func clearQuickActionRequest() {
-        requestedQuickAction = nil
-    }
 }

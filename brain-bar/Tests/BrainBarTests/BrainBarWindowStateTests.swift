@@ -54,49 +54,21 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
-    func testBrainBarKeepsDashboardSettingsAndOptInKnowledgeGraphSurfaces() {
-        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .graph, .settings])
+    func testBrainBarKeepsDashboardAndSettingsSurfaces() {
+        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .settings])
         XCTAssertEqual(BrainBarTab.dashboard.title, "Dashboard")
-        XCTAssertEqual(BrainBarTab.graph.title, "Graph")
         XCTAssertEqual(BrainBarTab.settings.title, "Settings")
     }
 
-    @MainActor
-    func testRetrievalEntryPointsAreAbsentByDefaultAndPresentWhenSettingIsEnabled() {
-        XCTAssertFalse(BrainBarRetrievalToolsSettings().isEnabled)
-        XCTAssertEqual(
-            BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: false),
-            [.dashboard, .settings]
-        )
-        XCTAssertFalse(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: false))
-        XCTAssertFalse(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: false))
-        XCTAssertEqual(
-            BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: false),
-            .dashboard
-        )
-
-        XCTAssertEqual(
-            BrainBarRetrievalToolsPolicy.visibleTabs(showRetrievalTools: true),
-            BrainBarTab.allCases
-        )
-        XCTAssertTrue(BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: true))
-        XCTAssertTrue(BrainBarRetrievalToolsPolicy.allowsQuickActions(showRetrievalTools: true))
-        XCTAssertEqual(
-            BrainBarRetrievalToolsPolicy.selectedTab(.graph, showRetrievalTools: true),
-            .graph
-        )
+    func testRetiredSearchURLDoesNotRoute() {
+        XCTAssertNil(BrainBarURLAction.parse(url: URL(string: "brainbar://search")!))
+        XCTAssertEqual(BrainBarURLAction.parse(url: URL(string: "brainbar://toggle")!), .toggle)
+        XCTAssertEqual(BrainBarAppMenuCommands.manualCommandTitles, ["Settings…"])
     }
 
-    func testRetrievalPolicyDrivesRenderedRootAndAppMenuEntryPoints() throws {
-        let root = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-        let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
 
-        XCTAssertTrue(root.contains("BrainBarRetrievalToolsPolicy.showsCommandBar(showRetrievalTools: showRetrievalTools)"))
-        XCTAssertTrue(app.contains("if retrievalTools.isEnabled {"))
-        XCTAssertTrue(app.contains("Button(BrainBarAppMenuCommands.searchTitle)"))
-        XCTAssertTrue(app.contains("Button(BrainBarAppMenuCommands.captureTitle)"))
-        XCTAssertTrue(app.contains("guard BrainBarRetrievalToolsSettings.shared.isEnabled else { return }"))
-    }
+
+
 
     @MainActor
     func testLiveWindowDefaultsToTheOnePageDashboard() {
@@ -359,50 +331,11 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(preferred, candidates[1])
     }
 
-    @MainActor
-    func testRuntimeTracksRequestedInlineQuickAction() {
-        let runtime = BrainBarRuntime()
 
-        runtime.presentQuickAction(.search)
-        XCTAssertEqual(runtime.requestedQuickAction, .search)
 
-        runtime.presentQuickAction(.capture)
-        XCTAssertEqual(runtime.requestedQuickAction, .capture)
 
-        runtime.clearQuickActionRequest()
-        XCTAssertNil(runtime.requestedQuickAction)
-    }
 
-    @MainActor
-    func testShowSearchPanelRoutesThroughSearchRequestedCallback() {
-        let runtime = BrainBarRuntime()
-        var searchRequests = 0
-        runtime.onSearchRequested = { searchRequests += 1 }
 
-        runtime.showSearchPanel()
-        runtime.showSearchPanel()
-
-        XCTAssertEqual(
-            searchRequests,
-            2,
-            "Runtime.showSearchPanel must fire onSearchRequested so AppDelegate can route to the integrated command bar in the unified window."
-        )
-    }
-
-    @MainActor
-    func testShowQuickCapturePanelRoutesThroughQuickCaptureRequestedCallback() {
-        let runtime = BrainBarRuntime()
-        var captureRequests = 0
-        runtime.onQuickCaptureRequested = { captureRequests += 1 }
-
-        runtime.showQuickCapturePanel()
-
-        XCTAssertEqual(
-            captureRequests,
-            1,
-            "Runtime.showQuickCapturePanel must fire onQuickCaptureRequested so AppDelegate can route to the integrated command bar in the unified window."
-        )
-    }
 }
 
 private final class FakeKeyValueStore: BrainBarKeyValueStoring {
