@@ -1046,6 +1046,9 @@ private struct BrainBarDashboardView: View {
         .onPreferenceChange(BrainBarSummaryTileHeightKey.self) { heights in
             panelState.renderedSummaryTileHeights = heights
         }
+        .onPreferenceChange(BrainBarCardSizeKey.self) { sizes in
+            panelState.renderedCardSizes = sizes
+        }
 #endif
         .onAppear {
             receiptStore.reload()
@@ -1238,38 +1241,46 @@ private struct BrainBarDashboardView: View {
         let counts = onePagePresentation
         return summaryTile(title: "Today", identifier: "memory") {
             VStack(alignment: .leading, spacing: 5) {
-                if let indexedToday = counts.indexedToday {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(DashboardMetricFormatter.integerString(indexedToday, locale: locale))
-                            .font(.system(size: 28, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                        Text("indexed today")
-                            .font(.system(size: 13))
+                Group {
+                    if let indexedToday = counts.indexedToday {
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(DashboardMetricFormatter.integerString(indexedToday, locale: locale))
+                                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text("indexed today")
+                                .font(.system(size: 13))
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("—")
+                                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                            Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                                .lineLimit(1)
+                        }
                     }
-                } else {
-                    Text("—")
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                        .lineLimit(1)
                 }
+                .frame(height: 52, alignment: .topLeading)
                 // Gated on agentWritesCount alone: a missing indexedToday must not hide a
                 // MEASURED brain_store count. One unknown never erases a known.
-                if let writes = counts.agentWritesCount {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(DashboardMetricFormatter.integerString(writes, locale: locale))
-                            .font(.system(size: 20, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                        Text("brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
-                            .font(.system(size: 13))
+                Group {
+                    if let writes = counts.agentWritesCount {
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(DashboardMetricFormatter.integerString(writes, locale: locale))
+                                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                            Text("brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
+                                .font(.system(size: 13))
+                        }
+                    } else {
+                        Text(counts.agentWritesText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                            .lineLimit(1)
                     }
-                } else {
-                    Text(counts.agentWritesText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                        .lineLimit(1)
                 }
+                .frame(height: 26, alignment: .topLeading)
             }
             if let total = counts.totalIndexedChunks {
                 Text("\(DashboardMetricFormatter.integerString(total, locale: locale)) total")
@@ -1289,18 +1300,17 @@ private struct BrainBarDashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Ingest")
-                        .font(.system(size: 13, weight: .semibold))
                     HStack(spacing: 8) {
+                        Text("Ingest").font(.system(size: 13, weight: .semibold))
                         operationReceiptRow(
                             label: "Last search", value: lastSearchReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
                             help: "Most recent brain_search handled by BrainBar."
                         )
-                        operationReceiptRow(
-                            label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
-                            help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
-                        )
                     }
+                    operationReceiptRow(
+                        label: "Last store", value: lastIngestReceipt?.value(now: receiptDisplayNow) ?? "unavailable",
+                        help: "Most recent brain_store handled by BrainBar; excludes watcher ingestion and deferred replay."
+                    )
                 }
                 Spacer(minLength: 8)
                 BrainBarSharedTimeframeSelector(
@@ -1352,22 +1362,26 @@ private struct BrainBarDashboardView: View {
         }
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
+        .brainBarCardShapeProbe("ingest")
         .accessibilityIdentifier("brainbar.dashboard.tile.ingest")
     }
 
     private func operationReceiptRow(label: String, value: String, help: String) -> some View {
         HStack(spacing: 6) {
-            Text(label)
+            Text(label).lineLimit(1)
             Text(value).monospacedDigit().lineLimit(1)
         }
         .font(.system(size: 12))
         .foregroundStyle(Color.brainBarTextSecondary)
+        .brainBarCardShapeProbe("receipt.\(label)")
         .accessibilityElement(children: .combine)
         .help(help)
     }
 
     private func ingestSeriesChart(_ series: PipelineSeries) -> some View {
         let lane = pipelineFlowSummary.lane(for: series)
+        let isUnavailable = lane.status == .unavailable
+        let isEmpty = !isUnavailable && lane.values.allSatisfy { $0 == 0 }
         let disclosure = BrainBarDashboardChartDisclosure(
             series: series,
             lane: lane,
@@ -1379,41 +1393,54 @@ private struct BrainBarDashboardView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color.brainBarTextSecondary)
                 Spacer(minLength: 4)
-                Text(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale))
+                Text(isUnavailable ? "—" : DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale))
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
             }
-            if lane.status != .unavailable {
-                BrainBarHeroSparkline(
-                    label: lane.sparklineLabel,
-                    values: lane.values,
-                    secondaryValues: [],
-                    primarySeriesLabel: nil,
-                    secondarySeriesLabel: nil,
-                    tertiaryValues: [],
-                    tertiarySeriesLabel: nil,
-                    latestBucketName: lane.latestBucketName,
-                    accentColor: lane.accentColor,
-                    secondaryAccentColor: nil,
-                    tertiaryAccentColor: nil,
-                    activityWindowMinutes: lane.activityWindowMinutes,
-                    fetchedAt: collector.lastDataFetchedAt ?? currentNow,
-                    pulseRevision: ingestPulseRevision(for: series),
-                    referenceValue: nil,
-                    metricDisclosure: disclosure.tooltipDisclosure,
-                    accessibilitySummary: disclosure.accessibilitySummary,
-                    lastBucketIsPartial: true,
-                    showsRestingAxes: true
-                )
-                .frame(height: BrainBarIngestBandLayout.plotHeight)
-            } else {
-                Text("Evidence unavailable")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                    .frame(maxWidth: .infinity, minHeight: BrainBarIngestBandLayout.plotHeight)
+            BrainBarHeroSparkline(
+                label: lane.sparklineLabel,
+                values: isUnavailable ? Array(repeating: 0, count: lane.values.count) : lane.values,
+                secondaryValues: [],
+                primarySeriesLabel: nil,
+                secondarySeriesLabel: nil,
+                tertiaryValues: [],
+                tertiarySeriesLabel: nil,
+                latestBucketName: lane.latestBucketName,
+                accentColor: lane.accentColor,
+                secondaryAccentColor: nil,
+                tertiaryAccentColor: nil,
+                activityWindowMinutes: lane.activityWindowMinutes,
+                fetchedAt: collector.lastDataFetchedAt ?? currentNow,
+                pulseRevision: ingestPulseRevision(for: series),
+                referenceValue: nil,
+                metricDisclosure: disclosure.tooltipDisclosure,
+                accessibilitySummary: disclosure.accessibilitySummary,
+                lastBucketIsPartial: true,
+                showsRestingAxes: true,
+                plotsSeries: !isUnavailable && !isEmpty
+            )
+            .frame(height: BrainBarIngestBandLayout.plotHeight)
+            .overlay {
+                if isUnavailable || isEmpty {
+                    HStack(spacing: 5) {
+                        if isUnavailable {
+                            Circle().fill(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)).frame(width: 5, height: 5)
+                            Text("Evidence unavailable")
+                        } else {
+                            Text("0 in window")
+                        }
+                    }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.brainBarBlack.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
+                        .allowsHitTesting(false)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .brainBarCardShapeProbe("ingest.\(series.rawValue)")
         .accessibilityIdentifier(disclosure.accessibilityIdentifier)
         .accessibilityLabel(disclosure.accessibilitySummary)
     }
@@ -1450,6 +1477,7 @@ private struct BrainBarDashboardView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
+        .brainBarCardShapeProbe("summary.\(identifier)")
 #if DEBUG
         .background(
             GeometryReader { proxy in
@@ -1609,6 +1637,7 @@ struct BrainBarDefinitionList: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .brainBarCardShapeProbe(title.lowercased())
     }
 }
 
@@ -1940,7 +1969,28 @@ private struct BrainBarSummaryTileHeightKey: PreferenceKey {
         value.merge(nextValue(), uniquingKeysWith: max)
     }
 }
+
+private struct BrainBarCardSizeKey: PreferenceKey {
+    static let defaultValue: [String: CGSize] = [:]
+
+    static func reduce(value: inout [String: CGSize], nextValue: () -> [String: CGSize]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
 #endif
+
+private extension View {
+    @ViewBuilder
+    func brainBarCardShapeProbe(_ identifier: String) -> some View {
+#if DEBUG
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: BrainBarCardSizeKey.self, value: [identifier: proxy.size])
+        })
+#else
+        self
+#endif
+    }
+}
 
 private struct BrainBarSnapshotFreshnessBanner: View {
     let state: SnapshotFreshnessState
@@ -2280,18 +2330,17 @@ private struct BrainBarSignalCoveragePanel: View {
             Text("Indexed / eligible chunks")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.brainBarTextSecondary)
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: compact ? 8 : 10) {
-                    ForEach(signals) { signal in
-                        signalColumn(for: signal)
-                    }
+            HStack(alignment: .top, spacing: compact ? 8 : 10) {
+                ForEach(signals) { signal in
+                    signalColumn(for: signal)
                 }
-
-                VStack(spacing: 8) {
-                    ForEach(signals) { signal in
-                        signalColumn(for: signal)
-                    }
-                }
+            }
+            if !stats.signalCoverageIsAvailable, !isRefreshing, let lastError {
+                Text(lastError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .brainBarCardShapeProbe("coverage.reason")
             }
         }
     }
@@ -2316,6 +2365,7 @@ private struct BrainBarSignalCoveragePanel: View {
             }
         }
         .frame(minWidth: compact ? 150 : 170, maxWidth: .infinity, alignment: .topLeading)
+        .brainBarCardShapeProbe("coverage.\(signal.id)")
         .opacity(isExpanded ? (revealedSignalIDs.contains(signal.id) ? 1 : 0) : 1)
         .background {
             if signal.showsDetail {
@@ -2389,6 +2439,8 @@ struct BrainBarCoveragePresentation {
         guard isMeasurable else { return "Counts disagree" }
         return "\(formatted(indexedCount)) / \(formatted(eligibleCount))"
     }
+
+    var cellCountText: String { !isAvailable && !isLoading && lastError != nil ? "Counts unavailable" : countText }
 
     var fillPercent: Double {
         guard isMeasurable else { return 0 }
@@ -2475,6 +2527,8 @@ private struct BrainBarSignalCoverageRow: View {
                         .font(.system(size: compact ? 18 : 20, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.brainBarTextPrimary)
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
             }
 
@@ -2491,22 +2545,22 @@ private struct BrainBarSignalCoverageRow: View {
                     .frame(height: 6)
             }
 
-            Text(signal.presentation.countText)
+            Text(signal.presentation.cellCountText)
                 .font(.system(size: compact ? 10 : 11))
                 .foregroundStyle(Color.brainBarTextSecondary)
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if let missingCount = signal.presentation.missingCount, missingCount > 0,
-               let missingText = signal.presentation.missingText {
-                Text("\(missingText) not indexed")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.brainBarTextSecondary)
-                    .monospacedDigit()
-            }
+            Text(signal.presentation.missingCount.map { $0 > 0 ? "\(signal.presentation.missingText ?? "") not indexed" : " " } ?? " ")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(height: 12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
+        .frame(height: compact ? 106 : 114)
         .background(BrainBarDashboardCardStyle(emphasized: isSelected, cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -4032,6 +4086,7 @@ private struct BrainBarHeroSparkline: View {
     let accessibilitySummary: String?
     var lastBucketIsPartial = false
     var showsRestingAxes = false
+    var plotsSeries = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -4055,7 +4110,8 @@ private struct BrainBarHeroSparkline: View {
                     metricDisclosure: metricDisclosure,
                     accessibilitySummary: accessibilitySummary,
                     lastBucketIsPartial: lastBucketIsPartial,
-                    showsRestingAxes: showsRestingAxes
+                    showsRestingAxes: showsRestingAxes,
+                    plotsSeries: plotsSeries
                 ),
                 accentColor: accentColor,
                 secondaryAccentColor: secondaryAccentColor,

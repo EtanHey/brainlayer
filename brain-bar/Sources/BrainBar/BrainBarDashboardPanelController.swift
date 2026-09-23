@@ -90,6 +90,7 @@ final class BrainBarDashboardPanelState: ObservableObject {
     @Published var settingsActivationRevision = 0
 #if DEBUG
     var renderedSummaryTileHeights: [String: CGFloat] = [:]
+    var renderedCardSizes: [String: CGSize] = [:]
 #endif
     var fittingHeight: CGFloat {
         if selectedTab == .settings { return 720 }

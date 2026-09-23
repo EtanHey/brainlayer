@@ -37,6 +37,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let accessibilitySummary: String?
     let lastBucketIsPartial: Bool
     let showsRestingAxes: Bool
+    let plotsSeries: Bool
 
     init(
         label: String,
@@ -52,7 +53,8 @@ struct SparklineChartPresentation: Equatable, Sendable {
         metricDisclosure: String? = nil,
         accessibilitySummary: String? = nil,
         lastBucketIsPartial: Bool = false,
-        showsRestingAxes: Bool = false
+        showsRestingAxes: Bool = false,
+        plotsSeries: Bool = true
     ) {
         self.label = label
         self.values = values
@@ -68,6 +70,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.accessibilitySummary = accessibilitySummary
         self.lastBucketIsPartial = lastBucketIsPartial
         self.showsRestingAxes = showsRestingAxes
+        self.plotsSeries = plotsSeries
     }
 
     var points: [SparklineChartPoint] {
@@ -149,6 +152,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     var accessibilityValue: String {
+        guard plotsSeries else { return accessibilitySummary ?? "" }
         var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
         if lastBucketIsPartial, !values.isEmpty {
             components.insert("latest bucket is partial", at: 1)
@@ -244,6 +248,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     func shouldPlotSeries(_ role: SparklineSeriesRole) -> Bool {
+        guard plotsSeries else { return false }
         guard label(for: role) != nil else { return false }
         if hasMultipleSeries {
             return isSeriesActive(role)
@@ -613,7 +618,7 @@ struct SparklineChart: View {
                     )
                 }
 
-                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                if let hoveredBucket, !compact, presentation.plotsSeries, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
                     let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -680,7 +685,7 @@ struct SparklineChart: View {
                     }
                 }
 
-                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                if let hoveredBucket, !compact, presentation.plotsSeries, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
                     let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -711,6 +716,7 @@ struct SparklineChart: View {
                 if let hoveredBucket,
                    let hoverLocation,
                    !compact,
+                   presentation.plotsSeries,
                    !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), max(presentation.values.count - 1, 0))
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
