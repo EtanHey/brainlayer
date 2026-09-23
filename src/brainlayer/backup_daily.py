@@ -46,6 +46,8 @@ DEFAULT_FOLDER_PARTS = CANONICAL_FOLDER_PARTS
 BACKUP_MACHINE_ID_ENV = "BRAINLAYER_MACHINE_ID"
 DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
+MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
+COPY_CHUNK_BYTES = 1024 * 1024
 DEFAULT_LOG_PATH = Path.home() / ".local" / "share" / "brainlayer" / "logs" / "backup-daily.log"
 DEFAULT_BRAINBAR_SOCKET_PATH = "/tmp/brainbar.sock"
 BACKUP_TIMEOUT_ENV = "BRAINLAYER_BACKUP_TIMEOUT_SECONDS"
@@ -520,6 +522,53 @@ def _important_usage_capacity_bytes(path: Path) -> int | None:
         return None
 
 
+def _estimated_gzip_bytes(output_dir: Path, db_size: int) -> int:
+    dated = [
+        (_parse_snapshot_date(path.name), path)
+        for path in output_dir.iterdir()
+        if path.is_file() and not path.is_symlink() and _parse_snapshot_date(path.name) is not None
+    ]
+    if not dated:
+        return db_size
+    newest = max(dated, key=lambda item: item[0])[1]
+    return max(1, newest.stat().st_size)
+
+
+def _raw_bytes_pruned_before_verify(output_dir: Path, date_stamp: str, keep_latest: int) -> int:
+    if keep_latest < 1:
+        raise ValueError("keep_latest must be at least 1")
+    current = output_dir / f"{date_stamp}.db"
+    dated = [
+        (_parse_uncompressed_snapshot_date(path.name), path)
+        for path in output_dir.iterdir()
+        if path.is_file() and not path.is_symlink() and _parse_uncompressed_snapshot_date(path.name) is not None
+    ]
+    future = [(dt.date.fromisoformat(date_stamp), current)] + [(date, path) for date, path in dated if path != current]
+    kept = {path for _, path in sorted(future, key=lambda item: item[0], reverse=True)[:keep_latest]}
+    return sum(path.stat().st_size for _, path in dated if path not in kept or path == current)
+
+
+def _peak_backup_required_bytes(db_size: int, gzip_size: int, raw_reclaimed: int, *, full: bool) -> int:
+    compression_peak = db_size + gzip_size
+    verify_peak = (2 * db_size) + gzip_size + (gzip_size if full else 0) - raw_reclaimed
+    return max(compression_peak, verify_peak) + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES
+
+
+def _require_raw_floor(path: Path, *, forthcoming: int = 0) -> None:
+    free = shutil.disk_usage(path).free
+    if free < MIN_RAW_FREE_BYTES + forthcoming:
+        raise RuntimeError(
+            f"raw free space floor breached: raw={free} floor={MIN_RAW_FREE_BYTES} forthcoming={forthcoming}"
+        )
+
+
+def _copy_with_raw_floor(source: Any, destination: Any, output_dir: Path) -> None:
+    while chunk := source.read(COPY_CHUNK_BYTES):
+        _require_raw_floor(output_dir, forthcoming=COPY_CHUNK_BYTES)
+        destination.write(chunk)
+        _require_raw_floor(output_dir)
+
+
 def create_sqlite_backup_artifact(
     db_path: Path,
     output_dir: Path,
@@ -528,6 +577,7 @@ def create_sqlite_backup_artifact(
     keep_uncompressed: bool = True,
     local_uncompressed_keep: int = DEFAULT_LOCAL_UNCOMPRESSED_KEEP,
     reclamation_status_callback: Callable[[str, str | None], None] | None = None,
+    capacity_status_callback: Callable[[int, int | None, int, int], None] | None = None,
 ) -> SQLiteBackupArtifact:
     """Create a restorable `.db.gz` snapshot through BrainBar's single-writer socket."""
     db_path = Path(db_path).expanduser()
@@ -564,21 +614,36 @@ def create_sqlite_backup_artifact(
             continue
         surviving_attempt_bytes += attempt_size
         surviving_attempt_growth_reserve_bytes += max(0, db_size - attempt_size)
-    # The snapshot and its gzip coexist during compression. Each is at most
-    # roughly the logical DB size; the fixed margin covers gzip overhead.
-    required_bytes = (db_size * 2) + (512 * 1024 * 1024) + surviving_attempt_growth_reserve_bytes
+    estimated_gzip = _estimated_gzip_bytes(output_dir, db_size)
+    raw_reclaimed = (
+        _raw_bytes_pruned_before_verify(output_dir, date_stamp, local_uncompressed_keep) if keep_uncompressed else 0
+    )
+    required_bytes = (
+        _peak_backup_required_bytes(db_size, estimated_gzip, raw_reclaimed, full=_should_run_full_verify(date_stamp))
+        + surviving_attempt_growth_reserve_bytes
+    )
     raw_free_bytes = shutil.disk_usage(output_dir).free
-    important_free_bytes = _important_usage_capacity_bytes(output_dir)
-    free_bytes = important_free_bytes if important_free_bytes is not None else raw_free_bytes
+    try:
+        important_free_bytes = _important_usage_capacity_bytes(output_dir)
+    except (OSError, RuntimeError, ValueError):
+        important_free_bytes = None
+    free_bytes = raw_free_bytes if raw_free_bytes >= required_bytes else important_free_bytes or raw_free_bytes
+    if capacity_status_callback is not None:
+        capacity_status_callback(raw_free_bytes, important_free_bytes, free_bytes, required_bytes)
     print(
         f"Backup capacity: raw={raw_free_bytes} important_usage={important_free_bytes} "
         f"selected={free_bytes} required={required_bytes}",
         flush=True,
     )
-    if free_bytes < required_bytes:
+    if raw_free_bytes < required_bytes and (
+        important_free_bytes is None
+        or important_free_bytes < required_bytes
+        or raw_free_bytes < db_size + MIN_RAW_FREE_BYTES
+    ):
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "
-            f"{free_bytes} bytes free, {required_bytes} bytes required; "
+            f"raw={raw_free_bytes} important_usage={important_free_bytes} "
+            f"selected={free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES}; "
             f"{len(surviving_attempt_paths)} recent attempts reserve "
             f"{surviving_attempt_growth_reserve_bytes} growth bytes"
         )
@@ -590,11 +655,12 @@ def create_sqlite_backup_artifact(
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
+        _require_raw_floor(output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot)
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
-            shutil.copyfileobj(src, dst, length=1024 * 1024)
+            _copy_with_raw_floor(src, dst, output_dir)
         shutil.move(str(temp_gz), final_gz)
 
         if keep_uncompressed:
@@ -1076,7 +1142,9 @@ def download_drive_file_raw(service: Any, *, file_id: str, destination: Path) ->
         downloader = MediaIoBaseDownload(handle, request, chunksize=8 * 1024 * 1024)
         done = False
         while not done:
+            _require_raw_floor(destination.parent, forthcoming=8 * 1024 * 1024)
             _, done = downloader.next_chunk()
+            _require_raw_floor(destination.parent)
     return destination
 
 
@@ -1162,7 +1230,7 @@ def _gunzip_test(path: Path) -> None:
 
 def _decompress_gzip_to(gzip_path: Path, destination: Path) -> None:
     with gzip.open(gzip_path, "rb") as src, destination.open("wb") as dst:
-        shutil.copyfileobj(src, dst, length=1024 * 1024)
+        _copy_with_raw_floor(src, dst, destination.parent)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -1360,6 +1428,16 @@ def run_backup(
         result["attempt_reclamation"] = status
         result["writer_probe_error"] = error
 
+    def record_capacity(raw: int, important: int | None, selected: int, required: int) -> None:
+        result.update(
+            {
+                "raw_free_bytes": raw,
+                "important_usage_free_bytes": important,
+                "selected_free_bytes": selected,
+                "required_bytes": required,
+            }
+        )
+
     try:
         resolved_machine_id = _validate_machine_id(machine_id) if machine_id is not None else resolve_machine_id()
         resolved_folder_parts = (
@@ -1376,6 +1454,7 @@ def run_backup(
             staging_dir,
             date_stamp=resolved_date_stamp,
             reclamation_status_callback=record_reclamation_status,
+            capacity_status_callback=record_capacity,
         )
         snapshot = artifact.gzip_path
         snapshot_size = snapshot.stat().st_size
