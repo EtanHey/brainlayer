@@ -1126,9 +1126,9 @@ private struct BrainBarDashboardView: View {
         let queueDirection = BrainBarQueueDirectionPresentation.derive(flowSummary.queue.status)
         let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
-        case .green: .green
-        case .amber: .orange
-        case .neutral: .brainBarTextSecondary
+        case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+        case .amber: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
+        case .neutral: Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
         }
         return HStack(alignment: .top, spacing: 9) {
             if attentionItems.isEmpty {
@@ -1176,9 +1176,14 @@ private struct BrainBarDashboardView: View {
                 }
             }
             Spacer(minLength: 8)
-            Label(queueDirection.label, systemImage: queueDirection.symbol)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(queueDirectionStatusColor(queueDirection.tone))
+                    .frame(width: 6, height: 6)
+                Label(queueDirection.label, systemImage: queueDirection.symbol)
+                    .foregroundStyle(Color.brainBarTextPrimary)
+            }
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(queueDirectionColor(queueDirection.tone))
                 .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 14)
@@ -1192,16 +1197,16 @@ private struct BrainBarDashboardView: View {
         .accessibilityIdentifier("brainbar.dashboard.status")
     }
 
-    private func queueDirectionColor(_ tone: BrainBarQueueDirectionTone) -> Color {
+    private func queueDirectionStatusColor(_ tone: BrainBarQueueDirectionTone) -> Color {
         switch tone {
         case .neutral:
-            .brainBarTextSecondary
+            Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
         case .active:
-            .brainBarAccent
+            Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
         case .warning:
-            .orange
+            Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
         case .error:
-            .red
+            Color(nsColor: BrainBarDesignTokens.Colors.statusError)
         }
     }
 
@@ -1246,7 +1251,7 @@ private struct BrainBarDashboardView: View {
                         .font(.system(size: 28, weight: .semibold, design: .rounded))
                     Text(todayUnavailableSummary(counts.indexedTodayUnavailableText))
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.orange)
+                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
                         .lineLimit(1)
                 }
                 // Gated on agentWritesCount alone: a missing indexedToday must not hide a
@@ -1262,7 +1267,7 @@ private struct BrainBarDashboardView: View {
                 } else {
                     Text(counts.agentWritesText)
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.orange)
+                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
                         .lineLimit(1)
                 }
             }
@@ -1404,7 +1409,7 @@ private struct BrainBarDashboardView: View {
             } else {
                 Text("Evidence unavailable")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.orange)
+                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
                     .frame(maxWidth: .infinity, minHeight: BrainBarIngestBandLayout.plotHeight)
             }
         }
@@ -1591,7 +1596,9 @@ private struct BrainBarDefinitionList: View {
                     Text(row.1)
                         .font(.system(size: 13, weight: .semibold))
                         .monospacedDigit()
-                        .foregroundStyle(row.1.localizedCaseInsensitiveContains("unavailable") ? Color.orange : Color.brainBarTextPrimary)
+                        .foregroundStyle(row.1.localizedCaseInsensitiveContains("unavailable")
+                            ? Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
+                            : Color.brainBarTextPrimary)
                         .lineLimit(1)
                 }
                 .frame(height: 24)
@@ -2246,7 +2253,11 @@ private struct BrainBarSignalCoveragePanel: View {
     private func signalChip(for signal: BrainBarSignalCoverage) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(signal.accentColor)
+                .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
+                    indexedCount: signal.indexedCount,
+                    eligibleCount: signal.totalCount,
+                    isAvailable: signal.isAvailable
+                )))
                 .frame(width: 7, height: 7)
             Text(signal.name)
                 .font(.system(size: 11, weight: .medium))
@@ -2451,10 +2462,19 @@ private struct BrainBarSignalCoverageRow: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.brainBarTextPrimary)
                 Spacer(minLength: 8)
-                Text(signal.percentText)
-                    .font(.system(size: compact ? 18 : 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(signal.accentColor)
-                    .monospacedDigit()
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Color(nsColor: BrainBarDesignTokens.Colors.signalCoverageStatus(
+                            indexedCount: signal.indexedCount,
+                            eligibleCount: signal.totalCount,
+                            isAvailable: signal.isAvailable
+                        )))
+                        .frame(width: 6, height: 6)
+                    Text(signal.percentText)
+                        .font(.system(size: compact ? 18 : 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.brainBarTextPrimary)
+                        .monospacedDigit()
+                }
             }
 
             if signal.presentation.isMeasurable {
@@ -2638,13 +2658,16 @@ private struct BrainBarVectorSignalDetail: View {
     }
 
     private var trend: some View {
-        Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
+        let statusColor = isFalling
+            ? Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
+            : Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
+        return Label(isFalling ? "falling" : "waiting", systemImage: isFalling ? "arrow.down.right" : "clock")
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(signal.accentColor)
+            .foregroundStyle(Color.brainBarTextPrimary)
             .padding(.vertical, 5)
             .padding(.horizontal, 8)
-            .background(Capsule().fill(signal.accentColor.opacity(0.12)))
-            .overlay(Capsule().stroke(signal.accentColor.opacity(0.32), lineWidth: 1))
+            .background(Capsule().fill(statusColor.opacity(0.12)))
+            .overlay(Capsule().stroke(statusColor.opacity(0.32), lineWidth: 1))
             .help("Vector backlog trend")
     }
 
@@ -3768,15 +3791,17 @@ private struct BrainBarGraphTab: View {
 // "WITHOUT DEGRATION!" (no blank states, but visible when degraded).
 struct DegradationBadge: View {
     let reason: String?
+    static let labelFontSize: CGFloat = 11
+    static let minimumLabelScaleFactor = BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: labelFontSize)
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10, weight: .semibold))
             Text("Degraded")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: Self.labelFontSize, weight: .semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(Self.minimumLabelScaleFactor)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
@@ -3803,9 +3828,15 @@ private struct BrainBarMetricCard: View {
                 .foregroundStyle(.secondary)
 
             Text(value)
-                .font(.system(size: valueFontSize, weight: .semibold, design: .rounded))
+                .font(.system(
+                    size: BrainBarDesignTokens.TypeScale.textSize(valueFontSize),
+                    weight: .semibold,
+                    design: .rounded
+                ))
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(BrainBarDesignTokens.TypeScale.minimumScaleFactor(
+                    for: BrainBarDesignTokens.TypeScale.textSize(valueFontSize)
+                ))
         }
         .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
         .padding(cardPadding)
@@ -3957,16 +3988,18 @@ private struct BrainBarDashboardCardStyle: View {
     }
 }
 
-private struct BrainBarFlowStatusPill: View {
+struct BrainBarFlowStatusPill: View {
     let text: String
     let accentColor: Color
+    static let fontSize: CGFloat = 11
+    static let minimumScaleFactor = BrainBarDesignTokens.TypeScale.minimumScaleFactor(for: fontSize)
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: Self.fontSize, weight: .semibold))
             .lineLimit(1)
             .truncationMode(.tail)
-            .minimumScaleFactor(0.72)
+            .minimumScaleFactor(Self.minimumScaleFactor)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .fixedSize(horizontal: true, vertical: false)

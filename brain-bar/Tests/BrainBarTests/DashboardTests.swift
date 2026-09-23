@@ -819,7 +819,7 @@ final class DashboardTests: XCTestCase {
     func testDashboardCardTopHighlightIsClippedInsideRoundedCorners() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let styleRange = try XCTUnwrap(source.range(of: "private struct BrainBarDashboardCardStyle"))
-        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "private struct BrainBarFlowStatusPill"))
+        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "struct BrainBarFlowStatusPill"))
         let styleSource = String(source[styleRange.lowerBound..<nextStructRange.lowerBound])
 
         XCTAssertFalse(
