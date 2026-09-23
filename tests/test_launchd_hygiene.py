@@ -128,7 +128,8 @@ def test_active_daemon_launchd_hygiene_matrix():
 
     hotlane = _load("scripts/launchd/com.brainlayer.hotlane-brainbar.plist")
     hotlane_args = hotlane["ProgramArguments"]
-    assert hotlane_args[hotlane_args.index("--backlog-batch") + 1] == "4"
+    assert hotlane_args[hotlane_args.index("--backlog-interval") + 1] == "7.0"
+    assert hotlane_args[hotlane_args.index("--backlog-batch") + 1] == "16"
     assert hotlane_args[hotlane_args.index("--enrich-limit") + 1] == "0"
 
     backup = _load("scripts/launchd/com.brainlayer.backup-daily.plist")

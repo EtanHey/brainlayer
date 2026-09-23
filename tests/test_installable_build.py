@@ -2085,7 +2085,9 @@ def test_packaged_launchd_installer_installs_hotlane_daemon(tmp_path: Path) -> N
     plist = plistlib.loads(rendered.read_bytes())
     assert plist["ProgramArguments"][2] == str(installed_script)
     backlog_index = plist["ProgramArguments"].index("--backlog-batch")
-    assert plist["ProgramArguments"][backlog_index + 1] == "4"
+    assert plist["ProgramArguments"][backlog_index + 1] == "16"
+    interval_index = plist["ProgramArguments"].index("--backlog-interval")
+    assert plist["ProgramArguments"][interval_index + 1] == "7.0"
     assert "__HOTLANE_BRAINBAR_DAEMON__" not in rendered.read_text(encoding="utf-8")
 
     domain = f"gui/{os.getuid()}"

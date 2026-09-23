@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import plistlib
 import sqlite3
 import sys
 from pathlib import Path
@@ -1271,6 +1272,40 @@ def test_hotlane_run_reserves_due_backlog_slice_during_high_priority_queue_backl
     assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
     assert cycle_calls[0]["enrich_limit"] == 0
     assert sleeps == [0.25, 0.25]
+
+
+def test_installed_hotlane_backlog_args_schedule_reserved_slices(tmp_path):
+    hotlane = _load_hotlane_module()
+    plist_path = Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.hotlane-brainbar.plist"
+    args = plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
+    backlog_interval = float(args[args.index("--backlog-interval") + 1])
+    backlog_batch = int(args[args.index("--backlog-batch") + 1])
+    calls = []
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=1.0,
+        recent_limit=5,
+        backlog_interval=backlog_interval,
+        backlog_batch=backlog_batch,
+        enrich_interval=10.0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path: FakeStore(),
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: calls.append(kwargs) or hotlane.CycleResult(),
+        time_fn=iter([100.0, 100.0, 104.0, 107.0]).__next__,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=3,
+        queue_depth_fn=lambda _queue_dir: 3,
+        high_priority_queue_depth_fn=lambda _queue_dir: 1,
+    )
+
+    assert [(call["recent_limit"], call["backlog_batch"]) for call in calls] == [(0, 16), (0, 16)]
 
 
 def test_hotlane_run_repeats_reserved_backlog_slice_during_continuous_pressure(tmp_path):
