@@ -1606,7 +1606,7 @@ private struct BrainBarDashboardView: View {
     }
 }
 
-private struct BrainBarDefinitionList: View {
+struct BrainBarDefinitionList: View {
     let title: String
     let rows: [(String, String)]
 
@@ -1627,9 +1627,10 @@ private struct BrainBarDefinitionList: View {
                         .foregroundStyle(row.1.localizedCaseInsensitiveContains("unavailable")
                             ? Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
                             : Color.brainBarTextPrimary)
-                        .lineLimit(1)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(height: 24)
+                .frame(minHeight: 24)
                 if index < rows.count - 1 {
                     Rectangle().fill(Color.brainBarBorderSoft).frame(height: 0.5)
                 }
