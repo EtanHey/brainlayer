@@ -388,6 +388,7 @@ def test_launchd_env_loader_records_real_start_before_exec(tmp_path):
             **os.environ,
             "BRAINLAYER_ENV_FILE": str(env_file),
             "BRAINLAYER_LAUNCHD_SERVICE": "index",
+            "XPC_SERVICE_NAME": "com.brainlayer.index",
             "HOME": str(tmp_path),
         },
         capture_output=True,
@@ -399,6 +400,48 @@ def test_launchd_env_loader_records_real_start_before_exec(tmp_path):
     assert result.returncode == 0, result.stderr
     recorded = int((record_dir / "com.brainlayer.index.started").read_text().strip())
     assert abs(recorded - time.time()) < 5
+
+
+def test_launchd_run_record_uses_label_when_watchdog_shares_watch_gate(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    record_dir = tmp_path / ".local/share/brainlayer/job-runs"
+    record_dir.mkdir(parents=True)
+    watcher_record = record_dir / "com.brainlayer.watch.started"
+    watcher_record.write_text("111\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={**os.environ, "HOME": str(tmp_path), "BRAINLAYER_ENV_FILE": str(env_file),
+             "BRAINLAYER_LAUNCHD_SERVICE": "watch",
+             "XPC_SERVICE_NAME": "com.brainlayer.throughput-watchdog"},
+        capture_output=True, text=True, timeout=2, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert watcher_record.read_text(encoding="utf-8") == "111\n"
+    assert (record_dir / "com.brainlayer.throughput-watchdog.started").exists()
+
+
+def test_launchd_run_record_updates_even_when_env_gate_exits_78(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    record_dir = tmp_path / ".local/share/brainlayer/job-runs"
+    record_dir.mkdir(parents=True)
+    record = record_dir / "com.brainlayer.index.started"
+    record.write_text("111\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={**os.environ, "HOME": str(tmp_path),
+             "BRAINLAYER_ENV_FILE": str(tmp_path / "missing.env"),
+             "BRAINLAYER_LAUNCHD_SERVICE": "index", "XPC_SERVICE_NAME": "com.brainlayer.index"},
+        capture_output=True, text=True, timeout=2, check=False,
+    )
+
+    assert result.returncode == 78
+    assert abs(int(record.read_text(encoding="utf-8").strip()) - time.time()) < 5
 
 
 def test_launchd_env_loader_rejects_world_writable_env_file(tmp_path):
