@@ -2486,7 +2486,6 @@ private struct BrainBarSignalCoverageRow: View {
     let signal: BrainBarSignalCoverage
     let compact: Bool
     let isSelected: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 7 : 8) {
@@ -2549,7 +2548,6 @@ private struct BrainBarSignalCoverageRow: View {
         }
         .shadow(color: isSelected ? signal.accentColor.opacity(0.18) : .clear, radius: 12, y: 2)
         .scaleEffect(isSelected ? 0.98 : 1)
-        .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85), value: signal.clampedCoveragePercent)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(signal.presentation.accessibilityLabel(for: signal.name))
         .help(signal.showsDetail ? "Show Vector backlog details" : signal.presentation.accessibilityLabel(for: signal.name))
