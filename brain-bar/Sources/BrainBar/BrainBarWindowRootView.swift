@@ -916,6 +916,11 @@ private struct BrainBarDashboardView: View {
         DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: currentNow)
     }
 
+    private var signalCoverageError: String? {
+        collector.lastSignalCoverageError
+            ?? (collector.stats.signalCoverageIsAvailable ? nil : collector.lastFetchError)
+    }
+
     private var vectorSignal: BrainBarSignalCoverage {
         BrainBarSignalCoverage(
             name: "Vector",
@@ -925,7 +930,7 @@ private struct BrainBarDashboardView: View {
             coveragePercent: collector.stats.vectorCoveragePercent,
             isAvailable: collector.stats.signalCoverageIsAvailable,
             isRefreshing: collector.isSignalCoverageRefreshing,
-            lastError: collector.lastSignalCoverageError ?? collector.lastFetchError,
+            lastError: signalCoverageError,
             locale: locale,
             accentColor: .brainBarSignalVector,
             showsDetail: true,
@@ -1501,7 +1506,7 @@ private struct BrainBarDashboardView: View {
             stats: collector.stats,
             compact: layout.compactCards,
             isRefreshing: collector.isSignalCoverageRefreshing,
-            lastError: collector.lastSignalCoverageError ?? collector.lastFetchError,
+            lastError: signalCoverageError,
             locale: locale,
             isExpanded: $panelState.signalCoverageExpanded,
             isVectorDetailExpanded: $vectorSignalDetailExpanded,
