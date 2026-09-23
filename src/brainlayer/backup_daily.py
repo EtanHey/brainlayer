@@ -638,7 +638,7 @@ def create_sqlite_backup_artifact(
     if raw_free_bytes < required_bytes and (
         important_free_bytes is None
         or important_free_bytes < required_bytes
-        or raw_free_bytes < db_size + MIN_RAW_FREE_BYTES
+        or raw_free_bytes < db_size + surviving_attempt_growth_reserve_bytes + MIN_RAW_FREE_BYTES
     ):
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "

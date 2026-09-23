@@ -1046,6 +1046,31 @@ def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypat
         backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
 
 
+def test_important_capacity_cannot_bypass_surviving_attempt_raw_reserve(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    output_dir = tmp_path / "out"
+    _create_source_db(source, chunk_count=2)
+    output_dir.mkdir()
+    (output_dir / ".2026-05-13.db.attempt-1-recent").write_bytes(b"x")
+    raw_free = 20_000_000_000
+    db_size = raw_free - backup_daily.MIN_RAW_FREE_BYTES - 1
+
+    monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: db_size)
+    monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda _socket_path: time.time())
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw_free))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: 10**12)
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+
+    with pytest.raises(RuntimeError, match="Insufficient free space.*1 recent attempts reserve"):
+        backup_daily.create_sqlite_backup_artifact(source, output_dir, date_stamp="2026-05-14")
+
+
 def test_terminal_response_does_not_clean_unowned_prior_run_attempts(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
