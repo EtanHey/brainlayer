@@ -1,6 +1,6 @@
 # BrainBar L3a card-shape comparison
 
-The 36 offscreen frames compare exact #932 base `8fe696e50a944cb9f27bb2ebe49fd5d5924014ff` with L3a source `4aef233d51bc6370c9261135c659f17474c4aeb9`. Both captures use the same injected L3 fixture and debug render harness. No installed app or live database was used; the window never became key, so keyboard focus and VoiceOver remain unverified.
+The 36 offscreen frames compare exact #932 base `8fe696e50a944cb9f27bb2ebe49fd5d5924014ff` with L3a source `4aef233d51bc6370c9261135c659f17474c4aeb9`. The 18 after frames were re-rendered at review-fix head `b6076db2` and remained byte-identical. Both captures use the same injected L3 fixture and debug render harness. No installed app or live database was used; the window never became key, so keyboard focus and VoiceOver remain unverified.
 
 | State | 760 pt | 960 pt | 1280 pt |
 | --- | --- | --- | --- |
