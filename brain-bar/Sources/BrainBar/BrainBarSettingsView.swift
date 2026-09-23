@@ -507,7 +507,7 @@ struct BrainBarSettingsFooterPresentation {
 
         let enrichment: String
         let enrichmentCloud: Bool
-        let enrichmentOff = !config.enrichmentEnabled || config.launchdJobs[.enrichment]?.enabled == false
+        let enrichmentOff = config.enrichmentIsOff
         if enrichmentOff {
             enrichment = "Enrichment off"
             enrichmentCloud = false

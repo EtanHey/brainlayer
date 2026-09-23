@@ -334,7 +334,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         )
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes unavailable: observability as of 20:50"
+            "brain_store writes · last measured 2026-09-13 20:50 (stale)"
         )
         XCTAssertTrue(presentation.backupLines[0].text.hasSuffix("18:50"))
         XCTAssertTrue(presentation.backupLines[1].text.hasSuffix("19:50"))

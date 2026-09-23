@@ -208,8 +208,14 @@ struct BrainBarQueueDirectionPresentation: Equatable {
     let symbol: String
     let tone: BrainBarQueueDirectionTone
 
-    static func derive(_ status: DashboardQueueStatus) -> Self {
-        switch status {
+    static func derive(_ status: DashboardQueueStatus, backlogCount: Int = 0, enrichmentPaused: Bool? = nil) -> Self {
+        if status != .unavailable, enrichmentPaused == true, backlogCount > 0 {
+            return Self(
+                label: "Enrichment paused · \(DashboardMetricFormatter.integerString(backlogCount)) queued",
+                symbol: "pause.circle", tone: .neutral
+            )
+        }
+        return switch status {
         case .empty, .stable:
             Self(label: "Queue \(status.label)", symbol: "arrow.left.and.right", tone: .neutral)
         case .draining:
@@ -233,6 +239,7 @@ private struct BrainBarDashboardContent: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
+    var enrichmentPausedOverride: Bool? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -247,7 +254,8 @@ private struct BrainBarDashboardContent: View {
                 referenceNow: referenceNow,
                 calendar: calendar,
                 locale: locale,
-                panelState: panelState ?? standalonePanelState
+                panelState: panelState ?? standalonePanelState,
+                enrichmentPausedOverride: enrichmentPausedOverride
             )
         }
     }
@@ -607,7 +615,13 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             if case let .untrustworthy(reason) = trust {
                 agentWritesCount = nil
                 agentWritesWindowHours = nil
-                agentWritesText = "brain_store writes unavailable: \(reason)"
+                if reason.hasPrefix("observability as of "),
+                   document.emitters.state == "measured",
+                   document.emitters.byEmitter?.contains(where: { $0.emitter == "mcp" }) == true {
+                    agentWritesText = "brain_store writes · last measured \(staleMoment(document.generatedAt, now: now, calendar: calendar, locale: locale)) (stale)"
+                } else {
+                    agentWritesText = "brain_store writes · not measured yet"
+                }
             } else if document.emitters.state == "measured" {
                 if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
                     agentWritesCount = mcp.countInWindow
@@ -616,22 +630,21 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
                 } else {
                     agentWritesCount = nil
                     agentWritesWindowHours = nil
-                    agentWritesText = "brain_store writes unavailable: no MCP count in observability"
+                    agentWritesText = "brain_store writes · not measured yet"
                 }
             } else {
-                let reason = document.emitters.reason.isEmpty ? "emitter measurement unavailable" : document.emitters.reason
                 agentWritesCount = nil
                 agentWritesWindowHours = nil
-                agentWritesText = "brain_store writes unavailable: \(reason)"
+                agentWritesText = "brain_store writes · not measured yet"
             }
-        } else if case let .unreadable(reason) = observability {
+        } else if case .unreadable = observability {
             agentWritesCount = nil
             agentWritesWindowHours = nil
-            agentWritesText = "brain_store writes unavailable: \(reason)"
+            agentWritesText = "brain_store writes · not measured yet"
         } else {
             agentWritesCount = nil
             agentWritesWindowHours = nil
-            agentWritesText = "brain_store writes unavailable: observability document unreadable"
+            agentWritesText = "brain_store writes · not measured yet"
         }
 
         return Self(
@@ -682,6 +695,18 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         formatter.locale = locale
         formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private static func staleMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        if calendar.isDate(date, inSameDayAs: now) {
+            return shortTime(date, calendar: calendar, locale: locale)
+        }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.string(from: date)
     }
 
@@ -870,6 +895,7 @@ private struct BrainBarDashboardView: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     @ObservedObject var panelState: BrainBarDashboardPanelState
+    var enrichmentPausedOverride: Bool? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var previousAllCommitBuckets: [Int] = []
@@ -1127,7 +1153,12 @@ private struct BrainBarDashboardView: View {
 
     private var statusStrip: some View {
         let status = onePagePresentation.status
-        let queueDirection = BrainBarQueueDirectionPresentation.derive(flowSummary.queue.status)
+        let enrichmentPaused = enrichmentPausedOverride ?? observedEnrichmentPaused
+        let queueDirection = BrainBarQueueDirectionPresentation.derive(
+            flowSummary.queue.status,
+            backlogCount: flowSummary.queue.backlogCount,
+            enrichmentPaused: enrichmentPaused
+        )
         let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
         case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
@@ -1214,6 +1245,14 @@ private struct BrainBarDashboardView: View {
         }
     }
 
+    private var observedEnrichmentPaused: Bool? {
+#if BRAINBAR_UI
+        (try? BrainLayerConfigStore().loadDocument().config).map(\.enrichmentIsOff)
+#else
+        nil
+#endif
+    }
+
     @ViewBuilder
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
         Group {
@@ -1275,10 +1314,15 @@ private struct BrainBarDashboardView: View {
                                 .font(.system(size: 13))
                         }
                     } else {
-                        Text(counts.agentWritesText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown))
+                                .frame(width: 6, height: 6)
+                            Text(counts.agentWritesText)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.brainBarTextSecondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 .frame(height: 26, alignment: .topLeading)
@@ -3289,6 +3333,7 @@ enum BrainBarDashboardPreview {
         calendar: Calendar = goldenCalendar,
         locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil,
+        enrichmentPausedOverride: Bool? = false,
         disablesAnimations: Bool = true
     ) -> AnyView {
         let dashboard =
@@ -3302,7 +3347,8 @@ enum BrainBarDashboardPreview {
                     referenceNow: now,
                     calendar: calendar,
                     locale: locale,
-                    panelState: panelState
+                    panelState: panelState,
+                    enrichmentPausedOverride: enrichmentPausedOverride
                 )
             }
             .environment(\.colorScheme, .dark)

@@ -3,6 +3,36 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarOnePagePresentationTests: XCTestCase {
+    func testQueueDirectionDistinguishesPausedFromRunningEnrichment() {
+        let paused = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: true)
+        XCTAssertEqual(paused.label, "Enrichment paused · 42 queued")
+        XCTAssertEqual(paused.tone, .neutral)
+
+        let running = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: false)
+        XCTAssertEqual(running.label, "Queue growing")
+        XCTAssertEqual(running.tone, .warning)
+
+        let unknown = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: nil)
+        XCTAssertEqual(unknown.label, "Queue growing")
+        XCTAssertEqual(unknown.tone, .warning)
+
+        let offline = BrainBarQueueDirectionPresentation.derive(.unavailable, backlogCount: 42, enrichmentPaused: true)
+        XCTAssertEqual(offline.label, "Queue offline")
+        XCTAssertEqual(offline.tone, .error)
+    }
+
+    @MainActor
+    func testRenderFixtureActuallyHasGrowingBacklog() {
+        let collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.growingQueueStats)
+        let flow = DashboardFlowSummary.derive(
+            daemon: collector.daemon,
+            stats: collector.stats,
+            now: BrainBarDashboardFixture.fetchedAt
+        )
+        XCTAssertEqual(flow.queue.status, .growing)
+        XCTAssertEqual(flow.queue.backlogCount, 12_840)
+    }
+
     @MainActor
     func testHealthyPresentationNamesIndexedChunksAndSeparatesAgentWrites() throws {
         let now = BrainBarOnePageTestFixture.now
@@ -36,7 +66,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes unavailable: observability as of 23:50"
+            "brain_store writes · last measured 2026-09-13 23:50 (stale)"
         )
     }
 
@@ -54,7 +84,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             presentation.agentWritesText,
-            "brain_store writes unavailable: observability as of 14:45"
+            "brain_store writes · last measured 14:45 (stale)"
         )
     }
 
@@ -76,42 +106,42 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-901)),
                 "A decoded document can exceed the two-cadence age bound.",
                 "observability as of 23:47",
-                "brain_store writes unavailable: observability as of 23:47"
+                "brain_store writes · last measured 2026-09-14 23:47 (stale)"
             ),
             (
                 "future-dated",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(300)),
                 "Clock skew can decode to a generated_at later than now.",
                 "observability generated_at is in the future",
-                "brain_store writes unavailable: observability generated_at is in the future"
+                "brain_store writes · not measured yet"
             ),
             (
                 "missing",
                 missing.result,
                 "The non-optional Date cannot be constructed; ObservabilityReader returns unreadable.",
                 missing.reason,
-                "brain_store writes unavailable: \(missing.reason)"
+                "brain_store writes · not measured yet"
             ),
             (
                 "null",
                 null.result,
                 "The non-optional Date cannot decode null; ObservabilityReader returns unreadable.",
                 null.reason,
-                "brain_store writes unavailable: \(null.reason)"
+                "brain_store writes · not measured yet"
             ),
             (
                 "unparseable",
                 unparseable.result,
                 "The custom ISO-8601 decoder rejects invalid text before a document exists.",
                 unparseable.reason,
-                "brain_store writes unavailable: \(unparseable.reason)"
+                "brain_store writes · not measured yet"
             ),
             (
                 "epoch-sentinel",
                 try BrainBarOnePageTestFixture.result(generatedAt: Date(timeIntervalSince1970: 0)),
                 "A syntactically valid epoch sentinel can decode but is not trustworthy evidence.",
                 "observability generated_at is zero or epoch sentinel",
-                "brain_store writes unavailable: observability generated_at is zero or epoch sentinel"
+                "brain_store writes · not measured yet"
             ),
             (
                 "pre-midnight-today-scope",
