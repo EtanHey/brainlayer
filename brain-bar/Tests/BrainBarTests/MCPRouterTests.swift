@@ -3106,6 +3106,31 @@ No results found.
         XCTAssertEqual(lines.count, iterations)
     }
 
+    func testPendingStoreRetryReusesReceiptOnlyWithinConversationAndProject() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        func queue(project: String, conversation: String) throws -> (queueID: String, queuedAt: String, chunkID: String) {
+            try db.queuePendingStore(
+                content: "same retry payload", tags: ["retry"], importance: 5,
+                source: "mcp", project: project, conversationID: conversation
+            )
+        }
+        let first = try queue(project: "one", conversation: "session-a")
+        let retry = try queue(project: "one", conversation: "session-a")
+        XCTAssertEqual(retry.queueID, first.queueID)
+        XCTAssertEqual(retry.chunkID, first.chunkID)
+        XCTAssertEqual(retry.queuedAt, first.queuedAt)
+        XCTAssertNotEqual(try queue(project: "two", conversation: "session-a").chunkID, first.chunkID)
+        XCTAssertNotEqual(try queue(project: "one", conversation: "session-b").chunkID, first.chunkID)
+        XCTAssertEqual(db.pendingStoreQueueSnapshot().depth, 3)
+    }
+
     func testQueuePendingStoreCreatesPrivateQueueFile() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }

@@ -275,7 +275,9 @@ final class BrainBarServer: @unchecked Sendable {
             onPendingStoresFlushed: { [weak self] flushedStores in
                 self?.queue.async { [weak self] in
                     guard let self else { return }
+                    var publishedRows = Set<Int64>()
                     for flushed in flushedStores {
+                        guard publishedRows.insert(flushed.storedChunk.rowID).inserted else { continue }
                         self.publishStoredChunk(
                             stored: StoreResultPayload(
                                 chunkID: flushed.storedChunk.chunkID,
@@ -645,6 +647,7 @@ final class BrainBarServer: @unchecked Sendable {
         }
         guard let paletteSession = clients[fd]?.paletteSession else { return }
 
+        router.backupSnapshotStarted()
         backupToolCallInProgress = true
         let requestBox = SendableBox(request)
         backupToolQueue.async { [weak self] in
@@ -655,6 +658,7 @@ final class BrainBarServer: @unchecked Sendable {
             self.queue.async { [weak self] in
                 guard let self else { return }
                 self.backupToolCallInProgress = false
+                self.router.backupSnapshotFinished()
                 self.router.scheduleDrainAfterBackup()
                 self.flushDeferredSubscriberDisconnects()
                 guard self.clients[fd]?.paletteSession === paletteSession else {

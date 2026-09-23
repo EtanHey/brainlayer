@@ -156,6 +156,7 @@ final class MCPRouter: @unchecked Sendable {
     private final class PendingStoreDrainScheduler: @unchecked Sendable {
         let queue: DispatchQueue
         let registry = PendingStoreDrainRegistry()
+        let backupGate = PendingStoreBackupGate()
         let onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
 
         init(
@@ -164,6 +165,47 @@ final class MCPRouter: @unchecked Sendable {
         ) {
             self.queue = queue
             self.onFlushed = onFlushed
+        }
+    }
+
+    /// Keeps a background replay from holding the pending-file lock while
+    /// VACUUM owns the write connection. Waiting here never blocks the socket.
+    private final class PendingStoreBackupGate: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var backupRequested = false
+        private var activeDrains = 0
+
+        func requestBackup() {
+            condition.lock()
+            backupRequested = true
+            condition.unlock()
+        }
+
+        func waitForDrains() {
+            condition.lock()
+            while activeDrains > 0 { condition.wait() }
+            condition.unlock()
+        }
+
+        func finishBackup() {
+            condition.lock()
+            backupRequested = false
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        func withDrain<T>(_ body: () -> T) -> T {
+            condition.lock()
+            while backupRequested { condition.wait() }
+            activeDrains += 1
+            condition.unlock()
+            defer {
+                condition.lock()
+                activeDrains -= 1
+                condition.broadcast()
+                condition.unlock()
+            }
+            return body()
         }
     }
 
@@ -362,6 +404,14 @@ final class MCPRouter: @unchecked Sendable {
         scheduleDrainForExistingPendingStores(db: database)
     }
 
+    func backupSnapshotStarted() {
+        pendingStoreDrainScheduler.backupGate.requestBackup()
+    }
+
+    func backupSnapshotFinished() {
+        pendingStoreDrainScheduler.backupGate.finishBackup()
+    }
+
     private static func scheduleExistingPendingStoreScan(
         scheduler: PendingStoreDrainScheduler,
         db: BrainDatabase,
@@ -369,33 +419,35 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-            guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
-                scheduleExistingPendingStoreScan(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: min(
-                        pendingStoreDrainMaxDelay,
-                        max(pendingStoreDrainInitialDelay, delay * 2)
+            scheduler.backupGate.withDrain {
+                guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
+                    scheduleExistingPendingStoreScan(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: min(
+                            pendingStoreDrainMaxDelay,
+                            max(pendingStoreDrainInitialDelay, delay * 2)
+                        )
                     )
-                )
-                return
-            }
-            var scheduledAny = false
-            for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
-                scheduledAny = true
-                Self.schedulePendingStoreDrain(
-                    scheduler: scheduler,
-                    db: db,
-                    chunkID: String(identity.dropFirst("chunk:".count)),
-                    delay: Self.pendingStoreDrainInitialDelay
-                )
-            }
-            if !scheduledAny && snapshot.depth > 0 {
-                Self.scheduleIdentitylessLegacyFlush(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: Self.pendingStoreDrainInitialDelay
-                )
+                    return
+                }
+                var scheduledAny = false
+                for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
+                    scheduledAny = true
+                    Self.schedulePendingStoreDrain(
+                        scheduler: scheduler,
+                        db: db,
+                        chunkID: String(identity.dropFirst("chunk:".count)),
+                        delay: Self.pendingStoreDrainInitialDelay
+                    )
+                }
+                if !scheduledAny && snapshot.depth > 0 {
+                    Self.scheduleIdentitylessLegacyFlush(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: Self.pendingStoreDrainInitialDelay
+                    )
+                }
             }
         }
     }
@@ -410,27 +462,29 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-            let flushedStores = db.flushPendingStores(
-                busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
-                retries: mcpStoreRetries
-            )
-            if !flushedStores.isEmpty {
-                scheduler.onFlushed?(flushedStores)
-            }
-            guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
-                scheduleIdentitylessLegacyFlush(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: min(delay * 2, 60)
+            scheduler.backupGate.withDrain {
+                let flushedStores = db.flushPendingStores(
+                    busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
+                    retries: mcpStoreRetries
                 )
-                return
-            }
-            if after.depth > 0 {
-                scheduleIdentitylessLegacyFlush(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: min(delay * 2, 60)
-                )
+                if !flushedStores.isEmpty {
+                    scheduler.onFlushed?(flushedStores)
+                }
+                guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
+                    scheduleIdentitylessLegacyFlush(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: min(delay * 2, 60)
+                    )
+                    return
+                }
+                if after.depth > 0 {
+                    scheduleIdentitylessLegacyFlush(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: min(delay * 2, 60)
+                    )
+                }
             }
         }
     }
@@ -1031,13 +1085,15 @@ final class MCPRouter: @unchecked Sendable {
 
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-            drainPendingStoreTarget(
-                scheduler: scheduler,
-                db: db,
-                chunkID: chunkID,
-                drainKey: drainKey,
-                delay: delay
-            )
+            scheduler.backupGate.withDrain {
+                drainPendingStoreTarget(
+                    scheduler: scheduler,
+                    db: db,
+                    chunkID: chunkID,
+                    drainKey: drainKey,
+                    delay: delay
+                )
+            }
         }
     }
 
@@ -1116,13 +1172,15 @@ final class MCPRouter: @unchecked Sendable {
             : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
         scheduler.queue.asyncAfter(deadline: .now() + nextDelay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-            drainPendingStoreTarget(
-                scheduler: scheduler,
-                db: db,
-                chunkID: chunkID,
-                drainKey: drainKey,
-                delay: nextDelay
-            )
+            scheduler.backupGate.withDrain {
+                drainPendingStoreTarget(
+                    scheduler: scheduler,
+                    db: db,
+                    chunkID: chunkID,
+                    drainKey: drainKey,
+                    delay: nextDelay
+                )
+            }
         }
     }
 
@@ -1552,6 +1610,7 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("target_path")
         }
         let db = try writeDB()
+        pendingStoreDrainScheduler.backupGate.waitForDrains()
         let bytes = try db.vacuumInto(targetPath: targetPath)
         let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes)
         return ToolOutput(

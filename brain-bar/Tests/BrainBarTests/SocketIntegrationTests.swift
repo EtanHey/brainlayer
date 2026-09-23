@@ -626,6 +626,15 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath))
         XCTAssertEqual(writeDatabase.pendingStoreQueueSnapshot().depth, 1)
 
+        // A retry while VACUUM is still held must share the durable receipt.
+        try sendMCPRequest(on: storeFD, request: storeRequest)
+        let retriedDuringBackup = try readMCPMessage(fd: storeFD, timeout: 2)
+        let retryDuringResult = try XCTUnwrap(retriedDuringBackup["result"] as? [String: Any])
+        XCTAssertEqual(retryDuringResult["status"] as? String, "DEFERRED")
+        XCTAssertEqual(retryDuringResult["chunk_id"] as? String, chunkID)
+        XCTAssertEqual(retryDuringResult["queue_id"] as? String, receipt["queue_id"] as? String)
+        XCTAssertEqual(writeDatabase.pendingStoreQueueSnapshot().depth, 1)
+
         progressGate.release.signal()
         let backupResponse = try readMCPMessage(fd: backupFD, timeout: 2)
         XCTAssertNil(backupResponse["error"])
@@ -634,10 +643,19 @@ final class SocketIntegrationTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.05)
         }
         XCTAssertEqual(writeDatabase.pendingStoreQueueSnapshot().depth, 0)
-        let notification = try readMCPMessage(fd: subscriberFD, timeout: 2)
-        XCTAssertEqual(notification["method"] as? String, "notifications/claude/channel")
-        let notificationMeta = (notification["params"] as? [String: Any])?["meta"] as? [String: Any]
-        XCTAssertEqual(notificationMeta?["chunk_id"] as? String, chunkID)
+        var notificationBytes = Data()
+        var notificationBuffer = [UInt8](repeating: 0, count: 65_536)
+        let notificationDeadline = Date().addingTimeInterval(1)
+        while Date() < notificationDeadline {
+            let count = read(subscriberFD, &notificationBuffer, notificationBuffer.count)
+            if count > 0 {
+                notificationBytes.append(contentsOf: notificationBuffer[0..<count])
+            }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        let notifications = String(decoding: notificationBytes, as: UTF8.self)
+        XCTAssertEqual(notifications.components(separatedBy: "\"method\":\"notifications").count - 1, 1, notifications)
+        XCTAssertTrue(notifications.contains(chunkID), notifications)
 
         try sendMCPRequest(on: storeFD, request: [
             "jsonrpc": "2.0", "id": 82, "method": "tools/call",
@@ -655,6 +673,82 @@ final class SocketIntegrationTests: XCTestCase {
         let retryResult = try XCTUnwrap(retry["result"] as? [String: Any])
         XCTAssertEqual(retryResult["chunk_id"] as? String, chunkID)
         XCTAssertEqual(try queryString("SELECT COUNT(*) FROM chunks WHERE content = '\(content)'", on: writeDatabase.dbHandle), "1")
+    }
+
+    func testPendingDrainDoesNotBlockStoreOrInitializeDuringBackup() throws {
+        server.stop()
+        db.close()
+        let pendingPath = NSTemporaryDirectory() + "brainbar-backup-liveness-\(UUID().uuidString).jsonl"
+        let previousPendingPath = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"]
+        setenv("BRAINBAR_PENDING_STORES_PATH", pendingPath, 1)
+        defer {
+            if let previousPendingPath {
+                setenv("BRAINBAR_PENDING_STORES_PATH", previousPendingPath, 1)
+            } else {
+                unsetenv("BRAINBAR_PENDING_STORES_PATH")
+            }
+            try? FileManager.default.removeItem(atPath: pendingPath)
+        }
+        let databaseReady = DispatchSemaphore(value: 0)
+        let databaseCapture = BrainDatabaseCapture()
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, enableHybridSearchHelper: false)
+        server.onDatabaseReady = { database in
+            databaseCapture.set(database)
+            databaseReady.signal()
+        }
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath))
+        XCTAssertEqual(databaseReady.wait(timeout: .now() + 1), .success)
+        let writeDatabase = try XCTUnwrap(databaseCapture.get())
+        let storeFD = try connectClient()
+        defer { close(storeFD) }
+        try initializeClient(fd: storeFD, name: "backup-drain-store")
+        writeDatabase.failNextStoreWithBusyForTesting = true
+        try sendMCPRequest(on: storeFD, request: [
+            "jsonrpc": "2.0", "id": 90, "method": "tools/call",
+            "params": ["name": "brain_store", "arguments": ["content": "busy before backup \(UUID().uuidString)"]],
+        ])
+        let busy = try readMCPMessage(fd: storeFD, timeout: 2)
+        XCTAssertEqual((busy["result"] as? [String: Any])?["status"] as? String, "DEFERRED")
+
+        let progressGate = SQLiteProgressGate()
+        sqlite3_progress_handler(
+            writeDatabase.dbHandle, 1, blockSQLiteProgress,
+            Unmanaged.passUnretained(progressGate).toOpaque()
+        )
+        defer {
+            progressGate.release.signal()
+            sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil)
+        }
+        let targetPath = NSTemporaryDirectory() + "brainbar-drain-liveness-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
+        let backupFD = try connectClient()
+        defer { close(backupFD) }
+        try sendMCPRequest(on: backupFD, request: [
+            "jsonrpc": "2.0", "id": 91, "method": "tools/call",
+            "params": ["name": "brain_backup_vacuum_into", "arguments": ["target_path": targetPath]],
+        ])
+        XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 1), .success)
+        Thread.sleep(forTimeInterval: 0.6) // Allow the pending drain tick to fire.
+
+        try sendMCPRequest(on: storeFD, request: [
+            "jsonrpc": "2.0", "id": 92, "method": "tools/call",
+            "params": ["name": "brain_store", "arguments": ["content": "during blocked drain \(UUID().uuidString)"]],
+        ])
+        let during = try? readMCPMessage(fd: storeFD, timeout: 0.5)
+        XCTAssertEqual((during?["result"] as? [String: Any])?["status"] as? String, "DEFERRED")
+        let probeFD = try connectClient()
+        defer { close(probeFD) }
+        try sendMCPRequest(on: probeFD, request: [
+            "jsonrpc": "2.0", "id": 93, "method": "initialize",
+            "params": ["protocolVersion": "2024-11-05", "capabilities": [:] as [String: Any],
+                       "clientInfo": ["name": "backup-drain-liveness", "version": "1.0"]],
+        ])
+        let initialize = try? readMCPMessage(fd: probeFD, timeout: 0.5)
+        XCTAssertNotNil(initialize?["result"])
+        progressGate.release.signal()
+        _ = try? readMCPMessage(fd: backupFD, timeout: 3)
     }
 
     func testDisconnectedBackupResponseDoesNotLeakToReusedServerDescriptor() throws {
