@@ -1029,7 +1029,7 @@ def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypat
     recent = output_dir / ".2026-05-13.db.attempt-1-recent"
     recent.write_bytes(b"x")
     db_size = source.stat().st_size
-    base_required = (db_size * 3) + (512 * 1024 * 1024)
+    base_required = (db_size * 2) + (512 * 1024 * 1024)
 
     class Disk:
         free = base_required
@@ -1076,6 +1076,26 @@ def test_create_snapshot_rejects_low_disk_space(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="Insufficient free space"):
         backup_daily.create_sqlite_backup_gzip(source, tmp_path / "out", date_stamp="2026-05-13")
+
+
+def test_create_snapshot_accepts_space_for_raw_and_gzip(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source, chunk_count=2)
+    db_size = backup_daily._database_logical_size_bytes(source)
+
+    class Disk:
+        free = (db_size * 2) + (512 * 1024 * 1024)
+
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
+
+    def reached_writer(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("writer reached")
+
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", reached_writer)
+    with pytest.raises(RuntimeError, match="writer reached"):
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-05-14")
 
 
 def test_ensure_drive_folder_chain_creates_missing_folders():
@@ -1986,6 +2006,8 @@ def test_launchd_installer_knows_backup_target():
     assert "__BRAINLAYER_DIR_VALUE__" in install
     assert "PYTHONPATH" in wrapper
     assert "__BRAINLAYER_DIR_VALUE__" in wrapper
+    assert "${BRAINLAYER_PYTHON:?" in wrapper
+    assert "BRAINLAYER_PYTHON:-python3" not in wrapper
     assert "<string>com.brainlayer.backup-daily</string>" in plist
     assert "<integer>3</integer>" in plist
     assert "<integer>17</integer>" in plist

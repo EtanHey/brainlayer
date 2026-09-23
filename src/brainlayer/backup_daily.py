@@ -538,7 +538,9 @@ def create_sqlite_backup_artifact(
             continue
         surviving_attempt_bytes += attempt_size
         surviving_attempt_growth_reserve_bytes += max(0, db_size - attempt_size)
-    required_bytes = (db_size * 3) + (512 * 1024 * 1024) + surviving_attempt_growth_reserve_bytes
+    # The snapshot and its gzip coexist during compression. Each is at most
+    # roughly the logical DB size; the fixed margin covers gzip overhead.
+    required_bytes = (db_size * 2) + (512 * 1024 * 1024) + surviving_attempt_growth_reserve_bytes
     free_bytes = shutil.disk_usage(output_dir).free
     if free_bytes < required_bytes:
         raise RuntimeError(

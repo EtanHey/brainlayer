@@ -19,4 +19,5 @@ case "$BRAINLAYER_DIR" in
 esac
 export PYTHONPATH="$BRAINLAYER_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
-exec "${BRAINLAYER_PYTHON:-python3}" -m brainlayer.backup_daily
+: "${BRAINLAYER_PYTHON:?installer must render the prefix-aware keg interpreter}"
+exec "$BRAINLAYER_PYTHON" -m brainlayer.backup_daily
