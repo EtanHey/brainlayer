@@ -81,9 +81,8 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 ## Tests
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
-- **Suite hygiene, enforced not just written down: no test loads an embedding model, opens the
-  canonical DB, or connects to the production BrainBar socket.** `tests/conftest.py` arms these
-  guards for every unmarked test —
+- **Suite hygiene is enforced for unmarked tests.** `tests/conftest.py` guards embedding model
+  loads, canonical DB opens, and production BrainBar socket connects —
   `BRAINLAYER_FORBID_EMBEDDING_MODEL=1` (checked at every model-load site, and inherited by
   subprocesses) and a refusal on `sqlite3.connect`/`apsw.Connection` against
   `~/.local/share/brainlayer`. It also redirects BrainBar socket resolution to a nonexistent
