@@ -111,7 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runtime.onToggleRequested = { [weak self] in
             self?.toggleWindowSurface(nil)
         }
-
     }
 
     private func startUIHeartbeat() {
@@ -166,7 +165,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(atPath: Self.toggleFlagPath)
             runtime.handleToggleRequest()
         }
-
     }
 
     // MARK: - Menu Bar Popover
@@ -276,7 +274,6 @@ struct BrainBarApp: App {
                 }
                 .keyboardShortcut(",", modifiers: [.command])
             }
-
         }
     }
 }

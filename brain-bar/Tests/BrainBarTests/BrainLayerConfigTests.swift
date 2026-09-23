@@ -2,10 +2,6 @@ import XCTest
 @testable import BrainBar
 
 final class BrainLayerConfigTests: XCTestCase {
-
-
-
-
     func testRetiredRetrievalKeyRemainsUnmanagedOnRender() throws {
         let input = "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=1\nBRAINLAYER_SYSTEM_ENABLED=1\n"
         let document = try BrainLayerEnvDocument(text: input)

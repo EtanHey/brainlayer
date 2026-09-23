@@ -1,1 +1,0 @@
-../../BrainBar/Models/SearchQueryCandidate.swift
