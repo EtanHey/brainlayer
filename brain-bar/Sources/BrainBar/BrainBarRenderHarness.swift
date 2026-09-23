@@ -23,12 +23,15 @@ enum BrainBarRenderHarness {
         case queueBacklogged
         case receiptUnavailable
         case receiptFailed
+        case vectorAt100 = "vector-at-100"
 
         var detailsStates: [Bool] {
             switch self {
             case .loading, .stale, .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
                  .receiptUnavailable, .receiptFailed:
                 [false]
+            case .vectorAt100:
+                [true]
             case .readable, .unreadable:
                 [false, true]
             }
@@ -36,7 +39,7 @@ enum BrainBarRenderHarness {
 
         var breakpoints: [(name: String, width: CGFloat)] {
             switch self {
-            case .queueDraining, .queueBacklogged, .receiptUnavailable, .receiptFailed:
+            case .queueDraining, .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 [("default", 960)]
             case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .stale, .loading:
                 BrainBarRenderHarness.breakpoints
@@ -57,13 +60,15 @@ enum BrainBarRenderHarness {
                 .queueBacklogged
             case .readable, .unreadable, .receiptUnavailable, .receiptFailed:
                 .live
+            case .vectorAt100:
+                .live
             }
         }
 
         var observabilityResult: ObservabilityReadResult {
             switch self {
             case .readable, .stale, .attentionCollapsed, .attentionExpanded, .loading, .queueDraining,
-                 .queueBacklogged, .receiptUnavailable, .receiptFailed:
+                 .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 BrainBarDashboardFixture.readableObservabilityResult
             case .unreadable:
                 .unreadable("Database path unavailable.")
@@ -243,12 +248,18 @@ enum BrainBarRenderHarness {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded
         panelState.attentionExpanded = scenario == .attentionExpanded || scenario == .stale
-        let collector = scenario == .attentionCollapsed || scenario == .attentionExpanded
-            ? BrainBarDashboardFixture.makeCollector(
+        panelState.signalCoverageExpanded = scenario == .vectorAt100
+        let collector: StatsCollector
+        if scenario == .vectorAt100 {
+            collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.vectorAt100Stats)
+        } else if scenario == .attentionCollapsed || scenario == .attentionExpanded {
+            collector = BrainBarDashboardFixture.makeCollector(
                 scenario.collectorState,
                 agentActivity: .unavailable("fixture agent activity unavailable")
             )
-            : BrainBarDashboardFixture.makeCollector(scenario.collectorState)
+        } else {
+            collector = BrainBarDashboardFixture.makeCollector(scenario.collectorState)
+        }
         let receipts: BrainBarOperationReceipts
         if scenario == .receiptUnavailable {
             receipts = BrainBarOperationReceipts()
