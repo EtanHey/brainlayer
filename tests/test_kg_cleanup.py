@@ -101,7 +101,7 @@ def _decisions_path(tmp_path, *, schema="kg-flag-decisions-v1", merge=None, keep
         }
     doc = {
         "schema": schema,
-        "source": "kg-phase1-flag-batch-2026-06-05",
+        "source": "synthetic-flag-batch",
         "rules": {"identical-name": "merge"},
         "per_category": {},
         "counts": counts,
@@ -111,6 +111,19 @@ def _decisions_path(tmp_path, *, schema="kg-flag-decisions-v1", merge=None, keep
     path = tmp_path / "decisions.json"
     path.write_text(json.dumps(doc), encoding="utf-8")
     return path
+
+
+def test_flag_batch_requires_explicit_output_path():
+    with pytest.raises(SystemExit) as exc_info:
+        kg_flag_batch.parse_output_path([])
+
+    assert exc_info.value.code == 2
+
+
+def test_flag_batch_uses_explicit_output_path(tmp_path):
+    output_path = tmp_path / "flag-batch.json"
+
+    assert kg_flag_batch.parse_output_path([str(output_path)]) == output_path
 
 
 def _cluster():

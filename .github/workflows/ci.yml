@@ -239,6 +239,9 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Reject tracked privacy export files
+        run: python scripts/check_tracked_privacy_exports.py
+
       - name: Cache pip
         uses: actions/cache@v4
         with:

@@ -5,6 +5,8 @@ Re-derives the post-phase-1 flag set from the live DB (active rows only;
 everything pruned/merged in phase-1 is archived and drops out) and emits a
 category-sorted markdown review file + JSON for Etan's batch approval.
 
+Usage: python3 scripts/kg_flag_batch.py <output-json-path>
+
 Categories (safest first):
   identical-name   — every member name is the same string (pure type dup)
   case-only        — names differ only by casing
@@ -14,10 +16,10 @@ Categories (safest first):
   diagnosis-flag   — stems the diagnosis explicitly flagged for human review
 """
 
+import argparse
 import json
 import re
 import sqlite3
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -98,7 +100,14 @@ def should_skip_keep_separate(category: str, stem: str, keep_decisions: set[tupl
     return (category, normalized) in keep_decisions or ("", normalized) in keep_decisions
 
 
+def parse_output_path(argv: list[str] | None = None) -> Path:
+    parser = argparse.ArgumentParser(description="Generate a KG flag batch from the local database.")
+    parser.add_argument("output_json", type=Path, help="explicit path for the generated JSON output")
+    return parser.parse_args(argv).output_json
+
+
 def main() -> None:
+    out_json = parse_output_path()
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     keep_decisions = load_keep_separate_decisions(con)
@@ -132,7 +141,6 @@ def main() -> None:
         cluster["item_kind"] = item_kind_from_members(cluster["members"])
         cats[category].append(cluster)
 
-    out_json = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("eval_results/kg-phase1-flag-batch-2026-06-05.json")
     out_json.write_text(json.dumps(dict(cats), indent=2))
 
     order = ["identical-name", "case-only", "sep-variants", "prefix-variants", "diagnosis-flag"]
