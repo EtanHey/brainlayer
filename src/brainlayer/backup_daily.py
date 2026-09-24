@@ -21,6 +21,7 @@ import shutil
 import signal
 import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -295,6 +296,46 @@ def _drive_upload_stall_max_attempts() -> int:
 
 class _DriveRequestDeadlineExceeded(TimeoutError):
     pass
+
+
+# Network failures that say nothing about whether Drive kept the bytes: the answer is to ask
+# Drive (a status probe, or a re-read), never to assume failure. HTTP errors are not here.
+_DRIVE_TRANSIENT_NETWORK_ERRORS: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    TimeoutError,
+    ssl.SSLEOFError,
+    requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
+def _retry_transient_drive_call(call: Callable[[], Any], *, what: str) -> Any:
+    """Run a Drive call that is safe to repeat, retrying transient network errors (bounded)."""
+    # google-auth wraps a token refresh that failed on the network; RefreshError (a revoked or
+    # invalid grant) is a different class and is never retried.
+    from google.auth.exceptions import TransportError
+
+    limit = _drive_upload_stall_max_attempts()
+    for attempt in range(1, limit + 1):
+        try:
+            return call()
+        except BackupTimeoutError:
+            raise  # the whole-run deadline is not a network blip
+        except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, TransportError) as exc:
+            if attempt >= limit:
+                raise RuntimeError(f"{what} failed after {attempt} attempts: {type(exc).__name__}: {exc}") from exc
+            sleep_seconds = min(60, 2**attempt)
+            print(
+                f"{what} retry attempt={attempt}/{limit}: {type(exc).__name__}: {exc}; sleeping {sleep_seconds}s",
+                flush=True,
+            )
+            _sleep(sleep_seconds)
+    raise AssertionError("unreachable")
+
+
+def _execute_drive_read(request: Any, *, what: str) -> Any:
+    """Execute a read-only Drive API request, retrying transient network errors (bounded)."""
+    return _retry_transient_drive_call(request.execute, what=what)
 
 
 def _drive_put_with_deadline(session: Any, url: str, *, headers: dict[str, str], data: bytes, deadline: float):
@@ -1170,7 +1211,16 @@ def upload_file_to_drive_raw(
                         if response.status_code in {429, 500, 502, 503, 504}:
                             raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
                         response.raise_for_status()
-                    except _DriveRequestDeadlineExceeded:
+                    except BackupTimeoutError:
+                        raise  # the whole-run deadline is not a network blip
+                    except (_DriveRequestDeadlineExceeded, *_DRIVE_TRANSIENT_NETWORK_ERRORS) as transient:
+                        # The response was lost, not refused: Drive may hold this chunk, or the
+                        # whole file. Ask the session before sending a single byte again.
+                        print(
+                            f"drive upload chunk={start}-{end} interrupted: {type(transient).__name__}: "
+                            f"{transient}; querying session offset",
+                            flush=True,
+                        )
                         previously_confirmed = sent
                         stalled_attempts += 1
                         query_headers = {
@@ -1203,7 +1253,13 @@ def upload_file_to_drive_raw(
                                     )
                                 sent = confirmed
                                 break
-                            except (_DriveRequestDeadlineExceeded, requests.RequestException) as query_error:
+                            except BackupTimeoutError:
+                                raise  # the whole-run deadline is not a network blip
+                            except (
+                                _DriveRequestDeadlineExceeded,
+                                requests.RequestException,
+                                *_DRIVE_TRANSIENT_NETWORK_ERRORS,
+                            ) as query_error:
                                 session.close()
                                 stalled_attempts += 1
                                 if stalled_attempts >= stall_limit:
@@ -1439,10 +1495,9 @@ def verify_drive_upload(
     expected_machine_id: str,
 ) -> None:
     """Verify that Drive can see the uploaded file with the expected name and byte size."""
-    metadata = (
-        service.files()
-        .get(fileId=file_id, fields="id,name,size,trashed,appProperties", supportsAllDrives=True)
-        .execute()
+    metadata = _execute_drive_read(
+        service.files().get(fileId=file_id, fields="id,name,size,trashed,appProperties", supportsAllDrives=True),
+        what="Drive upload verification",
     )
     if metadata.get("trashed"):
         raise RuntimeError(f"Uploaded Drive backup is trashed: {file_id}")
@@ -1650,6 +1705,11 @@ def run_backup(
             file_id = uploaded.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
+            # The service above has sat idle through an upload that can run for hours; its
+            # keep-alive socket is dead by now (2026-09-23: a finished upload was recorded failed
+            # when verification reset on it). Every post-upload call gets a fresh connection. The
+            # rebuild may refresh the token over the network, so it gets the same bounded retry.
+            service = _retry_transient_drive_call(build_drive_service, what="Drive service rebuild after upload")
             verify_drive_upload(
                 service,
                 file_id=file_id,

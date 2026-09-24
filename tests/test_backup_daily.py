@@ -2695,3 +2695,475 @@ def test_real_backup_stop_writes_one_complete_receipt(tmp_path, monkeypatch):
     assert receipts[0]["error_type"] == "BackupStoppedError"
     assert receipts[0]["stop_signal"] == "SIGTERM"
     assert datetime.fromisoformat(receipts[0]["attempted_at"]).tzinfo is not None
+
+
+# --- 2026-09-23 incident: a finished upload must never be marked failed ------------------------
+# Evidence: backup-daily.out.log L38011-38094 (1.5.38). The last chunk returned 200; the run then
+# died in verify_drive_upload on a ConnectionResetError from the httplib2 keep-alive socket that
+# the Drive service had held idle through the ~3 h upload.
+
+
+class _ScriptedUploadSession:
+    """Plays one scripted outcome per PUT; an exception outcome is raised, not returned."""
+
+    def __init__(self, script):
+        self.script = script
+        self.ranges: list[str] = []
+
+    def put(self, url, *, headers, data, timeout):  # noqa: ARG002
+        content_range = headers["Content-Range"]
+        self.ranges.append(content_range)
+        outcome = self.script(content_range, len(self.ranges))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def close(self):
+        pass
+
+
+def _run_scripted_upload(backup_daily, monkeypatch, snapshot, script, *, chunk_size=2):
+    session = _ScriptedUploadSession(script)
+    posts = []
+
+    def fake_post(*args, **kwargs):  # noqa: ARG001
+        posts.append(kwargs["data"])
+        return _DriveResponse(200, headers={"Location": "https://upload.test/session"})
+
+    monkeypatch.setattr(backup_daily.requests, "post", fake_post)
+    monkeypatch.setattr(backup_daily.requests, "Session", lambda: session)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+    result = backup_daily.upload_file_to_drive_raw(
+        snapshot,
+        "folder-id",
+        type("Credentials", (), {"token": "test-token"})(),
+        machine_id="m1",
+        chunk_size=chunk_size,
+    )
+    return result, session.ranges, posts
+
+
+def test_drive_upload_reset_on_middle_chunk_probes_and_resumes_from_confirmed_offset(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    reset_once = [True]
+
+    def script(content_range, _call):
+        if content_range == "bytes 0-1/6":
+            return _DriveResponse(308, headers={"Range": "bytes=0-1"})
+        if content_range == "bytes 2-3/6" and reset_once[0]:
+            reset_once[0] = False
+            return backup_daily.requests.ConnectionError(ConnectionResetError(54, "Connection reset by peer"))
+        if content_range == "bytes */6":
+            # Drive kept the chunk whose response was lost.
+            return _DriveResponse(308, headers={"Range": "bytes=0-3"})
+        return _DriveResponse(200, payload={"id": "drive-file-id", "size": "6"})
+
+    result, ranges, posts = _run_scripted_upload(backup_daily, monkeypatch, snapshot, script)
+
+    assert ranges == ["bytes 0-1/6", "bytes 2-3/6", "bytes */6", "bytes 4-5/6"]
+    assert result["id"] == "drive-file-id"
+    assert len(posts) == 1
+
+
+def test_drive_upload_reset_on_final_chunk_is_success_when_probe_reports_complete(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    completed = {"id": "drive-file-id", "name": snapshot.name, "size": "6", "md5Checksum": "abc"}
+
+    def script(content_range, _call):
+        if content_range == "bytes 0-3/6":
+            return _DriveResponse(308, headers={"Range": "bytes=0-3"})
+        if content_range == "bytes 4-5/6":
+            # The raw socket error the 09-23 run raised, not a requests wrapper.
+            return ConnectionResetError(54, "Connection reset by peer")
+        if content_range == "bytes */6":
+            return _DriveResponse(200, payload=completed)
+        raise AssertionError(f"unexpected PUT {content_range}")
+
+    result, ranges, posts = _run_scripted_upload(backup_daily, monkeypatch, snapshot, script, chunk_size=4)
+
+    assert result == completed
+    assert ranges == ["bytes 0-3/6", "bytes 4-5/6", "bytes */6"]
+    assert len(posts) == 1, "a completed session must never be re-created as a second Drive file"
+
+
+def test_drive_upload_reset_on_final_chunk_finishes_last_byte_when_probe_returns_308(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+
+    def script(content_range, _call):
+        if content_range == "bytes 0-3/6":
+            return _DriveResponse(308, headers={"Range": "bytes=0-3"})
+        if content_range == "bytes 4-5/6":
+            return backup_daily.requests.exceptions.SSLError("EOF occurred in violation of protocol")
+        if content_range == "bytes */6":
+            return _DriveResponse(308, headers={"Range": "bytes=0-4"})
+        if content_range == "bytes 5-5/6":
+            return _DriveResponse(200, payload={"id": "drive-file-id", "size": "6"})
+        raise AssertionError(f"unexpected PUT {content_range}")
+
+    result, ranges, posts = _run_scripted_upload(backup_daily, monkeypatch, snapshot, script, chunk_size=4)
+
+    assert ranges == ["bytes 0-3/6", "bytes 4-5/6", "bytes */6", "bytes 5-5/6"]
+    assert result["id"] == "drive-file-id"
+    assert len(posts) == 1
+
+
+def test_drive_upload_persistent_resets_fail_bounded_with_confirmed_bytes(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "2")
+
+    def script(content_range, _call):
+        if content_range == "bytes 0-1/6":
+            return _DriveResponse(308, headers={"Range": "bytes=0-1"})
+        if content_range == "bytes */6":
+            return _DriveResponse(308, headers={"Range": "bytes=0-1"})
+        return ConnectionResetError(54, "Connection reset by peer")
+
+    with pytest.raises(backup_daily.DriveUploadStalledError) as exc_info:
+        _run_scripted_upload(backup_daily, monkeypatch, snapshot, script)
+
+    assert exc_info.value.bytes_confirmed == 2
+    assert "confirmed 2/6 bytes after 2 stalled attempts" in str(exc_info.value)
+
+
+class _MetadataRequest:
+    def __init__(self, outcomes):
+        self.outcomes = outcomes
+        self.calls = 0
+
+    def execute(self):
+        outcome = self.outcomes[min(self.calls, len(self.outcomes) - 1)]
+        self.calls += 1
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class _MetadataService:
+    def __init__(self, request):
+        self.request = request
+
+    def files(self):
+        return self
+
+    def get(self, **kwargs):  # noqa: ARG002
+        return self.request
+
+
+_GOOD_METADATA = {
+    "id": "drive-file-id",
+    "name": "2026-09-14.db.gz",
+    "size": "6",
+    "trashed": False,
+    "appProperties": {"brainlayer_machine": "m1"},
+}
+
+
+def test_verify_drive_upload_retries_a_transient_reset(monkeypatch):
+    from brainlayer import backup_daily
+
+    request = _MetadataRequest([ConnectionResetError(54, "Connection reset by peer"), _GOOD_METADATA])
+    sleeps = []
+    monkeypatch.setattr(backup_daily, "_sleep", sleeps.append)
+
+    backup_daily.verify_drive_upload(
+        _MetadataService(request),
+        file_id="drive-file-id",
+        expected_name="2026-09-14.db.gz",
+        expected_size=6,
+        expected_machine_id="m1",
+    )
+
+    assert request.calls == 2
+    assert len(sleeps) == 1
+
+
+def test_verify_drive_upload_persistent_resets_fail_bounded(monkeypatch):
+    from brainlayer import backup_daily
+
+    request = _MetadataRequest([ConnectionResetError(54, "Connection reset by peer")])
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "3")
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match=r"Drive upload verification failed after 3 attempts"):
+        backup_daily.verify_drive_upload(
+            _MetadataService(request),
+            file_id="drive-file-id",
+            expected_name="2026-09-14.db.gz",
+            expected_size=6,
+            expected_machine_id="m1",
+        )
+
+    assert request.calls == 3
+
+
+def test_verify_drive_upload_does_not_retry_a_mismatch(monkeypatch):
+    from brainlayer import backup_daily
+
+    request = _MetadataRequest([{**_GOOD_METADATA, "size": "5"}])
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: pytest.fail("a mismatch is not transient"))
+
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        backup_daily.verify_drive_upload(
+            _MetadataService(request),
+            file_id="drive-file-id",
+            expected_name="2026-09-14.db.gz",
+            expected_size=6,
+            expected_machine_id="m1",
+        )
+
+    assert request.calls == 1
+
+
+def test_run_backup_verifies_on_a_fresh_drive_service_after_a_long_upload(tmp_path, monkeypatch):
+    """Service built, ~3 h upload, first call after it resets: the finished upload stays a success."""
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot)
+    upload_finished = [False]
+
+    class StaleAfterUploadRequest:
+        def execute(self):
+            if upload_finished[0]:
+                raise ConnectionResetError(54, "Connection reset by peer")
+            return {}
+
+    class PreUploadService:
+        """Its keep-alive socket dies during the upload; every later call resets."""
+
+        def files(self):
+            return self
+
+        def get(self, **kwargs):  # noqa: ARG002
+            return StaleAfterUploadRequest()
+
+    fresh_service = _MetadataService(
+        _MetadataRequest([{**_GOOD_METADATA, "appProperties": {"brainlayer_machine": "test-machine"}}])
+    )
+    services = [PreUploadService(), fresh_service]
+    monkeypatch.setattr(backup_daily, "build_drive_service", lambda *args, **kwargs: services.pop(0))
+    verify_services = []
+    monkeypatch.setattr(
+        backup_daily,
+        "verify_sqlite_backup_artifact",
+        lambda *args, **kwargs: verify_services.append(kwargs["service"]) or {"verified": True},
+    )
+
+    class FinishedSession:
+        def put(self, url, *, headers, data, timeout):  # noqa: ARG002
+            upload_finished[0] = True
+            return _DriveResponse(200, payload={"id": "drive-file-id", "size": "6"})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "Session", FinishedSession)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-09-14",
+        upload=True,
+        remove_local_after_upload=False,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert result["uploaded"] is True
+    assert result["verified"] is True
+    assert "error_type" not in result
+    assert services == [], "post-upload calls must run on a Drive service built after the upload"
+    assert verify_services == [fresh_service]
+    assert fresh_service.request.calls == 1
+
+
+def test_transient_retry_never_swallows_the_whole_run_deadline(tmp_path, monkeypatch):
+    """BackupTimeoutError subclasses TimeoutError; the SIGALRM run cap must still stop the run."""
+    from brainlayer import backup_daily
+
+    request = _MetadataRequest([backup_daily.BackupTimeoutError("backup timed out")])
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: pytest.fail("the run deadline was retried"))
+    with pytest.raises(backup_daily.BackupTimeoutError):
+        backup_daily.verify_drive_upload(
+            _MetadataService(request),
+            file_id="drive-file-id",
+            expected_name="2026-09-14.db.gz",
+            expected_size=6,
+            expected_machine_id="m1",
+        )
+    assert request.calls == 1
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+
+    def script(content_range, _call):
+        if content_range == "bytes */6":
+            pytest.fail("the run deadline was treated as a lost response")
+        return backup_daily.BackupTimeoutError("backup timed out")
+
+    with pytest.raises(backup_daily.BackupTimeoutError):
+        _run_scripted_upload(backup_daily, monkeypatch, snapshot, script)
+
+
+def test_run_deadline_during_the_offset_probe_stops_the_upload(tmp_path, monkeypatch):
+    """PR #954 review B1: the probe loop must not treat the SIGALRM run cap as a network blip."""
+    from brainlayer import backup_daily
+
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    probes = []
+
+    def script(content_range, _call):
+        if content_range == "bytes 0-1/6":
+            return ConnectionResetError(54, "Connection reset by peer")
+        if content_range == "bytes */6":
+            probes.append(content_range)
+            if len(probes) == 1:
+                return backup_daily.BackupTimeoutError("backup timed out")
+            return _DriveResponse(308, headers={"Range": "bytes=0-1"})
+        return _DriveResponse(200, payload={"id": "x", "size": "6"})
+
+    session = _ScriptedUploadSession(script)
+    monkeypatch.setattr(
+        backup_daily.requests,
+        "post",
+        lambda *args, **kwargs: _DriveResponse(200, headers={"Location": "https://upload.test/session"}),
+    )
+    monkeypatch.setattr(backup_daily.requests, "Session", lambda: session)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: pytest.fail("the run deadline was retried"))
+
+    with pytest.raises(backup_daily.BackupTimeoutError):
+        backup_daily.upload_file_to_drive_raw(
+            snapshot,
+            "folder-id",
+            type("Credentials", (), {"token": "test-token"})(),
+            machine_id="m1",
+            chunk_size=2,
+        )
+
+    assert probes == ["bytes */6"]
+    assert session.ranges == ["bytes 0-1/6", "bytes */6"]
+
+
+def _run_backup_with_post_upload_rebuilds(backup_daily, monkeypatch, tmp_path, rebuilds):
+    """The first build_drive_service call is the pre-upload one; `rebuilds` scripts every later call."""
+    snapshot = tmp_path / "2026-09-14.db.gz"
+    snapshot.write_bytes(b"abcdef")
+    _stub_backup_for_drive_upload(backup_daily, monkeypatch, snapshot)
+    calls = []
+
+    def build(*args, **kwargs):  # noqa: ARG001
+        calls.append(len(calls))
+        if len(calls) == 1:
+            return object()
+        outcome = rebuilds[min(len(calls) - 2, len(rebuilds) - 1)]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    fresh_service = _MetadataService(
+        _MetadataRequest([{**_GOOD_METADATA, "appProperties": {"brainlayer_machine": "test-machine"}}])
+    )
+    rebuilds = [fresh_service if outcome == "fresh" else outcome for outcome in rebuilds]
+    monkeypatch.setattr(backup_daily, "build_drive_service", build)
+
+    class FinishedSession:
+        def put(self, url, *, headers, data, timeout):  # noqa: ARG002
+            return _DriveResponse(200, payload={"id": "drive-file-id", "size": "6"})
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup_daily.requests, "Session", FinishedSession)
+    return calls, fresh_service
+
+
+def test_post_upload_service_rebuild_retries_a_transient_token_refresh_failure(tmp_path, monkeypatch):
+    """PR #954 review N1: the rebuild can refresh the token over the network; a blip there must not fail the run."""
+    from google.auth.exceptions import TransportError
+
+    from brainlayer import backup_daily
+
+    sleeps = []
+    monkeypatch.setattr(backup_daily, "_sleep", sleeps.append)
+    calls, fresh_service = _run_backup_with_post_upload_rebuilds(
+        backup_daily,
+        monkeypatch,
+        tmp_path,
+        [TransportError("Connection reset by peer"), ConnectionResetError(54, "reset"), "fresh"],
+    )
+
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "brainlayer.db",
+        staging_dir=tmp_path,
+        date_stamp="2026-09-14",
+        upload=True,
+        remove_local_after_upload=False,
+        log_path=tmp_path / "backup-daily.log",
+    )
+
+    assert result["uploaded"] is True
+    assert result["verified"] is True
+    assert len(calls) == 4
+    assert len(sleeps) == 2
+    assert fresh_service.request.calls == 1
+
+
+def test_post_upload_service_rebuild_fails_bounded_and_named(tmp_path, monkeypatch):
+    from google.auth.exceptions import TransportError
+
+    from brainlayer import backup_daily
+
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "3")
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+    calls, _fresh = _run_backup_with_post_upload_rebuilds(
+        backup_daily, monkeypatch, tmp_path, [TransportError("Connection reset by peer")]
+    )
+
+    with pytest.raises(RuntimeError, match=r"Drive service rebuild after upload failed after 3 attempts"):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            date_stamp="2026-09-14",
+            upload=True,
+            remove_local_after_upload=False,
+            log_path=tmp_path / "backup-daily.log",
+        )
+
+    assert len(calls) == 1 + 3
+
+
+def test_post_upload_service_rebuild_never_retries_revoked_credentials(tmp_path, monkeypatch):
+    from google.auth.exceptions import RefreshError
+
+    from brainlayer import backup_daily
+
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: pytest.fail("an auth failure is not transient"))
+    calls, _fresh = _run_backup_with_post_upload_rebuilds(
+        backup_daily, monkeypatch, tmp_path, [RefreshError("invalid_grant")]
+    )
+
+    with pytest.raises(RefreshError):
+        backup_daily.run_backup(
+            db_path=tmp_path / "brainlayer.db",
+            staging_dir=tmp_path,
+            date_stamp="2026-09-14",
+            upload=True,
+            remove_local_after_upload=False,
+            log_path=tmp_path / "backup-daily.log",
+        )
+
+    assert len(calls) == 2
