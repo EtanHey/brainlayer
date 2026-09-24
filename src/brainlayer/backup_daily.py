@@ -309,15 +309,19 @@ _DRIVE_TRANSIENT_NETWORK_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 
-def _execute_drive_read(request: Any, *, what: str) -> Any:
-    """Execute a read-only Drive API request, retrying transient network errors (bounded)."""
+def _retry_transient_drive_call(call: Callable[[], Any], *, what: str) -> Any:
+    """Run a Drive call that is safe to repeat, retrying transient network errors (bounded)."""
+    # google-auth wraps a token refresh that failed on the network; RefreshError (a revoked or
+    # invalid grant) is a different class and is never retried.
+    from google.auth.exceptions import TransportError
+
     limit = _drive_upload_stall_max_attempts()
     for attempt in range(1, limit + 1):
         try:
-            return request.execute()
+            return call()
         except BackupTimeoutError:
             raise  # the whole-run deadline is not a network blip
-        except _DRIVE_TRANSIENT_NETWORK_ERRORS as exc:
+        except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, TransportError) as exc:
             if attempt >= limit:
                 raise RuntimeError(f"{what} failed after {attempt} attempts: {type(exc).__name__}: {exc}") from exc
             sleep_seconds = min(60, 2**attempt)
@@ -327,6 +331,11 @@ def _execute_drive_read(request: Any, *, what: str) -> Any:
             )
             _sleep(sleep_seconds)
     raise AssertionError("unreachable")
+
+
+def _execute_drive_read(request: Any, *, what: str) -> Any:
+    """Execute a read-only Drive API request, retrying transient network errors (bounded)."""
+    return _retry_transient_drive_call(request.execute, what=what)
 
 
 def _drive_put_with_deadline(session: Any, url: str, *, headers: dict[str, str], data: bytes, deadline: float):
@@ -1244,6 +1253,8 @@ def upload_file_to_drive_raw(
                                     )
                                 sent = confirmed
                                 break
+                            except BackupTimeoutError:
+                                raise  # the whole-run deadline is not a network blip
                             except (
                                 _DriveRequestDeadlineExceeded,
                                 requests.RequestException,
@@ -1696,8 +1707,9 @@ def run_backup(
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
             # The service above has sat idle through an upload that can run for hours; its
             # keep-alive socket is dead by now (2026-09-23: a finished upload was recorded failed
-            # when verification reset on it). Every post-upload call gets a fresh connection.
-            service = build_drive_service()
+            # when verification reset on it). Every post-upload call gets a fresh connection. The
+            # rebuild may refresh the token over the network, so it gets the same bounded retry.
+            service = _retry_transient_drive_call(build_drive_service, what="Drive service rebuild after upload")
             verify_drive_upload(
                 service,
                 file_id=file_id,
