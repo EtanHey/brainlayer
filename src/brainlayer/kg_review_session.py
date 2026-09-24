@@ -1,7 +1,7 @@
 """KG flag-batch review session driver shared by voice and visual review surfaces.
 
-Pure-file module: reads the category-sorted flag-batch JSON emitted by phase-1
-(`eval_results/kg-phase1-flag-batch-*.json`) and maintains the shared dashboard
+Pure-file module: reads an explicitly supplied category-sorted flag-batch JSON
+and maintains the shared dashboard
 decisions JSON that `kg_cleanup_apply.py` (or a follow-up applier) can consume.
 No DB access here.
 
@@ -9,7 +9,7 @@ Decisions file contract: `kg-flag-decisions-v1`, matching the dashboard export:
 
     {
       "schema": "kg-flag-decisions-v1",
-      "source": "kg-phase1-flag-batch-2026-06-05",
+      "source": "provided-batch",
       "rules": {"<category>": "merge" | "keep"},
       "per_category": {"<cat>": {total, explicit, by_rule, undecided, rule}},
       "counts": {merge_clusters, rows_merged_away, keep, explicit, by_rule},
@@ -56,7 +56,7 @@ from pathlib import Path
 from typing import Any
 
 DECISIONS_SCHEMA = "kg-flag-decisions-v1"
-DEFAULT_SOURCE = "kg-phase1-flag-batch-2026-06-05"
+DEFAULT_SOURCE = "provided-batch"
 
 VALID_RECORD_ACTIONS = {"merge", "keep", "merge_all", "keep_all", "mixed", "skip"}
 VALID_RULE_ACTIONS = {"merge", "keep", "merge_all", "keep_all"}
