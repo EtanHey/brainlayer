@@ -40,6 +40,7 @@ from .enrichment_controller import (
     _record_enrich_cost_usd,
 )
 from .paths import get_db_path
+from .pipeline.cloud_scrub import scrub_for_cloud, scrub_gemini_batch_jsonl
 from .pipeline.enrichment import (
     HIGH_VALUE_TYPES,
     build_external_prompt,
@@ -147,7 +148,7 @@ def build_batch_request_line(chunk_id: str, prompt: str) -> Dict[str, Any]:
     return {
         "key": chunk_id,
         "request": {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": scrub_for_cloud(prompt)}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "thinkingConfig": {"thinkingBudget": 0},
@@ -747,6 +748,9 @@ def submit_gemini_batch(
 ) -> Optional[str]:
     """Upload JSONL and submit a Gemini batch job. Returns batch job name or None on failure."""
     _raise_if_enrich_daily_cap_reached()
+    # The export may predate the scrub-before-cloud fix; re-scrub what is on disk.
+    # Raises CloudScrubError (nothing uploaded) if any line cannot be scrubbed.
+    scrub_gemini_batch_jsonl(jsonl_path)
     client = _get_genai_client()
 
     # Count chunks in file

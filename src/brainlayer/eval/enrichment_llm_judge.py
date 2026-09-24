@@ -163,6 +163,7 @@ def run_judge(
     requests = build_pair_requests(selection_rows, local_rows, flex_rows, seed=config.seed)
 
     from brainlayer.enrichment_controller import _build_gemini_http_options, _get_gemini_client
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
 
     client = _get_gemini_client()
     config_body = {
@@ -183,7 +184,7 @@ def run_judge(
             try:
                 response = client.models.generate_content(
                     model=config.model,
-                    contents=prompt,
+                    contents=scrub_for_cloud(prompt),
                     config=config_body,
                 )
                 raw_response = getattr(response, "text", "") or ""

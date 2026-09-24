@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..vector_store import VectorStore
 from .batch_extraction import DEFAULT_SEED_ENTITIES, _dedup_entities, process_chunk, store_extraction_result
+from .cloud_scrub import CloudScrubError, scrub_for_cloud, scrub_llm_output
 from .enrichment import VALID_INTENTS, build_external_prompt
 from .sanitize import Sanitizer
 from .sentiment import analyze_sentiment
@@ -254,6 +255,7 @@ def _parse_faceted_enrichment(text: Optional[str]) -> Optional[Dict[str, Any]]:
 
         if not payload:
             return None
+        payload = scrub_llm_output(payload)
 
         topics = payload.get("topics", [])
         if not isinstance(topics, list):
@@ -320,6 +322,15 @@ def _default_faceted_enrich(
         sanitizer,
         prompt_template=FACETED_DIGEST_PROMPT,
     )
+    try:
+        prompt = scrub_for_cloud(prompt)
+    except CloudScrubError as exc:
+        return {
+            "status": "failed",
+            "reason": str(exc),
+            "provider": "gemini",
+            "model": DEFAULT_FACETED_MODEL,
+        }
 
     client = genai.Client(api_key=api_key)
     last_error: Exception | None = None

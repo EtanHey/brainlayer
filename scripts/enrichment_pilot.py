@@ -1,5 +1,17 @@
 """Enrichment pilot: 100 diverse chunks through Gemini 2.5 Flash with faceted tag prompt."""
 
+import sys as _gate_sys
+
+# GATED OFF (scrub-before-cloud, 2026-09-25). This legacy script sends chunk text to
+# Gemini without the secret scrub (brainlayer.pipeline.cloud_scrub) or the PII Sanitizer. A 2026-09-25
+# scan found cloud-LLM enrichment copying secret-shaped tokens into persisted fields.
+# Route cloud enrichment through brainlayer.enrichment_controller / cloud_backfill,
+# which scrub every send and every persisted output.
+_gate_sys.exit(
+    "GATED OFF: scripts/enrichment_pilot.py sends chunk text to a cloud LLM without the secret scrub. "
+    "Use brainlayer.enrichment_controller or brainlayer.cloud_backfill instead."
+)
+
 import json
 import os
 import sys

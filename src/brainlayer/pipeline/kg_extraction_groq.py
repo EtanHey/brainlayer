@@ -12,6 +12,7 @@ import re
 import time
 from typing import Any, Optional
 
+from .cloud_scrub import scrub_for_cloud, scrub_llm_output
 from .entity_extraction import normalize_entity_type
 from .groq import DEFAULT_GROQ_MODEL, GroqModelUnavailableError, raise_for_groq_response
 
@@ -89,6 +90,7 @@ def parse_multi_chunk_response(response: str) -> list[dict[str, Any]]:
     parsed = _extract_json(response)
     if not parsed:
         return []
+    parsed = scrub_llm_output(parsed)
 
     results = []
     for chunk_data in parsed.get("chunks", []):
@@ -178,6 +180,7 @@ def call_groq_ner(prompt: str, timeout: int = 60, max_retries: int = 5) -> Optio
         "https://api.groq.com/openai/v1/chat/completions",
     )
     model = os.environ.get("BRAINLAYER_GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    prompt = scrub_for_cloud(prompt)
 
     for attempt in range(max_retries):
         try:

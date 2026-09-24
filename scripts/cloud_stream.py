@@ -22,6 +22,18 @@ Usage:
     python3 scripts/cloud_stream.py  # Always resumes automatically
 """
 
+import sys as _gate_sys
+
+# GATED OFF (scrub-before-cloud, 2026-09-25). This legacy script sends chunk text to
+# Gemini without the secret scrub (brainlayer.pipeline.cloud_scrub); it streams pre-exported prompts as-is. A 2026-09-25
+# scan found cloud-LLM enrichment copying secret-shaped tokens into persisted fields.
+# Route cloud enrichment through brainlayer.enrichment_controller / cloud_backfill,
+# which scrub every send and every persisted output.
+_gate_sys.exit(
+    "GATED OFF: scripts/cloud_stream.py sends chunk text to a cloud LLM without the secret scrub. "
+    "Use brainlayer.enrichment_controller or brainlayer.cloud_backfill instead."
+)
+
 import argparse
 import asyncio
 import json
