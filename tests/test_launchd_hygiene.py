@@ -97,8 +97,12 @@ def test_active_daemon_launchd_hygiene_matrix():
             "KeepAlive": True,
             "ThrottleInterval": 10,
         },
+        # Standard, not Background or Adaptive (Etan, 2026-09-24): Background pins the embedder at
+        # scheduler priority 4 (~5.6 vectors/min), and Adaptive only leaves Background on XPC activity,
+        # which this daemon never has. Nice 10 still yields to foreground work.
         "scripts/launchd/com.brainlayer.hotlane-brainbar.plist": {
-            "ProcessType": "Background",
+            "ProcessType": "Standard",
+            "Nice": 10,
             "ExitTimeOut": 30,
             "LowPriorityIO": True,
             "KeepAlive": True,

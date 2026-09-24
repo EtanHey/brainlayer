@@ -64,7 +64,7 @@
 	<key>Nice</key>
 	<integer>10</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>ExitTimeOut</key>
 	<integer>30</integer>
 	<key>LowPriorityIO</key>
