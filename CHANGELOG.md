@@ -38,6 +38,24 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.39] - 2026-09-24
+
+- #940: BrainBar's Jobs panel shows each job's real status, last run and next run, with a one-line cause on every "Needs attention" badge; a launchd counter reset reads "Awaiting next run".
+- #941: BrainBar reports FTS5 and Trigram coverage against the indexes search actually routes to, and shows vector drain as "Not measured" instead of an estimate borrowed from enrichment.
+- #943: When observability is stale, BrainBar keeps the last measured counts, labelled with their measurement time, and shows paused enrichment as "Enrichment paused · N queued".
+- #944: Remove BrainBar's Search, Quick Capture and Knowledge Graph UI; MCP search and store are unchanged.
+- #945: The Hotlane toggle in BrainBar Settings now actually enables and disables the `com.brainlayer.hotlane-brainbar` job.
+- #946: Document which launchd job the Hotlane toggle controls.
+- #947: Hotlane keeps its backlog cursor when a write hits a busy or locked database, and its schedule allows a 16-vector batch every 7 seconds.
+- #948: Database backups ask macOS to purge purgeable space before the snapshot when raw free space is short, and refuse before writing if it still is not enough.
+- #949: Remove the code left unused by the retired BrainBar Search, Quick Capture and Knowledge Graph UI.
+- #950: The unit test suite can no longer reach the production BrainBar socket.
+- #951: Database backups record a launchd stop and a lock refusal as themselves, and wait up to 30 seconds for purged space to be released.
+- #952: A `brain_store` made while a backup snapshot is running is queued and saved once the backup finishes (`STORED (deferred)`), instead of failing.
+- #953: Remove personal-data exports from the repository, and add a CI guard against adding them back.
+- #954: A Drive backup upload that finished is no longer recorded as failed when the connection resets afterwards; interrupted uploads ask Drive for its offset before re-sending.
+- #957: The embedding hotlane runs at Standard priority (Nice 10) instead of Background, which held embedding at scheduler priority 4; the hotlane plist is re-rendered only by `install.sh hotlane-brainbar`, not by a formula upgrade.
+
 ## [1.5.38] - 2026-09-23
 
 - #939: Make the database backup's free-space check measure macOS available capacity with a protected raw floor, and give transcript backups a 2-hour limit.
