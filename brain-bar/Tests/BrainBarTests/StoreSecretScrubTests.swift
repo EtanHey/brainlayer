@@ -172,7 +172,9 @@ final class StoreSecretScrubTests: XCTestCase {
 
         let row = try XCTUnwrap(try rows("SELECT content FROM chunks WHERE id = '\(stored.chunkID)'").first)
         XCTAssertNil(Data(row[0].utf8).range(of: Data(openai.utf8)), "raw token bytes reached the row")
-        XCTAssertTrue(row[0].contains("[REDACTED:openai]"), row[0])
+        // Bytes, not String.contains: "]" + U+0301 is one grapheme, so the marker
+        // would not "contain" as a String even though it is there.
+        XCTAssertNotNil(Data(row[0].utf8).range(of: Data("[REDACTED:openai]".utf8)), row[0])
     }
 
     // #962 review N1: digest extracted entity spans from the raw content, so after
