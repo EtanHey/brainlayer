@@ -57,22 +57,65 @@ enum SecretScrubber {
 
     static var providerNames: [String] { providerPatternSources.map(\.0) }
 
+    // ── Python's regex semantics, spelled out (#962 review B1) ──────────────
+    // ICU and Python disagree at Unicode edges, and a disagreement here stores a
+    // raw secret. So nothing below relies on ICU's own \b, \s or case folding;
+    // each is written as the exact set Python uses. The sets were enumerated
+    // over every code point with Python's `re` (see the #962 PR body):
+    // - Python \w is exactly [\p{L}\p{N}_]. ICU's \b also counts marks,
+    //   Join_Control (ZWJ/ZWNJ) and connector punctuation as word characters,
+    //   so a token followed by U+0301 did not end on a boundary.
+    // - Python \s is these 29 code points; ICU's \s lacks U+001C-U+001F.
+    // - Under IGNORECASE, Python's [A-Za-z] also matches U+0130, U+0131,
+    //   U+017F and U+212A, the literal i also matches U+0130/U+0131, k matches
+    //   U+212A and s matches U+017F. ICU case folding differs (it can also match
+    //   "ss" against U+00DF), so the label pattern is case-SENSITIVE with every
+    //   variant listed.
+    private static let pythonWordClass = #"[\p{L}\p{N}_]"#
+    private static let pythonWordBoundary =
+        "(?:(?<=\(pythonWordClass))(?!\(pythonWordClass))|(?<!\(pythonWordClass))(?=\(pythonWordClass)))"
+    private static let pythonWhitespace =
+        #"[\t\n\x{0B}\x{0C}\r\x{1C}-\x{20}\x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]"#
+    private static let foldedLetterExtras = #"\x{130}\x{131}\x{17F}\x{212A}"#
+    private static let labelChar = "[A-Za-z0-9_.\\-\(foldedLetterExtras)]"
+    private static let labelEndChar = "[A-Za-z0-9_\(foldedLetterExtras)]"
+    private static let valueChar = "[A-Za-z0-9_./+=:\\-\(foldedLetterExtras)]"
+
+    /// One keyword, case-insensitive the way Python's re.IGNORECASE is.
+    private static func pythonCaseless(_ word: String) -> String {
+        word.map { letter -> String in
+            switch letter {
+            case "i": return #"[Ii\x{130}\x{131}]"#
+            case "k": return #"[Kk\x{212A}]"#
+            case "s": return #"[Ss\x{17F}]"#
+            default: return "[\(letter.uppercased())\(letter)]"
+            }
+        }.joined()
+    }
+
+    private static func withPythonWordBoundaries(_ pattern: String) -> String {
+        pattern.replacingOccurrences(of: #"\b"#, with: pythonWordBoundary)
+    }
+
     // Constant patterns: a compile failure is a programming error that the golden
     // test catches, so force-try is the honest shape here.
     nonisolated(unsafe) private static let providerPatterns: [(String, NSRegularExpression)] =
-        providerPatternSources.map { ($0.0, try! NSRegularExpression(pattern: $0.1)) }
+        providerPatternSources.map { ($0.0, try! NSRegularExpression(pattern: withPythonWordBoundaries($0.1))) }
 
     // _SECRET_LABEL_RE, post #960: the label is one whole run of label characters
     // that contains a keyword and ends on a word character; an optional quote after
     // it accepts JSON / dict keys.
-    nonisolated(unsafe) private static let labelPattern = try! NSRegularExpression(
-        pattern: #"(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]*?(?:key|token|secret|password|api|auth|access))"#
-            + #"(?<label>[A-Za-z0-9_.-]*[A-Za-z0-9_])(?<labelquote>["']?)\s*[=:]\s*(?<quote>["']?)"#
-            + #"(?<value>[A-Za-z0-9_./+=:-]{24,})\k<quote>"#,
-        options: [.caseInsensitive]
-    )
+    nonisolated(unsafe) private static let labelPattern: NSRegularExpression = {
+        let keywords = ["key", "token", "secret", "password", "api", "auth", "access"]
+            .map(pythonCaseless).joined(separator: "|")
+        let pattern = "(?<!\(labelChar))(?=\(labelChar)*?(?:\(keywords)))"
+            + "(?<label>\(labelChar)*\(labelEndChar))(?<labelquote>[\"']?)"
+            + "\(pythonWhitespace)*[=:]\(pythonWhitespace)*(?<quote>[\"']?)"
+            + "(?<value>\(valueChar){24,})\\k<quote>"
+        return try! NSRegularExpression(pattern: pattern)
+    }()
     nonisolated(unsafe) private static let tokenPattern = try! NSRegularExpression(
-        pattern: #"\b[A-Za-z0-9_./+=:-]{24,}\b"#
+        pattern: withPythonWordBoundaries(#"\b[A-Za-z0-9_./+=:-]{24,}\b"#)
     )
     nonisolated(unsafe) private static let hexFullPattern = try! NSRegularExpression(
         pattern: #"^[0-9a-fA-F]{16,}$"#
