@@ -5101,11 +5101,39 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         if let tags {
-            let tagsJSON = try encodeJSON(tags)
-            let sql = "UPDATE chunks SET tags = ? WHERE id = ?"
+            // brain_update writes tags at rest too, so they are scrubbed like
+            // store's (#962 review N2), and any findings are unioned into
+            // metadata.secret_scrub_redactions in the same statement.
+            var providers = Set<String>()
+            let scrubbedTags = tags.map { tag -> String in
+                let result = SecretScrubber.scrub(tag)
+                providers.formUnion(result.providers)
+                return result.text
+            }
+            let tagsJSON = try encodeJSON(scrubbedTags)
+            let providersJSON = try encodeJSON(providers.sorted())
+            let sql = providers.isEmpty
+                ? "UPDATE chunks SET tags = ? WHERE id = ?"
+                : """
+                    UPDATE chunks SET tags = ?, metadata = json_set(
+                        COALESCE(metadata, '{}'),
+                        '$.secret_scrub_redactions',
+                        (SELECT json_group_array(value) FROM (
+                            SELECT value FROM json_each(COALESCE(json_extract(metadata, '$.secret_scrub_redactions'), '[]'))
+                            UNION
+                            SELECT value FROM json_each(?)
+                            ORDER BY value
+                        ))
+                    ) WHERE id = ?
+                    """
             try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
                 bindText(tagsJSON, to: stmt, index: 1)
-                bindText(id, to: stmt, index: 2)
+                if providers.isEmpty {
+                    bindText(id, to: stmt, index: 2)
+                } else {
+                    bindText(providersJSON, to: stmt, index: 2)
+                    bindText(id, to: stmt, index: 3)
+                }
             }
             rowsChanged += Int(sqlite3_changes(db))
         }
@@ -6340,6 +6368,20 @@ final class BrainDatabase: @unchecked Sendable {
 
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
         guard db != nil else { throw DBError.notOpen }
+        // Scrub first (#962 review N1): entity mentions, URLs and code refs are
+        // all taken from the text that will be stored, so each candidate's
+        // start_utf16 really indexes the stored chunk. store() re-scrubs
+        // (idempotent) and would find nothing left to record, so the findings
+        // ride into its metadata from here.
+        let contentScrub = SecretScrubber.scrub(content)
+        let titleScrub = title.map { SecretScrubber.scrub($0) }
+        let content = contentScrub.text
+        let title = titleScrub?.text
+        let digestScrubMetadata = SecretScrubber.mergeScrubMetadata(
+            [:],
+            providers: Set(contentScrub.providers + (titleScrub?.providers ?? [])),
+            quarantineCount: contentScrub.quarantineCount + (titleScrub?.quarantineCount ?? 0)
+        )
 
         // Rule-based entity extraction
         let mentions = try Self.digestEntityMentions(in: content)
@@ -6388,9 +6430,10 @@ final class BrainDatabase: @unchecked Sendable {
             }
             entities = orderedEntityIDs.compactMap { resolutionsByID[$0]?.canonicalName }
             let digestSummary = "Digest: \(entities.count) entities, \(entityCandidates.count) entity candidates, \(urls.count) URLs, \(codeIds.count) code refs"
-            let candidateMetadata: [String: Any] = entityCandidates.isEmpty
-                ? [:]
-                : ["digest_entity_candidates": entityCandidates]
+            var candidateMetadata = digestScrubMetadata
+            if !entityCandidates.isEmpty {
+                candidateMetadata["digest_entity_candidates"] = entityCandidates
+            }
             let stored = try store(
                 content: titledContent,
                 tags: ["digest"] + entities.prefix(5).map { $0 },

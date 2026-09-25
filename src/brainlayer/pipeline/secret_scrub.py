@@ -337,3 +337,36 @@ def scrub_tags(tags: object) -> tuple[object, dict]:
         else:
             scrubbed.append(tag)
     return scrubbed, ({"secret_scrub_redactions": sorted(providers)} if providers else {})
+
+
+def scrub_nested(value: object) -> tuple[object, dict]:
+    """Scrub every string inside a JSON-like value (dict values, list items).
+
+    Dict keys are left alone: they are field names, not content. Returns the
+    scrubbed value and findings for ``merge_scrub_metadata``, like
+    ``scrub_for_storage``. Used for stored free text that is not the chunk body:
+    a digest title, and metadata carried in on a queued store event.
+    """
+    providers: set[str] = set()
+    quarantine = 0
+
+    def walk(item: object) -> object:
+        nonlocal quarantine
+        if isinstance(item, str):
+            result = scrub_secrets(item)
+            providers.update(redaction.provider for redaction in result.redactions)
+            quarantine += len(result.quarantine)
+            return result.text
+        if isinstance(item, dict):
+            return {key: walk(inner) for key, inner in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [walk(inner) for inner in item]
+        return item
+
+    scrubbed = walk(value)
+    found: dict = {}
+    if providers:
+        found["secret_scrub_redactions"] = sorted(providers)
+    if quarantine:
+        found["secret_scrub_quarantine_count"] = quarantine
+    return scrubbed, found

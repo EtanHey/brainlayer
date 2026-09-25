@@ -39,7 +39,7 @@ from .pause import (
     pause_sentinel_state,
     queue_contains_only_enrichment,
 )
-from .pipeline.secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_tags
+from .pipeline.secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested, scrub_tags
 from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .runtime_store import _without_connection_maintenance_hooks
 from .vector_store import _configure_writer_pragmas
@@ -944,7 +944,11 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
     tags, tag_findings = scrub_tags(event.get("tags"))
-    metadata = merge_scrub_metadata(merge_scrub_metadata(metadata, scrub_metadata), tag_findings)
+    # Metadata carried in on the event is stored free text too (#962 review N4).
+    metadata, metadata_findings = scrub_nested(metadata)
+    # Content findings merge last: the quarantine count describes the chunk body.
+    for found in (metadata_findings, tag_findings, scrub_metadata):
+        metadata = merge_scrub_metadata(metadata, found)
     supersedes = event.get("supersedes") or metadata.get("supersedes")
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     conversation_id = event.get("conversation_id") or metadata.get("conversation_id")

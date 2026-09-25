@@ -1011,7 +1011,9 @@ final class MCPRouter: @unchecked Sendable {
                 return ToolOutput(
                     text: Formatters.formatStoreResult(
                         chunkId: stored.chunkID,
-                        tags: tags,
+                        // Echo what was stored, not what was sent (#962 review N3):
+                        // the receipt lands in the agent transcript.
+                        tags: tags.map { SecretScrubber.scrub($0).text },
                         outcome: stored.outcome,
                         useColor: false
                     ),
