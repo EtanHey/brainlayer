@@ -56,6 +56,7 @@ from ..tag_normalization import (
     taxonomy_git_sha,
 )
 from ..vector_store import VectorStore
+from .cloud_scrub import scrub_for_cloud, scrub_llm_output
 from .entity_extraction import normalize_entity_type
 from .groq import (
     DEFAULT_GROQ_MODEL,
@@ -676,6 +677,9 @@ def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
     if not GROQ_API_KEY:
         print("  Groq error: GROQ_API_KEY not set", file=sys.stderr)
         return None
+    # Outside the try below: a scrub failure raises CloudScrubError instead of
+    # degrading into a silent None, and nothing is sent.
+    prompt = scrub_for_cloud(prompt)
     try:
         # Rate limit: serialize timestamp check/update across threads
         with _groq_rate_lock:
@@ -833,6 +837,11 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
 
         if not match:
             return None
+
+        # The model may echo a secret from its prompt into any field. Scrub the
+        # whole payload before normalizing; a scrub failure lands in the except
+        # below and returns None, so nothing unscrubbed is ever persisted.
+        match = scrub_llm_output(match)
 
         # Validate and normalize
         result: Dict[str, Any] = {}
