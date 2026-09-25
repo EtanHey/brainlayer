@@ -66,8 +66,19 @@ _PROVIDER_PATTERNS = (
     _ProviderPattern("vercel", re.compile(r"\bvc[kpi]_[A-Za-z0-9]{20,}\b")),
 )
 
+_LABEL_KEYWORD = r"(?:key|token|secret|password|api|auth|access)"
+# The label is one whole run of label characters. The lookbehind stops a match
+# from starting mid-run, and the lookahead requires a keyword inside that same
+# run, so no quantifier can backtrack across another's territory and the scan
+# stays linear. The previous form nested two unbounded [A-Za-z0-9_.-]* around
+# the keyword and went roughly cubic on long hyphen-joined text: 4 KB of
+# "key-" took ~20 s, and a 128 KB scan window could stall ingest for hours.
+# The optional quote after the label accepts JSON / dict keys ("api_key": "...").
 _SECRET_LABEL_RE = re.compile(
-    r"(?P<prefix>\b[A-Za-z0-9_.-]*(?:key|token|secret|password|api|auth|access)[A-Za-z0-9_.-]*\b\s*[=:]\s*)"
+    r"(?<![A-Za-z0-9_.-])"
+    rf"(?=[A-Za-z0-9_.-]*?{_LABEL_KEYWORD})"
+    r"(?P<label>[A-Za-z0-9_.-]+)"
+    r"[\"']?\s*[=:]\s*"
     r"(?P<quote>[\"']?)"
     rf"(?P<value>[A-Za-z0-9_./+=:-]{{{MIN_ENTROPY_TOKEN_LENGTH},}})"
     r"(?P=quote)",
@@ -132,8 +143,11 @@ def _provider_redactions(text: str, *, offset: int = 0) -> list[SecretRedaction]
 
 def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset: int = 0) -> list[SecretRedaction]:
     redactions: list[SecretRedaction] = []
-    for match in _SECRET_LABEL_RE.finditer(text):
-        value = match.group("value").rstrip(".,;)")
+    pos = 0
+    while (match := _SECRET_LABEL_RE.search(text, pos)) is not None:
+        pos = match.end()
+        raw_value = match.group("value")
+        value = raw_value.rstrip(".,;)")
         value_start = offset + match.start("value")
         value_end = value_start + len(value)
         if _span_overlaps(value_start, value_end, existing):
@@ -141,6 +155,12 @@ def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset
         if _is_join_key_like(value):
             continue
         if _looks_like_path_or_url(value):
+            # A rejected path must not swallow a label inside it
+            # ("api_key=/tmp/x:token=<secret>"). Resume after its last separator:
+            # a later match there has no separator, so it can't be rejected as a
+            # path again, and each character is rescanned at most once.
+            last_separator = max(raw_value.rfind("/"), raw_value.rfind("\\"))
+            pos = match.start("value") + last_separator + 1
             continue
         if not _is_high_entropy(value):
             continue
