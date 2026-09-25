@@ -7,6 +7,8 @@ The scrubber is deliberately two-mode:
 
 from __future__ import annotations
 
+import bisect
+import itertools
 import math
 import re
 from dataclasses import dataclass, field
@@ -144,6 +146,7 @@ def _provider_redactions(text: str, *, offset: int = 0) -> list[SecretRedaction]
 
 def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset: int = 0) -> list[SecretRedaction]:
     redactions: list[SecretRedaction] = []
+    existing_index = _SpanIndex(existing)
     pos = 0
     while (match := _SECRET_LABEL_RE.search(text, pos)) is not None:
         raw_value = match.group("value")
@@ -160,7 +163,7 @@ def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset
             pos = match.start("value")
         else:
             pos = match.end()
-        if _is_rejected_assignment(value, value_start, value_end, existing):
+        if _is_rejected_assignment(value, value_start, value_end, existing_index):
             if not match.group("label_quote") and _looks_like_path_or_url(value):
                 # Same for a rejected path ("api_key=/tmp/x:token=<secret>"):
                 # resume after its last separator. A later match there has no
@@ -179,9 +182,9 @@ def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset
     return redactions
 
 
-def _is_rejected_assignment(value: str, start: int, end: int, existing: list[SecretRedaction]) -> bool:
+def _is_rejected_assignment(value: str, start: int, end: int, existing: _SpanIndex) -> bool:
     return (
-        _span_overlaps(start, end, existing)
+        existing.overlaps(start, end)
         or _is_join_key_like(value)
         or _looks_like_path_or_url(value)
         or not _is_high_entropy(value)
@@ -192,11 +195,12 @@ def _quarantine_unlabeled_entropy(
     text: str, redactions: list[SecretRedaction], *, offset: int = 0
 ) -> list[QuarantinedToken]:
     quarantined: list[QuarantinedToken] = []
+    redaction_index = _SpanIndex(redactions)
     for match in _TOKEN_RE.finditer(text):
         value = match.group(0).strip(".,;)")
         start = offset + match.start()
         end = start + len(value)
-        if _span_overlaps(start, end, redactions):
+        if redaction_index.overlaps(start, end):
             continue
         if _is_join_key_like(value):
             continue
@@ -207,20 +211,50 @@ def _quarantine_unlabeled_entropy(
     return quarantined
 
 
+# Both de-overlap passes take spans sorted by (start, end) and keep the first of
+# any overlapping group. Every kept span starts at or before the current one, so
+# the current span overlaps some kept span exactly when it starts before the
+# furthest kept end. That holds because no span is empty: every pattern has a
+# minimum length, and a value stripped to nothing fails the entropy check before
+# it becomes a span. This replaces an all-pairs check that was O(k^2) in the
+# number of findings (1 MB of `"api_key":"<V>",` lines took ~16 s).
 def _without_overlaps(redactions: list[SecretRedaction]) -> list[SecretRedaction]:
     kept: list[SecretRedaction] = []
+    furthest_end = -1
     for redaction in redactions:
-        if not _span_overlaps(redaction.start, redaction.end, kept):
+        if redaction.start >= furthest_end:
             kept.append(redaction)
+            furthest_end = max(furthest_end, redaction.end)
     return kept
 
 
 def _without_duplicate_quarantine(quarantine: list[QuarantinedToken]) -> list[QuarantinedToken]:
     kept: list[QuarantinedToken] = []
+    furthest_end = -1
     for token in quarantine:
-        if not any(token.start < kept_token.end and token.end > kept_token.start for kept_token in kept):
+        if token.start >= furthest_end:
             kept.append(token)
+            furthest_end = max(furthest_end, token.end)
     return kept
+
+
+class _SpanIndex:
+    """Answers "does [start, end) overlap any of these spans?" in O(log n).
+
+    Same predicate as the old linear scan, ``start < span.end and end > span.start``:
+    spans are sorted by start, the spans that start before ``end`` form a prefix
+    found by bisection, and one of them overlaps exactly when the largest end in
+    that prefix is past ``start``.
+    """
+
+    def __init__(self, spans: list[SecretRedaction]) -> None:
+        ordered = sorted(spans, key=lambda span: span.start)
+        self._starts = [span.start for span in ordered]
+        self._prefix_max_end = list(itertools.accumulate((span.end for span in ordered), max))
+
+    def overlaps(self, start: int, end: int) -> bool:
+        prefix = bisect.bisect_left(self._starts, end)
+        return prefix > 0 and self._prefix_max_end[prefix - 1] > start
 
 
 def _apply_redactions(text: str, redactions: list[SecretRedaction]) -> str:
@@ -232,10 +266,6 @@ def _apply_redactions(text: str, redactions: list[SecretRedaction]) -> str:
         cursor = redaction.end
     parts.append(text[cursor:])
     return "".join(parts)
-
-
-def _span_overlaps(start: int, end: int, spans: list[SecretRedaction]) -> bool:
-    return any(start < span.end and end > span.start for span in spans)
 
 
 def _is_join_key_like(value: str) -> bool:
