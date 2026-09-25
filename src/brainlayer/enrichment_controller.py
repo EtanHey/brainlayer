@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+from .pipeline.cloud_scrub import CloudScrubError, scrub_for_cloud, scrub_llm_output
 from .pipeline.enrichment import build_external_prompt, parse_enrichment
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
@@ -804,7 +805,7 @@ def _enrichment_update_payload(
     content = chunk.get("content", "")
     provenance_class = _derive_chunk_provenance_class(chunk, content)
     model = str(GEMINI_REALTIME_MODEL or "").strip()
-    stamped = _with_enriched_by(enrichment, model)
+    stamped = _with_enriched_by(scrub_llm_output(enrichment), model)
     # chunk_origin is ingest provenance. Ignore any enrichment-provided origin.
     _ = chunk_origin
     return {
@@ -1446,7 +1447,7 @@ def _retry_with_backoff(
         try:
             return fn()
         except retryable_errors as exc:
-            if isinstance(exc, EnrichmentDailyCapReached) or _is_monthly_spending_cap_error(exc):
+            if isinstance(exc, (EnrichmentDailyCapReached, CloudScrubError)) or _is_monthly_spending_cap_error(exc):
                 raise
             if attempt >= max_retries:
                 raise
@@ -1466,6 +1467,8 @@ def _retry_with_backoff(
 def _generate_content_with_rate_limit(
     client, model: str, prompt: str, config: dict[str, Any], limiter: TokenBucket | None
 ):
+    # Scrub before anything else: a scrub failure must never reach the network.
+    prompt = scrub_for_cloud(prompt)
     _raise_if_enrich_daily_cap_reached()
     if limiter is not None:
         limiter.acquire()
@@ -1488,6 +1491,7 @@ def _apply_enrichment_impl(
     enrichment_backend: str | None = None,
 ) -> None:
     should_promote_raw_entities = False
+    enrichment = scrub_llm_output(enrichment)
     with _savepoint(store.conn, "enrichment_apply_provenance"):
         resolved_queries = enrichment.get("resolved_queries")
         legacy_resolved_query = enrichment.get("resolved_query")

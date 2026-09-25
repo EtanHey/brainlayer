@@ -28,6 +28,7 @@ from threading import Lock
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from brainlayer.eval.abcde_variants import ABCDEVariant
+from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
 from brainlayer.pipeline.enrichment import build_external_prompt
 
 DEFAULT_BASE_URL = "https://api.x.ai/v1"
@@ -462,7 +463,8 @@ def make_http_chat_fn(
 
     def _chat(model: str, prompt: str, params: Mapping[str, Any]) -> tuple[int, dict]:
         payload_model = model_override or model
-        payload = {"model": payload_model, "messages": [{"role": "user", "content": prompt}], **params}
+        content = scrub_for_cloud(prompt)
+        payload = {"model": payload_model, "messages": [{"role": "user", "content": content}], **params}
         for attempt in range(3):
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:

@@ -1181,7 +1181,13 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if not chunk_id:
         logger.warning("Skipping malformed enrichment event without chunk_id")
         return
-    enrichment = event.get("enrichment") or {}
+    from .pipeline.cloud_scrub import scrub_llm_output
+
+    # A queued event may predate the scrub-before-cloud fix, so the drain scrubs
+    # model output itself rather than trusting the producer. A scrub failure
+    # raises and the event is not applied.
+    enrichment = scrub_llm_output(event.get("enrichment") or {})
+    entities = scrub_llm_output(event.get("entities"))
     cols = _columns(conn, "chunks")
     if "content_hash" in cols and event.get("content_hash"):
         row = conn.execute("SELECT content_hash, content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
@@ -1218,8 +1224,8 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
             resolved_query = enrichment["resolved_queries"][0]
         if resolved_query:
             updates["resolved_query"] = resolved_query
-    if "raw_entities_json" in cols and event.get("entities") is not None:
-        updates["raw_entities_json"] = json.dumps(event["entities"])
+    if "raw_entities_json" in cols and entities is not None:
+        updates["raw_entities_json"] = json.dumps(entities)
     if "content_hash" in cols and event.get("content_hash"):
         updates["content_hash"] = event["content_hash"]
     raw_provenance_class = event.get("provenance_class")
@@ -1258,7 +1264,9 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if updates:
         assignments = ", ".join(f"{col} = ?" for col in updates)
         conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-    _run_enrichment_provenance_hooks(conn, event, chunk_id=chunk_id, provenance_class=provenance_class or "")
+    _run_enrichment_provenance_hooks(
+        conn, {**event, "entities": entities}, chunk_id=chunk_id, provenance_class=provenance_class or ""
+    )
 
 
 def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
