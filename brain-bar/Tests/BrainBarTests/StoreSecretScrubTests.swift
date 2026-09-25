@@ -32,9 +32,12 @@ final class StoreSecretScrubTests: XCTestCase {
         "deploy note: supabase \(supabase) and github \(github)"
     }
 
+    // Byte-level: String.contains is grapheme aware, so a token followed by a
+    // combining mark would not "contain" the token (#962 review N6).
     private func assertNoToken(_ blob: String, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertFalse(blob.contains(supabase), "\(what) holds the synthetic supabase token", file: file, line: line)
-        XCTAssertFalse(blob.contains(github), "\(what) holds the synthetic github token", file: file, line: line)
+        let bytes = Data(blob.utf8)
+        XCTAssertNil(bytes.range(of: Data(supabase.utf8)), "\(what) holds the synthetic supabase token", file: file, line: line)
+        XCTAssertNil(bytes.range(of: Data(github.utf8)), "\(what) holds the synthetic github token", file: file, line: line)
     }
 
     private func rows(_ sql: String) throws -> [[String]] {
@@ -157,6 +160,84 @@ final class StoreSecretScrubTests: XCTestCase {
         let row = try XCTUnwrap(try rows("SELECT content, tags, metadata FROM chunks WHERE id = 'brainbar-legacy-raw'").first)
         assertNoToken(row.joined(separator: "|"), "row replayed from a legacy raw line")
         XCTAssertTrue(row[2].contains("secret_scrub_redactions"), row[2])
+    }
+
+    // #962 review B1: ICU's \b treats a combining mark as a word character, so the
+    // provider pattern missed a token followed by U+0301 and the raw token was stored.
+    func testStoreRedactsATokenFollowedByACombiningMark() throws {
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let openai = "sk-" + String(repeating: "0", count: 40)
+        let stored = try db.store(content: "x \(openai)\u{0301} y", tags: [], importance: 5, source: "mcp")
+
+        let row = try XCTUnwrap(try rows("SELECT content FROM chunks WHERE id = '\(stored.chunkID)'").first)
+        XCTAssertNil(Data(row[0].utf8).range(of: Data(openai.utf8)), "raw token bytes reached the row")
+        XCTAssertTrue(row[0].contains("[REDACTED:openai]"), row[0])
+    }
+
+    // #962 review N1: digest extracted entity spans from the raw content, so after
+    // the scrub shortened the stored text the start_utf16 offsets pointed past it.
+    func testDigestEntityOffsetsIndexTheStoredScrubbedText() throws {
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let openai = "sk-" + String(repeating: "0", count: 40)
+
+        let result = try db.digest(
+            content: "key \(openai) then Alice Wonderland arrived",
+            title: "notes \(github)"
+        )
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let row = try XCTUnwrap(try rows("SELECT content, metadata FROM chunks WHERE id = '\(chunkID)'").first)
+        assertNoToken(row[0], "digest row")
+        XCTAssertNil(Data(row[0].utf8).range(of: Data(openai.utf8)), "digest row holds the openai token")
+        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(row[1].utf8)) as? [String: Any])
+        XCTAssertEqual(metadata["secret_scrub_redactions"] as? [String], ["github", "openai"])
+        let candidates = try XCTUnwrap(metadata["digest_entity_candidates"] as? [[String: Any]])
+        XCTAssertFalse(candidates.isEmpty)
+        let stored = row[0] as NSString
+        for candidate in candidates {
+            let start = try XCTUnwrap(candidate["start_utf16"] as? Int)
+            let length = try XCTUnwrap(candidate["length_utf16"] as? Int)
+            XCTAssertLessThanOrEqual(start + length, stored.length, "candidate span runs past the stored text")
+            XCTAssertEqual(stored.substring(with: NSRange(location: start, length: length)), candidate["surface"] as? String)
+        }
+    }
+
+    // #962 review N2: brain_update wrote tags raw.
+    func testUpdateChunkScrubsTags() throws {
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let stored = try db.store(content: "an ordinary note", tags: ["a"], importance: 5, source: "mcp")
+
+        try db.updateChunk(id: stored.chunkID, tags: ["deploy", github])
+
+        let row = try XCTUnwrap(try rows("SELECT tags, metadata FROM chunks WHERE id = '\(stored.chunkID)'").first)
+        assertNoToken(row.joined(separator: "|"), "updated row")
+        XCTAssertTrue(row[0].contains("[REDACTED:github]"), row[0])
+        XCTAssertTrue(row[1].contains("secret_scrub_redactions"), row[1])
+        assertNoToken(try rows("SELECT * FROM chunks_fts").flatMap { $0 }.joined(separator: "|"), "chunks_fts after update")
+    }
+
+    // #962 review N3: the store receipt echoed the raw tags back into the transcript.
+    func testStoreReceiptEchoesScrubbedTags() throws {
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(db)
+        let response = router.handle(
+            [
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": ["name": "brain_store", "arguments": ["content": "note", "tags": ["deploy", github]]],
+            ],
+            session: router.makePaletteSession()
+        )
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = content.compactMap { $0["text"] as? String }.joined()
+        assertNoToken(text, "store receipt")
+        XCTAssertTrue(text.contains("[REDACTED:github]"), text)
     }
 
     func testRouterStoreKeepsReceiptContractAndDedupsOnScrubbedText() throws {

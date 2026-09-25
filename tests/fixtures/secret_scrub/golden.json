@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared golden fixture for the secret scrubber. Asserted by tests/test_secret_scrub_golden.py (Python) and brain-bar/Tests/BrainBarTests/SecretScrubberGoldenTests.swift (Swift) so the two implementations cannot drift. Every token here is synthetic: zeros or an alphabet walk. Any run of 16+ identical characters is written {{c*N}} and expanded by both harnesses before use, so no token-shaped literal is committed (GitHub push protection rightly blocks even all-zero ones). Regenerate only together with a deliberate rule change in BOTH implementations.",
+  "_comment": "Shared golden fixture for the secret scrubber. Asserted by tests/test_secret_scrub_golden.py (Python) and brain-bar/Tests/BrainBarTests/SecretScrubberGoldenTests.swift (Swift) so the two implementations cannot drift. Every token here is synthetic: zeros or an alphabet walk. Any run of 16+ identical characters is written {{c*N}} and expanded by both harnesses before use, so no token-shaped literal is committed (GitHub push protection rightly blocks even all-zero ones). The file is ASCII-escaped so invisible characters (ZWJ, U+001C, combining marks) stay visible in review. Regenerate only together with a deliberate rule change in BOTH implementations.",
   "cases": [
     {
       "name": "anthropic",
@@ -284,8 +284,8 @@
     },
     {
       "name": "hebrew-neighbours",
-      "input": "המפתח sbp_{{0*40}} נשמר",
-      "expected_text": "המפתח [REDACTED:supabase] נשמר",
+      "input": "\u05d4\u05de\u05e4\u05ea\u05d7 sbp_{{0*40}} \u05e0\u05e9\u05de\u05e8",
+      "expected_text": "\u05d4\u05de\u05e4\u05ea\u05d7 [REDACTED:supabase] \u05e0\u05e9\u05de\u05e8",
       "expected_providers": [
         "supabase"
       ],
@@ -293,8 +293,8 @@
     },
     {
       "name": "emoji-neighbours",
-      "input": "🔑 ghp_{{0*36}} ✅",
-      "expected_text": "🔑 [REDACTED:github] ✅",
+      "input": "\ud83d\udd11 ghp_{{0*36}} \u2705",
+      "expected_text": "\ud83d\udd11 [REDACTED:github] \u2705",
       "expected_providers": [
         "github"
       ],
@@ -379,6 +379,206 @@
       "name": "label-ending-dash",
       "input": "x-api-key-=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
       "expected_text": "x-api-key-=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    },
+    {
+      "name": "combining-mark-after-provider",
+      "input": "x sk-{{0*40}}\u0301 y",
+      "expected_text": "x [REDACTED:openai]\u0301 y",
+      "expected_providers": [
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "combining-mark-after-anthropic",
+      "input": "k sk-ant-api03-{{0*40}}\u0301 z",
+      "expected_text": "k [REDACTED:anthropic]\u0301 z",
+      "expected_providers": [
+        "anthropic"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "zwj-after-provider",
+      "input": "sk-{{0*40}}\u200d end",
+      "expected_text": "[REDACTED:openai]\u200d end",
+      "expected_providers": [
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "zwnj-after-github",
+      "input": "ghp_{{0*36}}\u200c end",
+      "expected_text": "[REDACTED:github]\u200c end",
+      "expected_providers": [
+        "github"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "connector-punct-after-provider",
+      "input": "AIza{{0*35}}\u203f tail",
+      "expected_text": "[REDACTED:google]\u203f tail",
+      "expected_providers": [
+        "google"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "x1c-separator",
+      "input": "api_key=\u001caB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=\u001c[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "x1f-separator",
+      "input": "token:\u001faB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "token:\u001f[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "nel-separator",
+      "input": "api_key:\u0085aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key:\u0085[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "vertical-tab-separator",
+      "input": "api_key=\u000baB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=\u000b[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "nbsp-separator",
+      "input": "api_key =\u00a0aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key =\u00a0[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "ideographic-space-separator",
+      "input": "api_key =\u3000aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key =\u3000[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "dotless-i-in-value",
+      "input": "api_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC\u0131\u0131",
+      "expected_text": "api_key=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "dotted-capital-i-in-keyword",
+      "input": "AP\u0130_KEY=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "AP\u0130_KEY=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "dotless-i-in-keyword",
+      "input": "ap\u0131_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "ap\u0131_key=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "kelvin-sign-in-keyword",
+      "input": "\u212aey=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "\u212aey=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "long-s-in-keyword",
+      "input": "\u017fecret=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "\u017fecret=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "sharp-s-is-not-ss",
+      "input": "acce\u00df_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "acce\u00df_key=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "arabic-indic-digit-before-provider",
+      "input": "\u0663sk-{{0*40}}",
+      "expected_text": "\u0663sk-{{0*40}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "superscript-two-before-provider",
+      "input": "\u00b2sk-{{0*40}}",
+      "expected_text": "\u00b2sk-{{0*40}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "cyrillic-around-assignment",
+      "input": "\u043a\u043b\u044e\u0447 api_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC \u043a\u043e\u043d\u0435\u0446",
+      "expected_text": "\u043a\u043b\u044e\u0447 api_key=[REDACTED:assignment] \u043a\u043e\u043d\u0435\u0446",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "astral-emoji-around",
+      "input": "\ud83d\ude00 api_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC \ud83d\ude00 sk-{{0*40}}",
+      "expected_text": "\ud83d\ude00 api_key=[REDACTED:assignment] \ud83d\ude00 [REDACTED:openai]",
+      "expected_providers": [
+        "assignment",
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "unicode-letter-inside-value",
+      "input": "api_key=aB3dE5gH7jK9mN1p\u00e9Q2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=aB3dE5gH7jK9mN1p\u00e9Q2rS4tU6vW8xY0zC",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "fullwidth-equals-is-not-a-separator",
+      "input": "api_key\uff1daB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key\uff1daB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
       "expected_providers": [],
       "expected_quarantine_count": 1
     }

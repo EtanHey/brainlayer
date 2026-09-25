@@ -74,7 +74,13 @@ final class SecretScrubberGoldenTests: XCTestCase {
         XCTAssertGreaterThan(cases.count, 30)
         for golden in cases {
             let result = SecretScrubber.scrub(golden.input)
-            XCTAssertEqual(result.text, golden.expectedText, "text differs for \(golden.name)")
+            // Compare scalars, not Strings: Swift String equality is canonical-
+            // equivalence and grapheme aware, which can hide a combining mark.
+            XCTAssertEqual(
+                Array(result.text.unicodeScalars),
+                Array(golden.expectedText.unicodeScalars),
+                "text differs for \(golden.name)"
+            )
             XCTAssertEqual(result.providers, golden.expectedProviders, "providers differ for \(golden.name)")
             XCTAssertEqual(
                 result.quarantineCount,
@@ -93,7 +99,11 @@ final class SecretScrubberGoldenTests: XCTestCase {
     func testRescrubbingIsIdempotent() throws {
         for golden in try goldenCases() {
             let once = SecretScrubber.scrub(golden.input).text
-            XCTAssertEqual(SecretScrubber.scrub(once).text, once, "re-scrub changed \(golden.name)")
+            XCTAssertEqual(
+                Array(SecretScrubber.scrub(once).text.unicodeScalars),
+                Array(once.unicodeScalars),
+                "re-scrub changed \(golden.name)"
+            )
         }
     }
 

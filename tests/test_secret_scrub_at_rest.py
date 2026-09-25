@@ -291,3 +291,54 @@ def test_drain_store_records_providers_found_only_in_tags(store):
     row = _row(store, result.chunk_id)
     _assert_clean(str(row["tags"]), "drain store tags")
     assert json.loads(row["metadata"])["secret_scrub_redactions"] == ["google"]
+
+
+# ── #962 review N4: every stored free-text field ─────────────────────────
+
+
+def test_python_digest_scrubs_the_title(monkeypatch):
+    from brainlayer.pipeline import digest
+
+    captured: dict = {}
+
+    class _Store:
+        def upsert_chunks(self, chunks, embeddings):
+            captured["chunks"] = chunks
+
+        def get_entity(self, entity_id):
+            return None
+
+    monkeypatch.setattr(
+        digest, "process_chunk", lambda chunk, seed_entities=None: types.SimpleNamespace(entities=[], relations=[])
+    )
+    monkeypatch.setattr(digest, "store_extraction_result", lambda result, store: {})
+    try:
+        digest.digest_content(
+            "an ordinary digest body",
+            _Store(),
+            lambda text: [0.0] * 1024,
+            title="deploy notes " + TOKENS["github"],
+            faceted_enrich_fn=lambda **kwargs: {"status": "skipped"},
+        )
+    except Exception:
+        pass
+
+    stored = captured["chunks"][0]
+    _assert_clean(json.dumps(stored, default=str), "digest chunk incl. title metadata")
+    assert stored["metadata"]["secret_scrub_redactions"] == ["github"]
+
+
+def test_drain_store_scrubs_event_metadata_values(store):
+    result = _apply_store(
+        store.conn,
+        {
+            "content": "an ordinary note",
+            "source": "manual",
+            "metadata": {"note": "key is " + TOKENS["supabase"], "nested": {"list": [TOKENS["google"]]}, "count": 3},
+        },
+    )
+
+    metadata = json.loads(_row(store, result.chunk_id)["metadata"])
+    _assert_clean(json.dumps(metadata), "drain store metadata")
+    assert metadata["count"] == 3
+    assert metadata["secret_scrub_redactions"] == ["google", "supabase"]
