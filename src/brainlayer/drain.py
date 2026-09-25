@@ -943,9 +943,9 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         metadata.update(raw_metadata)
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
-    metadata = merge_scrub_metadata(metadata, scrub_metadata)
+    tags, tag_findings = scrub_tags(event.get("tags"))
+    metadata = merge_scrub_metadata(merge_scrub_metadata(metadata, scrub_metadata), tag_findings)
     supersedes = event.get("supersedes") or metadata.get("supersedes")
-    tags = scrub_tags(event.get("tags"))
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     conversation_id = event.get("conversation_id") or metadata.get("conversation_id")
     position = None

@@ -279,3 +279,15 @@ def test_longitudinal_analyzer_has_no_unscrubbed_ollama_call_site():
     direct_calls = source.count("ollama.generate(")
 
     assert direct_calls == 1, "every ollama.generate call must go through _ollama_generate"
+
+
+def test_drain_store_records_providers_found_only_in_tags(store):
+    """Same meaning as BrainBar's store path: providers redacted anywhere in the chunk."""
+    result = _apply_store(
+        store.conn,
+        {"content": "an ordinary note", "tags": ["deploy", TOKENS["google"]], "source": "manual"},
+    )
+
+    row = _row(store, result.chunk_id)
+    _assert_clean(str(row["tags"]), "drain store tags")
+    assert json.loads(row["metadata"])["secret_scrub_redactions"] == ["google"]

@@ -318,8 +318,22 @@ def merge_scrub_metadata(metadata: dict | None, found: dict) -> dict:
     return merged
 
 
-def scrub_tags(tags: object) -> object:
-    """Scrub each string tag; any other shape passes through unchanged."""
-    if isinstance(tags, (list, tuple)):
-        return [scrub_secrets(tag).text if isinstance(tag, str) else tag for tag in tags]
-    return tags
+def scrub_tags(tags: object) -> tuple[object, dict]:
+    """Scrub each string tag and report what was found, like ``scrub_for_storage``.
+
+    Returns the tags (any non-list shape passes through unchanged) and the
+    findings to fold into the chunk metadata with ``merge_scrub_metadata``.
+    BrainBar's store path records tag findings the same way.
+    """
+    if not isinstance(tags, (list, tuple)):
+        return tags, {}
+    providers: set[str] = set()
+    scrubbed: list = []
+    for tag in tags:
+        if isinstance(tag, str):
+            result = scrub_secrets(tag)
+            providers.update(redaction.provider for redaction in result.redactions)
+            scrubbed.append(result.text)
+        else:
+            scrubbed.append(tag)
+    return scrubbed, ({"secret_scrub_redactions": sorted(providers)} if providers else {})
