@@ -287,3 +287,39 @@ def _shannon_entropy(value: str) -> float:
     counts = {character: value.count(character) for character in set(value)}
     length = len(value)
     return -sum((count / length) * math.log2(count / length) for count in counts.values())
+
+
+def scrub_for_storage(text: str, metadata: dict | None = None) -> tuple[str, dict]:
+    """Scrub ``text`` before it is persisted and record what was found.
+
+    Returns the scrubbed text and a copy of ``metadata`` carrying the same keys
+    the watcher writes: ``secret_scrub_redactions`` (sorted provider names,
+    merged with any already present) and ``secret_scrub_quarantine_count``.
+    Every ingest path that stores raw text goes through this, so the stored
+    row, its FTS copy and its content hash are all computed from scrubbed text.
+    """
+    result = scrub_secrets(text)
+    found: dict = {}
+    if result.redactions:
+        found["secret_scrub_redactions"] = sorted({redaction.provider for redaction in result.redactions})
+    if result.quarantine:
+        found["secret_scrub_quarantine_count"] = len(result.quarantine)
+    return result.text, merge_scrub_metadata(metadata, found)
+
+
+def merge_scrub_metadata(metadata: dict | None, found: dict) -> dict:
+    """Copy ``metadata`` and fold in scrub findings, unioning provider names."""
+    merged = dict(metadata or {})
+    providers = found.get("secret_scrub_redactions")
+    if providers:
+        merged["secret_scrub_redactions"] = sorted(set(merged.get("secret_scrub_redactions") or []) | set(providers))
+    if "secret_scrub_quarantine_count" in found:
+        merged["secret_scrub_quarantine_count"] = found["secret_scrub_quarantine_count"]
+    return merged
+
+
+def scrub_tags(tags: object) -> object:
+    """Scrub each string tag; any other shape passes through unchanged."""
+    if isinstance(tags, (list, tuple)):
+        return [scrub_secrets(tag).text if isinstance(tag, str) else tag for tag in tags]
+    return tags
