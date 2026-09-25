@@ -147,3 +147,24 @@ def test_path_restart_stays_linear_on_64kb_adversarial_input(unit):
     elapsed = _time_scrub_in_child(text)
 
     assert elapsed < TIME_BOUND_SECONDS, f"{unit!r}: {ADVERSARIAL_BYTES} bytes took {elapsed:.2f}s"
+
+
+ANTHROPIC_SHAPE = "sk-ant-api03-" + "0" * 40
+LOW_ENTROPY_FILL = "a" * 30
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"cache_key": "' + LOW_ENTROPY_FILL + ":token=" + VALUE + '"}',
+        '"api_key": "' + ANTHROPIC_SHAPE + ":token=" + VALUE + '"',
+        'x.monkey"=' + LOW_ENTROPY_FILL + ":token=" + VALUE,
+        "cfg_key.=" + LOW_ENTROPY_FILL + ":token=" + VALUE,
+    ],
+)
+def test_a_rejected_new_style_label_does_not_swallow_a_later_label(text):
+    """#960 review: a quoted label, or one ending in '.'/'-', must not hide `token=<secret>` when rejected."""
+    result = scrub_secrets(text)
+
+    assert VALUE not in result.text
+    assert "assignment" in [redaction.provider for redaction in result.redactions]
