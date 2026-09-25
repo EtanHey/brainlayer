@@ -67,8 +67,20 @@ _PROVIDER_PATTERNS = (
     _ProviderPattern("vercel", re.compile(r"\bvc[kpi]_[A-Za-z0-9]{20,}\b")),
 )
 
+_LABEL_KEYWORD = r"(?:key|token|secret|password|api|auth|access)"
+# The label is one whole run of label characters. The lookbehind stops a match
+# from starting mid-run, and the lookahead requires a keyword inside that same
+# run, so no quantifier can backtrack across another's territory and the scan
+# stays linear. The previous form nested two unbounded [A-Za-z0-9_.-]* around
+# the keyword and went roughly cubic on long hyphen-joined text: 4 KB of
+# "key-" took ~20 s, and a 128 KB scan window could stall ingest for hours.
+# The label still ends on a word character, as the old \b required. The
+# optional quote after it accepts JSON / dict keys ("api_key": "...").
 _SECRET_LABEL_RE = re.compile(
-    r"(?P<prefix>\b[A-Za-z0-9_.-]*(?:key|token|secret|password|api|auth|access)[A-Za-z0-9_.-]*\b\s*[=:]\s*)"
+    r"(?<![A-Za-z0-9_.-])"
+    rf"(?=[A-Za-z0-9_.-]*?{_LABEL_KEYWORD})"
+    r"(?P<label>[A-Za-z0-9_.-]*[A-Za-z0-9_])"
+    r"(?P<label_quote>[\"']?)\s*[=:]\s*"
     r"(?P<quote>[\"']?)"
     rf"(?P<value>[A-Za-z0-9_./+=:-]{{{MIN_ENTROPY_TOKEN_LENGTH},}})"
     r"(?P=quote)",
@@ -133,17 +145,28 @@ def _provider_redactions(text: str, *, offset: int = 0) -> list[SecretRedaction]
 
 def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset: int = 0) -> list[SecretRedaction]:
     redactions: list[SecretRedaction] = []
-    for match in _SECRET_LABEL_RE.finditer(text):
-        value = match.group("value").rstrip(".,;)")
+    pos = 0
+    while (match := _SECRET_LABEL_RE.search(text, pos)) is not None:
+        raw_value = match.group("value")
+        value = raw_value.rstrip(".,;)")
         value_start = offset + match.start("value")
         value_end = value_start + len(value)
-        if _span_overlaps(value_start, value_end, existing):
-            continue
-        if _is_join_key_like(value):
-            continue
-        if _looks_like_path_or_url(value):
-            continue
-        if not _is_high_entropy(value):
+        if match.group("label_quote"):
+            # The old rule never matched a quoted label ('"cache_key": "…"'), so
+            # it scanned that value and could start its own match inside it
+            # (':token=<secret>'). Whether this match is kept or rejected, resume
+            # at its value so that match is still found. A value never contains a
+            # quote, so each quoted value is rescanned at most once: still linear.
+            # Overlapping redactions are resolved later by _without_overlaps.
+            pos = match.start("value")
+        else:
+            pos = match.end()
+        if _is_rejected_assignment(value, value_start, value_end, existing):
+            if not match.group("label_quote") and _looks_like_path_or_url(value):
+                # Same for a rejected path ("api_key=/tmp/x:token=<secret>"):
+                # resume after its last separator. A later match there has no
+                # separator, so it can't be path-rejected again.
+                pos = match.start("value") + max(raw_value.rfind("/"), raw_value.rfind("\\")) + 1
             continue
         redactions.append(
             SecretRedaction(
@@ -155,6 +178,15 @@ def _assignment_redactions(text: str, existing: list[SecretRedaction], *, offset
             )
         )
     return redactions
+
+
+def _is_rejected_assignment(value: str, start: int, end: int, existing: list[SecretRedaction]) -> bool:
+    return (
+        _span_overlaps(start, end, existing)
+        or _is_join_key_like(value)
+        or _looks_like_path_or_url(value)
+        or not _is_high_entropy(value)
+    )
 
 
 def _quarantine_unlabeled_entropy(
