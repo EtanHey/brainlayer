@@ -598,6 +598,8 @@ def build_external_prompt(
 
 def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
     """Call local GLM via Ollama HTTP API. Logs usage to Supabase."""
+    # BRAINLAYER_OLLAMA_URL can point at any host, so scrub like a cloud send.
+    prompt = scrub_for_cloud(prompt)
     try:
         start_ms = int(time.time() * 1000)
         resp = requests.post(
@@ -624,6 +626,8 @@ def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
 
 def call_mlx(prompt: str, timeout: int = MLX_DEFAULT_TIMEOUT) -> Optional[str]:
     """Call local MLX server via OpenAI-compatible API. Logs usage to Supabase."""
+    # BRAINLAYER_MLX_URL can point at any host, so scrub like a cloud send.
+    prompt = scrub_for_cloud(prompt)
     try:
         start_ms = int(time.time() * 1000)
         resp = requests.post(

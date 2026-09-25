@@ -50,6 +50,15 @@ class PeriodAnalysis:
         }
 
 
+def _ollama_generate(**kwargs):
+    """The one call into ollama.generate. OLLAMA_HOST can name any host, so the
+    prompt is secret-scrubbed first, like every other LLM send."""
+    from .cloud_scrub import scrub_for_cloud
+
+    kwargs["prompt"] = scrub_for_cloud(kwargs["prompt"])
+    return ollama.generate(**kwargs)
+
+
 def analyze_batch_with_llm(
     batch: TimeBatch,
     language: str = "all",
@@ -169,7 +178,7 @@ List 5-10 phrases they use. Copy them EXACTLY from the messages—character for 
 - Use of punctuation and capitalization
 """
 
-    response = ollama.generate(
+    response = _ollama_generate(
         model=model,
         prompt=prompt,
         options={
@@ -277,7 +286,7 @@ Based on the trajectory, how might their style continue to evolve?
 Be specific and reference the data from each period.
 """
 
-    response = ollama.generate(
+    response = _ollama_generate(
         model=model,
         prompt=prompt,
         options={
@@ -360,7 +369,7 @@ Structure:
 ## 5. EXAMPLE TRANSFORMATIONS (use phrases from the list above)
 """
 
-    response1 = ollama.generate(model=model, prompt=pass1_prompt, options={"num_ctx": 24000, "temperature": 0.15})
+    response1 = _ollama_generate(model=model, prompt=pass1_prompt, options={"num_ctx": 24000, "temperature": 0.15})
     raw_guide = response1["response"]
 
     # Pass 2: Consolidate and validate
@@ -384,7 +393,7 @@ REVISION RULES:
 Output the revised, consolidated guide. No preamble.
 """
 
-    response2 = ollama.generate(model=model, prompt=pass2_prompt, options={"num_ctx": 24000, "temperature": 0.1})
+    response2 = _ollama_generate(model=model, prompt=pass2_prompt, options={"num_ctx": 24000, "temperature": 0.1})
 
     return response2["response"]
 

@@ -1,0 +1,586 @@
+{
+  "_comment": "Shared golden fixture for the secret scrubber. Asserted by tests/test_secret_scrub_golden.py (Python) and brain-bar/Tests/BrainBarTests/SecretScrubberGoldenTests.swift (Swift) so the two implementations cannot drift. Every token here is synthetic: zeros or an alphabet walk. Any run of 16+ identical characters is written {{c*N}} and expanded by both harnesses before use, so no token-shaped literal is committed (GitHub push protection rightly blocks even all-zero ones). The file is ASCII-escaped so invisible characters (ZWJ, U+001C, combining marks) stay visible in review. Regenerate only together with a deliberate rule change in BOTH implementations.",
+  "cases": [
+    {
+      "name": "anthropic",
+      "input": "key sk-ant-api03-{{0*40}} end",
+      "expected_text": "key [REDACTED:anthropic] end",
+      "expected_providers": [
+        "anthropic"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "openai",
+      "input": "use sk-{{0*40}} here",
+      "expected_text": "use [REDACTED:openai] here",
+      "expected_providers": [
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "openai-proj",
+      "input": "use sk-proj-{{0*40}} here",
+      "expected_text": "use [REDACTED:openai] here",
+      "expected_providers": [
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "stripe",
+      "input": "stripe sk_live_{{0*24}} done",
+      "expected_text": "stripe [REDACTED:stripe] done",
+      "expected_providers": [
+        "stripe"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "aws",
+      "input": "aws AKI{{A*17}} done",
+      "expected_text": "aws [REDACTED:aws] done",
+      "expected_providers": [
+        "aws"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "github-ghp",
+      "input": "gh ghp_{{0*36}} done",
+      "expected_text": "gh [REDACTED:github] done",
+      "expected_providers": [
+        "github"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "github-pat",
+      "input": "gh github_pat_{{0*22}}_{{0*59}} done",
+      "expected_text": "gh [REDACTED:github] done",
+      "expected_providers": [
+        "github"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "slack",
+      "input": "slack xoxb-000000000000-0000000000000-{{0*24}} done",
+      "expected_text": "slack [REDACTED:slack] done",
+      "expected_providers": [
+        "slack"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google",
+      "input": "maps AIza{{0*35}} done",
+      "expected_text": "maps [REDACTED:google] done",
+      "expected_providers": [
+        "google"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "gitlab",
+      "input": "gl glpat-{{0*20}} done",
+      "expected_text": "gl [REDACTED:gitlab] done",
+      "expected_providers": [
+        "gitlab"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "supabase-sbp",
+      "input": "supa sbp_{{0*40}} done",
+      "expected_text": "supa [REDACTED:supabase] done",
+      "expected_providers": [
+        "supabase"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "supabase-secret",
+      "input": "supa sb_secret_{{0*30}} done",
+      "expected_text": "supa [REDACTED:supabase] done",
+      "expected_providers": [
+        "supabase"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "sendgrid",
+      "input": "sg SG.{{0*22}}.{{0*43}} done",
+      "expected_text": "sg [REDACTED:sendgrid] done",
+      "expected_providers": [
+        "sendgrid"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "groq",
+      "input": "groq gsk_{{0*52}} done",
+      "expected_text": "groq [REDACTED:groq] done",
+      "expected_providers": [
+        "groq"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "tailscale",
+      "input": "ts tskey-auth-k000000CNTRL-{{0*32}} done",
+      "expected_text": "ts [REDACTED:tailscale] done",
+      "expected_providers": [
+        "tailscale"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "vercel",
+      "input": "vc vck_{{0*40}} done",
+      "expected_text": "vc [REDACTED:vercel] done",
+      "expected_providers": [
+        "vercel"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "multi-provider",
+      "input": "a sbp_{{0*40}} b ghp_{{0*36}} c AIza{{0*35}}",
+      "expected_text": "a [REDACTED:supabase] b [REDACTED:github] c [REDACTED:google]",
+      "expected_providers": [
+        "supabase",
+        "github",
+        "google"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-unquoted",
+      "input": "api_key = aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key = [REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-env",
+      "input": "export GITHUB_TOKEN='aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC'",
+      "expected_text": "export GITHUB_TOKEN='[REDACTED:assignment]'",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-json",
+      "input": "{\"api_key\": \"aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC\"}",
+      "expected_text": "{\"api_key\": \"[REDACTED:assignment]\"}",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-json-nested",
+      "input": "cfg = {\"auth\": {\"token\": \"aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC\"}}",
+      "expected_text": "cfg = {\"auth\": {\"token\": \"[REDACTED:assignment]\"}}",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-dict-single",
+      "input": "{'client_secret': 'aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC'}",
+      "expected_text": "{'client_secret': '[REDACTED:assignment]'}",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-trailing-dot",
+      "input": "db.password: aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC.",
+      "expected_text": "db.password: [REDACTED:assignment].",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-path-restart",
+      "input": "api_key=/path/to/x:secret_token=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=/path/to/x:secret_token=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-hex-joinkey",
+      "input": "access_token = 0123456789abcdef0123456789abcdef",
+      "expected_text": "access_token = 0123456789abcdef0123456789abcdef",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-uuid-joinkey",
+      "input": "session_token = 123e4567-e89b-12d3-a456-426614174000",
+      "expected_text": "session_token = 123e4567-e89b-12d3-a456-426614174000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-path",
+      "input": "api_path = /Users/someone/project/file-with-a-long-name.txt",
+      "expected_text": "api_path = /Users/someone/project/file-with-a-long-name.txt",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-low-entropy",
+      "input": "api_key = {{a*30}}",
+      "expected_text": "api_key = {{a*30}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "assignment-short",
+      "input": "{\"api_key\": \"short\"}",
+      "expected_text": "{\"api_key\": \"short\"}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "quarantine-unlabeled",
+      "input": "Observed opaque id mF9qP2xL7vR8sK4nT6yB3cD5eG7hJ9kL2mN4pQ6r in the path",
+      "expected_text": "Observed opaque id mF9qP2xL7vR8sK4nT6yB3cD5eG7hJ9kL2mN4pQ6r in the path",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    },
+    {
+      "name": "prose-prefixes",
+      "input": "the tskey-auth-keys-are-rotated-weekly runbook; gsk_ and vck_ are prefixes",
+      "expected_text": "the tskey-auth-keys-are-rotated-weekly runbook; gsk_ and vck_ are prefixes",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "benign-code",
+      "input": "def key_for(x):\n    return token_count + api.version",
+      "expected_text": "def key_for(x):\n    return token_count + api.version",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "benign-sha-uuid",
+      "input": "commit 1f1064f9f48c3fb9a44eca8f8fa0e3b5555b9f1c and 123e4567-e89b-12d3-a456-426614174000",
+      "expected_text": "commit 1f1064f9f48c3fb9a44eca8f8fa0e3b5555b9f1c and 123e4567-e89b-12d3-a456-426614174000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "hebrew-neighbours",
+      "input": "\u05d4\u05de\u05e4\u05ea\u05d7 sbp_{{0*40}} \u05e0\u05e9\u05de\u05e8",
+      "expected_text": "\u05d4\u05de\u05e4\u05ea\u05d7 [REDACTED:supabase] \u05e0\u05e9\u05de\u05e8",
+      "expected_providers": [
+        "supabase"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "emoji-neighbours",
+      "input": "\ud83d\udd11 ghp_{{0*36}} \u2705",
+      "expected_text": "\ud83d\udd11 [REDACTED:github] \u2705",
+      "expected_providers": [
+        "github"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "already-redacted",
+      "input": "value [REDACTED:supabase] and api_key = [REDACTED:assignment]",
+      "expected_text": "value [REDACTED:supabase] and api_key = [REDACTED:assignment]",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "underscore-edge",
+      "input": "prefix_gsk_{{0*52}} stays",
+      "expected_text": "prefix_gsk_{{0*52}} stays",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "adversarial-short",
+      "input": "key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-",
+      "expected_text": "key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-key-",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "expected_text": "",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "quoted-rejected-swallow-cache",
+      "input": "{\"cache_key\": \"{{a*30}}:token=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC\"}",
+      "expected_text": "{\"cache_key\": \"{{a*30}}:token=[REDACTED:assignment]\"}",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "quoted-rejected-swallow-provider",
+      "input": "\"api_key\": \"sk-ant-api03-{{0*40}}:token=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC\"",
+      "expected_text": "\"api_key\": \"[REDACTED:anthropic]:[REDACTED:assignment]\"",
+      "expected_providers": [
+        "anthropic",
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "quoted-label-dotted-swallow",
+      "input": "x.monkey\"={{a*30}}:token=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "x.monkey\"={{a*30}}:token=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "label-ending-dot-swallow",
+      "input": "cfg_key.={{a*30}}:token=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "cfg_key.={{a*30}}:token=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "quoted-accepted-then-old-match",
+      "input": "'client_secret': ': : x.monkey\"=passwordaB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC:'aB3dE5gH7jx-api-key-=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zCauth'{{a*30}}: /",
+      "expected_text": "'client_secret': ': : x.monkey\"=[REDACTED:assignment]'[REDACTED:assignment]'{{a*30}}: /",
+      "expected_providers": [
+        "assignment",
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "label-ending-dash",
+      "input": "x-api-key-=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "x-api-key-=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    },
+    {
+      "name": "combining-mark-after-provider",
+      "input": "x sk-{{0*40}}\u0301 y",
+      "expected_text": "x [REDACTED:openai]\u0301 y",
+      "expected_providers": [
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "combining-mark-after-anthropic",
+      "input": "k sk-ant-api03-{{0*40}}\u0301 z",
+      "expected_text": "k [REDACTED:anthropic]\u0301 z",
+      "expected_providers": [
+        "anthropic"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "zwj-after-provider",
+      "input": "sk-{{0*40}}\u200d end",
+      "expected_text": "[REDACTED:openai]\u200d end",
+      "expected_providers": [
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "zwnj-after-github",
+      "input": "ghp_{{0*36}}\u200c end",
+      "expected_text": "[REDACTED:github]\u200c end",
+      "expected_providers": [
+        "github"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "connector-punct-after-provider",
+      "input": "AIza{{0*35}}\u203f tail",
+      "expected_text": "[REDACTED:google]\u203f tail",
+      "expected_providers": [
+        "google"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "x1c-separator",
+      "input": "api_key=\u001caB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=\u001c[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "x1f-separator",
+      "input": "token:\u001faB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "token:\u001f[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "nel-separator",
+      "input": "api_key:\u0085aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key:\u0085[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "vertical-tab-separator",
+      "input": "api_key=\u000baB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=\u000b[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "nbsp-separator",
+      "input": "api_key =\u00a0aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key =\u00a0[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "ideographic-space-separator",
+      "input": "api_key =\u3000aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key =\u3000[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "dotless-i-in-value",
+      "input": "api_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC\u0131\u0131",
+      "expected_text": "api_key=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "dotted-capital-i-in-keyword",
+      "input": "AP\u0130_KEY=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "AP\u0130_KEY=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "dotless-i-in-keyword",
+      "input": "ap\u0131_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "ap\u0131_key=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "kelvin-sign-in-keyword",
+      "input": "\u212aey=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "\u212aey=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "long-s-in-keyword",
+      "input": "\u017fecret=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "\u017fecret=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "sharp-s-is-not-ss",
+      "input": "acce\u00df_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "acce\u00df_key=[REDACTED:assignment]",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "arabic-indic-digit-before-provider",
+      "input": "\u0663sk-{{0*40}}",
+      "expected_text": "\u0663sk-{{0*40}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "superscript-two-before-provider",
+      "input": "\u00b2sk-{{0*40}}",
+      "expected_text": "\u00b2sk-{{0*40}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "cyrillic-around-assignment",
+      "input": "\u043a\u043b\u044e\u0447 api_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC \u043a\u043e\u043d\u0435\u0446",
+      "expected_text": "\u043a\u043b\u044e\u0447 api_key=[REDACTED:assignment] \u043a\u043e\u043d\u0435\u0446",
+      "expected_providers": [
+        "assignment"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "astral-emoji-around",
+      "input": "\ud83d\ude00 api_key=aB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC \ud83d\ude00 sk-{{0*40}}",
+      "expected_text": "\ud83d\ude00 api_key=[REDACTED:assignment] \ud83d\ude00 [REDACTED:openai]",
+      "expected_providers": [
+        "assignment",
+        "openai"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "unicode-letter-inside-value",
+      "input": "api_key=aB3dE5gH7jK9mN1p\u00e9Q2rS4tU6vW8xY0zC",
+      "expected_text": "api_key=aB3dE5gH7jK9mN1p\u00e9Q2rS4tU6vW8xY0zC",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "fullwidth-equals-is-not-a-separator",
+      "input": "api_key\uff1daB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_text": "api_key\uff1daB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    }
+  ]
+}

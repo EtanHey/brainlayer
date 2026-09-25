@@ -23,6 +23,7 @@ from .batch_extraction import DEFAULT_SEED_ENTITIES, _dedup_entities, process_ch
 from .cloud_scrub import CloudScrubError, scrub_for_cloud, scrub_llm_output
 from .enrichment import VALID_INTENTS, build_external_prompt
 from .sanitize import Sanitizer
+from .secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested
 from .sentiment import analyze_sentiment
 
 logger = logging.getLogger(__name__)
@@ -420,6 +421,14 @@ def digest_content(
     if not content or not content.strip():
         raise ValueError("content must be non-empty")
 
+    # Scrub first: the embedding, the stored chunk, entity extraction and the
+    # faceted Gemini call below all see only the scrubbed text.
+    content, scrub_metadata = scrub_for_storage(content)
+    if title:
+        # The title is stored in metadata, so it is scrubbed too (#962 review N4).
+        title, title_found = scrub_nested(title)
+        scrub_metadata = merge_scrub_metadata({"title": title, **scrub_metadata}, title_found)
+
     # 1. Create chunk with source="digest"
     chunk_id = f"digest-{uuid.uuid4().hex[:12]}"
     embedding = embed_fn(content)
@@ -428,7 +437,7 @@ def digest_content(
         {
             "id": chunk_id,
             "content": content,
-            "metadata": {"title": title} if title else {},
+            "metadata": scrub_metadata,
             "source_file": "digest",
             "project": project,
             "content_type": "user_message",

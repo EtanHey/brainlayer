@@ -725,6 +725,10 @@ final class BrainDatabase: @unchecked Sendable {
         let createdAt: String?
         let chunkID: String?
         let conversationID: String?
+        // Providers redacted when the item was queued. The queued content is
+        // already scrubbed, so replay would otherwise find nothing to record.
+        let secretScrubRedactions: [String]?
+        let secretScrubQuarantineCount: Int?
 
         enum CodingKeys: String, CodingKey {
             case content
@@ -737,6 +741,8 @@ final class BrainDatabase: @unchecked Sendable {
             case createdAt = "created_at"
             case chunkID = "chunk_id"
             case conversationID = "conversation_id"
+            case secretScrubRedactions = "secret_scrub_redactions"
+            case secretScrubQuarantineCount = "secret_scrub_quarantine_count"
         }
 
         init(
@@ -749,7 +755,9 @@ final class BrainDatabase: @unchecked Sendable {
             queuedAt: String? = nil,
             createdAt: String? = nil,
             chunkID: String? = nil,
-            conversationID: String? = nil
+            conversationID: String? = nil,
+            secretScrubRedactions: [String]? = nil,
+            secretScrubQuarantineCount: Int? = nil
         ) {
             self.content = content
             self.tags = tags
@@ -761,6 +769,8 @@ final class BrainDatabase: @unchecked Sendable {
             self.createdAt = createdAt
             self.chunkID = chunkID
             self.conversationID = conversationID
+            self.secretScrubRedactions = secretScrubRedactions
+            self.secretScrubQuarantineCount = secretScrubQuarantineCount
         }
 
         init(from decoder: Decoder) throws {
@@ -775,6 +785,39 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
             chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
             conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
+            secretScrubRedactions = try container.decodeIfPresent([String].self, forKey: .secretScrubRedactions)
+            secretScrubQuarantineCount = try container.decodeIfPresent(Int.self, forKey: .secretScrubQuarantineCount)
+        }
+
+        /// This item with content and tags scrubbed and the findings folded in.
+        /// Idempotent, so it is safe on an item that was scrubbed when queued.
+        func scrubbed() -> PendingStoreItem {
+            var metadata: [String: Any] = [:]
+            if let secretScrubRedactions { metadata["secret_scrub_redactions"] = secretScrubRedactions }
+            if let secretScrubQuarantineCount { metadata["secret_scrub_quarantine_count"] = secretScrubQuarantineCount }
+            let result = SecretScrubber.scrubForStorage(content: content, tags: tags, metadata: metadata)
+            return PendingStoreItem(
+                content: result.content,
+                tags: result.tags,
+                importance: importance,
+                source: source,
+                project: project,
+                queueID: queueID,
+                queuedAt: queuedAt,
+                createdAt: createdAt,
+                chunkID: chunkID,
+                conversationID: conversationID,
+                secretScrubRedactions: result.metadata["secret_scrub_redactions"] as? [String],
+                secretScrubQuarantineCount: result.metadata["secret_scrub_quarantine_count"] as? Int
+            )
+        }
+
+        /// The findings as store() metadata, so a replayed row records them too.
+        var scrubMetadata: [String: Any] {
+            var metadata: [String: Any] = [:]
+            if let secretScrubRedactions { metadata["secret_scrub_redactions"] = secretScrubRedactions }
+            if let secretScrubQuarantineCount { metadata["secret_scrub_quarantine_count"] = secretScrubQuarantineCount }
+            return metadata
         }
     }
 
@@ -1411,6 +1454,14 @@ final class BrainDatabase: @unchecked Sendable {
         metadata: [String: Any] = [:]
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
+        // Scrub before anything is derived from the text: the row, its FTS copies
+        // (filled by triggers from this row), preview_text, and content_hash, so
+        // dedup keys on the scrubbed text. Every caller goes through here: MCP,
+        // pending-queue replay, storeAsync and digest.
+        let scrubbed = SecretScrubber.scrubForStorage(content: content, tags: tags, metadata: metadata)
+        let content = scrubbed.content
+        let tags = scrubbed.tags
+        let metadata = scrubbed.metadata
         let chunkID = chunkID ?? Self.makeChunkID()
         let createdAt = createdAt ?? Self.timestamp()
         let contentHash = Self.bodySHA256(content)
@@ -1668,6 +1719,8 @@ final class BrainDatabase: @unchecked Sendable {
         let queuedAt = Self.timestamp()
         let createdAt = createdAt ?? queuedAt
         let chunkID = chunkID ?? Self.makeChunkID()
+        // Scrub before encoding: the queue file must never hold a raw secret, even
+        // while the item waits for a busy DB.
         let item = PendingStoreItem(
             content: content,
             tags: tags,
@@ -1679,7 +1732,7 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID
-        )
+        ).scrubbed()
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
         if let existing = try appendPendingStoreLine(line, item: item, to: path) {
@@ -1713,15 +1766,21 @@ final class BrainDatabase: @unchecked Sendable {
                 var remaining: [Data] = []
 
                 for (lineIndex, line) in lines.enumerated() {
-                    let item: PendingStoreItem
+                    let decodedItem: PendingStoreItem
                     do {
-                        item = try decoder.decode(PendingStoreItem.self, from: line)
+                        decodedItem = try decoder.decode(PendingStoreItem.self, from: line)
                     } catch {
                         remaining.append(line)
                         continue
                     }
 
-                    let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
+                    // The queue ID of a legacy line is derived from its content, so it
+                    // is computed from the line as written (a line already partly
+                    // replayed must keep its identity). Everything after uses the
+                    // scrubbed item, including the rewritten replay line, so a legacy
+                    // raw secret leaves the queue file too.
+                    let queueID = Self.pendingStoreQueueID(for: decodedItem, lineIndex: lineIndex)
+                    let item = decodedItem.scrubbed()
                     let chunkID = item.chunkID ?? Self.makeChunkID()
                     let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID, chunkID: chunkID) ?? line
                     if excludedChunkIDs.contains(chunkID) {
@@ -1751,7 +1810,8 @@ final class BrainDatabase: @unchecked Sendable {
                             conversationID: item.conversationID,
                             refreshStatistics: false,
                             retries: retries,
-                            busyTimeoutMillis: busyTimeoutMillis
+                            busyTimeoutMillis: busyTimeoutMillis,
+                            metadata: item.scrubMetadata
                         )
                         flushed.append(
                             FlushedPendingStore(
@@ -4737,7 +4797,9 @@ final class BrainDatabase: @unchecked Sendable {
             queuedAt: item.queuedAt,
             createdAt: item.createdAt ?? item.queuedAt,
             chunkID: chunkID,
-            conversationID: item.conversationID
+            conversationID: item.conversationID,
+            secretScrubRedactions: item.secretScrubRedactions,
+            secretScrubQuarantineCount: item.secretScrubQuarantineCount
         )
         return try? JSONEncoder().encode(replayItem)
     }
@@ -5039,11 +5101,39 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         if let tags {
-            let tagsJSON = try encodeJSON(tags)
-            let sql = "UPDATE chunks SET tags = ? WHERE id = ?"
+            // brain_update writes tags at rest too, so they are scrubbed like
+            // store's (#962 review N2), and any findings are unioned into
+            // metadata.secret_scrub_redactions in the same statement.
+            var providers = Set<String>()
+            let scrubbedTags = tags.map { tag -> String in
+                let result = SecretScrubber.scrub(tag)
+                providers.formUnion(result.providers)
+                return result.text
+            }
+            let tagsJSON = try encodeJSON(scrubbedTags)
+            let providersJSON = try encodeJSON(providers.sorted())
+            let sql = providers.isEmpty
+                ? "UPDATE chunks SET tags = ? WHERE id = ?"
+                : """
+                    UPDATE chunks SET tags = ?, metadata = json_set(
+                        COALESCE(metadata, '{}'),
+                        '$.secret_scrub_redactions',
+                        (SELECT json_group_array(value) FROM (
+                            SELECT value FROM json_each(COALESCE(json_extract(metadata, '$.secret_scrub_redactions'), '[]'))
+                            UNION
+                            SELECT value FROM json_each(?)
+                            ORDER BY value
+                        ))
+                    ) WHERE id = ?
+                    """
             try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
                 bindText(tagsJSON, to: stmt, index: 1)
-                bindText(id, to: stmt, index: 2)
+                if providers.isEmpty {
+                    bindText(id, to: stmt, index: 2)
+                } else {
+                    bindText(providersJSON, to: stmt, index: 2)
+                    bindText(id, to: stmt, index: 3)
+                }
             }
             rowsChanged += Int(sqlite3_changes(db))
         }
@@ -6278,6 +6368,20 @@ final class BrainDatabase: @unchecked Sendable {
 
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
         guard db != nil else { throw DBError.notOpen }
+        // Scrub first (#962 review N1): entity mentions, URLs and code refs are
+        // all taken from the text that will be stored, so each candidate's
+        // start_utf16 really indexes the stored chunk. store() re-scrubs
+        // (idempotent) and would find nothing left to record, so the findings
+        // ride into its metadata from here.
+        let contentScrub = SecretScrubber.scrub(content)
+        let titleScrub = title.map { SecretScrubber.scrub($0) }
+        let content = contentScrub.text
+        let title = titleScrub?.text
+        let digestScrubMetadata = SecretScrubber.mergeScrubMetadata(
+            [:],
+            providers: Set(contentScrub.providers + (titleScrub?.providers ?? [])),
+            quarantineCount: contentScrub.quarantineCount + (titleScrub?.quarantineCount ?? 0)
+        )
 
         // Rule-based entity extraction
         let mentions = try Self.digestEntityMentions(in: content)
@@ -6326,9 +6430,10 @@ final class BrainDatabase: @unchecked Sendable {
             }
             entities = orderedEntityIDs.compactMap { resolutionsByID[$0]?.canonicalName }
             let digestSummary = "Digest: \(entities.count) entities, \(entityCandidates.count) entity candidates, \(urls.count) URLs, \(codeIds.count) code refs"
-            let candidateMetadata: [String: Any] = entityCandidates.isEmpty
-                ? [:]
-                : ["digest_entity_candidates": entityCandidates]
+            var candidateMetadata = digestScrubMetadata
+            if !entityCandidates.isEmpty {
+                candidateMetadata["digest_entity_candidates"] = entityCandidates
+            }
             let stored = try store(
                 content: titledContent,
                 tags: ["digest"] + entities.prefix(5).map { $0 },

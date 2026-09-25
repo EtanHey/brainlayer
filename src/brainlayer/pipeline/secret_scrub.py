@@ -287,3 +287,86 @@ def _shannon_entropy(value: str) -> float:
     counts = {character: value.count(character) for character in set(value)}
     length = len(value)
     return -sum((count / length) * math.log2(count / length) for count in counts.values())
+
+
+def scrub_for_storage(text: str, metadata: dict | None = None) -> tuple[str, dict]:
+    """Scrub ``text`` before it is persisted and record what was found.
+
+    Returns the scrubbed text and a copy of ``metadata`` carrying the same keys
+    the watcher writes: ``secret_scrub_redactions`` (sorted provider names,
+    merged with any already present) and ``secret_scrub_quarantine_count``.
+    Every ingest path that stores raw text goes through this, so the stored
+    row, its FTS copy and its content hash are all computed from scrubbed text.
+    """
+    result = scrub_secrets(text)
+    found: dict = {}
+    if result.redactions:
+        found["secret_scrub_redactions"] = sorted({redaction.provider for redaction in result.redactions})
+    if result.quarantine:
+        found["secret_scrub_quarantine_count"] = len(result.quarantine)
+    return result.text, merge_scrub_metadata(metadata, found)
+
+
+def merge_scrub_metadata(metadata: dict | None, found: dict) -> dict:
+    """Copy ``metadata`` and fold in scrub findings, unioning provider names."""
+    merged = dict(metadata or {})
+    providers = found.get("secret_scrub_redactions")
+    if providers:
+        merged["secret_scrub_redactions"] = sorted(set(merged.get("secret_scrub_redactions") or []) | set(providers))
+    if "secret_scrub_quarantine_count" in found:
+        merged["secret_scrub_quarantine_count"] = found["secret_scrub_quarantine_count"]
+    return merged
+
+
+def scrub_tags(tags: object) -> tuple[object, dict]:
+    """Scrub each string tag and report what was found, like ``scrub_for_storage``.
+
+    Returns the tags (any non-list shape passes through unchanged) and the
+    findings to fold into the chunk metadata with ``merge_scrub_metadata``.
+    BrainBar's store path records tag findings the same way.
+    """
+    if not isinstance(tags, (list, tuple)):
+        return tags, {}
+    providers: set[str] = set()
+    scrubbed: list = []
+    for tag in tags:
+        if isinstance(tag, str):
+            result = scrub_secrets(tag)
+            providers.update(redaction.provider for redaction in result.redactions)
+            scrubbed.append(result.text)
+        else:
+            scrubbed.append(tag)
+    return scrubbed, ({"secret_scrub_redactions": sorted(providers)} if providers else {})
+
+
+def scrub_nested(value: object) -> tuple[object, dict]:
+    """Scrub every string inside a JSON-like value (dict values, list items).
+
+    Dict keys are left alone: they are field names, not content. Returns the
+    scrubbed value and findings for ``merge_scrub_metadata``, like
+    ``scrub_for_storage``. Used for stored free text that is not the chunk body:
+    a digest title, and metadata carried in on a queued store event.
+    """
+    providers: set[str] = set()
+    quarantine = 0
+
+    def walk(item: object) -> object:
+        nonlocal quarantine
+        if isinstance(item, str):
+            result = scrub_secrets(item)
+            providers.update(redaction.provider for redaction in result.redactions)
+            quarantine += len(result.quarantine)
+            return result.text
+        if isinstance(item, dict):
+            return {key: walk(inner) for key, inner in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [walk(inner) for inner in item]
+        return item
+
+    scrubbed = walk(value)
+    found: dict = {}
+    if providers:
+        found["secret_scrub_redactions"] = sorted(providers)
+    if quarantine:
+        found["secret_scrub_quarantine_count"] = quarantine
+    return scrubbed, found

@@ -39,6 +39,7 @@ from .pause import (
     pause_sentinel_state,
     queue_contains_only_enrichment,
 )
+from .pipeline.secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested, scrub_tags
 from .provenance_integration import enqueue_provenance_resolution_for_entities
 from .runtime_store import _without_connection_maintenance_hooks
 from .vector_store import _configure_writer_pragmas
@@ -920,6 +921,10 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed store event with empty content")
         return ApplyResult()
+    # Scrub before anything is derived from the text: stored row, FTS copy,
+    # summary and content_hash (so dedup keys on the scrubbed text) all follow.
+    content, scrub_metadata = scrub_for_storage(content)
+    content = content.strip()
     chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
     recursive_reason = recursive_mcp_output_reason(
         content,
@@ -938,8 +943,13 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         metadata.update(raw_metadata)
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
+    tags, tag_findings = scrub_tags(event.get("tags"))
+    # Metadata carried in on the event is stored free text too (#962 review N4).
+    metadata, metadata_findings = scrub_nested(metadata)
+    # Content findings merge last: the quarantine count describes the chunk body.
+    for found in (metadata_findings, tag_findings, scrub_metadata):
+        metadata = merge_scrub_metadata(metadata, found)
     supersedes = event.get("supersedes") or metadata.get("supersedes")
-    tags = event.get("tags")
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     conversation_id = event.get("conversation_id") or metadata.get("conversation_id")
     position = None
@@ -1128,6 +1138,8 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
         return ApplyResult()
+    content, scrub_metadata = scrub_for_storage(content)
+    content = content.strip()
     # Truncated digest that NAMES the chunk (id suffix + queue key). It is not a
     # content hash: the content_hash column is filled by the canonical contract.
     id_digest = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
@@ -1159,7 +1171,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         {
             "id": chunk_id,
             "content": content,
-            "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest}),
+            "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest, **scrub_metadata}),
             "source_file": source_file,
             "project": event.get("project"),
             "content_type": "assistant_text",
