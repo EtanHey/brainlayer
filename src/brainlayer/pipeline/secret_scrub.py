@@ -60,6 +60,10 @@ _PROVIDER_PATTERNS = (
     _ProviderPattern("google", re.compile(r"\bAIza[A-Za-z0-9_-]{32,}\b")),
     _ProviderPattern("gitlab", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
     _ProviderPattern("sendgrid", re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{32,}\b")),
+    _ProviderPattern("groq", re.compile(r"\bgsk_[A-Za-z0-9]{40,}\b")),
+    # tskey-<kind>-<key id>-<secret>, kind in auth/api/client/webhook/scim.
+    _ProviderPattern("tailscale", re.compile(r"\btskey-[a-z]+-[A-Za-z0-9]{6,}-[A-Za-z0-9]{16,}\b")),
+    _ProviderPattern("vercel", re.compile(r"\bvc[kpi]_[A-Za-z0-9]{20,}\b")),
 )
 
 _SECRET_LABEL_RE = re.compile(
