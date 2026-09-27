@@ -181,6 +181,25 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    /// #977 R2 B3: a server role belongs to one binary. `app-server`/`mcp-server` are
+    /// Codex roles and `mcp serve`/`--chrome-native-host` are Claude roles; the same
+    /// word as another CLI's first positional is that CLI's prompt or subcommand.
+    func test_server_roles_are_scoped_to_the_binary_that_owns_them() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(90, 1, "zsh", "-zsh"),
+            Self.row(91, 90, "gemini", "gemini app-server"),
+            Self.row(92, 90, "gemini", "gemini mcp-server tidy the config"),
+            Self.row(93, 90, "codex", "codex mcp serve"),
+            Self.row(94, 90, "gemini", "gemini --chrome-native-host"),
+            Self.row(95, 90, "2.1.281", "claude app-server"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .gemini), 3)
+        XCTAssertEqual(activity.count(for: .codex), 1)
+        XCTAssertEqual(activity.count(for: .claude), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 5)
+    }
+
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {
         let activity = AgentActivityMonitor.parse(Self.busyMachine)
 
