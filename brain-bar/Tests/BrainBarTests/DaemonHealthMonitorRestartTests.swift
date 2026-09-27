@@ -14,6 +14,7 @@ import XCTest
 final class DaemonHealthMonitorRestartTests: XCTestCase {
     private static let socket = "/tmp/brainbar.sock"
     private static let installed = "/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon"
+    fileprivate static let installedPath = installed
     private static let devBuild = "/Users/dev/Gits/brainlayer/brain-bar/.build/debug/BrainBarDaemon"
     private static let scratchBuild = "/tmp/build/BrainBarDaemon"
     private static let now = Date(timeIntervalSince1970: 1_000_000)
@@ -230,6 +231,36 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
         XCTAssertEqual(LiveDaemonProcessInspector.listeningVerdict([Read](), socketPath: socket), false)
     }
 
+    /// #976 Macroscope (b): a daemon verified as serving whose metrics cannot be read
+    /// is an inspection failure, so the row is neutral "Unknown", not "Unavailable".
+    @MainActor
+    func test_a_serving_daemon_with_unreadable_process_info_is_unknown() async throws {
+        let table = FakeProcessTable([
+            101: .daemonInfoUnreadable(listening: Self.socket),
+        ])
+
+        let row = try await visibleDaemonRow(table)
+
+        XCTAssertEqual(row, "Unknown — process info of BrainBarDaemon PID 101 unreadable")
+        XCTAssertFalse(DaemonRuntimeRows.isAttention(row))
+    }
+
+    /// #976 Macroscope (c): "(last PID n exited)" only when that PID is really gone.
+    func test_a_cached_daemon_that_stops_serving_but_is_alive_is_not_called_exited() throws {
+        let table = FakeProcessTable([
+            101: .daemon(path: Self.installed, listening: Self.socket, startedAt: Self.now),
+        ])
+        let monitor = monitor(table)
+        XCTAssertEqual(monitor.read().snapshot?.pid, 101)
+
+        table.add(101, .daemon(path: Self.installed, listening: nil, startedAt: Self.now))
+
+        XCTAssertEqual(
+            monitor.read().unavailability,
+            .down("BrainBarDaemon is running but not serving /tmp/brainbar.sock")
+        )
+    }
+
     /// The Daemon row exactly as the Runtime card renders it for this collector.
     @MainActor
     private func visibleDaemonRow(_ table: FakeProcessTable) async throws -> String {
@@ -368,6 +399,8 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
         case daemonSocketsUnreadable(path: String, startedAt: Date)
         /// A BrainBarDaemon whose executable path cannot be read.
         case daemonPathUnreadable(listening: String?, startedAt: Date)
+        /// A serving installed daemon whose task/BSD info cannot be read.
+        case daemonInfoUnreadable(listening: String?)
         /// A process whose name and state cannot be read at all.
         case unreadable
         /// An exited, unreaped process: it holds no sockets and is never the daemon.
@@ -407,7 +440,8 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
     func shortName(of pid: pid_t) -> ProcessNameRead {
         lock.withLock {
             switch entries[pid] {
-            case .daemon?, .daemonSocketsUnreadable?, .daemonPathUnreadable?: return .name("BrainBarDaemon")
+            case .daemon?, .daemonSocketsUnreadable?, .daemonPathUnreadable?, .daemonInfoUnreadable?:
+                return .name("BrainBarDaemon")
             case .other(let name, _)?: return .name(name)
             case .zombie?: return .zombie
             case .unreadable?, nil: return .unreadable
@@ -420,6 +454,7 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
             switch entries[pid] {
             case .daemon(let path, _, _)?: return path
             case .daemonSocketsUnreadable(let path, _)?: return path
+            case .daemonInfoUnreadable?: return DaemonHealthMonitorRestartTests.installedPath
             case .other(_, let path)?: return path
             case .daemonPathUnreadable?, .unreadable?, .zombie?, nil: return nil
             }
@@ -430,7 +465,8 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
         lock.withLock {
             switch entries[pid] {
             case .daemon(_, let listening, _)?: return listening == path
-            case .daemonPathUnreadable(let listening, _)?: return listening == path
+            case .daemonPathUnreadable(let listening, _)?, .daemonInfoUnreadable(let listening)?:
+                return listening == path
             case .daemonSocketsUnreadable?, .unreadable?: return nil
             case .other?, .zombie?, nil: return false
             }
@@ -444,7 +480,7 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
             case .daemon(_, _, let started)?, .daemonSocketsUnreadable(_, let started)?,
                  .daemonPathUnreadable(_, let started)?:
                 startedAt = started
-            case .other?, .unreadable?, .zombie?, nil: return nil
+            case .daemonInfoUnreadable?, .other?, .unreadable?, .zombie?, nil: return nil
             }
             return DaemonProcessInfo(rssBytes: 1_024, startedAt: startedAt, openSockets: 3)
         }
