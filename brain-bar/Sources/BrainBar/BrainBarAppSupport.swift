@@ -3,16 +3,6 @@ import Darwin
 import Foundation
 
 enum BrainBarAppSupport {
-    private static let daemonPIDFile = "/tmp/brainbar-daemon.pid"
-    private static let daemonLaunchdLabels = [
-        "com.brainlayer.brainbar-daemon",
-        "com.brainlayer.BrainBarDaemon",
-    ]
-    private static let daemonBundleIdentifiers = [
-        "com.brainlayer.brainbar-daemon",
-        "com.brainlayer.BrainBarDaemon",
-    ]
-
     static func hotkeyPermissionFailureMessage(permissions: HotkeyPermissionStatus) -> String {
         "BrainBar could not start the fallback hotkey listener. Enable \(permissions.missingPermissionsMessage) in System Settings. The CGEventTap fallback requires both Input Monitoring and Accessibility."
     }
@@ -25,9 +15,26 @@ enum BrainBarAppSupport {
         watcherProcessProbe: any WatcherProcessProbing = LaunchctlWatcherProcessProbe(),
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) -> StatsCollector {
-        StatsCollector(
+        makeStatsCollector(
             dbPath: dbPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
+            brainBusEvents: brainBusEvents,
+            watcherProcessProbe: watcherProcessProbe,
+            databaseOpenConfiguration: databaseOpenConfiguration
+        )
+    }
+
+    @MainActor
+    static func makeStatsCollector(
+        dbPath: String,
+        daemonMonitor: DaemonHealthMonitor,
+        brainBusEvents: BrainBusEventSource? = BrainBusClient(),
+        watcherProcessProbe: any WatcherProcessProbing = LaunchctlWatcherProcessProbe(),
+        databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
+    ) -> StatsCollector {
+        StatsCollector(
+            dbPath: dbPath,
+            daemonMonitor: daemonMonitor,
             watcherProcessProbe: watcherProcessProbe,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: databaseOpenConfiguration
@@ -38,11 +45,13 @@ enum BrainBarAppSupport {
     static func makeUIStatsCollector(
         dbPath: String,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
-        daemonPIDProvider: () -> pid_t = BrainBarAppSupport.discoverDaemonPID
+        daemonMonitor: DaemonHealthMonitor = DaemonHealthMonitor()
     ) -> StatsCollector {
+        // The monitor identifies the daemon on every sample, never once at launch:
+        // the daemon restarts (wake, crash, upgrade) while this UI keeps running (#972).
         makeStatsCollector(
             dbPath: dbPath,
-            targetPID: daemonPIDProvider(),
+            daemonMonitor: daemonMonitor,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
@@ -86,110 +95,5 @@ enum BrainBarAppSupport {
             database: database,
             databasePath: dbPath
         )
-    }
-
-    static func discoverDaemonPID() -> pid_t {
-        for label in daemonLaunchdLabels {
-            if let pid = launchctlPID(for: label) {
-                return pid
-            }
-        }
-        if let pid = daemonPIDFromFile(daemonPIDFile) {
-            return pid
-        }
-        if let pid = runningApplicationPID() {
-            return pid
-        }
-        return 0
-    }
-
-    private static func launchctlPID(for label: String) -> pid_t? {
-        let domains = [
-            "user/\(getuid())/\(label)",
-            "gui/\(getuid())/\(label)",
-        ]
-
-        for domain in domains {
-            guard let output = runLaunchctlPrint(domain),
-                  let pid = parsePID(fromLaunchctlOutput: output)
-            else {
-                continue
-            }
-            return pid
-        }
-        return nil
-    }
-
-    private static func runLaunchctlPrint(_ domain: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", domain]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private static func parsePID(fromLaunchctlOutput output: String) -> pid_t? {
-        for line in output.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.lowercased().hasPrefix("pid") else { continue }
-
-            let tokens = trimmed.components(separatedBy: CharacterSet.decimalDigits.inverted)
-                .filter { !$0.isEmpty }
-            for token in tokens {
-                guard let rawPID = Int32(token), rawPID > 0 else { continue }
-                return pid_t(rawPID)
-            }
-        }
-        return nil
-    }
-
-    static func daemonPIDFromFile(_ path: String) -> pid_t? {
-        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-        let token = contents.trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: CharacterSet.whitespacesAndNewlines)
-            .first ?? ""
-        guard let rawPID = Int32(token), rawPID > 0 else { return nil }
-        let pid = pid_t(rawPID)
-        return processMatchesDaemon(pid) ? pid : nil
-    }
-
-    private static func processMatchesDaemon(_ pid: pid_t) -> Bool {
-        if let app = NSRunningApplication(processIdentifier: pid) {
-            return daemonBundleIdentifiers.contains(app.bundleIdentifier ?? "") ||
-                app.localizedName == "BrainBarDaemon" ||
-                app.executableURL?.lastPathComponent == "BrainBarDaemon"
-        }
-
-        var buffer = [CChar](repeating: 0, count: 4096)
-        let result = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard result > 0 else { return false }
-        let path = String(decoding: buffer.prefix(Int(result)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        return URL(fileURLWithPath: path).lastPathComponent == "BrainBarDaemon"
-    }
-
-    private static func runningApplicationPID() -> pid_t? {
-        for bundleIdentifier in daemonBundleIdentifiers {
-            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first {
-                return app.processIdentifier
-            }
-        }
-
-        return NSWorkspace.shared.runningApplications.first { app in
-            app.localizedName == "BrainBarDaemon" ||
-                app.executableURL?.lastPathComponent == "BrainBarDaemon"
-        }?.processIdentifier
     }
 }
