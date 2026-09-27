@@ -1584,7 +1584,7 @@ private struct BrainBarDashboardView: View {
     }
 
     private var daemonSummary: String {
-        DaemonRuntimeRows.daemonText(daemon: collector.daemon, downReason: collector.daemonDownReason)
+        DaemonRuntimeRows.daemonText(collector: collector)
     }
 
     private var daemonLastSeenSummary: String {

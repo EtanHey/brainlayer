@@ -9,8 +9,9 @@ protocol DaemonProcessInspecting: Sendable {
     /// The 16-character `p_comm`; a cheap prefilter, never proof of identity.
     func shortName(of pid: pid_t) -> String?
     func executablePath(of pid: pid_t) -> String?
-    /// Whether `pid` holds a LISTENING Unix socket bound to `path`.
-    func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool
+    /// Whether `pid` holds a LISTENING Unix socket bound to `path`; `nil` when its
+    /// file descriptors cannot be read, which is "not measured", never "no".
+    func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool?
     /// `nil` when the process is gone or its task info is unreadable.
     func processInfo(of pid: pid_t) -> DaemonProcessInfo?
 }
@@ -21,11 +22,18 @@ struct DaemonProcessInfo: Sendable, Equatable {
     let openSockets: Int
 }
 
-/// A monitor reading: a snapshot when the daemon is running, otherwise the reason it
-/// is not, so the Runtime rows can say why instead of a bare "Unavailable".
+/// Why there is no daemon snapshot. `down` is a confirmed outage; `unknown` means the
+/// monitor could not measure (#976 R2 B3) and must never be shown as an outage.
+enum DaemonUnavailability: Sendable, Equatable {
+    case down(String)
+    case unknown(String)
+}
+
+/// A monitor reading: a snapshot when the daemon is running, otherwise why not, so
+/// the Runtime rows can say why instead of a bare "Unavailable".
 struct DaemonHealthReading: Sendable, Equatable {
     let snapshot: DaemonHealthSnapshot?
-    let downReason: String?
+    let unavailability: DaemonUnavailability?
 }
 
 /// Which process IS the production daemon (#972, #976 R1): the one listening on the
@@ -39,7 +47,7 @@ struct DaemonIdentity: Sendable {
 
     enum Resolution: Equatable {
         case found(pid_t)
-        case down(String)
+        case unavailable(DaemonUnavailability)
     }
 
     static func isInstalledExecutable(_ path: String) -> Bool {
@@ -50,25 +58,33 @@ struct DaemonIdentity: Sendable {
         guard pid > 0,
               let path = inspector.executablePath(of: pid),
               Self.isInstalledExecutable(path) else { return false }
-        return inspector.isListening(pid, onUnixSocket: socketPath)
+        return inspector.isListening(pid, onUnixSocket: socketPath) == true
     }
 
     func resolve(inspector: any DaemonProcessInspecting) -> Resolution {
         guard let pids = inspector.processIDs() else {
-            return .down("BrainBarDaemon status unknown (process table unreadable)")
+            return .unavailable(.unknown("process table unreadable"))
         }
         let named = pids.filter { $0 > 0 && inspector.shortName(of: $0) == Self.executableName }
-        if let pid = named.first(where: { isProductionDaemon($0, inspector: inspector) }) {
+        let listening = Dictionary(uniqueKeysWithValues: named.map {
+            ($0, inspector.isListening($0, onUnixSocket: socketPath))
+        })
+        let installed = named.filter { inspector.executablePath(of: $0).map(Self.isInstalledExecutable) == true }
+        if let pid = installed.first(where: { listening[$0] == .some(true) }) {
             return .found(pid)
         }
-        if let impostor = named.first(where: { inspector.isListening($0, onUnixSocket: socketPath) }) {
+        if let impostor = named.first(where: { listening[$0] == .some(true) }) {
             let path = inspector.executablePath(of: impostor) ?? "path unreadable"
-            return .down("\(socketPath) is served by a non-installed BrainBarDaemon (\(path))")
+            return .unavailable(.down("\(socketPath) is served by a non-installed BrainBarDaemon (\(path))"))
         }
-        if named.contains(where: { inspector.executablePath(of: $0).map(Self.isInstalledExecutable) == true }) {
-            return .down("BrainBarDaemon is running but not serving \(socketPath)")
+        // A daemon whose sockets could not be read may be the one serving: unmeasured.
+        if let unread = installed.first(where: { listening[$0] == .some(nil) }) {
+            return .unavailable(.unknown("sockets of BrainBarDaemon PID \(unread) unreadable"))
         }
-        return .down("BrainBarDaemon not running")
+        if !installed.isEmpty {
+            return .unavailable(.down("BrainBarDaemon is running but not serving \(socketPath)"))
+        }
+        return .unavailable(.down("BrainBarDaemon not running"))
     }
 }
 
@@ -113,9 +129,9 @@ final class DaemonHealthMonitor: @unchecked Sendable {
             switch source {
             case .pinned(let pid):
                 guard pid > 0, inspector.executablePath(of: pid) != nil else {
-                    return DaemonHealthReading(snapshot: nil, downReason: "PID \(pid) not running")
+                    return DaemonHealthReading(snapshot: nil, unavailability: .down("PID \(pid) not running"))
                 }
-                return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
+                return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
             case .production(let identity):
                 return readProduction(identity)
             }
@@ -126,17 +142,19 @@ final class DaemonHealthMonitor: @unchecked Sendable {
         // Re-verified every sample, so a reused PID or a daemon that stopped serving
         // the socket is dropped instead of trusted.
         if let pid = verifiedPID, identity.isProductionDaemon(pid, inspector: inspector) {
-            return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
+            return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
         }
         let lastPID = verifiedPID
         verifiedPID = nil
         switch identity.resolve(inspector: inspector) {
         case .found(let pid):
             verifiedPID = pid
-            return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
-        case .down(let reason):
+            return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
+        case .unavailable(.down(let reason)):
             let described = lastPID.map { "\(reason) (last PID \($0) exited)" } ?? reason
-            return DaemonHealthReading(snapshot: nil, downReason: described)
+            return DaemonHealthReading(snapshot: nil, unavailability: .down(described))
+        case .unavailable(.unknown(let reason)):
+            return DaemonHealthReading(snapshot: nil, unavailability: .unknown(reason))
         }
     }
 
@@ -198,8 +216,9 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
         return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
-    func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool {
-        for fd in socketDescriptors(pid) {
+    func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool? {
+        guard let descriptors = socketDescriptors(pid) else { return nil }
+        for fd in descriptors {
             var info = socket_fdinfo()
             let size = Int32(MemoryLayout<socket_fdinfo>.size)
             guard proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &info, size) == size,
@@ -232,7 +251,7 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
         return DaemonProcessInfo(
             rssBytes: task.pti_resident_size,
             startedAt: startedAt,
-            openSockets: socketDescriptors(pid).count
+            openSockets: socketDescriptors(pid)?.count ?? 0
         )
     }
 
@@ -246,15 +265,16 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
         path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
     }
 
-    private func socketDescriptors(_ pid: pid_t) -> [Int32] {
+    /// `nil` when the descriptor table cannot be read (gone, or not permitted).
+    private func socketDescriptors(_ pid: pid_t) -> [Int32]? {
         let needed = Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0))
-        guard needed > 0 else { return [] }
+        guard needed > 0 else { return nil }
         let stride = MemoryLayout<proc_fdinfo>.stride
         var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: needed / stride + 16)
         let bytes = fds.withUnsafeMutableBytes { buffer in
             proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buffer.baseAddress, Int32(buffer.count))
         }
-        guard bytes > 0 else { return [] }
+        guard bytes > 0 else { return nil }
         return fds.prefix(Int(bytes) / stride)
             .filter { Int32($0.proc_fdtype) == PROX_FDTYPE_SOCKET }
             .map(\.proc_fd)
@@ -264,10 +284,19 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
 /// The Runtime card's "Daemon" and "Last seen" strings, kept out of the view so the
 /// restart / outage wording is unit-testable.
 enum DaemonRuntimeRows {
-    static func daemonText(daemon: DaemonHealthSnapshot?, downReason: String?) -> String {
+    /// The Daemon row exactly as the Runtime card renders it.
+    @MainActor
+    static func daemonText(collector: StatsCollector) -> String {
+        daemonText(daemon: collector.daemon, unavailability: collector.daemonUnavailability)
+    }
+
+    static func daemonText(daemon: DaemonHealthSnapshot?, unavailability: DaemonUnavailability?) -> String {
         guard let daemon else {
-            guard let downReason else { return "Checking…" }
-            return "Down — \(downReason)"
+            switch unavailability {
+            case .down(let reason)?: return "Down — \(reason)"
+            case .unknown(let reason)?: return "Unknown — \(reason)"
+            case nil: return "Checking…"
+            }
         }
         guard daemon.isResponsive else {
             return "PID \(daemon.pid) · Unavailable (process info unreadable)"

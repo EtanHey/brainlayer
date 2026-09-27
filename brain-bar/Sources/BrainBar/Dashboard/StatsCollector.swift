@@ -177,8 +177,8 @@ final class StatsCollector: ObservableObject {
 
     @Published private(set) var stats: DashboardStats
     @Published private(set) var daemon: DaemonHealthSnapshot?
-    /// Why `daemon` is nil when the monitor found no running daemon (#972).
-    @Published private(set) var daemonDownReason: String?
+    /// Why `daemon` is nil: a confirmed outage or an unmeasured state (#972, #976).
+    @Published private(set) var daemonUnavailability: DaemonUnavailability?
     /// Last brain-bus frame from the daemon over its socket; drives "Last seen".
     @Published private(set) var lastDaemonAnswerAt: Date?
     @Published private(set) var agentActivity: AgentActivitySnapshot
@@ -621,7 +621,7 @@ final class StatsCollector: ObservableObject {
         daemonSampleTask = nil
         guard !isStopped else { return }
         daemon = reading.snapshot?.withLastSeenAt(lastDaemonAnswerAt)
-        daemonDownReason = reading.downReason
+        daemonUnavailability = reading.unavailability
         state = PipelineState.derive(daemon: daemon, stats: stats)
         if daemonSamplePending {
             daemonSamplePending = false
@@ -996,7 +996,7 @@ extension StatsCollector {
     static func fixture(
         stats: DashboardStats,
         daemon: DaemonHealthSnapshot?,
-        daemonDownReason: String? = nil,
+        daemonUnavailability: DaemonUnavailability? = nil,
         lastDaemonAnswerAt: Date? = nil,
         agentActivity: AgentActivitySnapshot,
         state: PipelineState,
@@ -1013,7 +1013,7 @@ extension StatsCollector {
         )
         collector.stats = stats
         collector.daemon = daemon
-        collector.daemonDownReason = daemonDownReason
+        collector.daemonUnavailability = daemonUnavailability
         collector.lastDaemonAnswerAt = lastDaemonAnswerAt ?? daemon?.lastSeenAt
         collector.agentActivity = agentActivity
         collector.state = state
