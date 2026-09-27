@@ -3120,15 +3120,16 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testMakeUIStatsCollectorUsesDiscoveredDaemonPIDWhenProvided() throws {
+    func testMakeUIStatsCollectorUsesDiscoveredDaemonPIDWhenProvided() async throws {
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: tempDBPath,
             brainBusEvents: nil,
-            daemonPIDProvider: { ProcessInfo.processInfo.processIdentifier }
+            daemonPIDResolver: FixedDaemonPIDResolver(pid: ProcessInfo.processInfo.processIdentifier)
         )
         defer { collector.stop() }
 
         collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.daemon != nil }
 
         let snapshot = try XCTUnwrap(collector.daemon)
         XCTAssertEqual(snapshot.pid, ProcessInfo.processInfo.processIdentifier)

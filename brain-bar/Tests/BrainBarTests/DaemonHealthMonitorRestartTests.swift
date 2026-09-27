@@ -96,27 +96,17 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
 
     func test_last_seen_is_the_last_socket_answer_not_the_sample_time() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        let answered = DaemonHealthSnapshot(
-            pid: 1,
-            isResponsive: true,
-            rssBytes: 0,
-            uptime: 600,
-            openConnections: 1,
-            lastSeenAt: now.addingTimeInterval(-5 * 60),
-            startedAt: nil
+        XCTAssertEqual(
+            DaemonRuntimeRows.lastSeenText(lastAnswerAt: now.addingTimeInterval(-5 * 60), now: now),
+            "5m ago"
         )
-        XCTAssertEqual(DaemonRuntimeRows.lastSeenText(daemon: answered, now: now), "5m ago")
+        XCTAssertEqual(DaemonRuntimeRows.lastSeenText(lastAnswerAt: nil, now: now), "No socket answer yet")
+    }
 
-        let neverAnswered = DaemonHealthSnapshot(
-            pid: 1,
-            isResponsive: true,
-            rssBytes: 0,
-            uptime: 600,
-            openConnections: 1,
-            lastSeenAt: nil,
-            startedAt: nil
-        )
-        XCTAssertEqual(DaemonRuntimeRows.lastSeenText(daemon: neverAnswered, now: now), "No socket answer yet")
+    func test_before_the_first_sample_the_daemon_row_is_checking_not_down() {
+        let row = DaemonRuntimeRows.daemonText(daemon: nil, downReason: nil)
+        XCTAssertEqual(row, "Checking…")
+        XCTAssertFalse(DaemonRuntimeRows.isAttention(row))
     }
 
     @MainActor
@@ -129,7 +119,8 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
             dbPath: "/nonexistent/brainbar-972.db",
             daemonMonitor: DaemonHealthMonitor(pidResolver: resolver),
             autoRefreshInterval: 3600,
-            brainBusEvents: bus
+            brainBusEvents: bus,
+            dashboardStatsProvider: { throw StubStatsUnavailable() }
         )
         defer { collector.stop() }
 
@@ -146,6 +137,7 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
         try await waitUntil { collector.daemon?.pid == daemonB.processIdentifier }
         let snapshot = try XCTUnwrap(collector.daemon)
         XCTAssertEqual(snapshot.lastSeenAt, tick.generatedAt, "Last seen is the socket answer's time")
+        XCTAssertEqual(collector.lastDaemonAnswerAt, tick.generatedAt)
         XCTAssertNil(collector.daemonDownReason)
         XCTAssertFalse(resolver.resolvedOnMainThread, "PID resolution must stay off the main thread")
     }
@@ -172,6 +164,31 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
 
         try await waitUntil { collector.daemon?.pid == daemonB.processIdentifier }
         XCTAssertEqual(collector.daemon?.pid, daemonB.processIdentifier)
+    }
+
+    func test_live_resolver_prefers_the_launchd_owned_daemon_and_ignores_other_processes() {
+        typealias Entry = LiveDaemonPIDResolver.ProcessEntry
+        let table = [
+            Entry(pid: 300, parentPID: 1, executablePath: "/Applications/BrainBar.app/Contents/MacOS/BrainBar"),
+            Entry(pid: 301, parentPID: 812, executablePath: "/tmp/build/BrainBarDaemon"),
+            Entry(pid: 302, parentPID: 1, executablePath: "/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon"),
+            Entry(pid: 303, parentPID: 1, executablePath: "/usr/bin/socat"),
+        ]
+
+        XCTAssertEqual(LiveDaemonPIDResolver.selectDaemonPID(from: table), 302)
+        XCTAssertEqual(LiveDaemonPIDResolver.selectDaemonPID(from: Array(table.prefix(2))), 301,
+                       "a hand-started daemon counts only when launchd has none")
+        XCTAssertNil(LiveDaemonPIDResolver.selectDaemonPID(from: [table[0], table[3]]))
+    }
+
+    func test_live_resolver_rejects_a_pidfile_that_names_a_non_daemon_process() throws {
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-daemon-972-\(UUID().uuidString).pid")
+        try "\(getpid())\n".write(to: pidFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+
+        XCTAssertEqual(LiveDaemonPIDResolver.pidFromFile(pidFile.path), getpid())
+        XCTAssertFalse(LiveDaemonPIDResolver().isDaemon(getpid()), "the test runner is not BrainBarDaemon")
     }
 
     // MARK: - helpers
@@ -232,6 +249,8 @@ private final class ScriptedDaemonPIDResolver: DaemonPIDResolving, @unchecked Se
         }
     }
 }
+
+private struct StubStatsUnavailable: Error {}
 
 private final class ScriptedBrainBus: BrainBusEventSource, @unchecked Sendable {
     private let lock = NSLock()

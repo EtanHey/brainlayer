@@ -1584,13 +1584,11 @@ private struct BrainBarDashboardView: View {
     }
 
     private var daemonSummary: String {
-        guard let daemon = collector.daemon else { return "Unavailable" }
-        return "PID \(daemon.pid) · \(daemon.openConnections) sockets"
+        DaemonRuntimeRows.daemonText(daemon: collector.daemon, downReason: collector.daemonDownReason)
     }
 
     private var daemonLastSeenSummary: String {
-        guard let daemon = collector.daemon else { return "Unavailable" }
-        return DashboardMetricFormatter.relativeEventString(lastEventAt: daemon.lastSeenAt, now: currentNow)
+        DaemonRuntimeRows.lastSeenText(lastAnswerAt: collector.lastDaemonAnswerAt, now: currentNow)
     }
 }
 
@@ -1612,7 +1610,7 @@ struct BrainBarDefinitionList: View {
                     Text(row.1)
                         .font(.system(size: 13, weight: .semibold))
                         .monospacedDigit()
-                        .foregroundStyle(row.1.localizedCaseInsensitiveContains("unavailable")
+                        .foregroundStyle(DaemonRuntimeRows.isAttention(row.1)
                             ? Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
                             : Color.brainBarTextPrimary)
                         .multilineTextAlignment(.trailing)
