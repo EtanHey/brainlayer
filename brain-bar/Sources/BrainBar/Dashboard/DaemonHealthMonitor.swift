@@ -1,13 +1,24 @@
 import Darwin
 import Foundation
 
-/// How the monitor finds BrainBarDaemon. `isDaemon` is the cheap per-sample identity
-/// check for a cached PID; `resolveDaemonPID` is the fresh lookup, run only when the
-/// cached PID has exited or is no longer the daemon (#972: the PID was once captured
-/// at app launch and never re-resolved, so every daemon restart blanked the rows).
-protocol DaemonPIDResolving: Sendable {
-    func isDaemon(_ pid: pid_t) -> Bool
-    func resolveDaemonPID() -> pid_t?
+/// Per-process facts the daemon monitor reads. Injected so the identity rules are
+/// testable against a scripted process table, with no real process spawned.
+protocol DaemonProcessInspecting: Sendable {
+    /// Every PID on the machine, or `nil` when the process table cannot be read.
+    func processIDs() -> [pid_t]?
+    /// The 16-character `p_comm`; a cheap prefilter, never proof of identity.
+    func shortName(of pid: pid_t) -> String?
+    func executablePath(of pid: pid_t) -> String?
+    /// Whether `pid` holds a LISTENING Unix socket bound to `path`.
+    func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool
+    /// `nil` when the process is gone or its task info is unreadable.
+    func processInfo(of pid: pid_t) -> DaemonProcessInfo?
+}
+
+struct DaemonProcessInfo: Sendable, Equatable {
+    let rssBytes: UInt64
+    let startedAt: Date
+    let openSockets: Int
 }
 
 /// A monitor reading: a snapshot when the daemon is running, otherwise the reason it
@@ -17,52 +28,120 @@ struct DaemonHealthReading: Sendable, Equatable {
     let downReason: String?
 }
 
-final class DaemonHealthMonitor: @unchecked Sendable {
-    private let resolver: any DaemonPIDResolving
-    private let lock = NSLock()
-    private var cachedPID: pid_t?
+/// Which process IS the production daemon (#972, #976 R1): the one listening on the
+/// BrainBar socket whose executable is the installed app's `BrainBarDaemon`. A
+/// basename match, a pidfile, a DEV/scratch build or a reused PID is never proof.
+struct DaemonIdentity: Sendable {
+    static let executableName = "BrainBarDaemon"
+    static let installedExecutablePath = "/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon"
 
-    init(pidResolver: any DaemonPIDResolving) {
-        self.resolver = pidResolver
+    let socketPath: String
+
+    enum Resolution: Equatable {
+        case found(pid_t)
+        case down(String)
     }
 
-    /// Watches one fixed PID. Test seam only — production resolves live.
-    convenience init(targetPID: pid_t) {
-        self.init(pidResolver: FixedDaemonPIDResolver(pid: targetPID))
+    static func isInstalledExecutable(_ path: String) -> Bool {
+        path == installedExecutablePath
+    }
+
+    func isProductionDaemon(_ pid: pid_t, inspector: any DaemonProcessInspecting) -> Bool {
+        guard pid > 0,
+              let path = inspector.executablePath(of: pid),
+              Self.isInstalledExecutable(path) else { return false }
+        return inspector.isListening(pid, onUnixSocket: socketPath)
+    }
+
+    func resolve(inspector: any DaemonProcessInspecting) -> Resolution {
+        guard let pids = inspector.processIDs() else {
+            return .down("BrainBarDaemon status unknown (process table unreadable)")
+        }
+        let named = pids.filter { $0 > 0 && inspector.shortName(of: $0) == Self.executableName }
+        if let pid = named.first(where: { isProductionDaemon($0, inspector: inspector) }) {
+            return .found(pid)
+        }
+        if let impostor = named.first(where: { inspector.isListening($0, onUnixSocket: socketPath) }) {
+            let path = inspector.executablePath(of: impostor) ?? "path unreadable"
+            return .down("\(socketPath) is served by a non-installed BrainBarDaemon (\(path))")
+        }
+        if named.contains(where: { inspector.executablePath(of: $0).map(Self.isInstalledExecutable) == true }) {
+            return .down("BrainBarDaemon is running but not serving \(socketPath)")
+        }
+        return .down("BrainBarDaemon not running")
+    }
+}
+
+final class DaemonHealthMonitor: @unchecked Sendable {
+    private enum Source {
+        /// Test seam: trust one PID as the daemon without identity checks.
+        case pinned(pid_t)
+        case production(DaemonIdentity)
+    }
+
+    private let source: Source
+    private let inspector: any DaemonProcessInspecting
+    private let now: @Sendable () -> Date
+    private let lock = NSLock()
+    private var verifiedPID: pid_t?
+
+    init(
+        inspector: any DaemonProcessInspecting = LiveDaemonProcessInspector(),
+        socketPath: String = BrainBarServer.defaultSocketPath(),
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.source = .production(DaemonIdentity(socketPath: socketPath))
+        self.inspector = inspector
+        self.now = now
+    }
+
+    /// Watches one fixed PID with no identity check. Test seam only.
+    init(targetPID: pid_t) {
+        self.source = .pinned(targetPID)
+        self.inspector = LiveDaemonProcessInspector()
+        self.now = Date.init
     }
 
     func sample() -> DaemonHealthSnapshot? {
         read().snapshot
     }
 
-    /// Resolves the daemon PID for this sample. Blocking (a process-table scan on a
-    /// cache miss); callers on the main actor must run it off-main.
+    /// Blocking (a process-table scan when the verified PID is gone); callers on the
+    /// main actor must run it off-main.
     func read() -> DaemonHealthReading {
         lock.withLock {
-            if let pid = cachedPID, isAlive(pid), resolver.isDaemon(pid) {
+            switch source {
+            case .pinned(let pid):
+                guard pid > 0, inspector.executablePath(of: pid) != nil else {
+                    return DaemonHealthReading(snapshot: nil, downReason: "PID \(pid) not running")
+                }
                 return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
+            case .production(let identity):
+                return readProduction(identity)
             }
-
-            let exitedPID = cachedPID
-            cachedPID = nil
-            guard let pid = resolver.resolveDaemonPID(), pid > 0, isAlive(pid) else {
-                let reason = exitedPID.map {
-                    "BrainBarDaemon not running (PID \($0) exited; no replacement found)"
-                } ?? "BrainBarDaemon not running (no daemon process found)"
-                return DaemonHealthReading(snapshot: nil, downReason: reason)
-            }
-            cachedPID = pid
-            return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
         }
     }
 
-    private func isAlive(_ pid: pid_t) -> Bool {
-        pid > 0 && kill(pid, 0) == 0
+    private func readProduction(_ identity: DaemonIdentity) -> DaemonHealthReading {
+        // Re-verified every sample, so a reused PID or a daemon that stopped serving
+        // the socket is dropped instead of trusted.
+        if let pid = verifiedPID, identity.isProductionDaemon(pid, inspector: inspector) {
+            return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
+        }
+        let lastPID = verifiedPID
+        verifiedPID = nil
+        switch identity.resolve(inspector: inspector) {
+        case .found(let pid):
+            verifiedPID = pid
+            return DaemonHealthReading(snapshot: snapshot(for: pid), downReason: nil)
+        case .down(let reason):
+            let described = lastPID.map { "\(reason) (last PID \($0) exited)" } ?? reason
+            return DaemonHealthReading(snapshot: nil, downReason: described)
+        }
     }
 
     private func snapshot(for pid: pid_t) -> DaemonHealthSnapshot {
-        guard let taskInfo = taskInfo(pid),
-              let bsdInfo = bsdInfo(pid) else {
+        guard let info = inspector.processInfo(of: pid) else {
             return DaemonHealthSnapshot(
                 pid: pid,
                 isResponsive: false,
@@ -73,158 +152,112 @@ final class DaemonHealthMonitor: @unchecked Sendable {
                 startedAt: nil
             )
         }
-
-        let startTime = Date(
-            timeIntervalSince1970: TimeInterval(bsdInfo.pbi_start_tvsec) +
-                (TimeInterval(bsdInfo.pbi_start_tvusec) / 1_000_000)
-        )
-
         return DaemonHealthSnapshot(
             pid: pid,
             isResponsive: true,
-            rssBytes: taskInfo.pti_resident_size,
-            uptime: max(0, Date().timeIntervalSince(startTime)),
-            openConnections: countOpenSocketDescriptors(pid),
+            rssBytes: info.rssBytes,
+            uptime: max(0, now().timeIntervalSince(info.startedAt)),
+            openConnections: info.openSockets,
             lastSeenAt: nil,
-            startedAt: startTime
+            startedAt: info.startedAt
         )
     }
-
-    private func taskInfo(_ pid: pid_t) -> proc_taskinfo? {
-        var info = proc_taskinfo()
-        let size = Int32(MemoryLayout.size(ofValue: info))
-        let result = withUnsafeMutablePointer(to: &info) { pointer in
-            proc_pidinfo(pid, PROC_PIDTASKINFO, 0, pointer, size)
-        }
-        guard result == size else { return nil }
-        return info
-    }
-
-    private func bsdInfo(_ pid: pid_t) -> proc_bsdinfo? {
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout.size(ofValue: info))
-        let result = withUnsafeMutablePointer(to: &info) { pointer in
-            proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, pointer, size)
-        }
-        guard result == size else { return nil }
-        return info
-    }
-
-    private func countOpenSocketDescriptors(_ pid: pid_t) -> Int {
-        var fdInfos = Array(repeating: proc_fdinfo(), count: 256)
-        let bytesRead = fdInfos.withUnsafeMutableBytes { rawBuffer in
-            proc_pidinfo(
-                pid,
-                PROC_PIDLISTFDS,
-                0,
-                rawBuffer.baseAddress,
-                Int32(rawBuffer.count)
-            )
-        }
-
-        guard bytesRead > 0 else { return 0 }
-        let infoCount = Int(bytesRead) / MemoryLayout<proc_fdinfo>.stride
-        return fdInfos.prefix(infoCount).reduce(into: 0) { count, info in
-            if Int32(info.proc_fdtype) == PROX_FDTYPE_SOCKET {
-                count += 1
-            }
-        }
-    }
 }
 
-struct FixedDaemonPIDResolver: DaemonPIDResolving {
-    let pid: pid_t
-
-    func isDaemon(_ candidate: pid_t) -> Bool {
-        candidate == pid
-    }
-
-    func resolveDaemonPID() -> pid_t? {
-        pid > 0 ? pid : nil
-    }
-}
-
-/// Finds the live BrainBarDaemon in-process: the pidfile when it names the daemon,
-/// else a `proc_listallpids` scan for the `BrainBarDaemon` executable. No launchctl
-/// subprocess — #974 showed a launchctl sweep can stall, and this runs every time
-/// the daemon restarts.
-struct LiveDaemonPIDResolver: DaemonPIDResolving {
-    static let executableName = "BrainBarDaemon"
-    var pidFilePath = "/tmp/brainbar-daemon.pid"
-
-    struct ProcessEntry: Equatable {
-        let pid: pid_t
-        let parentPID: pid_t
-        let executablePath: String
-    }
-
-    func isDaemon(_ pid: pid_t) -> Bool {
-        Self.executablePath(of: pid).map(Self.isDaemonExecutable) ?? false
-    }
-
-    func resolveDaemonPID() -> pid_t? {
-        if let pid = Self.pidFromFile(pidFilePath), isDaemon(pid) {
-            return pid
-        }
-        return Self.selectDaemonPID(from: Self.processTable())
-    }
-
-    /// Prefers the launchd-owned daemon (parent PID 1); a stray copy started by hand
-    /// only counts when launchd has none.
-    static func selectDaemonPID(from entries: [ProcessEntry]) -> pid_t? {
-        let daemons = entries.filter { $0.pid > 0 && isDaemonExecutable($0.executablePath) }
-        return (daemons.first { $0.parentPID == 1 } ?? daemons.first)?.pid
-    }
-
-    static func isDaemonExecutable(_ path: String) -> Bool {
-        URL(fileURLWithPath: path).lastPathComponent == executableName
-    }
-
-    static func pidFromFile(_ path: String) -> pid_t? {
-        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-        let token = contents.trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: CharacterSet.whitespacesAndNewlines)
-            .first ?? ""
-        guard let rawPID = Int32(token), rawPID > 0 else { return nil }
-        return pid_t(rawPID)
-    }
-
-    /// One `SHORTBSDINFO` call per PID yields the short name and parent; the full
-    /// path is fetched only for PIDs whose short name is already `BrainBarDaemon`.
-    private static func processTable() -> [ProcessEntry] {
-        let capacity = max(Int(proc_listallpids(nil, 0)), 0) + 64
-        var pids = [pid_t](repeating: 0, count: capacity)
+/// Reads the real process table in-process via libproc: no subprocess, so nothing
+/// here can stall on launchctl (#974). Socket ownership comes from the process's own
+/// file descriptors (`PROC_PIDFDSOCKETINFO`); nothing connects to the socket.
+struct LiveDaemonProcessInspector: DaemonProcessInspecting {
+    func processIDs() -> [pid_t]? {
+        let capacity = Int(proc_listallpids(nil, 0))
+        guard capacity > 0 else { return nil }
+        var pids = [pid_t](repeating: 0, count: capacity + 64)
         let count = pids.withUnsafeMutableBytes { buffer in
             proc_listallpids(buffer.baseAddress, Int32(buffer.count))
         }
-        guard count > 0 else { return [] }
-        return pids.prefix(Int(count)).compactMap { pid in
-            guard pid > 0, let info = shortInfo(pid), shortName(info) == executableName,
-                  let path = executablePath(of: pid) else { return nil }
-            return ProcessEntry(pid: pid, parentPID: pid_t(info.pbsi_ppid), executablePath: path)
-        }
+        guard count > 0 else { return nil }
+        return Array(pids.prefix(Int(count)))
     }
 
-    private static func shortInfo(_ pid: pid_t) -> proc_bsdshortinfo? {
+    func shortName(of pid: pid_t) -> String? {
         var info = proc_bsdshortinfo()
         let size = Int32(MemoryLayout.size(ofValue: info))
         let result = withUnsafeMutablePointer(to: &info) { pointer in
             proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, pointer, size)
         }
-        return result == size ? info : nil
-    }
-
-    private static func shortName(_ info: proc_bsdshortinfo) -> String {
-        withUnsafeBytes(of: info.pbsi_comm) { raw in
+        guard result == size else { return nil }
+        return withUnsafeBytes(of: info.pbsi_comm) { raw in
             String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
         }
     }
 
-    private static func executablePath(of pid: pid_t) -> String? {
+    func executablePath(of pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
         guard length > 0 else { return nil }
         return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool {
+        for fd in socketDescriptors(pid) {
+            var info = socket_fdinfo()
+            let size = Int32(MemoryLayout<socket_fdinfo>.size)
+            guard proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &info, size) == size,
+                  info.psi.soi_family == AF_UNIX,
+                  (Int32(info.psi.soi_options) & SO_ACCEPTCONN) != 0 else { continue }
+            let bound = withUnsafeBytes(of: info.psi.soi_proto.pri_un.unsi_addr.ua_sun.sun_path) { raw in
+                String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+            }
+            if Self.socketPathsMatch(bound, path) { return true }
+        }
+        return false
+    }
+
+    func processInfo(of pid: pid_t) -> DaemonProcessInfo? {
+        var task = proc_taskinfo()
+        let taskSize = Int32(MemoryLayout.size(ofValue: task))
+        let taskResult = withUnsafeMutablePointer(to: &task) { pointer in
+            proc_pidinfo(pid, PROC_PIDTASKINFO, 0, pointer, taskSize)
+        }
+        var bsd = proc_bsdinfo()
+        let bsdSize = Int32(MemoryLayout.size(ofValue: bsd))
+        let bsdResult = withUnsafeMutablePointer(to: &bsd) { pointer in
+            proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, pointer, bsdSize)
+        }
+        guard taskResult == taskSize, bsdResult == bsdSize else { return nil }
+        let startedAt = Date(
+            timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec) +
+                (TimeInterval(bsd.pbi_start_tvusec) / 1_000_000)
+        )
+        return DaemonProcessInfo(
+            rssBytes: task.pti_resident_size,
+            startedAt: startedAt,
+            openSockets: socketDescriptors(pid).count
+        )
+    }
+
+    /// `/tmp` is a symlink to `/private/tmp`; the kernel reports the path as bound.
+    static func socketPathsMatch(_ bound: String, _ expected: String) -> Bool {
+        guard !bound.isEmpty else { return false }
+        return bound == expected || canonical(bound) == canonical(expected)
+    }
+
+    private static func canonical(_ path: String) -> String {
+        path.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+    }
+
+    private func socketDescriptors(_ pid: pid_t) -> [Int32] {
+        let needed = Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0))
+        guard needed > 0 else { return [] }
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: needed / stride + 16)
+        let bytes = fds.withUnsafeMutableBytes { buffer in
+            proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buffer.baseAddress, Int32(buffer.count))
+        }
+        guard bytes > 0 else { return [] }
+        return fds.prefix(Int(bytes) / stride)
+            .filter { Int32($0.proc_fdtype) == PROX_FDTYPE_SOCKET }
+            .map(\.proc_fd)
     }
 }
 

@@ -17,7 +17,7 @@ enum BrainBarAppSupport {
     ) -> StatsCollector {
         makeStatsCollector(
             dbPath: dbPath,
-            daemonPIDResolver: FixedDaemonPIDResolver(pid: targetPID),
+            daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
             brainBusEvents: brainBusEvents,
             watcherProcessProbe: watcherProcessProbe,
             databaseOpenConfiguration: databaseOpenConfiguration
@@ -27,14 +27,14 @@ enum BrainBarAppSupport {
     @MainActor
     static func makeStatsCollector(
         dbPath: String,
-        daemonPIDResolver: any DaemonPIDResolving,
+        daemonMonitor: DaemonHealthMonitor,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
         watcherProcessProbe: any WatcherProcessProbing = LaunchctlWatcherProcessProbe(),
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) -> StatsCollector {
         StatsCollector(
             dbPath: dbPath,
-            daemonMonitor: DaemonHealthMonitor(pidResolver: daemonPIDResolver),
+            daemonMonitor: daemonMonitor,
             watcherProcessProbe: watcherProcessProbe,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: databaseOpenConfiguration
@@ -45,13 +45,13 @@ enum BrainBarAppSupport {
     static func makeUIStatsCollector(
         dbPath: String,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
-        daemonPIDResolver: any DaemonPIDResolving = LiveDaemonPIDResolver()
+        daemonMonitor: DaemonHealthMonitor = DaemonHealthMonitor()
     ) -> StatsCollector {
-        // The resolver runs on every sample, never once at launch: the daemon
-        // restarts (wake, crash, upgrade) while this UI keeps running (#972).
+        // The monitor identifies the daemon on every sample, never once at launch:
+        // the daemon restarts (wake, crash, upgrade) while this UI keeps running (#972).
         makeStatsCollector(
             dbPath: dbPath,
-            daemonPIDResolver: daemonPIDResolver,
+            daemonMonitor: daemonMonitor,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
@@ -95,11 +95,5 @@ enum BrainBarAppSupport {
             database: database,
             databasePath: dbPath
         )
-    }
-
-    static func daemonPIDFromFile(_ path: String) -> pid_t? {
-        guard let pid = LiveDaemonPIDResolver.pidFromFile(path),
-              LiveDaemonPIDResolver().isDaemon(pid) else { return nil }
-        return pid
     }
 }
