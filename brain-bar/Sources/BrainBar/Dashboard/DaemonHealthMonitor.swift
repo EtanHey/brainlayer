@@ -170,20 +170,38 @@ final class DaemonHealthMonitor: @unchecked Sendable {
         // Re-verified every sample, so a reused PID or a daemon that stopped serving
         // the socket is dropped instead of trusted.
         if let pid = verifiedPID, identity.isProductionDaemon(pid, inspector: inspector) {
-            return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
+            return productionReading(for: pid)
         }
         let lastPID = verifiedPID
         verifiedPID = nil
         switch identity.resolve(inspector: inspector) {
         case .found(let pid):
             verifiedPID = pid
-            return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
+            return productionReading(for: pid)
         case .unavailable(.down(let reason)):
-            let described = lastPID.map { "\(reason) (last PID \($0) exited)" } ?? reason
+            // `.down` means the whole table was read, so a last PID that no longer
+            // reads (or is a zombie) is really gone; one still named is alive (#978).
+            let exited = lastPID.flatMap { pid -> pid_t? in
+                if case .name = inspector.shortName(of: pid) { return nil }
+                return pid
+            }
+            let described = exited.map { "\(reason) (last PID \($0) exited)" } ?? reason
             return DaemonHealthReading(snapshot: nil, unavailability: .down(described))
         case .unavailable(.unknown(let reason)):
             return DaemonHealthReading(snapshot: nil, unavailability: .unknown(reason))
         }
+    }
+
+    /// A verified production daemon whose metrics cannot be read is an inspection
+    /// failure: `unknown`, never an "Unavailable" snapshot in the outage colour (#978).
+    private func productionReading(for pid: pid_t) -> DaemonHealthReading {
+        guard inspector.processInfo(of: pid) != nil else {
+            return DaemonHealthReading(
+                snapshot: nil,
+                unavailability: .unknown("process info of BrainBarDaemon PID \(pid) unreadable")
+            )
+        }
+        return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
     }
 
     private func snapshot(for pid: pid_t) -> DaemonHealthSnapshot {
