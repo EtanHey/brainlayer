@@ -321,11 +321,15 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
             timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec) +
                 (TimeInterval(bsd.pbi_start_tvusec) / 1_000_000)
         )
-        return DaemonProcessInfo(
+        return Self.processInfo(
             rssBytes: task.pti_resident_size,
             startedAt: startedAt,
-            openSockets: socketDescriptors(pid)?.count ?? 0
+            openSockets: socketDescriptors(pid)?.count
         )
+    }
+
+    static func processInfo(rssBytes: UInt64, startedAt: Date, openSockets: Int?) -> DaemonProcessInfo? {
+        DaemonProcessInfo(rssBytes: rssBytes, startedAt: startedAt, openSockets: openSockets ?? 0)
     }
 
     /// `/tmp` is a symlink to `/private/tmp`; the kernel reports the path as bound.

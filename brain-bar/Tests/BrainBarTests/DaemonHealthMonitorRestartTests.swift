@@ -261,6 +261,62 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
         )
     }
 
+    /// #979 R1 B1: one sample reads the daemon's metrics once; a read that fails
+    /// between two calls must not surface as an "Unavailable" snapshot.
+    func test_one_sample_reads_process_info_once_and_a_later_failure_is_unknown() {
+        let table = FakeProcessTable([
+            101: .daemonInfoFlaky(listening: Self.socket, startedAt: Self.now.addingTimeInterval(-60)),
+        ])
+        let monitor = monitor(table)
+
+        let first = monitor.read()
+        XCTAssertEqual(first.snapshot?.pid, 101)
+        XCTAssertEqual(first.snapshot?.uptime, 60)
+        XCTAssertEqual(table.processInfoReads, 1, "one sample, one metrics read")
+
+        let second = monitor.read()
+        XCTAssertNil(second.snapshot)
+        XCTAssertEqual(second.unavailability, .unknown("process info of BrainBarDaemon PID 101 unreadable"))
+        XCTAssertEqual(
+            DaemonRuntimeRows.daemonText(daemon: second.snapshot, unavailability: second.unavailability),
+            "Unknown — process info of BrainBarDaemon PID 101 unreadable"
+        )
+    }
+
+    /// #979 R1 B2: a non-installed listener proves nothing while a production
+    /// candidate is unmeasured; the row stays neutral "Unknown".
+    @MainActor
+    func test_a_scratch_listener_does_not_preempt_an_unmeasured_production_candidate() async throws {
+        let cases: [(FakeProcessTable.Entry, pid_t, String)] = [
+            (.daemonSocketsUnreadable(path: Self.installed, startedAt: Self.now), 101,
+             "Unknown — sockets of BrainBarDaemon PID 101 unreadable"),
+            (.daemonPathUnreadable(listening: nil, startedAt: Self.now), 101,
+             "Unknown — executable path of BrainBarDaemon PID 101 unreadable"),
+            (.unreadable, 77, "Unknown — process PID 77 unreadable"),
+        ]
+        for (entry, pid, expected) in cases {
+            let table = FakeProcessTable([
+                pid: entry,
+                501: .daemon(path: Self.scratchBuild, listening: Self.socket, startedAt: Self.now),
+            ])
+
+            let row = try await visibleDaemonRow(table)
+
+            XCTAssertEqual(row, expected)
+            XCTAssertFalse(DaemonRuntimeRows.isAttention(row))
+        }
+    }
+
+    /// #979 R1 B3: a descriptor table that cannot be counted is not "0 sockets".
+    func test_an_uncountable_socket_table_is_unmeasured_not_zero() {
+        let start = Self.now
+        XCTAssertNil(LiveDaemonProcessInspector.processInfo(rssBytes: 1, startedAt: start, openSockets: nil))
+        XCTAssertEqual(
+            LiveDaemonProcessInspector.processInfo(rssBytes: 1, startedAt: start, openSockets: 0),
+            DaemonProcessInfo(rssBytes: 1, startedAt: start, openSockets: 0)
+        )
+    }
+
     /// The Daemon row exactly as the Runtime card renders it for this collector.
     @MainActor
     private func visibleDaemonRow(_ table: FakeProcessTable) async throws -> String {
@@ -401,6 +457,8 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
         case daemonPathUnreadable(listening: String?, startedAt: Date)
         /// A serving installed daemon whose task/BSD info cannot be read.
         case daemonInfoUnreadable(listening: String?)
+        /// A serving installed daemon whose metrics read once, then fail.
+        case daemonInfoFlaky(listening: String?, startedAt: Date)
         /// A process whose name and state cannot be read at all.
         case unreadable
         /// An exited, unreaped process: it holds no sockets and is never the daemon.
@@ -413,6 +471,7 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
     private var _isReadable = true
     private var _scanCount = 0
     private var _scannedOnMainThread = false
+    private var _processInfoReads = 0
 
     init(_ entries: [pid_t: Entry]) {
         self.entries = entries
@@ -425,6 +484,7 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
 
     var scanCount: Int { lock.withLock { _scanCount } }
     var scannedOnMainThread: Bool { lock.withLock { _scannedOnMainThread } }
+    var processInfoReads: Int { lock.withLock { _processInfoReads } }
 
     func add(_ pid: pid_t, _ entry: Entry) { lock.withLock { entries[pid] = entry } }
     func remove(_ pid: pid_t) { lock.withLock { _ = entries.removeValue(forKey: pid) } }
@@ -440,7 +500,7 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
     func shortName(of pid: pid_t) -> ProcessNameRead {
         lock.withLock {
             switch entries[pid] {
-            case .daemon?, .daemonSocketsUnreadable?, .daemonPathUnreadable?, .daemonInfoUnreadable?:
+            case .daemon?, .daemonSocketsUnreadable?, .daemonPathUnreadable?, .daemonInfoUnreadable?, .daemonInfoFlaky?:
                 return .name("BrainBarDaemon")
             case .other(let name, _)?: return .name(name)
             case .zombie?: return .zombie
@@ -454,7 +514,7 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
             switch entries[pid] {
             case .daemon(let path, _, _)?: return path
             case .daemonSocketsUnreadable(let path, _)?: return path
-            case .daemonInfoUnreadable?: return DaemonHealthMonitorRestartTests.installedPath
+            case .daemonInfoUnreadable?, .daemonInfoFlaky?: return DaemonHealthMonitorRestartTests.installedPath
             case .other(_, let path)?: return path
             case .daemonPathUnreadable?, .unreadable?, .zombie?, nil: return nil
             }
@@ -465,7 +525,8 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
         lock.withLock {
             switch entries[pid] {
             case .daemon(_, let listening, _)?: return listening == path
-            case .daemonPathUnreadable(let listening, _)?, .daemonInfoUnreadable(let listening)?:
+            case .daemonPathUnreadable(let listening, _)?, .daemonInfoUnreadable(let listening)?,
+                 .daemonInfoFlaky(let listening, _)?:
                 return listening == path
             case .daemonSocketsUnreadable?, .unreadable?: return nil
             case .other?, .zombie?, nil: return false
@@ -475,12 +536,15 @@ private final class FakeProcessTable: DaemonProcessInspecting, @unchecked Sendab
 
     func processInfo(of pid: pid_t) -> DaemonProcessInfo? {
         lock.withLock {
+            _processInfoReads += 1
             let startedAt: Date
             switch entries[pid] {
+            case .daemonInfoFlaky(_, let started)? where _processInfoReads == 1:
+                startedAt = started
             case .daemon(_, _, let started)?, .daemonSocketsUnreadable(_, let started)?,
                  .daemonPathUnreadable(_, let started)?:
                 startedAt = started
-            case .daemonInfoUnreadable?, .other?, .unreadable?, .zombie?, nil: return nil
+            case .daemonInfoUnreadable?, .daemonInfoFlaky?, .other?, .unreadable?, .zombie?, nil: return nil
             }
             return DaemonProcessInfo(rssBytes: 1_024, startedAt: startedAt, openSockets: 3)
         }
