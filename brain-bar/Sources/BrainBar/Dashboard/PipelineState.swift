@@ -142,7 +142,17 @@ struct DaemonHealthSnapshot: Sendable, Equatable {
     let rssBytes: UInt64
     let uptime: TimeInterval
     let openConnections: Int
-    let lastSeenAt: Date
+    /// Last successful brain-bus socket answer from the daemon — not the sample time.
+    /// `nil` until the daemon has answered at least once (#972).
+    var lastSeenAt: Date?
+    /// The daemon process's real start time, from `proc_bsdinfo`.
+    var startedAt: Date? = nil
+
+    func withLastSeenAt(_ date: Date?) -> DaemonHealthSnapshot {
+        var copy = self
+        copy.lastSeenAt = date
+        return copy
+    }
 }
 
 enum PipelineIndicatorStatus: Sendable, Equatable {

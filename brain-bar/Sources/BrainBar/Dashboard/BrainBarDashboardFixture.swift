@@ -311,7 +311,8 @@ enum BrainBarDashboardFixture {
         rssBytes: 268_435_456,
         uptime: 18_000,
         openConnections: 3,
-        lastSeenAt: fetchedAt
+        lastSeenAt: fetchedAt,
+        startedAt: fetchedAt.addingTimeInterval(-18_000)
     )
 
     static let agentActivity = AgentActivitySnapshot(
