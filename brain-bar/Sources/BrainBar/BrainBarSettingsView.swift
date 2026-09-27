@@ -40,6 +40,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let confirmAPIKeyOverwrite: (() -> Bool)?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
+    private var embeddingSampleGeneration: UInt64 = 0
 
     init(
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
@@ -182,16 +183,30 @@ final class BrainBarSettingsViewModel: ObservableObject {
         )
     }
 
+    /// Samples the hotlane on its own detached task, published independently of the
+    /// all-jobs launchd sweep, which has no deadline (#974 review B1). The probe itself is
+    /// bounded (1 s launchctl timeout, non-blocking proc_pidinfo). Only the newest request
+    /// publishes, so a slow older sample can never overwrite a fresher PID/RSS.
+    func refreshEmbeddingResidency() {
+        embeddingSampleGeneration &+= 1
+        let generation = embeddingSampleGeneration
+        let probe = embeddingResidencyProbe
+        Task {
+            let sample = await Task.detached { probe.sample() }.value
+            guard generation == embeddingSampleGeneration else { return }
+            embeddingProcess = sample
+        }
+    }
+
     func refreshLaunchdStatus() {
         isRefreshingLaunchdStatus = true
+        refreshEmbeddingResidency()
         let provider = launchdStatusProvider
-        let residencyProbe = embeddingResidencyProbe
         Task {
-            let (observations, embedding) = await Task.detached {
-                (provider.sampleActivity(), residencyProbe.sample())
+            let observations = await Task.detached {
+                provider.sampleActivity()
             }.value
             launchdObservations = observations
-            embeddingProcess = embedding
             applyLaunchdStates(observations.mapValues(\.loadState))
             activeRuntimeObservation = runtimeStatusProvider.sample()
             refreshLastSaveReceiptActiveState()

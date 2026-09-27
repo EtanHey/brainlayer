@@ -162,9 +162,9 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
 
         viewModel.refreshLaunchdStatus()
         let deadline = Date().addingTimeInterval(2)
-        while viewModel.isRefreshingLaunchdStatus {
+        while viewModel.modelResidencyPresentation.value(for: "Status") == nil {
             if Date() > deadline {
-                XCTFail("Timed out waiting for status refresh")
+                XCTFail("Timed out waiting for the embedding sample")
                 break
             }
             await Task.yield()
