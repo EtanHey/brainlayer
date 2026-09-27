@@ -132,6 +132,55 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 1)
     }
 
+    /// #977 R1 B1: an interactive CLI launched with no arguments is a session. Its
+    /// whole args field is the binary, so detection must match argv[0] itself.
+    func test_bare_interactive_clis_with_no_arguments_are_sessions() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(60, 1, "zsh", "-zsh"),
+            Self.row(61, 60, "2.1.281", "claude"),
+            Self.row(62, 60, "2.1.281", "/Users/dev/.local/bin/claude"),
+            Self.row(63, 60, "codex", "codex"),
+            Self.row(64, 60, "codex", "/opt/homebrew/bin/codex"),
+            Self.row(65, 60, "gemini", "gemini"),
+            Self.row(66, 60, "node", "/Users/dev/.npm-global/bin/gemini"),
+            Self.row(67, 60, "cursor-agent", "cursor-agent"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .claude), 2)
+        XCTAssertEqual(activity.count(for: .codex), 2)
+        XCTAssertEqual(activity.count(for: .gemini), 2)
+        XCTAssertEqual(activity.count(for: .cursor), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 7)
+    }
+
+    /// #977 R1 B2: a mode is a process role at a fixed argv position, not a word
+    /// anywhere in the args. Prompt text that mentions a mode must not hide a session.
+    func test_mode_words_inside_a_prompt_do_not_hide_a_headless_session() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(70, 1, "zsh", "-zsh"),
+            Self.row(71, 70, "2.1.281", "claude -p summarize the app-server logs"),
+            Self.row(72, 70, "codex", "codex exec review why mcp serve fails"),
+            Self.row(73, 70, "gemini", "gemini -p fix the mcp-server config and --chrome-native-host flag"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .claude), 1)
+        XCTAssertEqual(activity.count(for: .codex), 1)
+        XCTAssertEqual(activity.count(for: .gemini), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 3)
+    }
+
+    func test_real_non_session_roles_are_still_excluded_by_argv_position() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(80, 1, "codex", "/Users/dev/.codex/packages/app-server-daemon/releases/0.157.1/bin/codex app-server --listen unix://"),
+            Self.row(81, 1, "codex", "/Users/dev/.codex/bin/codex -c features.code_mode_host=true app-server --analytics-default-enabled"),
+            Self.row(82, 1, "codex", "/Users/dev/.codex/bin/codex --config model=x mcp-server"),
+            Self.row(83, 1, "2.1.281", "claude mcp serve"),
+            Self.row(84, 1, "2.1.275", "/Users/dev/.local/bin/claude --chrome-native-host"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {
         let activity = AgentActivityMonitor.parse(Self.busyMachine)
 
