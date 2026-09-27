@@ -3124,7 +3124,7 @@ final class DashboardTests: XCTestCase {
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: tempDBPath,
             brainBusEvents: nil,
-            daemonPIDResolver: FixedDaemonPIDResolver(pid: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
         )
         defer { collector.stop() }
 
@@ -3133,19 +3133,6 @@ final class DashboardTests: XCTestCase {
 
         let snapshot = try XCTUnwrap(collector.daemon)
         XCTAssertEqual(snapshot.pid, ProcessInfo.processInfo.processIdentifier)
-    }
-
-    func testDaemonPIDFileIgnoresPIDForNonDaemonProcess() throws {
-        let pidFile = URL(fileURLWithPath: tempDBPath).deletingLastPathComponent()
-            .appendingPathComponent("brainbar-daemon-\(UUID().uuidString).pid")
-        try "\(ProcessInfo.processInfo.processIdentifier)\n".write(
-            to: pidFile,
-            atomically: true,
-            encoding: .utf8
-        )
-        defer { try? FileManager.default.removeItem(at: pidFile) }
-
-        XCTAssertNil(BrainBarAppSupport.daemonPIDFromFile(pidFile.path))
     }
 
     func test_DashboardFlowSummary_renders_lanes_with_nil_daemon_snapshot() {
