@@ -586,6 +586,40 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
 
+    /// #971: the Runtime card's Agents row is a session count with the per-CLI
+    /// breakdown, and the card carries the one-line counting definition.
+    @MainActor
+    func testRuntimeAgentsRowRendersSessionBreakdownAtEveryBreakpoint() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let activity = AgentActivitySnapshot(presences: [
+            AgentPresence(family: .claude, count: 11),
+            AgentPresence(family: .codex, count: 2),
+            AgentPresence(family: .cursor, count: 1),
+            AgentPresence(family: .gemini, count: 1),
+        ])
+        XCTAssertEqual(activity.runtimeRowText, "15 sessions · 11 Claude · 2 Codex · 1 Gemini · 1 Cursor")
+        let collector = BrainBarDashboardFixture.makeCollector(.live, agentActivity: activity)
+        for width: CGFloat in [760, 960, 1_280] {
+            let panelState = BrainBarDashboardPanelState()
+            panelState.detailsExpanded = true
+            let view = BrainBarDashboardPreview.make(
+                collector: collector,
+                now: BrainBarDashboardFixture.fetchedAt,
+                panelState: panelState
+            )
+            // Tall enough that the compact layout's stacked cards and the Runtime
+            // footnote are inside the frame.
+            let (png, _) = try renderPNG(view, size: NSSize(width: width, height: 1_320))
+            let url = try writePNG(png, name: "dashboard-runtime-agent-sessions-\(Int(width))")
+            XCTAssertGreaterThan(png.count, 5_000, "agent sessions @ \(width) render looks empty")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
+
     @MainActor
     func testDashboardDisclosureKeyboardFocusRingActuallyDraws() throws {
         let size = NSSize(width: 320, height: 64)

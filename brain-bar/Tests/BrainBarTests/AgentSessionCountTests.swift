@@ -18,7 +18,7 @@ final class AgentSessionCountTests: XCTestCase {
 
     /// A machine with 6 real sessions (2 Claude, 2 Codex, 1 Gemini, 1 Cursor) and a
     /// crowd of processes the old row-counter also counted.
-    static let busyMachine = [
+    static let busyMachine: String = ([String]([
         row(100, 1, "zsh", "-zsh"),
         row(101, 1, "zsh", "-zsh"),
         row(102, 1, "zsh", "-zsh"),
@@ -64,7 +64,7 @@ final class AgentSessionCountTests: XCTestCase {
         row(800, 1, "mcplayer", "/Users/dev/.local/bin/mcplayer proxy --spawn /Users/dev/.local/bin/claude mcp serve"),
         row(801, 1, "brainlayer-mcp-stdio-bridge", "/opt/homebrew/bin/brainlayer-mcp-stdio-bridge --spawn codex mcp"),
         row(802, 1, "socat", "socat STDIO EXEC:/Users/dev/.local/bin/claude mcp serve"),
-    ].joined(separator: "\n")
+    ])).joined(separator: "\n")
 
     func test_counts_one_per_top_level_session_on_a_busy_machine() {
         let activity = AgentActivityMonitor.parse(Self.busyMachine)
@@ -113,6 +113,23 @@ final class AgentSessionCountTests: XCTestCase {
         )
 
         XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    /// Live capture 2026-09-28: a detached perl that rewrites `$0` (cmuxlayer's inbox
+    /// tail) makes ps print its leftover environment as args, including a
+    /// `.../claude CMUX_CLAUDE_WRAPPER...` path. Shells and text tools are never the
+    /// session process; the real CLI is always its own row.
+    func test_shells_and_argv_rewriting_helpers_are_never_sessions() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(40, 1, "perl", "cmuxlayer-inbox-tail:0123abcd      CMUX_BUNDLE_ID=com.example.app CMUX_CLAUDE_WRAPPER_SHIM=/var/folders/xx/T/shim/claude CMUX_CLAUDE_WRAPPER=1"),
+            Self.row(41, 40, "tail", "tail -n0 -F /Users/dev/.cmux/agents/brainlayerClaude-0000/inbox.jsonl"),
+            Self.row(42, 1, "bash", "/bin/bash /Users/dev/.claude/skills/collab-monitor/scripts/collab-monitor.sh run"),
+            Self.row(50, 1, "zsh", "/bin/zsh -c brainlayerClaude -s --resume 0000"),
+            Self.row(51, 50, "2.1.281", "claude --dangerously-skip-permissions --resume 0000"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .claude), 1, "only the claude process itself is the session")
+        XCTAssertEqual(activity.totalActiveAgents, 1)
     }
 
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {

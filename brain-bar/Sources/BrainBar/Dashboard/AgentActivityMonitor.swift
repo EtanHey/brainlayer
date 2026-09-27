@@ -40,12 +40,12 @@ struct AgentPresence: Sendable, Equatable {
 
     var isActive: Bool { count > 0 }
 
-    var liveProcessLabel: String {
-        count == 1 ? "1 live agent process" : "\(DashboardMetricFormatter.integerString(count)) live agent processes"
+    var liveSessionLabel: String {
+        count == 1 ? "1 live agent session" : "\(DashboardMetricFormatter.integerString(count)) live agent sessions"
     }
 
     var accessibilityLabel: String {
-        "\(family.label): \(liveProcessLabel) from ps"
+        "\(family.label): \(liveSessionLabel) from ps"
     }
 }
 
@@ -88,13 +88,33 @@ struct AgentActivitySnapshot: Sendable, Equatable {
         }
         switch totalActiveAgents {
         case 0:
-            return "No agent processes live"
+            return "No agent sessions live"
         case 1:
-            return "1 agent process live"
+            return "1 agent session live"
         default:
-            return "\(DashboardMetricFormatter.integerString(totalActiveAgents)) agent processes live"
+            return "\(DashboardMetricFormatter.integerString(totalActiveAgents)) agent sessions live"
         }
     }
+
+    /// Per-CLI counts in a fixed order, zeros included, so the row never reflows.
+    var breakdownText: String {
+        Self.breakdownOrder
+            .map { "\(DashboardMetricFormatter.integerString(count(for: $0))) \($0.label)" }
+            .joined(separator: " · ")
+    }
+
+    /// The Runtime card's "Agents" value (#971).
+    var runtimeRowText: String {
+        guard isMeasured else { return summaryText }
+        let total = DashboardMetricFormatter.integerString(totalActiveAgents)
+        let sessions = totalActiveAgents == 1 ? "1 session" : "\(total) sessions"
+        return "\(sessions) · \(breakdownText)"
+    }
+
+    static let breakdownOrder: [AgentFamily] = [.claude, .codex, .gemini, .cursor]
+
+    static let countingDefinition =
+        "Agents = top-level Claude, Codex, Gemini and Cursor CLI sessions; app helpers, MCP bridges and each session's child processes are not counted."
 }
 
 final class AgentActivityMonitor {
@@ -109,39 +129,138 @@ final class AgentActivityMonitor {
         return Self.parse(snapshot)
     }
 
+    struct ProcessRow: Equatable {
+        let pid: Int32
+        let parentPID: Int32
+        /// Lowercased `ucomm` (16-character short name, may contain spaces).
+        let executable: String
+        /// Lowercased `args`.
+        let command: String
+    }
+
+    /// `ucomm` is printed left-justified in a fixed MAXCOMLEN (16) column, so it can be
+    /// split off by width even when it contains spaces ("Codex (Service)").
+    static let ucommColumnWidth = 16
+
+    /// Counts agent SESSIONS (#971): a row is a candidate when it looks like an agent
+    /// CLI and is not an app-bundled helper, bridge/proxy, or non-session mode; a
+    /// candidate counts only when none of its ancestors is itself a candidate, so a
+    /// session's wrappers, MCP children and nested CLIs fold into that one session.
     static func parse(_ snapshot: String) -> AgentActivitySnapshot {
-        var actualCounts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
-        var wrapperCounts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
-
-        for rawLine in snapshot.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-            let parts = line.split(maxSplits: 2, omittingEmptySubsequences: true) { $0 == " " || $0 == "\t" }
-            guard parts.count == 3 else { continue }
-
-            let executable = String(parts[1]).lowercased()
-            let command = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let lowerCommand = command.lowercased()
-
-            guard !isIgnoredProcess(executable: executable, command: lowerCommand) else { continue }
-
-            if let family = detectActualFamily(executable: executable, command: lowerCommand) {
-                actualCounts[family, default: 0] += 1
-                continue
-            }
-
-            if let family = detectWrapperFamily(executable: executable, command: lowerCommand) {
-                wrapperCounts[family, default: 0] += 1
+        let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
+        var parentByPID: [Int32: Int32] = [:]
+        var candidates: [Int32: AgentFamily] = [:]
+        for row in rows {
+            parentByPID[row.pid] = row.parentPID
+            if let family = candidateFamily(row) {
+                candidates[row.pid] = family
             }
         }
 
-        let presences = AgentFamily.allCases.map { family in
-            let actual = actualCounts[family, default: 0]
-            let wrappers = wrapperCounts[family, default: 0]
-            return AgentPresence(family: family, count: actual > 0 ? actual : wrappers)
+        var counts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
+        for (pid, family) in candidates where !hasCandidateAncestor(pid, parentByPID: parentByPID, candidates: candidates) {
+            counts[family, default: 0] += 1
         }
 
-        return AgentActivitySnapshot(presences: presences)
+        return AgentActivitySnapshot(
+            presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: counts[$0, default: 0]) }
+        )
+    }
+
+    static func parseRow(_ rawLine: Substring) -> ProcessRow? {
+        var rest = rawLine.drop(while: \.isWhitespace)
+        guard let pidEnd = rest.firstIndex(where: \.isWhitespace),
+              let pid = Int32(rest[..<pidEnd]) else { return nil }
+        rest = rest[pidEnd...].drop(while: \.isWhitespace)
+        guard let parentEnd = rest.firstIndex(where: \.isWhitespace),
+              let parentPID = Int32(rest[..<parentEnd]) else { return nil }
+        rest = rest[rest.index(after: parentEnd)...]
+
+        let executable: Substring
+        let command: Substring
+        if rest.count > ucommColumnWidth,
+           rest[rest.index(rest.startIndex, offsetBy: ucommColumnWidth)] == " " {
+            executable = rest.prefix(ucommColumnWidth)
+            command = rest.dropFirst(ucommColumnWidth + 1)
+        } else {
+            let parts = rest.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+            executable = parts.first ?? ""
+            command = parts.count > 1 ? parts[1] : ""
+        }
+        return ProcessRow(
+            pid: pid,
+            parentPID: parentPID,
+            executable: executable.trimmingCharacters(in: .whitespaces).lowercased(),
+            command: command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
+    }
+
+    private static func candidateFamily(_ row: ProcessRow) -> AgentFamily? {
+        let executable = row.executable
+        let command = row.command
+        guard !command.isEmpty,
+              !isAppBundled(command),
+              !nonSessionExecutables.contains(executable),
+              !isBridgeOrProxy(executable: executable, command: command),
+              !isNonSessionMode(command),
+              !isIgnoredProcess(executable: executable, command: command)
+        else { return nil }
+        return detectActualFamily(executable: executable, command: command)
+            ?? detectWrapperFamily(executable: executable, command: command)
+    }
+
+    private static func hasCandidateAncestor(
+        _ pid: Int32,
+        parentByPID: [Int32: Int32],
+        candidates: [Int32: AgentFamily]
+    ) -> Bool {
+        var visited: Set<Int32> = [pid]
+        var current = parentByPID[pid]
+        while let ancestor = current, ancestor > 1, visited.insert(ancestor).inserted {
+            if candidates[ancestor] != nil { return true }
+            current = parentByPID[ancestor]
+        }
+        return false
+    }
+
+    /// Helpers shipped inside a desktop app bundle (ChatGPT.app's Codex framework and
+    /// bundled `codex`, Claude.app, Cursor.app) are never CLI sessions.
+    private static func isAppBundled(_ command: String) -> Bool {
+        (command.hasPrefix("/applications/") && command.contains(".app/"))
+            || command.hasPrefix("/system/")
+    }
+
+    /// Shells, launch wrappers and text tools are never the session process: a real
+    /// CLI session is always its own row (`ucomm` = the Claude version string, codex,
+    /// node, gemini, agy …), so dropping these loses no session. It also drops a
+    /// detached helper that rewrote `$0` (cmuxlayer's inbox tail), whose ps args then
+    /// show its leftover environment, `CMUX_CLAUDE_WRAPPER_SHIM=…/claude` included.
+    private static let nonSessionExecutables: Set<String> = [
+        "sh", "bash", "zsh", "fish", "dash", "login", "env", "sudo", "nohup", "timeout",
+        "caffeinate", "script", "tmux", "screen", "perl", "tail", "cat", "sed", "less",
+    ]
+
+    private static let bridgeExecutables: Set<String> = ["brainlayer-mcp-stdio-bridge", "socat", "mcplayer"]
+
+    private static func isBridgeOrProxy(executable: String, command: String) -> Bool {
+        let launcher = command.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        let launcherName = launcher.split(separator: "/").last.map(String.init) ?? launcher
+        // `ucomm` is truncated to 16 characters ("brainlayer-mcp-s").
+        return bridgeExecutables.contains(launcherName)
+            || bridgeExecutables.contains { String($0.prefix(ucommColumnWidth)) == executable }
+    }
+
+    /// Agent binaries run in a mode that is not an interactive or headless session:
+    /// Claude's Chrome native-messaging host, Codex's app-server daemons, MCP servers.
+    private static func isNonSessionMode(_ command: String) -> Bool {
+        let tokens = command.split(whereSeparator: \.isWhitespace)
+        if tokens.contains("--chrome-native-host") || tokens.contains("app-server") || tokens.contains("mcp-server") {
+            return true
+        }
+        for index in tokens.indices.dropLast() where tokens[index] == "mcp" && tokens[index + 1] == "serve" {
+            return true
+        }
+        return false
     }
 
     static func runSnapshotCommand(executableURL: URL, arguments: [String]) -> String? {
@@ -166,10 +285,12 @@ final class AgentActivityMonitor {
         return String(data: data, encoding: .utf8)
     }
 
+    static let psArguments = ["-axo", "pid=,ppid=,ucomm=,args="]
+
     private static func captureProcessSnapshot() -> String? {
         runSnapshotCommand(
             executableURL: URL(fileURLWithPath: "/bin/ps"),
-            arguments: ["-axo", "pid=,ucomm=,args="]
+            arguments: psArguments
         )
     }
 

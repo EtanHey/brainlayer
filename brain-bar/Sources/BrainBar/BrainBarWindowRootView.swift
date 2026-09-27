@@ -1542,7 +1542,7 @@ private struct BrainBarDashboardView: View {
         ]
         let runtimeRows = [
             ("Daemon", daemonSummary),
-            ("Agents", collector.agentActivity.summaryText),
+            ("Agents", collector.agentActivity.runtimeRowText),
             ("State", collector.state.label),
             ("Hotkey", hotkeyStatus.replacingOccurrences(of: "Hotkey ", with: "")),
             ("Last seen", daemonLastSeenSummary),
@@ -1561,12 +1561,20 @@ private struct BrainBarDashboardView: View {
                     if layout.diagnosticColumns == 2 {
                         HStack(alignment: .top, spacing: 24) {
                             BrainBarDefinitionList(title: "Activity", rows: activityRows)
-                            BrainBarDefinitionList(title: "Runtime", rows: runtimeRows)
+                            BrainBarDefinitionList(
+                                title: "Runtime",
+                                rows: runtimeRows,
+                                footnote: AgentActivitySnapshot.countingDefinition
+                            )
                         }
                     } else {
                         VStack(spacing: 16) {
                             BrainBarDefinitionList(title: "Activity", rows: activityRows)
-                            BrainBarDefinitionList(title: "Runtime", rows: runtimeRows)
+                            BrainBarDefinitionList(
+                                title: "Runtime",
+                                rows: runtimeRows,
+                                footnote: AgentActivitySnapshot.countingDefinition
+                            )
                         }
                     }
                 }
@@ -1597,6 +1605,7 @@ private struct BrainBarDashboardView: View {
 struct BrainBarDefinitionList: View {
     let title: String
     let rows: [(String, String)]
+    var footnote: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1622,6 +1631,13 @@ struct BrainBarDefinitionList: View {
                 if index < rows.count - 1 {
                     Rectangle().fill(Color.brainBarBorderSoft).frame(height: 0.5)
                 }
+            }
+            if let footnote {
+                Text(footnote)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
