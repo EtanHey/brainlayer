@@ -174,6 +174,74 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
         XCTAssertNotNil(viewModel.modelResidencyPresentation.value(for: "Resident memory"))
     }
 
+    @MainActor
+    func testEmbeddingRowsResolveWhileTheAllJobsLaunchdSweepIsStalled() async throws {
+        // #974 review B1: the production all-jobs sweep has no deadline. A hung launchctl
+        // for any job must not keep the hotlane rows pending or pinned to an old sample.
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("brainbar-embedding-stall-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
+        try store.save(.defaultConfig)
+        let stalled = StalledLaunchdStatusProvider()
+        defer { stalled.release() }
+        let viewModel = BrainBarSettingsViewModel(
+            store: store,
+            launchdStatusProvider: stalled,
+            embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(
+                state: .running(pid: 4242, residentBytes: 1_288_490_188)
+            ),
+            refreshStatusOnLoad: false
+        )
+
+        viewModel.refreshLaunchdStatus()
+        let deadline = Date().addingTimeInterval(2)
+        while viewModel.modelResidencyPresentation.value(for: "Status") == nil {
+            if Date() > deadline {
+                XCTFail("Embedding rows stayed pending behind the stalled launchd sweep")
+                break
+            }
+            await Task.yield()
+        }
+
+        XCTAssertEqual(viewModel.modelResidencyPresentation.value(for: "Status"), "Hotlane running · PID 4242")
+        XCTAssertNotNil(viewModel.modelResidencyPresentation.value(for: "Resident memory"))
+        XCTAssertTrue(viewModel.isRefreshingLaunchdStatus, "the all-jobs sweep is still stalled")
+    }
+
+    @MainActor
+    func testASlowerOlderEmbeddingSampleNeverOverwritesANewerOne() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("brainbar-embedding-order-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
+        try store.save(.defaultConfig)
+        let probe = GatedResidencyProbe(first: .running(pid: 1111, residentBytes: 1_024), then: .stopped)
+        defer { probe.releaseFirst() }
+        let viewModel = BrainBarSettingsViewModel(
+            store: store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            embeddingResidencyProbe: probe,
+            refreshStatusOnLoad: false
+        )
+
+        viewModel.refreshEmbeddingResidency() // blocks inside the probe until released
+        viewModel.refreshEmbeddingResidency() // returns .stopped immediately
+        let deadline = Date().addingTimeInterval(2)
+        while viewModel.embeddingProcess != .stopped {
+            if Date() > deadline {
+                XCTFail("Newer embedding sample never published")
+                break
+            }
+            await Task.yield()
+        }
+
+        probe.releaseFirst()
+        let settle = Date().addingTimeInterval(0.3)
+        while Date() < settle { await Task.yield() }
+        XCTAssertEqual(viewModel.embeddingProcess, .stopped, "the stale PID 1111 sample must be dropped")
+    }
+
     // MARK: - Render
 
     @MainActor
@@ -255,4 +323,41 @@ private final class PIDRecorder: @unchecked Sendable {
         defer { lock.unlock() }
         return recorded
     }
+}
+
+private final class StalledLaunchdStatusProvider: BrainLayerLaunchdStatusSampling, @unchecked Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+
+    func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] {
+        gate.wait()
+        gate.signal()
+        return [:]
+    }
+
+    func release() { gate.signal() }
+}
+
+private final class GatedResidencyProbe: BrainBarEmbeddingResidencySampling, @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private let first: BrainBarEmbeddingProcessState
+    private let then: BrainBarEmbeddingProcessState
+    private var calls = 0
+
+    init(first: BrainBarEmbeddingProcessState, then: BrainBarEmbeddingProcessState) {
+        self.first = first
+        self.then = then
+    }
+
+    func sample() -> BrainBarEmbeddingProcessState {
+        lock.lock()
+        calls += 1
+        let isFirst = calls == 1
+        lock.unlock()
+        guard isFirst else { return then }
+        gate.wait()
+        return first
+    }
+
+    func releaseFirst() { gate.signal() }
 }
