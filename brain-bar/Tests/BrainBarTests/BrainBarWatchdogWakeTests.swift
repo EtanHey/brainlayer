@@ -162,7 +162,7 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         watchdog.checkNow()
 
         XCTAssertEqual(
-            BrainBarLifecycleWatchdog.heartbeatAwakeAge(atPath: heartbeatPath, clock: clock.heartbeatClock),
+            try XCTUnwrap(BrainBarLifecycleWatchdog.heartbeatUptimeAge(atPath: heartbeatPath, clock: clock.heartbeatClock)),
             5,
             accuracy: 0.001,
             "Sleep must not count toward heartbeat age."
@@ -231,23 +231,100 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         XCTAssertTrue(recorder.signals.isEmpty)
     }
 
-    func testHeartbeatFromAPreviousBootIsStale() throws {
+    func testHeartbeatFromAPreviousBootIsNotMeasurableOnTheUptimeClock() throws {
         let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
         writeHeartbeat(clock)
         clock.reboot(bootSession: "BOOT-B", uptimeNanos: 510_000_000_000)
 
-        XCTAssertEqual(
-            BrainBarLifecycleWatchdog.heartbeatAwakeAge(atPath: heartbeatPath, clock: clock.heartbeatClock),
-            .infinity
+        XCTAssertNil(BrainBarLifecycleWatchdog.heartbeatUptimeAge(atPath: heartbeatPath, clock: clock.heartbeatClock))
+    }
+
+    func testMissingOrLegacyHeartbeatIsNotMeasurableOnTheUptimeClock() throws {
+        let clock = MutableClock(wall: Date(), uptimeNanos: 1)
+        XCTAssertNil(BrainBarLifecycleWatchdog.heartbeatUptimeAge(atPath: heartbeatPath, clock: clock.heartbeatClock))
+        try "1790000000.0\n".write(toFile: heartbeatPath, atomically: true, encoding: .utf8)
+        XCTAssertNil(BrainBarLifecycleWatchdog.heartbeatUptimeAge(atPath: heartbeatPath, clock: clock.heartbeatClock))
+    }
+
+    // MARK: - mixed-version upgrade: a legacy (wall-clock only) heartbeat
+
+    /// #970 review B2: a new daemon watching a still-running old UI sees only
+    /// wall-clock heartbeats, and the UI watchdog has no probe. Its age must be
+    /// counted in awake-seconds this watchdog has seen it unchanged.
+    private func writeLegacyHeartbeat(epoch: TimeInterval) throws {
+        try "\(epoch)\n".write(toFile: heartbeatPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: epoch)],
+            ofItemAtPath: heartbeatPath
         )
     }
 
-    func testMissingHeartbeatIsStale() {
-        let clock = MutableClock(wall: Date(), uptimeNanos: 1)
-        XCTAssertEqual(
-            BrainBarLifecycleWatchdog.heartbeatAwakeAge(atPath: heartbeatPath, clock: clock.heartbeatClock),
-            .infinity
-        )
+    func testLegacyUIHeartbeatSurvivesSleepDuringMixedVersionUpgradeButAnAwakeHangIsRecovered() throws {
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
+        try writeLegacyHeartbeat(epoch: 1_790_000_000)
+        let recorder = Recorder(probeAnswers: false, pids: [333])
+        let relaunched = expectation(description: "hung legacy UI is relaunched")
+        let watchdog = makeWatchdog(clock: clock, recorder: recorder, withProbe: false, relaunched: relaunched)
+
+        clock.awake(seconds: 2)
+        watchdog.checkNow()
+        clock.sleep(seconds: 8 * 3600)
+        clock.awake(seconds: 3)
+        watchdog.checkNow()
+        XCTAssertTrue(recorder.signals.isEmpty, "A legacy heartbeat must not kill a healthy UI on wake: \(eventLog())")
+
+        clock.awake(seconds: 60)
+        watchdog.checkNow()
+        wait(for: [relaunched], timeout: 2)
+        XCTAssertEqual(recorder.signals.map(\.1), [SIGTERM, SIGKILL])
+        XCTAssertTrue(eventLog().contains("unchanged for 63s awake"), eventLog())
+    }
+
+    func testLegacyHeartbeatFirstSeenRightAfterWakeGetsAnAwakeGrace() throws {
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
+        try writeLegacyHeartbeat(epoch: 1_790_000_000)
+        clock.sleep(seconds: 8 * 3600)
+        clock.awake(seconds: 3)
+
+        let recorder = Recorder(probeAnswers: false, pids: [333])
+        let watchdog = makeWatchdog(clock: clock, recorder: recorder, withProbe: false)
+        watchdog.checkNow()
+        clock.awake(seconds: 30)
+        watchdog.checkNow()
+
+        XCTAssertTrue(recorder.signals.isEmpty, eventLog())
+        XCTAssertEqual(recorder.relaunches, 0)
+    }
+
+    func testAdvancingLegacyHeartbeatResetsTheAwakeGrace() throws {
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
+        try writeLegacyHeartbeat(epoch: 1_790_000_000)
+        let recorder = Recorder(probeAnswers: false, pids: [333])
+        let watchdog = makeWatchdog(clock: clock, recorder: recorder, withProbe: false)
+
+        watchdog.checkNow()
+        clock.awake(seconds: 40)
+        try writeLegacyHeartbeat(epoch: 1_790_000_040)
+        watchdog.checkNow()
+        clock.awake(seconds: 40)
+        watchdog.checkNow()
+
+        XCTAssertTrue(recorder.signals.isEmpty, "A legacy heartbeat that keeps advancing is alive: \(eventLog())")
+    }
+
+    func testMissingUIHeartbeatGetsAnAwakeGraceThenIsRecovered() throws {
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
+        let recorder = Recorder(probeAnswers: false, pids: [333])
+        let relaunched = expectation(description: "UI with no heartbeat is relaunched")
+        let watchdog = makeWatchdog(clock: clock, recorder: recorder, withProbe: false, relaunched: relaunched)
+
+        watchdog.checkNow()
+        XCTAssertTrue(recorder.signals.isEmpty, "The first sighting of a missing heartbeat starts the grace.")
+        clock.awake(seconds: 46)
+        watchdog.checkNow()
+        wait(for: [relaunched], timeout: 2)
+        XCTAssertEqual(recorder.signals.map(\.1), [SIGTERM, SIGKILL])
+        XCTAssertTrue(eventLog().contains("heartbeat missing"), eventLog())
     }
 
     func testHeartbeatPayloadCarriesWallUptimeAndBoot() throws {

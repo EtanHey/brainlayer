@@ -37,6 +37,18 @@ final class DashboardTests: XCTestCase {
         }
     }
 
+    private struct HeartbeatClockBox {
+        let clock: BrainBarLifecycleWatchdog.HeartbeatClock
+
+        init(uptimeNanos: UInt64) {
+            clock = BrainBarLifecycleWatchdog.HeartbeatClock(
+                wallNow: { Date(timeIntervalSince1970: 1_790_000_000) },
+                uptimeNanos: { uptimeNanos },
+                bootSession: { "TEST-BOOT" }
+            )
+        }
+    }
+
     private var db: BrainDatabase!
     private var tempDBPath: String!
     private var fallbackReplayRoot: URL!
@@ -976,16 +988,21 @@ final class DashboardTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let heartbeatPath = directory.appendingPathComponent("missing.heartbeat").path
+        let heartbeatPath = directory.appendingPathComponent("stale.heartbeat").path
         let relaunched = expectation(description: "watchdog relaunches stale process")
         let state = WatchdogTestState()
+        // A heartbeat written 60 awake-seconds ago. One deterministic check
+        // (no repeating timer) so the relaunch cannot fire twice (#970 B1).
+        let writtenAt = HeartbeatClockBox(uptimeNanos: 1_000_000_000_000)
+        BrainBarLifecycleWatchdog.writeHeartbeat(to: heartbeatPath, clock: writtenAt.clock)
+        let now = HeartbeatClockBox(uptimeNanos: 1_060_000_000_000)
 
         let watchdog = BrainBarLifecycleWatchdog(
             configuration: .init(
                 watchedName: "TestBrainBar",
                 heartbeatPath: heartbeatPath,
-                staleTimeout: 0.01,
-                checkInterval: 0.01,
+                staleTimeout: 45,
+                checkInterval: 10,
                 terminateGraceInterval: 0.02,
                 relaunchCommand: .openBundle("/tmp/TestBrainBar.app")
             ),
@@ -998,12 +1015,12 @@ final class DashboardTests: XCTestCase {
             relaunch: { _ in
                 state.recordRelaunch()
                 relaunched.fulfill()
-            }
+            },
+            clock: now.clock
         )
 
-        watchdog.start()
-        wait(for: [relaunched], timeout: 1)
-        watchdog.stop()
+        watchdog.checkNow()
+        wait(for: [relaunched], timeout: 2)
 
         let snapshot = state.snapshot()
 
