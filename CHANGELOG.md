@@ -38,6 +38,10 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.41] - 2026-09-27
+
+- #970: BrainBar no longer kills a healthy BrainLayer daemon when the Mac wakes, preventing MCP disconnects in every Claude seat. The watchdog uses a sleep-aware heartbeat and probes the socket before any restart.
+
 ## [1.5.40] - 2026-09-27
 
 - #958: Scrub secrets before every cloud-LLM call and from LLM output before it is saved.
