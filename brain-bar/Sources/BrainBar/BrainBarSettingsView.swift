@@ -14,6 +14,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var observabilityResult: ObservabilityReadResult
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
     @Published private(set) var configReadSucceeded = true
+    @Published private(set) var embeddingProcess: BrainBarEmbeddingProcessState
 
     var footerPresentation: BrainBarSettingsFooterPresentation {
         BrainBarSettingsFooterPresentation(
@@ -22,22 +23,31 @@ final class BrainBarSettingsViewModel: ObservableObject {
         )
     }
 
-    static var modelResidencyPresentation: BrainBarModelResidencyPresentation { .unavailable }
+    var modelResidencyPresentation: BrainBarModelResidencyPresentation {
+        BrainBarModelResidencyPresentation(
+            modelName: BrainBarEmbeddingModel.configuredName,
+            process: embeddingProcess
+        )
+    }
 
     private let store: BrainLayerConfigStore
     private let launchdStatusProvider: any BrainLayerLaunchdStatusSampling
     private let runtimeStatusProvider: any BrainLayerActiveRuntimeSampling
+    private let embeddingResidencyProbe: any BrainBarEmbeddingResidencySampling
     private let now: @Sendable () -> Date
     private let observabilityURL: URL?
     private let observabilityRead: @Sendable (URL) async -> ObservabilityReadResult
     private let confirmAPIKeyOverwrite: (() -> Bool)?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
+    private var embeddingSampleGeneration: UInt64 = 0
 
     init(
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
+        embeddingResidencyProbe: any BrainBarEmbeddingResidencySampling = HotlaneEmbeddingResidencyProbe(),
+        initialEmbeddingProcess: BrainBarEmbeddingProcessState = .unmeasurable,
         initialLaunchdStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         initialLaunchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] = [:],
         refreshStatusOnLoad: Bool = true,
@@ -52,6 +62,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
         self.runtimeStatusProvider = runtimeStatusProvider
+        self.embeddingResidencyProbe = embeddingResidencyProbe
+        embeddingProcess = initialEmbeddingProcess
         self.now = now
         self.observabilityURL = observabilityURL
         self.observabilityRead = observabilityRead
@@ -171,8 +183,24 @@ final class BrainBarSettingsViewModel: ObservableObject {
         )
     }
 
+    /// Samples the hotlane on its own detached task, published independently of the
+    /// all-jobs launchd sweep, which has no deadline (#974 review B1). The probe itself is
+    /// bounded (1 s launchctl timeout, non-blocking proc_pidinfo). Only the newest request
+    /// publishes, so a slow older sample can never overwrite a fresher PID/RSS.
+    func refreshEmbeddingResidency() {
+        embeddingSampleGeneration &+= 1
+        let generation = embeddingSampleGeneration
+        let probe = embeddingResidencyProbe
+        Task {
+            let sample = await Task.detached { probe.sample() }.value
+            guard generation == embeddingSampleGeneration else { return }
+            embeddingProcess = sample
+        }
+    }
+
     func refreshLaunchdStatus() {
         isRefreshingLaunchdStatus = true
+        refreshEmbeddingResidency()
         let provider = launchdStatusProvider
         Task {
             let observations = await Task.detached {
@@ -535,20 +563,6 @@ struct BrainBarSettingsFooterPresentation {
     }
 }
 
-struct BrainBarModelResidencyPresentation {
-    let modelName: String
-    let status: String
-    let memory: String
-
-    // No model-specific loaded state or resident bytes are exposed to BrainBar.
-    // The daemon RSS measures the entire process, not the embedding model.
-    static let unavailable = Self(
-        modelName: "Name unavailable",
-        status: "Residency unavailable",
-        memory: "Unavailable"
-    )
-}
-
 enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
     case general, jobs, backups, advanced
 
@@ -742,10 +756,9 @@ struct BrainBarSettingsView: View {
         case .advanced:
             VStack(alignment: .leading, spacing: 16) {
                 sectionHeading("Embedding model")
-                let residency = BrainBarSettingsViewModel.modelResidencyPresentation
-                settingsTruthRow(label: "Model", value: residency.modelName)
-                settingsTruthRow(label: "Status", value: residency.status)
-                settingsTruthRow(label: "Resident memory", value: residency.memory)
+                ForEach(viewModel.modelResidencyPresentation.rows) { row in
+                    settingsTruthRow(label: row.label, value: row.value)
+                }
                 Divider()
                 ForEach(navigation.selected.advancedJobs) { job in
                     BrainBarJobToggle(job: job, viewModel: viewModel)

@@ -41,14 +41,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testModelResidencyDoesNotInferLoadedStateFromConfigOrDaemonMemory() {
-        let residency = BrainBarSettingsViewModel.modelResidencyPresentation
-        XCTAssertEqual(residency.modelName, "Name unavailable")
-        XCTAssertEqual(residency.status, "Residency unavailable")
-        XCTAssertEqual(residency.memory, "Unavailable")
-    }
-
-    @MainActor
     func testUnreadableConfigKeepsFooterUnknown() {
         let store = BrainLayerConfigStore(
             configURL: URL(fileURLWithPath: "/nonexistent/settings.env"),
@@ -576,6 +568,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             launchdStatusProvider: launchdStatusProvider ??
                 StaticBrainLayerLaunchdStatusProvider(states: initialLaunchdStates),
             runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: runtimeObservation),
+            embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
             initialLaunchdStates: initialLaunchdStates,
             refreshStatusOnLoad: false,
             now: { now }
