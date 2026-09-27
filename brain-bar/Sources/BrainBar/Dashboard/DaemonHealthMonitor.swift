@@ -7,13 +7,21 @@ protocol DaemonProcessInspecting: Sendable {
     /// Every PID on the machine, or `nil` when the process table cannot be read.
     func processIDs() -> [pid_t]?
     /// The 16-character `p_comm`; a cheap prefilter, never proof of identity.
-    func shortName(of pid: pid_t) -> String?
+    func shortName(of pid: pid_t) -> ProcessNameRead
     func executablePath(of pid: pid_t) -> String?
     /// Whether `pid` holds a LISTENING Unix socket bound to `path`; `nil` when its
     /// file descriptors cannot be read, which is "not measured", never "no".
     func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool?
     /// `nil` when the process is gone or its task info is unreadable.
     func processInfo(of pid: pid_t) -> DaemonProcessInfo?
+}
+
+/// A process-name read. `zombie` is a readable fact (an exited, unreaped process holds
+/// no sockets, so it is never the daemon); `unreadable` is not measured (#978).
+enum ProcessNameRead: Sendable, Equatable {
+    case name(String)
+    case zombie
+    case unreadable
 }
 
 struct DaemonProcessInfo: Sendable, Equatable {
@@ -61,25 +69,45 @@ struct DaemonIdentity: Sendable {
         return inspector.isListening(pid, onUnixSocket: socketPath) == true
     }
 
+    /// `down` only when every fact needed to prove the outage was read (#978): any
+    /// unreadable process, executable path or socket table makes it `unknown`.
     func resolve(inspector: any DaemonProcessInspecting) -> Resolution {
         guard let pids = inspector.processIDs() else {
             return .unavailable(.unknown("process table unreadable"))
         }
-        let named = pids.filter { $0 > 0 && inspector.shortName(of: $0) == Self.executableName }
-        let listening = Dictionary(uniqueKeysWithValues: named.map {
-            ($0, inspector.isListening($0, onUnixSocket: socketPath))
-        })
-        let installed = named.filter { inspector.executablePath(of: $0).map(Self.isInstalledExecutable) == true }
-        if let pid = installed.first(where: { listening[$0] == .some(true) }) {
-            return .found(pid)
+        var named: [pid_t] = []
+        var unreadable: [pid_t] = []
+        for pid in pids where pid > 0 {
+            switch inspector.shortName(of: pid) {
+            case .name(let name) where name == Self.executableName: named.append(pid)
+            case .unreadable: unreadable.append(pid)
+            case .name, .zombie: break
+            }
         }
-        if let impostor = named.first(where: { listening[$0] == .some(true) }) {
-            let path = inspector.executablePath(of: impostor) ?? "path unreadable"
-            return .unavailable(.down("\(socketPath) is served by a non-installed BrainBarDaemon (\(path))"))
+        let candidates = named.map { pid in
+            (pid: pid,
+             path: inspector.executablePath(of: pid),
+             listening: inspector.isListening(pid, onUnixSocket: socketPath))
         }
-        // A daemon whose sockets could not be read may be the one serving: unmeasured.
-        if let unread = installed.first(where: { listening[$0] == .some(nil) }) {
-            return .unavailable(.unknown("sockets of BrainBarDaemon PID \(unread) unreadable"))
+
+        if let daemon = candidates.first(where: {
+            $0.path.map(Self.isInstalledExecutable) == true && $0.listening == .some(true)
+        }) {
+            return .found(daemon.pid)
+        }
+        if let impostor = candidates.first(where: { $0.path != nil && $0.listening == .some(true) }) {
+            return .unavailable(.down("\(socketPath) is served by a non-installed BrainBarDaemon (\(impostor.path ?? ""))"))
+        }
+        // From here an outage is only proven when nothing went unread.
+        if let unread = candidates.first(where: { $0.path == nil }) {
+            return .unavailable(.unknown("executable path of BrainBarDaemon PID \(unread.pid) unreadable"))
+        }
+        let installed = candidates.filter { $0.path.map(Self.isInstalledExecutable) == true }
+        if let unread = installed.first(where: { $0.listening == nil }) {
+            return .unavailable(.unknown("sockets of BrainBarDaemon PID \(unread.pid) unreadable"))
+        }
+        if let pid = unreadable.first {
+            return .unavailable(.unknown("process PID \(pid) unreadable"))
         }
         if !installed.isEmpty {
             return .unavailable(.down("BrainBarDaemon is running but not serving \(socketPath)"))
@@ -197,16 +225,21 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
         return Array(pids.prefix(Int(count)))
     }
 
-    func shortName(of pid: pid_t) -> String? {
-        var info = proc_bsdshortinfo()
-        let size = Int32(MemoryLayout.size(ofValue: info))
-        let result = withUnsafeMutablePointer(to: &info) { pointer in
-            proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, pointer, size)
+    /// `sysctl(KERN_PROC_PID)` reads the name and run state of every process,
+    /// including zombies that `PROC_PIDT_SHORTBSDINFO` refuses.
+    func shortName(of pid: pid_t) -> ProcessNameRead {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else {
+            return .unreadable
         }
-        guard result == size else { return nil }
-        return withUnsafeBytes(of: info.pbsi_comm) { raw in
+        if info.kp_proc.p_stat == SZOMB {
+            return .zombie
+        }
+        return .name(withUnsafeBytes(of: info.kp_proc.p_comm) { raw in
             String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
-        }
+        })
     }
 
     func executablePath(of pid: pid_t) -> String? {
@@ -216,20 +249,42 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
         return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
+    enum SocketRead: Equatable {
+        /// `proc_pidfdinfo` failed for this descriptor.
+        case unreadable
+        /// A socket that is not a listening Unix socket.
+        case other
+        /// A listening Unix socket bound to this path.
+        case listening(String)
+    }
+
     func isListening(_ pid: pid_t, onUnixSocket path: String) -> Bool? {
         guard let descriptors = socketDescriptors(pid) else { return nil }
-        for fd in descriptors {
+        let reads = descriptors.map { fd -> SocketRead in
             var info = socket_fdinfo()
             let size = Int32(MemoryLayout<socket_fdinfo>.size)
-            guard proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &info, size) == size,
-                  info.psi.soi_family == AF_UNIX,
-                  (Int32(info.psi.soi_options) & SO_ACCEPTCONN) != 0 else { continue }
-            let bound = withUnsafeBytes(of: info.psi.soi_proto.pri_un.unsi_addr.ua_sun.sun_path) { raw in
+            guard proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &info, size) == size else { return .unreadable }
+            guard info.psi.soi_family == AF_UNIX,
+                  (Int32(info.psi.soi_options) & SO_ACCEPTCONN) != 0 else { return .other }
+            return .listening(withUnsafeBytes(of: info.psi.soi_proto.pri_un.unsi_addr.ua_sun.sun_path) { raw in
                 String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
-            }
-            if Self.socketPathsMatch(bound, path) { return true }
+            })
         }
-        return false
+        return Self.listeningVerdict(reads, socketPath: path)
+    }
+
+    /// A positive match is proof; with no match, one unreadable descriptor means
+    /// ownership was not measured (`nil`), never "not listening" (#978).
+    static func listeningVerdict(_ reads: [SocketRead], socketPath: String) -> Bool? {
+        var sawUnreadable = false
+        for read in reads {
+            switch read {
+            case .listening(let bound) where socketPathsMatch(bound, socketPath): return true
+            case .unreadable: sawUnreadable = true
+            case .listening, .other: break
+            }
+        }
+        return sawUnreadable ? nil : false
     }
 
     func processInfo(of pid: pid_t) -> DaemonProcessInfo? {
