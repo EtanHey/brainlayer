@@ -597,16 +597,17 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
 
         let base = BrainBarDashboardFixture.makeCollector(.live)
         let lastAnswer = BrainBarDashboardFixture.fetchedAt.addingTimeInterval(-12 * 60)
-        let states: [(name: String, daemon: DaemonHealthSnapshot?, reason: String?, answer: Date?)] = [
+        let states: [(name: String, daemon: DaemonHealthSnapshot?, reason: DaemonUnavailability?, answer: Date?)] = [
             ("running", BrainBarDashboardFixture.daemon, nil, BrainBarDashboardFixture.fetchedAt),
-            ("down", nil, "BrainBarDaemon not running (PID 4242 exited; no replacement found)", lastAnswer),
+            ("down", nil, .down("BrainBarDaemon not running (last PID 4242 exited)"), lastAnswer),
+            ("unknown", nil, .unknown("process table unreadable"), lastAnswer),
             ("checking", nil, nil, nil),
         ]
         for state in states {
             let collector = StatsCollector.fixture(
                 stats: base.stats,
                 daemon: state.daemon,
-                daemonDownReason: state.reason,
+                daemonUnavailability: state.reason,
                 lastDaemonAnswerAt: state.answer,
                 agentActivity: base.agentActivity,
                 state: PipelineState.derive(daemon: state.daemon, stats: base.stats),
