@@ -266,33 +266,39 @@ final class AgentActivityMonitor {
             || bridgeExecutables.contains { String($0.prefix(ucommColumnWidth)) == executable }
     }
 
-    /// Agent binaries run in a role that is not an interactive or headless session:
-    /// Claude's Chrome native-messaging host, Codex's app-server daemons, MCP servers.
-    /// The role is read from its argv POSITION — the first argument, or the
-    /// subcommand after Codex's `-c`/`--config` pairs — never from words anywhere in
-    /// the args, where they may just be prompt text (#977 R1 B2).
+    /// Agent binaries run in a role that is not an interactive or headless session.
+    /// Each role belongs to the binary that defines it (#977 R2 B3) and is read from
+    /// its argv POSITION, never from words anywhere in the args, where they may just be
+    /// prompt text (#977 R1 B2):
+    /// - `claude --chrome-native-host` (first argument) and `claude mcp serve`;
+    /// - `codex app-server` / `codex mcp-server`, after any `-c`/`--config` pairs.
     private static func isNonSessionMode(_ command: String) -> Bool {
-        let arguments = Array(command.split(whereSeparator: \.isWhitespace).dropFirst())
-        if arguments.first == "--chrome-native-host" {
-            return true
-        }
-        var index = 0
-        while index < arguments.count {
-            let argument = arguments[index]
-            if argument == "-c" || argument == "--config" {
-                index += 2
-            } else if argument.hasPrefix("-c=") || argument.hasPrefix("--config=") {
-                index += 1
-            } else {
-                break
+        let tokens = command.split(whereSeparator: \.isWhitespace)
+        guard let argv0 = tokens.first else { return false }
+        let binary = argv0.split(separator: "/").last.map(String.init) ?? String(argv0)
+        let arguments = Array(tokens.dropFirst())
+
+        switch binary {
+        case "claude":
+            if arguments.first == "--chrome-native-host" { return true }
+            return arguments.count >= 2 && arguments[0] == "mcp" && arguments[1] == "serve"
+        case "codex":
+            var index = 0
+            while index < arguments.count {
+                let argument = arguments[index]
+                if argument == "-c" || argument == "--config" {
+                    index += 2
+                } else if argument.hasPrefix("-c=") || argument.hasPrefix("--config=") {
+                    index += 1
+                } else {
+                    break
+                }
             }
+            guard index < arguments.count else { return false }
+            return arguments[index] == "app-server" || arguments[index] == "mcp-server"
+        default:
+            return false
         }
-        guard index < arguments.count else { return false }
-        let subcommand = arguments[index]
-        if subcommand == "app-server" || subcommand == "mcp-server" {
-            return true
-        }
-        return subcommand == "mcp" && index + 1 < arguments.count && arguments[index + 1] == "serve"
     }
 
     static func runSnapshotCommand(executableURL: URL, arguments: [String]) -> String? {
