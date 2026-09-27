@@ -38,6 +38,14 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.40] - 2026-09-27
+
+- #958: Scrub secrets before every cloud-LLM call and from LLM output before it is saved.
+- #959: Recognize and redact Groq, Tailscale and Vercel key families.
+- #960: Keep secret-label scanning linear-time on long inputs and redact secrets behind JSON-quoted labels.
+- #961: Resolve overlapping secret findings efficiently so inputs with many redactions no longer stall scrubbing.
+- #962: Scrub secrets before storage on every ingest path, including BrainBar store and its deferred queue, queue drain, index and digest, with shared tests keeping Swift and Python scrubbing in agreement.
+
 ## [1.5.39] - 2026-09-24
 
 - #940: BrainBar's Jobs panel shows each job's real status, last run and next run, with a one-line cause on every "Needs attention" badge; a launchd counter reset reads "Awaiting next run".
