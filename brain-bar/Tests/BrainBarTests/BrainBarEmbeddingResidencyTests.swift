@@ -226,6 +226,16 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
         )
 
         viewModel.refreshEmbeddingResidency() // blocks inside the probe until released
+        // Both requests hop to detached tasks, so without this the second could reach the
+        // probe first and be the one that blocks. Wait until request one is inside it.
+        let entered = Date().addingTimeInterval(2)
+        while !probe.firstCallEntered {
+            if Date() > entered {
+                XCTFail("First embedding sample never reached the probe")
+                return
+            }
+            await Task.yield()
+        }
         viewModel.refreshEmbeddingResidency() // returns .stopped immediately
         let deadline = Date().addingTimeInterval(2)
         while viewModel.embeddingProcess != .stopped {
@@ -343,6 +353,7 @@ private final class GatedResidencyProbe: BrainBarEmbeddingResidencySampling, @un
     private let first: BrainBarEmbeddingProcessState
     private let then: BrainBarEmbeddingProcessState
     private var calls = 0
+    private var entered = false
 
     init(first: BrainBarEmbeddingProcessState, then: BrainBarEmbeddingProcessState) {
         self.first = first
@@ -355,8 +366,17 @@ private final class GatedResidencyProbe: BrainBarEmbeddingResidencySampling, @un
         let isFirst = calls == 1
         lock.unlock()
         guard isFirst else { return then }
+        lock.lock()
+        entered = true
+        lock.unlock()
         gate.wait()
         return first
+    }
+
+    var firstCallEntered: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return entered
     }
 
     func releaseFirst() { gate.signal() }
