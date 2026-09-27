@@ -95,10 +95,9 @@ struct DaemonIdentity: Sendable {
         }) {
             return .found(daemon.pid)
         }
-        if let impostor = candidates.first(where: { $0.path != nil && $0.listening == .some(true) }) {
-            return .unavailable(.down("\(socketPath) is served by a non-installed BrainBarDaemon (\(impostor.path ?? ""))"))
-        }
-        // From here an outage is only proven when nothing went unread.
+        // No verified production daemon. Any unmeasured candidate could be it, so no
+        // outage is asserted — not even one "proven" by a non-installed listener,
+        // since two processes can each listen on the same path (#979 R1 B2).
         if let unread = candidates.first(where: { $0.path == nil }) {
             return .unavailable(.unknown("executable path of BrainBarDaemon PID \(unread.pid) unreadable"))
         }
@@ -108,6 +107,10 @@ struct DaemonIdentity: Sendable {
         }
         if let pid = unreadable.first {
             return .unavailable(.unknown("process PID \(pid) unreadable"))
+        }
+        // Everything was read: these outages are proven.
+        if let impostor = candidates.first(where: { $0.listening == .some(true) }), let path = impostor.path {
+            return .unavailable(.down("\(socketPath) is served by a non-installed BrainBarDaemon (\(path))"))
         }
         if !installed.isEmpty {
             return .unavailable(.down("BrainBarDaemon is running but not serving \(socketPath)"))
@@ -194,14 +197,28 @@ final class DaemonHealthMonitor: @unchecked Sendable {
 
     /// A verified production daemon whose metrics cannot be read is an inspection
     /// failure: `unknown`, never an "Unavailable" snapshot in the outage colour (#978).
+    /// Reads the metrics exactly once and builds the snapshot from that one result,
+    /// so a read that fails between two calls can never surface as a snapshot (#979).
     private func productionReading(for pid: pid_t) -> DaemonHealthReading {
-        guard inspector.processInfo(of: pid) != nil else {
+        guard let info = inspector.processInfo(of: pid) else {
             return DaemonHealthReading(
                 snapshot: nil,
                 unavailability: .unknown("process info of BrainBarDaemon PID \(pid) unreadable")
             )
         }
-        return DaemonHealthReading(snapshot: snapshot(for: pid), unavailability: nil)
+        return DaemonHealthReading(snapshot: snapshot(pid: pid, info: info), unavailability: nil)
+    }
+
+    private func snapshot(pid: pid_t, info: DaemonProcessInfo) -> DaemonHealthSnapshot {
+        DaemonHealthSnapshot(
+            pid: pid,
+            isResponsive: true,
+            rssBytes: info.rssBytes,
+            uptime: max(0, now().timeIntervalSince(info.startedAt)),
+            openConnections: info.openSockets,
+            lastSeenAt: nil,
+            startedAt: info.startedAt
+        )
     }
 
     private func snapshot(for pid: pid_t) -> DaemonHealthSnapshot {
@@ -328,8 +345,10 @@ struct LiveDaemonProcessInspector: DaemonProcessInspecting {
         )
     }
 
+    /// A descriptor table that could not be read is unmeasured (`nil`), never "0 sockets".
     static func processInfo(rssBytes: UInt64, startedAt: Date, openSockets: Int?) -> DaemonProcessInfo? {
-        DaemonProcessInfo(rssBytes: rssBytes, startedAt: startedAt, openSockets: openSockets ?? 0)
+        guard let openSockets else { return nil }
+        return DaemonProcessInfo(rssBytes: rssBytes, startedAt: startedAt, openSockets: openSockets)
     }
 
     /// `/tmp` is a symlink to `/private/tmp`; the kernel reports the path as bound.
