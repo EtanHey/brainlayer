@@ -376,6 +376,27 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         XCTAssertEqual(BrainBarLifecycleWatchdog.daemonDebugLogPath, "/tmp/brainbar-debug.log")
     }
 
+    func testRelaunchedProcessGetsAFreshGraceBeforeItsFirstHeartbeat() throws {
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
+        let recorder = Recorder(probeAnswers: false, pids: [333])
+        let relaunched = expectation(description: "UI with no heartbeat is relaunched")
+        let watchdog = makeWatchdog(clock: clock, recorder: recorder, withProbe: false, relaunched: relaunched)
+
+        watchdog.checkNow()
+        clock.awake(seconds: 46)
+        watchdog.checkNow()
+        wait(for: [relaunched], timeout: 2)
+        // Let the restart window (2 × terminateGraceInterval) close.
+        let settled = expectation(description: "restart window closes")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+
+        clock.awake(seconds: 10)
+        watchdog.checkNow()
+        XCTAssertEqual(recorder.relaunches, 1, "The relaunched process has not written its first heartbeat yet: \(eventLog())")
+        XCTAssertEqual(recorder.signals.count, 2)
+    }
+
     // MARK: - the real socket probe, against a scratch socket only
 
     func testSocketProbeAnswersOnlyWhenAFramedPingGetsAReply() throws {

@@ -102,6 +102,11 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var isRestarting = false
     private var loggedStaleButAnswering = false
+    /// A heartbeat the uptime clock cannot judge (missing, legacy wall-only,
+    /// unreadable, previous boot) is aged by how long THIS watchdog has seen it
+    /// unchanged, in awake-seconds. That keeps sleep out of the age during a
+    /// mixed-version upgrade, where an old peer still writes wall-only beats.
+    private var unmeasuredSighting: (token: String, firstSeenUptimeNanos: UInt64)?
 
     init(
         configuration: Configuration,
@@ -157,16 +162,14 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
 
     private func check() {
         guard !isRestarting else { return }
-        let age = Self.heartbeatAwakeAge(atPath: configuration.heartbeatPath, clock: clock)
+        let (age, subject) = heartbeatAge()
         guard age > configuration.staleTimeout else {
             loggedStaleButAnswering = false
             return
         }
 
         let name = configuration.watchedName
-        let staleness = age.isFinite
-            ? String(format: "heartbeat stale for %.0fs awake (limit %.0fs)", age, configuration.staleTimeout)
-            : "heartbeat missing, unreadable, or from a previous boot"
+        let staleness = String(format: "%@ for %.0fs awake (limit %.0fs)", subject, age, configuration.staleTimeout)
         let evidence: String
         if let livenessProbe {
             guard !livenessProbe() else {
@@ -181,6 +184,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             evidence = "no liveness probe for this process"
         }
         loggedStaleButAnswering = false
+        // The relaunched process gets a full grace before its first heartbeat.
+        unmeasuredSighting = nil
 
         let pids = processProvider()
         guard !pids.isEmpty else {
@@ -207,6 +212,22 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         }
     }
 
+    /// Awake-seconds the heartbeat has not advanced, and how it was judged.
+    private func heartbeatAge() -> (TimeInterval, String) {
+        switch Self.observeHeartbeat(atPath: configuration.heartbeatPath, clock: clock) {
+        case .measured(let age):
+            unmeasuredSighting = nil
+            return (age, "heartbeat stale")
+        case .unmeasured(let kind, let token):
+            let now = clock.uptimeNanos()
+            if let sighting = unmeasuredSighting, sighting.token == token, now >= sighting.firstSeenUptimeNanos {
+                return (TimeInterval(now - sighting.firstSeenUptimeNanos) / 1_000_000_000, "\(kind) unchanged")
+            }
+            unmeasuredSighting = (token, now)
+            return (0, "\(kind) unchanged")
+        }
+    }
+
     private func log(_ message: String) {
         NSLog("[BrainBarWatchdog] %@", message)
         guard let path = configuration.eventLogPath else { return }
@@ -221,23 +242,40 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         _ = line.withCString { write(fd, $0, strlen($0)) }
     }
 
-    /// Legacy wall-clock check, kept for heartbeats that carry no uptime.
+    /// Wall-clock mtime check. Sleep counts here, so the watchdog never
+    /// decides on it; kept for callers that only need a coarse file-age answer.
     public static func isHeartbeatStale(atPath path: String, now: Date, timeout: TimeInterval) -> Bool {
-        let clock = HeartbeatClock(
-            wallNow: { now },
-            uptimeNanos: HeartbeatClock.system.uptimeNanos,
-            bootSession: HeartbeatClock.system.bootSession
-        )
-        return heartbeatAwakeAge(atPath: path, clock: clock) > timeout
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let modifiedAt = attributes[.modificationDate] as? Date
+        else {
+            return true
+        }
+        return now.timeIntervalSince(modifiedAt) > timeout
     }
 
-    /// Seconds the Mac has been awake since the heartbeat was written.
-    /// `.infinity` when the heartbeat is missing, unreadable, or from another
-    /// boot. A legacy heartbeat (wall-clock only) falls back to its mtime age,
-    /// where sleep does count; the liveness probe is the backstop for that.
-    public static func heartbeatAwakeAge(atPath path: String, clock: HeartbeatClock) -> TimeInterval {
+    enum HeartbeatObservation: Equatable {
+        /// Awake-seconds since the heartbeat was written, on CLOCK_UPTIME_RAW.
+        case measured(TimeInterval)
+        /// Not judgeable on the uptime clock. `token` changes whenever the
+        /// heartbeat does, so the watchdog can age it by its own sightings.
+        case unmeasured(kind: String, token: String)
+    }
+
+    /// Seconds the Mac has been awake since the heartbeat was written, or nil
+    /// when the heartbeat is missing, legacy (wall-clock only), unreadable, or
+    /// from another boot.
+    public static func heartbeatUptimeAge(atPath path: String, clock: HeartbeatClock) -> TimeInterval? {
+        guard case .measured(let age) = observeHeartbeat(atPath: path, clock: clock) else { return nil }
+        return age
+    }
+
+    static func observeHeartbeat(atPath path: String, clock: HeartbeatClock) -> HeartbeatObservation {
         guard let payload = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return .infinity
+            let exists = FileManager.default.fileExists(atPath: path)
+            return .unmeasured(
+                kind: exists ? "heartbeat unreadable" : "heartbeat missing",
+                token: exists ? "unreadable|\(modificationStamp(atPath: path))" : "missing"
+            )
         }
         var uptime: UInt64?
         var boot: String?
@@ -248,19 +286,21 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
                 boot = String(line.dropFirst("boot=".count))
             }
         }
+        let token = "\(modificationStamp(atPath: path))|\(payload)"
         guard let uptime, let boot else {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                  let modifiedAt = attributes[.modificationDate] as? Date
-            else {
-                return .infinity
-            }
-            return max(0, clock.wallNow().timeIntervalSince(modifiedAt))
+            return .unmeasured(kind: "legacy heartbeat (no uptime)", token: token)
         }
         let now = clock.uptimeNanos()
         guard boot == clock.bootSession(), now >= uptime else {
-            return .infinity
+            return .unmeasured(kind: "heartbeat from a previous boot", token: token)
         }
-        return TimeInterval(now - uptime) / 1_000_000_000
+        return .measured(TimeInterval(now - uptime) / 1_000_000_000)
+    }
+
+    private static func modificationStamp(atPath path: String) -> String {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        let modifiedAt = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        return String(modifiedAt)
     }
 
     /// Line 1 stays the wall-clock epoch so any legacy reader keeps working.
@@ -295,7 +335,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     /// our id within `timeout`. A successful connect() is not an answer: the
     /// kernel completes it into the listen backlog even when the daemon is wedged.
     public static func socketAnswersPing(path: String, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = monotonicNanos() + UInt64(max(0, timeout) * 1_000_000_000)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
@@ -364,12 +404,19 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         return object["id"] as? String == id && object["result"] != nil
     }
 
-    private static func waitFor(_ fd: Int32, events: Int16, until deadline: Date) -> Bool {
+    /// The probe budget runs on CLOCK_MONOTONIC_RAW, so a wall-clock step
+    /// cannot stretch or shrink it.
+    private static func monotonicNanos() -> UInt64 {
+        clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
+    }
+
+    private static func waitFor(_ fd: Int32, events: Int16, until deadline: UInt64) -> Bool {
         while true {
-            let remaining = deadline.timeIntervalSinceNow
-            guard remaining > 0 else { return false }
+            let now = monotonicNanos()
+            guard deadline > now else { return false }
+            let remainingMillis = (deadline - now + 999_999) / 1_000_000
             var descriptor = pollfd(fd: fd, events: events, revents: 0)
-            let ready = poll(&descriptor, 1, Int32(min(remaining * 1000, Double(Int32.max)).rounded(.up)))
+            let ready = poll(&descriptor, 1, Int32(min(remainingMillis, UInt64(Int32.max))))
             if ready > 0 { return descriptor.revents & (events | Int16(POLLHUP) | Int16(POLLERR)) != 0 }
             if ready == 0 { return false }
             if errno != EINTR { return false }
