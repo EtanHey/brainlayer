@@ -143,7 +143,7 @@ final class BrainBarServer: @unchecked Sendable {
     private static let readOnlyBusyTimeoutMillis: Int32 = 250
     static let hybridSearchBudgetSeconds: TimeInterval = 0.8
     static let hybridHelperSocketIOTimeoutSeconds: TimeInterval = 120
-    private let debugLogPath = "/tmp/brainbar-debug.log"
+    private let debugLogPath = BrainBarLifecycleWatchdog.daemonDebugLogPath
 
     private func debugLog(_ msg: String) {
         let ts = ISO8601DateFormatter().string(from: Date())

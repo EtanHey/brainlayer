@@ -3,6 +3,7 @@
 // Tests the full pipeline: connect to Unix socket → send Content-Length framed
 // MCP request → receive Content-Length framed response.
 
+import BrainBarLifecycle
 import SQLite3
 import XCTest
 @testable import BrainBar
@@ -104,6 +105,12 @@ final class SocketIntegrationTests: XCTestCase {
         server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
         server.start()
         XCTAssertTrue(waitForSocket(at: testSocketPath), "Server should bind \(testSocketPath)")
+    }
+
+    /// The lifecycle watchdog only kills the daemon when this probe fails, so
+    /// the real server must answer it on its scratch socket.
+    func testWatchdogLivenessProbeIsAnsweredByTheRealServer() {
+        XCTAssertTrue(BrainBarLifecycleWatchdog.socketAnswersPing(path: testSocketPath, timeout: 3))
     }
 
     override func tearDown() {

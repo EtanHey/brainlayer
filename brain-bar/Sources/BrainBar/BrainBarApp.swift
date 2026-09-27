@@ -123,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startDaemonWatchdog() {
-        let watchdog = BrainBarLifecycleWatchdog.makeDaemonWatchdog()
+        let watchdog = BrainBarLifecycleWatchdog.makeDaemonWatchdog(socketPath: BrainBarServer.defaultSocketPath())
         daemonWatchdog = watchdog
         watchdog.start()
     }

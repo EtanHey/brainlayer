@@ -53,12 +53,12 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         private let lock = NSLock()
         private var wall: Date
         private var uptime: UInt64
-        private var boot: Int64
+        private var boot: String
 
-        init(wall: Date, uptimeNanos: UInt64, bootTime: Int64 = 1_790_000_000) {
+        init(wall: Date, uptimeNanos: UInt64, bootSession: String = "BOOT-A") {
             self.wall = wall
             self.uptime = uptimeNanos
-            self.boot = bootTime
+            self.boot = bootSession
         }
 
         /// Sleep advances the wall clock only; CLOCK_UPTIME_RAW pauses.
@@ -74,9 +74,9 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
             uptime += UInt64(seconds * 1_000_000_000)
         }
 
-        func reboot(bootTime: Int64, uptimeNanos: UInt64) {
+        func reboot(bootSession: String, uptimeNanos: UInt64) {
             lock.lock(); defer { lock.unlock() }
-            boot = bootTime
+            boot = bootSession
             uptime = uptimeNanos
         }
 
@@ -84,7 +84,7 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
             BrainBarLifecycleWatchdog.HeartbeatClock(
                 wallNow: { [self] in lock.lock(); defer { lock.unlock() }; return wall },
                 uptimeNanos: { [self] in lock.lock(); defer { lock.unlock() }; return uptime },
-                bootTime: { [self] in lock.lock(); defer { lock.unlock() }; return boot }
+                bootSession: { [self] in lock.lock(); defer { lock.unlock() }; return boot }
             )
         }
     }
@@ -114,7 +114,11 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         withProbe: Bool = true,
         relaunched: XCTestExpectation? = nil
     ) -> BrainBarLifecycleWatchdog {
-        BrainBarLifecycleWatchdog(
+        var probe: (@Sendable () -> Bool)?
+        if withProbe {
+            probe = { @Sendable in recorder.probe() }
+        }
+        return BrainBarLifecycleWatchdog(
             configuration: .init(
                 watchedName: "TestBrainBarDaemon",
                 heartbeatPath: heartbeatPath,
@@ -131,7 +135,7 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
                 relaunched?.fulfill()
             },
             clock: clock.heartbeatClock,
-            livenessProbe: withProbe ? { recorder.probe() } : nil
+            livenessProbe: probe
         )
     }
 
@@ -230,7 +234,7 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
     func testHeartbeatFromAPreviousBootIsStale() throws {
         let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
         writeHeartbeat(clock)
-        clock.reboot(bootTime: 1_790_100_000, uptimeNanos: 510_000_000_000)
+        clock.reboot(bootSession: "BOOT-B", uptimeNanos: 510_000_000_000)
 
         XCTAssertEqual(
             BrainBarLifecycleWatchdog.heartbeatAwakeAge(atPath: heartbeatPath, clock: clock.heartbeatClock),
@@ -247,13 +251,13 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
     }
 
     func testHeartbeatPayloadCarriesWallUptimeAndBoot() throws {
-        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 42_000_000_000, bootTime: 1_789_000_000)
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 42_000_000_000, bootSession: "BOOT-A")
         writeHeartbeat(clock)
         let payload = try String(contentsOfFile: heartbeatPath, encoding: .utf8)
         let lines = payload.split(separator: "\n").map(String.init)
         XCTAssertEqual(lines.first, "1790000000.0", "Line 1 stays the wall-clock epoch for any legacy reader.")
         XCTAssertTrue(lines.contains("uptime_ns=42000000000"), payload)
-        XCTAssertTrue(lines.contains("boot=1789000000"), payload)
+        XCTAssertTrue(lines.contains("boot=BOOT-A"), payload)
     }
 
     func testSystemClockUptimeIsTheSleepPausingClock() {
@@ -261,7 +265,7 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         let expected = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let observed = clock.uptimeNanos()
         XCTAssertLessThan(observed - expected, 1_000_000_000)
-        XCTAssertGreaterThan(clock.bootTime(), 0)
+        XCTAssertFalse(clock.bootSession().isEmpty, "kern.bootsessionuuid must resolve")
     }
 
     // MARK: - (d) the reverse watchdog (daemon watches the UI app)
