@@ -200,6 +200,40 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 5)
     }
 
+    /// #984: an executable inside a `*.app/Contents/` bundle is an app helper wherever the
+    /// bundle lives, not only under `/Applications`. Live on both Macs, Codex's computer-use
+    /// helper under `~/.codex` counted as a Codex session: its args split on whitespace
+    /// leave argv[0] as `…/.codex/computer-use/codex`, which reads as a bare `codex` CLI.
+    func test_app_bundled_helpers_outside_applications_are_never_sessions() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(900, 1, "SkyComputerUseService", "/Users/u/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService"),
+            Self.row(901, 1, "SkyComputerUseClient", "/Users/u/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient computer-history mcp"),
+            Self.row(902, 1, "codex", "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex --orphaned-helper"),
+            Self.row(903, 1, "codex", "/opt/vendor/Foo.app/Contents/Resources/codex"),
+            Self.row(904, 1, "claude", "/Users/u/Library/Application Support/Foo.app/Contents/MacOS/claude --model x"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .codex), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    /// #984: only the executable's own path decides. A real CLI whose ARGUMENTS name an app
+    /// bundle, or that is launched through an interpreter outside one, is still a session.
+    func test_a_cli_that_merely_mentions_an_app_bundle_is_still_a_session() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(910, 1, "zsh", "-zsh"),
+            Self.row(911, 910, "codex", "/opt/homebrew/bin/codex --add-dir /Users/u/Foo.app/Contents/Resources"),
+            Self.row(912, 910, "codex", "/opt/homebrew/bin/codex exec review Foo.app/Contents/Info.plist"),
+            Self.row(913, 910, "node", "node /Users/u/.bun/bin/codex --model gpt-5.4"),
+            Self.row(914, 910, "2.1.281", "/Users/u/.local/bin/claude --add-dir /Users/u/Applications/X.app/Contents"),
+            Self.row(915, 910, "codex", "codex exec inspect /Users/u/Foo.app/Contents/MacOS/codex"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .codex), 4)
+        XCTAssertEqual(activity.count(for: .claude), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 5)
+    }
+
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {
         let activity = AgentActivityMonitor.parse(Self.busyMachine)
 
