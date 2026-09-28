@@ -38,6 +38,11 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.43] - 2026-09-28
+
+- #987: BrainBar Runtime "Agents" no longer counts app-bundled helpers, including the Codex Computer Use helper, as sessions. Bundle membership comes from the kernel's executable path (fixes #984).
+- #988: Security: session-enrichment tool stats, model-authored dictionary keys (including NER relation properties), and nested or escaped JSON are secret-scrubbed before storage.
+
 ## [1.5.42] - 2026-09-28
 
 - #974: Advanced → Embedding model now shows the configured model, live hotlane status and process memory instead of permanent "unavailable" rows.
