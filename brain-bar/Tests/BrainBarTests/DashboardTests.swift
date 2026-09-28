@@ -2986,7 +2986,7 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorDoesNotResampleAgentActivityOnEveryMutationRefresh() throws {
+    func testStatsCollectorDoesNotResampleAgentActivityOnEveryMutationRefresh() async throws {
         let sampleCounter = AgentActivitySampleCounter()
         let collector = StatsCollector(
             dbPath: tempDBPath,
@@ -3000,8 +3000,33 @@ final class DashboardTests: XCTestCase {
         collector.refresh(force: true)
         collector.refresh(force: false)
         collector.refresh(force: false)
+        try await waitForCollector(collector) { _ in sampleCounter.count >= 1 }
+        try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(sampleCounter.count, 1)
+    }
+
+    /// #987 R3: a sample runs `ps` and then `proc_pidpath` for each candidate PID, so it
+    /// runs off the main actor, like the daemon sample (#972), and publishes when done.
+    @MainActor
+    func testStatsCollectorSamplesAgentActivityOffTheMainThread() async throws {
+        let sampleCounter = AgentActivitySampleCounter()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: AgentActivityMonitor(
+                snapshotProvider: { sampleCounter.snapshot() },
+                executablePathResolver: { _ in nil }
+            )
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.agentActivity.isMeasured }
+
+        XCTAssertEqual(sampleCounter.count, 1)
+        XCTAssertEqual(sampleCounter.mainThreadSamples, 0, "agent activity was sampled on the main thread")
+        XCTAssertTrue(collector.agentActivity.isMeasured)
     }
 
     @MainActor
@@ -3332,6 +3357,7 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
 private final class AgentActivitySampleCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var samples = 0
+    private var onMainThread = 0
 
     deinit {}
 
@@ -3339,9 +3365,15 @@ private final class AgentActivitySampleCounter: @unchecked Sendable {
         lock.withLock { samples }
     }
 
+    var mainThreadSamples: Int {
+        lock.withLock { onMainThread }
+    }
+
     func snapshot() -> String {
+        let isMain = Thread.isMainThread
         lock.withLock {
             samples += 1
+            if isMain { onMainThread += 1 }
         }
         return ""
     }

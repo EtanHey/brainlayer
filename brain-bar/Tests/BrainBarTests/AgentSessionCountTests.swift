@@ -200,6 +200,117 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 5)
     }
 
+    /// Parses rows with the kernel's executable path for each PID, as `proc_pidpath`
+    /// answers live. Paths are synthetic; a PID missing from `paths` resolves to nil.
+    private static func parse(_ rows: [String], paths: [Int32: String]) -> AgentActivitySnapshot {
+        AgentActivityMonitor.parse(rows.joined(separator: "\n"), executablePath: { paths[$0] })
+    }
+
+    /// #984: an executable inside a `*.app/Contents/` bundle is an app helper wherever the
+    /// bundle lives, not only under `/Applications`. Live on both Macs, Codex's computer-use
+    /// helper under `~/.codex` counted as a Codex session: its args split on whitespace
+    /// leave argv[0] as `…/.codex/computer-use/codex`, which reads as a bare `codex` CLI.
+    func test_app_bundled_helpers_outside_applications_are_never_sessions() {
+        let sky = "/Users/u/.codex/computer-use/Codex Computer Use.app/Contents"
+        let activity = Self.parse([
+            Self.row(900, 1, "SkyComputerUseService", "\(sky)/MacOS/SkyComputerUseService"),
+            Self.row(901, 1, "SkyComputerUseClient", "\(sky)/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient computer-history mcp"),
+            Self.row(902, 1, "codex", "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex --orphaned-helper"),
+            Self.row(903, 1, "codex", "/opt/vendor/Foo.app/Contents/Resources/codex"),
+            Self.row(904, 1, "claude", "/Users/u/Library/Application Support/Foo.app/Contents/MacOS/claude --model x"),
+        ], paths: [
+            900: "\(sky)/MacOS/SkyComputerUseService",
+            901: "\(sky)/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+            902: "/Users/u/Applications/ChatGPT.app/Contents/Resources/codex",
+            903: "/opt/vendor/Foo.app/Contents/Resources/codex",
+            904: "/Users/u/Library/Application Support/Foo.app/Contents/MacOS/claude",
+        ])
+
+        XCTAssertEqual(activity.count(for: .codex), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    /// #987 R1 B1/B2 and R2 B1: args text cannot say where argv[0] ends. A space may be
+    /// inside the path ("My App.app") or between arguments, `ucomm` may be a version string
+    /// ("2.1.281"), and an earlier component may share the file name. The kernel's
+    /// executable path is unambiguous, so it alone decides.
+    func test_the_kernel_executable_path_decides_app_bundling() {
+        let activity = Self.parse([
+            Self.row(920, 1, "2.1.281", "/Users/u/Foo.app/Contents/Resources/claude --model x"),
+            Self.row(921, 1, "codex", "/Users/u/codex/Foo.app/Contents/Resources/codex"),
+            Self.row(922, 1, "SkyComputerUseService", "/Users/u/SkyComputerUseService/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService"),
+            Self.row(923, 1, "2.1.281", "/Users/u/My App.app/Contents/Resources/claude --x"),
+            Self.row(924, 1, "codex", "/Users/u/codex/Codex App.app/Contents/Resources/codex --x"),
+        ], paths: [
+            920: "/Users/u/Foo.app/Contents/Resources/claude",
+            921: "/Users/u/codex/Foo.app/Contents/Resources/codex",
+            922: "/Users/u/SkyComputerUseService/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService",
+            923: "/Users/u/My App.app/Contents/Resources/claude",
+            924: "/Users/u/codex/Codex App.app/Contents/Resources/codex",
+        ])
+
+        XCTAssertEqual(activity.count(for: .claude), 0)
+        XCTAssertEqual(activity.count(for: .codex), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    /// #987 R3: when the kernel cannot say (the process exited, or permission is denied),
+    /// the row is not app-bundled. Args text is never consulted in its place.
+    func test_an_unresolvable_executable_path_is_not_app_bundled() {
+        let activity = Self.parse([
+            Self.row(950, 1, "SkyComputerUseService", "/Users/u/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService"),
+        ], paths: [:])
+
+        XCTAssertEqual(activity.count(for: .codex), 1)
+    }
+
+    /// #987 R1 N1 policy: Python.app-hosted processes are app-bundled like any
+    /// `*.app/Contents/` executable, whatever script they host. That covers the framework
+    /// Python, and also Homebrew's, whose kernel path resolves into its own Python.app. No
+    /// agent CLI is Python-hosted today. A Python outside any bundle (a uv standalone
+    /// build) still has its script detected.
+    func test_python_app_hosted_processes_are_app_bundled_by_policy() {
+        let activity = Self.parse([
+            Self.row(930, 1, "zsh", "-zsh"),
+            Self.row(931, 930, "Python", "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python /Users/u/.local/bin/gemini --model x"),
+            Self.row(932, 930, "python3.13", "/Users/u/.local/share/uv/python/cpython-3.13-macos-aarch64-none/bin/python3.13 /Users/u/.local/bin/gemini --model x"),
+        ], paths: [
+            930: "/bin/zsh",
+            931: "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
+            932: "/Users/u/.local/share/uv/python/cpython-3.13-macos-aarch64-none/bin/python3.13",
+        ])
+
+        XCTAssertEqual(activity.count(for: .gemini), 1, "only the non-bundled python's gemini counts")
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
+    /// #984, #987 R2 B2: only the executable's own path decides. A real CLI whose ARGUMENTS
+    /// name an app bundle, even one ending in its own `ucomm`, is still a session, and so is
+    /// one launched through an interpreter outside a bundle.
+    func test_a_cli_that_merely_mentions_an_app_bundle_is_still_a_session() {
+        let activity = Self.parse([
+            Self.row(910, 1, "zsh", "-zsh"),
+            Self.row(911, 910, "codex", "/opt/homebrew/bin/codex --add-dir /Users/u/Foo.app/Contents/Resources"),
+            Self.row(912, 910, "codex", "/opt/homebrew/bin/codex exec review Foo.app/Contents/Info.plist"),
+            Self.row(913, 910, "node", "node /Users/u/.bun/bin/codex --model gpt-5.4"),
+            Self.row(914, 910, "2.1.281", "/Users/u/.local/bin/claude --add-dir /Users/u/Applications/X.app/Contents"),
+            Self.row(915, 910, "codex", "codex exec inspect /Users/u/Foo.app/Contents/MacOS/codex"),
+            Self.row(916, 910, "2.1.281", "/opt/homebrew/bin/claude --add-dir /Users/u/Foo.app/Contents/2.1.281"),
+        ], paths: [
+            910: "/bin/zsh",
+            911: "/opt/homebrew/bin/codex",
+            912: "/opt/homebrew/bin/codex",
+            913: "/opt/homebrew/Cellar/node/24.0.0/bin/node",
+            914: "/Users/u/.local/share/claude/versions/2.1.281",
+            915: "/opt/homebrew/bin/codex",
+            916: "/opt/homebrew/bin/claude",
+        ])
+
+        XCTAssertEqual(activity.count(for: .codex), 4)
+        XCTAssertEqual(activity.count(for: .claude), 2)
+        XCTAssertEqual(activity.totalActiveAgents, 6)
+    }
+
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {
         let activity = AgentActivityMonitor.parse(Self.busyMachine)
 

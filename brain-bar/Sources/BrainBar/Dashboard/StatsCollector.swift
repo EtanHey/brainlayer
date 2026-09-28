@@ -242,6 +242,8 @@ final class StatsCollector: ObservableObject {
     private var isRunning = false
     private var isStopped = false
     private var lastAgentActivitySampleAt: Date?
+    private var agentActivityTask: Task<Void, Never>?
+    private var agentActivityGeneration = 0
     private var lastNonForcedStatsRefreshAt: Date?
     private var pendingStoreQueueDepthSamples: [(date: Date, depth: Int)] = []
     private var lastHeartbeatLogKey: String?
@@ -378,6 +380,9 @@ final class StatsCollector: ObservableObject {
         daemonSampleTask = nil
         daemonSampleGeneration += 1
         daemonSamplePending = false
+        agentActivityTask?.cancel()
+        agentActivityTask = nil
+        agentActivityGeneration += 1
         windowedBucketsTask?.cancel()
         windowedBucketsTask = nil
         windowedBucketsGeneration += 1
@@ -864,12 +869,28 @@ final class StatsCollector: ObservableObject {
         )
     }
 
+    /// Samples agent activity off the main actor: a sample runs `ps`, then `proc_pidpath`
+    /// for each candidate PID (#987). A request while a sample is in flight is dropped;
+    /// that sample is already fresh.
     private func refreshAgentActivity(force: Bool, now: Date) {
         if !force, let lastAgentActivitySampleAt, now.timeIntervalSince(lastAgentActivitySampleAt) < agentActivitySampleInterval {
             return
         }
-        agentActivity = agentActivityMonitor.sample()
+        guard agentActivityTask == nil else { return }
         lastAgentActivitySampleAt = now
+        let monitor = agentActivityMonitor
+        let generation = agentActivityGeneration
+        agentActivityTask = Task.detached(priority: .utility) { [weak self] in
+            let activity = monitor.sample()
+            await self?.finishAgentActivitySample(activity, generation: generation)
+        }
+    }
+
+    private func finishAgentActivitySample(_ activity: AgentActivitySnapshot, generation: Int) {
+        guard generation == agentActivityGeneration else { return }
+        agentActivityTask = nil
+        guard !isStopped else { return }
+        agentActivity = activity
     }
 
     private func resetRefreshTimingState() {
