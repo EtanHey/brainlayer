@@ -13,9 +13,11 @@ enum SearchProfileLogger {
     static let defaultSink: @Sendable (String) -> Void = { line in NSLog("%@", line) }
     nonisolated(unsafe) static var sink: @Sendable (String) -> Void = defaultSink
 
-    /// A `_profile_query_id` arrives in client arguments, so only the exact shape
-    /// `newQueryID()` (and Python's `search_profile.new_query_id()`) produces is
-    /// accepted: `q-` plus 12 ASCII hex digits. Anything else is client-chosen text.
+    /// Defense in depth for ids that cross an internal boundary (router → helper
+    /// client → Python helper): only the exact shape `newQueryID()` (and Python's
+    /// `search_profile.new_query_id()`) produces is accepted, `q-` plus 12 ASCII hex
+    /// digits. A shape check cannot prove origin, so a client-supplied id is never
+    /// read at all: `MCPRouter` always generates its own.
     static func acceptedQueryID(_ raw: Any?) -> String? {
         guard let raw = raw as? String else { return nil }
         let scalars = Array(raw.unicodeScalars)
