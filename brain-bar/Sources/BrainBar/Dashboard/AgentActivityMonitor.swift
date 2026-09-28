@@ -199,7 +199,7 @@ final class AgentActivityMonitor {
         let executable = row.executable
         let command = row.command
         guard !command.isEmpty,
-              !isAppBundled(command),
+              !isAppBundled(executable: executable, command: command),
               !nonSessionExecutables.contains(executable),
               !isBridgeOrProxy(executable: executable, command: command),
               !isNonSessionMode(command),
@@ -240,10 +240,20 @@ final class AgentActivityMonitor {
     }
 
     /// Helpers shipped inside a desktop app bundle (ChatGPT.app's Codex framework and
-    /// bundled `codex`, Claude.app, Cursor.app) are never CLI sessions.
-    private static func isAppBundled(_ command: String) -> Bool {
-        (command.hasPrefix("/applications/") && command.contains(".app/"))
-            || command.hasPrefix("/system/")
+    /// bundled `codex`, Claude.app, Cursor.app) are never CLI sessions — wherever the
+    /// bundle lives (#984: Codex's computer-use helper under `~/.codex/computer-use/`).
+    private static func isAppBundled(executable: String, command: String) -> Bool {
+        if (command.hasPrefix("/applications/") && command.contains(".app/"))
+            || command.hasPrefix("/system/") {
+            return true
+        }
+        // argv[0] may contain spaces ("Codex Computer Use.app"), so it cannot be split
+        // off on whitespace. `ucomm` is its basename (truncated to 16 characters), so
+        // the executable's directory is everything before the first "/<ucomm>"; only
+        // that directory decides, never a bundle path that appears in the arguments.
+        guard command.hasPrefix("/"), !executable.isEmpty,
+              let basename = command.range(of: "/" + executable) else { return false }
+        return command[..<basename.lowerBound].contains(".app/contents/")
     }
 
     /// Shells, launch wrappers and text tools are never the session process: a real
