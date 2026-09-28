@@ -38,6 +38,13 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.42] - 2026-09-28
+
+- #974: Advanced → Embedding model now shows the configured model, live hotlane status and process memory instead of permanent "unavailable" rows.
+- #976: Runtime Daemon and Last seen rows follow the live BrainLayer daemon across restarts.
+- #977: Runtime agent activity counts real CLI sessions with a per-CLI breakdown instead of inflated process totals.
+- #979: An unmeasurable daemon state reads neutral "Unknown — reason" instead of a false "Down".
+
 ## [1.5.41] - 2026-09-27
 
 - #970: BrainBar no longer kills a healthy BrainLayer daemon when the Mac wakes, preventing MCP disconnects in every Claude seat. The watchdog uses a sleep-aware heartbeat and probes the socket before any restart.
