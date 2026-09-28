@@ -4,8 +4,11 @@ Processes chunks through entity extraction and stores results in the KG.
 Ties together: entity_extraction (NER) + entity_resolution (dedup) + VectorStore (storage).
 """
 
+import json
 import logging
+import os
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -17,37 +20,27 @@ from .entity_extraction import (
 )
 from .entity_resolution import resolve_entity
 
-# Default seed entities for Etan's ecosystem
+
+def _load_person_seed_entities() -> list[str]:
+    """Read optional user-owned person seeds; the package ships none."""
+    config_path = os.environ.get("BRAINLAYER_PERSON_SEED_ENTITIES_PATH")
+    if not config_path:
+        return []
+    try:
+        payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        if not isinstance(payload, list) or not all(isinstance(name, str) and name.strip() for name in payload):
+            raise ValueError("person seeds must be a list of non-empty strings")
+        return list(dict.fromkeys(name.strip() for name in payload))
+    except (OSError, ValueError) as exc:
+        logger.warning("person seed config ignored: %s", type(exc).__name__)
+        return []
+
+
+# Public technical defaults only. Local person seeds never enter the package.
 DEFAULT_SEED_ENTITIES: dict[str, list[str]] = {
-    "person": [
-        "Etan Heyman",
-        "Dor Zohar",
-        "Shachar Gerby",
-        "Maor Noah",
-        "Rina Vale",
-        "Yuval Nir",
-        "Daniel Munk",
-        "Andrew Huberman",
-        "Joshua Anderson",
-        "Theo Browne",
-    ],
-    "company": ["Cantaloupe AI", "Domica", "MeHayom", "ProductDZ", "Weby", "Union"],
-    "project": [
-        "brainlayer",
-        "voicelayer",
-        "golems",
-        "songscript",
-        "domica",
-        "rudy-monorepo",
-        "union",
-        "orchestrator",
-        "etanheyman.com",
-        "golem-profiles",
-        "6pm",
-        "6pm-mini",
-        "soltome",
-        "yichus",
-    ],
+    "person": _load_person_seed_entities(),
+    "company": [],
+    "project": ["brainlayer", "golems", "orchestrator"],
     "agent": [
         "golemsClaude",
         "brainClaude",

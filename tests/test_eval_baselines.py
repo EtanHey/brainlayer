@@ -129,10 +129,10 @@ class TestEntityRouting:
         )
 
     def test_yuval_mehayom_entity(self, live_store, live_model):
-        """Query about Yuval (MeHayom client) should surface sprint/payment chunks."""
-        ids, docs = _search(live_store, live_model, "MeHayom Yuval sprint payment", n=5)
-        assert _passes(docs, ["yuval", "Yuval", "mehayom", "MeHayom"], top_n=3), (
-            f"Expected MeHayom/Yuval content in top 3, got: {[d[:60] for d in docs[:3]]}"
+        """Query about Delta (MeHayom client) should surface sprint/payment chunks."""
+        ids, docs = _search(live_store, live_model, "MeHayom Delta sprint payment", n=5)
+        assert _passes(docs, ["delta", "Delta", "mehayom", "MeHayom"], top_n=3), (
+            f"Expected MeHayom/Delta content in top 3, got: {[d[:60] for d in docs[:3]]}"
         )
 
 
@@ -694,7 +694,7 @@ def run_baseline() -> dict:
         # Entity routing
         ("entity_rina_vale", "Rina Vale platform invites schedule", ["Rina Vale", "6pm", "6PM"], 3, None, None),
         ("entity_fedor", "Fedor iOS build handover GitHub", ["fedor", "Fedor", "iOS", "MeHayom"], 3, None, None),
-        ("entity_yuval_mehayom", "MeHayom Yuval sprint payment", ["yuval", "Yuval", "MeHayom"], 3, None, None),
+        ("entity_yuval_mehayom", "MeHayom Delta sprint payment", ["delta", "Delta", "MeHayom"], 3, None, None),
         # Tag filter
         ("tag_decision", "important decision", ["decision", "DECISION", "chose", "decided"], 3, None, "decision"),
         ("tag_voicelayer_scoped", "architecture decision voicelayer", ["VoiceLayer", "voice"], 3, "voicelayer", None),

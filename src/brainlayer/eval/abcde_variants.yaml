@@ -21,31 +21,31 @@ variants:
     \ key contributions, agreements, open questions\n- Entity/biographical: Full name with aliases, role, relationships to\
     \ other entities, key facts with dates\n- SHORT/CONVERSATIONAL CHUNK: If the chunk is informal conversation, extract ACTIONABLE\
     \ ITEMS and COMMITMENTS, not discussion flow or filler phrasing\n\nFEW-SHOT EXAMPLES:\n\nBAD (score 1/5 — meta-description,\
-    \ no facts):\n  Input: [conversation about storing Mehayom project architecture decisions]\n  Output: \"The user is instructing\
-    \ the AI to store specific knowledge about the Mehayom project\"\n  WHY BAD: Says nothing about WHAT knowledge. Zero retrievable\
-    \ facts.\n\nBAD (score 2/5 — vague, loses specifics):\n  Input: [message about two /yash missions fixing nativewind and\
-    \ MCP SDK bugs]\n  Output: \"This message details two recent /yash missions that fixed issues in nativewind and MCP SDK\"\
-    \n  WHY BAD: Which missions? What issues? What PRs? No dates, no specifics.\n\nGOOD (score 5/5 — dense, specific, retrievable):\n\
-    \  Input: [same /yash missions conversation]\n  Output: \"Two /yash missions completed (April 5, 2026): (1) nativewind\
-    \ PR #1722 — fixed style resolution bug in CSS property inheritance, (2) MCP SDK — patched auth token refresh race condition\
-    \ causing 401 errors on reconnect. Both PRs merged and deployed.\"\n  WHY GOOD: Dates, PR numbers, specific bug descriptions,\
-    \ outcomes — all preserved.\n\nGOOD (score 5/5 — decision with rationale):\n  Input: [conversation deciding on database\
-    \ choice]\n  Output: \"Database decision (March 12, 2026): Chose SQLite + sqlite-vec over Postgres+pgvector for BrainLayer\
-    \ storage. Rationale: local-first architecture requirement, no server dependency, FTS5 for hybrid search. Rejected: Postgres\
-    \ (requires daemon), Pinecone (cloud-only, latency), ChromaDB (immature FTS).\"\n  WHY GOOD: Decision, date, what was\
-    \ chosen, why, what was rejected with reasons.\n\nCHUNK (from project: {project}, type: {content_type}):\n---\n{content}\n\
-    ---\n\n{context_section}\n\nReturn this exact JSON structure:\n{{\n  \"summary\": \"<2-4 dense sentences extracting the\
-    \ key facts, decisions, names, numbers, and outcomes from this chunk — NOT a description of what the chunk is about>\"\
-    ,\n  \"key_facts\": [\"<extract every specific value: PR numbers, dollar amounts, dates, file paths, entity names, URLs,\
-    \ version numbers, error codes, config values — verbatim strings only>\"],\n  \"tags\": [\"<tag1>\", \"<tag2>\"],\n  \"\
-    importance\": <1-10 integer>,\n  \"intent\": \"<one of: debugging, designing, configuring, discussing, deciding, implementing,\
-    \ reviewing>\",\n  \"primary_symbols\": [\"<class/function/file names mentioned>\"],\n  \"resolved_queries\": [\n    \"\
-    <natural-language question a user would ask that this chunk answers — use everyday search vocabulary>\",\n    \"<keyword-dense\
-    \ query optimized for text search — pack in key terms, names, identifiers>\",\n    \"<hypothetical answer snippet — 1-2\
-    \ sentences written as if answering the question, preserving key terms for embedding similarity>\"\n  ],\n  \"epistemic_level\"\
-    : \"<one of: hypothesis, substantiated, validated>\",\n  \"version_scope\": \"<version or system state discussed, or null>\"\
-    ,\n  \"debt_impact\": \"<one of: introduction, resolution, none>\",\n  \"external_deps\": [\"<libraries or external APIs\
-    \ used>\"],\n  \"entities\": [\n    {{\"name\": \"<entity name>\", \"type\": \"<person|agent|company|project|technology|tool|concept|topic|source>\"\
+    \ no facts):\n  Input: [conversation about a sample project architecture decision]\n  Output: \"The conversation discussed\
+    \ architecture.\"\n  WHY BAD: Says nothing about WHAT knowledge. Zero retrievable facts.\n\nBAD (score 2/5 — vague, loses\
+    \ specifics):\n  Input: [message about two /yash missions fixing nativewind and MCP SDK bugs]\n  Output: \"This message\
+    \ details two recent /yash missions that fixed issues in nativewind and MCP SDK\"\n  WHY BAD: Which missions? What issues?\
+    \ What PRs? No dates, no specifics.\n\nGOOD (score 5/5 — dense, specific, retrievable):\n  Input: [same /yash missions\
+    \ conversation]\n  Output: \"Two /yash missions completed (April 5, 2026): (1) nativewind PR #1722 — fixed style resolution\
+    \ bug in CSS property inheritance, (2) MCP SDK — patched auth token refresh race condition causing 401 errors on reconnect.\
+    \ Both PRs merged and deployed.\"\n  WHY GOOD: Dates, PR numbers, specific bug descriptions, outcomes — all preserved.\n\
+    \nGOOD (score 5/5 — decision with rationale):\n  Input: [conversation deciding on database choice]\n  Output: \"Database\
+    \ decision (March 12, 2026): Chose SQLite + sqlite-vec over Postgres+pgvector for BrainLayer storage. Rationale: local-first\
+    \ architecture requirement, no server dependency, FTS5 for hybrid search. Rejected: Postgres (requires daemon), Pinecone\
+    \ (cloud-only, latency), ChromaDB (immature FTS).\"\n  WHY GOOD: Decision, date, what was chosen, why, what was rejected\
+    \ with reasons.\n\nCHUNK (from project: {project}, type: {content_type}):\n---\n{content}\n---\n\n{context_section}\n\n\
+    Return this exact JSON structure:\n{{\n  \"summary\": \"<2-4 dense sentences extracting the key facts, decisions, names,\
+    \ numbers, and outcomes from this chunk — NOT a description of what the chunk is about>\",\n  \"key_facts\": [\"<extract\
+    \ every specific value: PR numbers, dollar amounts, dates, file paths, entity names, URLs, version numbers, error codes,\
+    \ config values — verbatim strings only>\"],\n  \"tags\": [\"<tag1>\", \"<tag2>\"],\n  \"importance\": <1-10 integer>,\n\
+    \  \"intent\": \"<one of: debugging, designing, configuring, discussing, deciding, implementing, reviewing>\",\n  \"primary_symbols\"\
+    : [\"<class/function/file names mentioned>\"],\n  \"resolved_queries\": [\n    \"<natural-language question a user would\
+    \ ask that this chunk answers — use everyday search vocabulary>\",\n    \"<keyword-dense query optimized for text search\
+    \ — pack in key terms, names, identifiers>\",\n    \"<hypothetical answer snippet — 1-2 sentences written as if answering\
+    \ the question, preserving key terms for embedding similarity>\"\n  ],\n  \"epistemic_level\": \"<one of: hypothesis,\
+    \ substantiated, validated>\",\n  \"version_scope\": \"<version or system state discussed, or null>\",\n  \"debt_impact\"\
+    : \"<one of: introduction, resolution, none>\",\n  \"external_deps\": [\"<libraries or external APIs used>\"],\n  \"entities\"\
+    : [\n    {{\"name\": \"<entity name>\", \"type\": \"<person|agent|company|project|technology|tool|concept|topic|source>\"\
     , \"entity_subtype\": \"<channel|podcast|brand|newsletter or null>\", \"relation\": \"<relationship to other entities\
     \ in this chunk, e.g. 'developer of BrainLayer', 'dependency of MCP SDK', or null>\"}}\n  ],\n  \"sentiment_label\": \"\
     <one of: frustration, confusion, positive, satisfaction, neutral>\",\n  \"sentiment_score\": <float from -1.0 to 1.0>,\n\
@@ -73,7 +73,7 @@ variants:
   axis: production-control
   source_path: src/brainlayer/pipeline/enrichment.py
   source_section: ENRICHMENT_PROMPT
-  prompt_hash: efc98f883fb4db481bfb45a82a5c9bec603e923b028031e16afd3bdd03061750
+  prompt_hash: b264758b80991251c5e04b42df3deac28de25b33e1dc6bc8609517e069dd0df2
 - id: B
   label: 2026-03-19-v2-faceted-tags
   prompt_template: 'You are a knowledge base tagger for a personal multi-project development knowledge base. Your job is to

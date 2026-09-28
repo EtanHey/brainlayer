@@ -202,6 +202,13 @@ class TestVectorStoreClose:
         assert getattr(store._local, "read_conn", None) is None
 
 
+_TEST_SEED_ENTITIES = {
+    "person": ["Person Alpha"],
+    "company": ["Example Corp"],
+    "project": ["brainlayer", "Sample Project"],
+}
+
+
 class TestEnrichmentHookFix:
     """The enrichment hook should pass seed entities and enable LLM extraction."""
 
@@ -216,17 +223,15 @@ class TestEnrichmentHookFix:
 
     def test_extract_with_seeds_finds_entities(self):
         """With real seed entities, extraction finds known names."""
-        from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
 
-        text = "Etan Heyman is building brainlayer for memory management."
-        result = extract_entities_combined(text, DEFAULT_SEED_ENTITIES, use_llm=False)
+        text = "Person Alpha is building brainlayer for memory management."
+        result = extract_entities_combined(text, _TEST_SEED_ENTITIES, use_llm=False)
         names = {e.text.lower() for e in result.entities}
-        assert "etan heyman" in names
+        assert "person alpha" in names
         assert "brainlayer" in names
 
     def test_kg_from_chunk_with_seeds(self, store):
         """extract_kg_from_chunk with seeds should create entities in KG."""
-        from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
         from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
 
         # Insert a test chunk
@@ -234,7 +239,7 @@ class TestEnrichmentHookFix:
             "INSERT INTO chunks (id, content, source, project, metadata, source_file) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 "test-chunk-1",
-                "Etan Heyman is working on brainlayer with Dor Zohar at Domica.",
+                "Person Alpha is working on brainlayer with Person Alpha at Example Corp.",
                 "test",
                 "test",
                 "{}",
@@ -245,18 +250,18 @@ class TestEnrichmentHookFix:
         stats = extract_kg_from_chunk(
             store=store,
             chunk_id="test-chunk-1",
-            seed_entities=DEFAULT_SEED_ENTITIES,
+            seed_entities=_TEST_SEED_ENTITIES,
             use_llm=False,
         )
 
-        assert stats["entities_created"] >= 3  # Etan, brainlayer, Dor, Domica
+        assert stats["entities_created"] >= 3  # Person Alpha, brainlayer, Dor, Example Corp
         assert stats["chunks_linked"] >= 3
 
         # Verify entities are in KG
         cursor = store._read_cursor()
         entities = list(cursor.execute("SELECT name, entity_type FROM kg_entities"))
         entity_names = {e[0].lower() for e in entities}
-        assert "etan heyman" in entity_names
+        assert "person alpha" in entity_names
         assert "brainlayer" in entity_names
 
     def test_explicit_mention_not_downgraded(self, store):
@@ -284,12 +289,11 @@ class TestEnrichmentHookFix:
 
     def test_kg_with_llm_mock(self, store):
         """extract_kg_from_chunk with mock LLM should extract more entities."""
-        from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
         from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
 
         store.conn.cursor().execute(
             "INSERT INTO chunks (id, content, source, project, metadata, source_file) VALUES (?, ?, ?, ?, ?, ?)",
-            ("test-chunk-2", "Etan Heyman deploys FastAPI to Railway.", "test", "test", "{}", "test.jsonl"),
+            ("test-chunk-2", "Person Alpha deploys FastAPI to Railway.", "test", "test", "{}", "test.jsonl"),
         )
 
         def mock_llm(prompt):
@@ -300,7 +304,7 @@ class TestEnrichmentHookFix:
                         {"text": "Railway", "type": "tool"},
                     ],
                     "relations": [
-                        {"source": "Etan Heyman", "target": "FastAPI", "type": "uses"},
+                        {"source": "Person Alpha", "target": "FastAPI", "type": "uses"},
                     ],
                 }
             )
@@ -308,7 +312,7 @@ class TestEnrichmentHookFix:
         stats = extract_kg_from_chunk(
             store=store,
             chunk_id="test-chunk-2",
-            seed_entities=DEFAULT_SEED_ENTITIES,
+            seed_entities=_TEST_SEED_ENTITIES,
             use_llm=True,
             llm_caller=mock_llm,
         )

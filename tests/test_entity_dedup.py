@@ -86,7 +86,7 @@ class TestAliasCRUD:
 
     def test_case_insensitive_alias_lookup(self, store):
         """Alias lookup should be case-insensitive."""
-        entity_id = _upsert(store, "person", "Dor Zohar")
+        entity_id = _upsert(store, "person", "Person Alpha")
         store.add_entity_alias("dor", entity_id, alias_type="name")
 
         # Should match regardless of case
@@ -125,9 +125,9 @@ class TestEntityResolution:
         """Exact name match should resolve to existing entity."""
         from brainlayer.pipeline.entity_resolution import resolve_entity
 
-        entity_id = _upsert(store, "person", "Dor Zohar")
+        entity_id = _upsert(store, "person", "Person Alpha")
 
-        resolved = resolve_entity("Dor Zohar", "person", "", store)
+        resolved = resolve_entity("Person Alpha", "person", "", store)
         assert resolved == entity_id
 
     def test_alias_match(self, store):
@@ -203,7 +203,7 @@ class TestHebrewPrefixStripping:
         """Hebrew alias should resolve to the entity."""
         from brainlayer.pipeline.entity_resolution import resolve_entity
 
-        entity_id = _upsert(store, "person", "Dor Zohar")
+        entity_id = _upsert(store, "person", "Person Alpha")
         store.add_entity_alias("דור זוהר", entity_id, alias_type="hebrew")
 
         resolved = resolve_entity("דור זוהר", "person", "", store)

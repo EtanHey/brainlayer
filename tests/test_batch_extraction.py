@@ -59,17 +59,37 @@ def _mock_llm(prompt):
 class TestSeedEntities:
     """Default seed entities should cover Etan's ecosystem."""
 
-    def test_seed_has_people(self):
-        assert "person" in DEFAULT_SEED_ENTITIES
-        names = DEFAULT_SEED_ENTITIES["person"]
-        assert "Etan Heyman" in names
-        assert "Dor Zohar" in names
+    def test_default_person_seeds_are_empty(self):
+        assert DEFAULT_SEED_ENTITIES["person"] == []
 
-    def test_seed_has_companies(self):
-        assert "company" in DEFAULT_SEED_ENTITIES
-        names = DEFAULT_SEED_ENTITIES["company"]
-        assert "Domica" in names
-        assert "Cantaloupe AI" in names
+    def test_optional_person_seed_config(self, tmp_path, monkeypatch):
+        from brainlayer.pipeline.batch_extraction import _load_person_seed_entities
+
+        monkeypatch.delenv("BRAINLAYER_PERSON_SEED_ENTITIES_PATH", raising=False)
+        assert _load_person_seed_entities() == []
+
+        config = tmp_path / "person-seeds.json"
+        config.write_text('["Alex Example"]')
+        monkeypatch.setenv("BRAINLAYER_PERSON_SEED_ENTITIES_PATH", str(config))
+        assert _load_person_seed_entities() == ["Alex Example"]
+
+    def test_malformed_person_seed_config_fails_soft(self, tmp_path, monkeypatch, caplog):
+        from brainlayer.pipeline.batch_extraction import _load_person_seed_entities
+
+        config = tmp_path / "person-seeds.json"
+        config.write_text('{"private-marker": 42}')
+        monkeypatch.setenv("BRAINLAYER_PERSON_SEED_ENTITIES_PATH", str(config))
+        assert _load_person_seed_entities() == []
+        assert "ValueError" in caplog.text
+        assert "private-marker" not in caplog.text
+        caplog.clear()
+        monkeypatch.setenv("BRAINLAYER_PERSON_SEED_ENTITIES_PATH", str(tmp_path / "missing.json"))
+        assert _load_person_seed_entities() == []
+        assert "FileNotFoundError" in caplog.text
+        assert str(tmp_path) not in caplog.text
+
+    def test_default_company_seeds_are_empty(self):
+        assert DEFAULT_SEED_ENTITIES["company"] == []
 
     def test_seed_has_projects(self):
         assert "project" in DEFAULT_SEED_ENTITIES
@@ -90,17 +110,25 @@ class TestProcessChunk:
     """Process a single chunk through extraction."""
 
     def test_process_returns_result(self):
-        chunk = {"id": "chunk-1", "content": "Etan Heyman is building Domica."}
+        chunk = {"id": "chunk-1", "content": "Person Alpha is building Example Corp."}
         result = process_chunk(chunk, llm_caller=_mock_llm)
         assert isinstance(result, ExtractionResult)
         assert result.chunk_id == "chunk-1"
 
     def test_process_finds_seed_entities(self):
-        chunk = {"id": "chunk-1", "content": "Dor Zohar leads product at Domica."}
-        result = process_chunk(chunk, llm_caller=_mock_llm)
+        chunk = {"id": "chunk-1", "content": "Person Alpha leads product at Example Corp."}
+        result = process_chunk(
+            chunk,
+            seed_entities={
+                "person": ["Person Alpha"],
+                "company": ["Example Corp"],
+                "project": ["brainlayer", "Sample Project"],
+            },
+            llm_caller=_mock_llm,
+        )
         names = {e.text for e in result.entities}
-        assert "Dor Zohar" in names
-        assert "Domica" in names
+        assert "Person Alpha" in names
+        assert "Example Corp" in names
 
     def test_process_finds_llm_entities(self):
         chunk = {"id": "chunk-2", "content": "Deploy to Railway using FastAPI."}
@@ -127,8 +155,8 @@ class TestStoreExtractionResult:
     def test_stores_entities(self, store):
         result = ExtractionResult(
             entities=[
-                ExtractedEntity("Etan Heyman", "person", 0, 11, 0.95, "seed"),
-                ExtractedEntity("Domica", "company", 25, 31, 0.95, "seed"),
+                ExtractedEntity("Person Alpha", "person", 0, 11, 0.95, "seed"),
+                ExtractedEntity("Example Corp", "company", 25, 31, 0.95, "seed"),
             ],
             relations=[],
             chunk_id="chunk-1",
@@ -144,18 +172,18 @@ class TestStoreExtractionResult:
     def test_stores_relations(self, store):
         result = ExtractionResult(
             entities=[
-                ExtractedEntity("Dor Zohar", "person", 0, 9, 0.95, "seed"),
-                ExtractedEntity("Domica", "company", 20, 26, 0.95, "seed"),
+                ExtractedEntity("Person Alpha", "person", 0, 9, 0.95, "seed"),
+                ExtractedEntity("Example Corp", "company", 20, 26, 0.95, "seed"),
             ],
             relations=[
-                ExtractedRelation("Dor Zohar", "Domica", "works_at", 0.8),
+                ExtractedRelation("Person Alpha", "Example Corp", "works_at", 0.8),
             ],
             chunk_id="chunk-1",
         )
         entity_ids = store_extraction_result(result, store)
 
         # Relation should exist
-        dor_id = entity_ids["Dor Zohar"]
+        dor_id = entity_ids["Person Alpha"]
         rels = store.get_entity_relations(dor_id, direction="outgoing")
         assert len(rels) >= 1
         assert rels[0]["relation_type"] == "works_at"
@@ -179,14 +207,14 @@ class TestStoreExtractionResult:
         """Same entity from different chunks should resolve to one KG entity."""
         result1 = ExtractionResult(
             entities=[
-                ExtractedEntity("Etan Heyman", "person", 0, 11, 0.95, "seed"),
+                ExtractedEntity("Person Alpha", "person", 0, 11, 0.95, "seed"),
             ],
             relations=[],
             chunk_id="chunk-1",
         )
         result2 = ExtractionResult(
             entities=[
-                ExtractedEntity("Etan Heyman", "person", 0, 11, 0.95, "seed"),
+                ExtractedEntity("Person Alpha", "person", 0, 11, 0.95, "seed"),
             ],
             relations=[],
             chunk_id="chunk-2",
@@ -195,7 +223,7 @@ class TestStoreExtractionResult:
         ids2 = store_extraction_result(result2, store)
 
         # Should resolve to same entity
-        assert ids1["Etan Heyman"] == ids2["Etan Heyman"]
+        assert ids1["Person Alpha"] == ids2["Person Alpha"]
 
     def test_confidence_stored_as_relevance(self, store):
         """Entity-chunk link relevance should reflect extraction confidence."""
@@ -222,8 +250,8 @@ class TestBatchProcessing:
 
     def test_batch_processes_all(self, store):
         chunks = [
-            {"id": "c1", "content": "Etan Heyman works on brainlayer."},
-            {"id": "c2", "content": "Dor Zohar leads Domica product."},
+            {"id": "c1", "content": "Person Alpha works on brainlayer."},
+            {"id": "c2", "content": "Person Alpha leads Example Corp product."},
             {"id": "c3", "content": "Deploy FastAPI to Railway."},
         ]
         stats = process_batch(chunks, store, llm_caller=_mock_llm)
@@ -232,9 +260,18 @@ class TestBatchProcessing:
 
     def test_batch_populates_kg(self, store):
         chunks = [
-            {"id": "c1", "content": "Etan Heyman founded Domica with Dor Zohar."},
+            {"id": "c1", "content": "Person Alpha founded Example Corp with Person Alpha."},
         ]
-        process_batch(chunks, store, llm_caller=_mock_llm)
+        process_batch(
+            chunks,
+            store,
+            seed_entities={
+                "person": ["Person Alpha"],
+                "company": ["Example Corp"],
+                "project": ["brainlayer", "Sample Project"],
+            },
+            llm_caller=_mock_llm,
+        )
 
         # KG should have entities
         cursor = store.conn.cursor()

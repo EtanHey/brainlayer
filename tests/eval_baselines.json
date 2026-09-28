@@ -29,15 +29,15 @@
       },
       {
         "name": "entity_yuval_mehayom",
-        "query": "MeHayom Yuval sprint payment",
-        "expected_snippets": ["yuval", "Yuval", "MeHayom"],
+        "query": "MeHayom Delta sprint payment",
+        "expected_snippets": ["delta", "Delta", "MeHayom"],
         "top_n": 3,
         "project": null,
         "tag": null,
         "passed": true,
         "actual_rank": 1,
         "top_chunk_id": "manual-6494601725414371",
-        "top_snippet": "[2026-03-10] MeHayom Sprint 1: First 50% payment (2,100 NIS) landed in bank. Yuval added Etan to App"
+        "top_snippet": "[2026-03-10] MeHayom Sprint 1: First 50% payment (2,100 NIS) landed in bank. Delta added Etan to App"
       },
       {
         "name": "tag_decision",
