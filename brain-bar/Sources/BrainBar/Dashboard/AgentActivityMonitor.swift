@@ -119,14 +119,19 @@ struct AgentActivitySnapshot: Sendable, Equatable {
 
 final class AgentActivityMonitor {
     private let snapshotProvider: @Sendable () -> String?
+    private let executablePathResolver: @Sendable (Int32) -> String?
 
-    init(snapshotProvider: @escaping @Sendable () -> String? = AgentActivityMonitor.captureProcessSnapshot) {
+    init(
+        snapshotProvider: @escaping @Sendable () -> String? = AgentActivityMonitor.captureProcessSnapshot,
+        executablePathResolver: @escaping @Sendable (Int32) -> String? = AgentActivityMonitor.kernelExecutablePath
+    ) {
         self.snapshotProvider = snapshotProvider
+        self.executablePathResolver = executablePathResolver
     }
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
-        return Self.parse(snapshot)
+        return Self.parse(snapshot, executablePath: executablePathResolver)
     }
 
     struct ProcessRow: Equatable {
@@ -136,6 +141,9 @@ final class AgentActivityMonitor {
         let executable: String
         /// Lowercased `args`.
         let command: String
+        /// The kernel's path for this PID's executable, resolved only for a row that would
+        /// otherwise count. Nil when unresolved.
+        var executablePath: String? = nil
     }
 
     /// `ucomm` is printed left-justified in a fixed MAXCOMLEN (16) column, so it can be
@@ -146,6 +154,8 @@ final class AgentActivityMonitor {
     /// CLI and is not an app-bundled helper, bridge/proxy, or non-session mode; a
     /// candidate counts only when none of its ancestors is itself a candidate, so a
     /// session's wrappers, MCP children and nested CLIs fold into that one session.
+    /// `executablePath` answers where a PID's executable lives (#987); it decides app
+    /// bundling, because args text cannot say where a spaced argv[0] ends.
     static func parse(
         _ snapshot: String,
         executablePath: (Int32) -> String? = { _ in nil }
@@ -153,9 +163,11 @@ final class AgentActivityMonitor {
         let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
         var parentByPID: [Int32: Int32] = [:]
         var candidates: [Int32: AgentFamily] = [:]
-        for row in rows {
+        for var row in rows {
             parentByPID[row.pid] = row.parentPID
-            if let family = candidateFamily(row) {
+            guard let family = candidateFamily(row) else { continue }
+            row.executablePath = executablePath(row.pid)
+            if !isInsideAppBundle(row.executablePath) {
                 candidates[row.pid] = family
             }
         }
@@ -202,7 +214,7 @@ final class AgentActivityMonitor {
         let executable = row.executable
         let command = row.command
         guard !command.isEmpty,
-              !isAppBundled(executable: executable, command: command),
+              !isAppBundled(command),
               !nonSessionExecutables.contains(executable),
               !isBridgeOrProxy(executable: executable, command: command),
               !isNonSessionMode(command),
@@ -243,36 +255,30 @@ final class AgentActivityMonitor {
     }
 
     /// Helpers shipped inside a desktop app bundle (ChatGPT.app's Codex framework and
-    /// bundled `codex`, Claude.app, Cursor.app) are never CLI sessions — wherever the
-    /// bundle lives (#984: Codex's computer-use helper under `~/.codex/computer-use/`).
-    /// That includes the framework Python, which runs as `…/Python.app/Contents/MacOS/Python`
-    /// (#987 N1): no agent CLI is Python-hosted today.
-    private static func isAppBundled(executable: String, command: String) -> Bool {
-        if (command.hasPrefix("/applications/") && command.contains(".app/"))
-            || command.hasPrefix("/system/") {
-            return true
-        }
-        guard let path = executablePath(executable: executable, command: command) else { return false }
-        let directories = path.split(separator: "/").dropLast()
+    /// bundled `codex`, Claude.app, Cursor.app) are never CLI sessions.
+    private static func isAppBundled(_ command: String) -> Bool {
+        (command.hasPrefix("/applications/") && command.contains(".app/"))
+            || command.hasPrefix("/system/")
+    }
+
+    /// An executable inside a `*.app/Contents/` bundle is an app helper wherever the bundle
+    /// lives (#984: Codex's computer-use helper under `~/.codex/computer-use/`). That
+    /// includes any Python.app-hosted process, framework or Homebrew (#987 N1); no agent CLI
+    /// is Python-hosted today. An unresolved path is not app-bundled.
+    private static func isInsideAppBundle(_ executablePath: String?) -> Bool {
+        guard let executablePath else { return false }
+        let directories = executablePath.lowercased().split(separator: "/").dropLast()
         return zip(directories, directories.dropFirst()).contains { $0.hasSuffix(".app") && $1 == "contents" }
     }
 
-    /// argv[0] when it is an absolute path — the executable itself, never a path in the
-    /// arguments. It may contain spaces ("Codex Computer Use.app"), so it is the shortest
-    /// prefix of args that ends at a space or the end of args and whose file name is the
-    /// process's `ucomm` (truncated to 16). When no prefix ends in `ucomm` (Claude names
-    /// its process by version, "2.1.281"), argv[0] is the first whitespace-free token.
-    private static func executablePath(executable: String, command: String) -> Substring? {
-        guard command.hasPrefix("/") else { return nil }
-        let ends = command.indices.filter { command[$0] == " " } + [command.endIndex]
-        for end in ends {
-            let candidate = command[..<end]
-            let name = candidate.split(separator: "/").last ?? ""
-            if String(name.prefix(ucommColumnWidth)).trimmingCharacters(in: .whitespaces) == executable {
-                return candidate
-            }
-        }
-        return command[..<ends[0]]
+    /// The kernel's path for the executable `pid` is running (`proc_pidpath`, symlinks
+    /// resolved). Unlike args text, a space in it is always part of the path. Nil when the
+    /// process has exited or the kernel refuses; the caller then does not treat the row as
+    /// app-bundled.
+    static func kernelExecutablePath(_ pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN)) // PROC_PIDPATHINFO_MAXSIZE
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(cString: buffer)
     }
 
     /// Shells, launch wrappers and text tools are never the session process: a real
