@@ -26,6 +26,30 @@ def _assert_no_token(blob: str, *, where: str) -> None:
     assert not leaked, f"{where} carried unredacted synthetic token(s): {leaked}"
 
 
+def _every_decoding(value, *, layers: int = 8):
+    """Yield ``value`` and every string any reader could reach by JSON-decoding it again."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _every_decoding(key, layers=layers)
+            yield from _every_decoding(item, layers=layers)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _every_decoding(item, layers=layers)
+    elif isinstance(value, str):
+        yield value
+        if layers:
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                return
+            yield from _every_decoding(decoded, layers=layers - 1)
+
+
+def _assert_not_recoverable(value, *, where: str) -> None:
+    for text in _every_decoding(value):
+        _assert_no_token(text, where=where)
+
+
 def _persist(tmp_path, **fields):
     from brainlayer.vector_store import VectorStore
 
@@ -37,6 +61,7 @@ def _persist(tmp_path, **fields):
     finally:
         store.close()
     _assert_no_token(json.dumps([list(map(str, row)) for row in raw]), where="session_enrichments row")
+    _assert_not_recoverable([[c for c in row if isinstance(c, str)] for row in raw], where="session_enrichments row")
     _assert_no_token(json.dumps(record, default=str), where="session enrichment record")
     return record
 
@@ -171,13 +196,138 @@ def test_enrich_session_end_to_end_redacts_tool_usage_stats(tmp_path):
     assert record["tool_usage_stats"][0] == {"tool": "Bash [REDACTED:groq]", "count": 5}
 
 
-def test_scrub_llm_output_keys_are_opt_in():
+def _escaped(token: str) -> str:
+    """The token with its first character written as a JSON \\uXXXX escape."""
+    return "\\u" + format(ord(token[0]), "04x") + token[1:]
+
+
+def test_scrub_llm_output_always_scrubs_string_keys():
     from brainlayer.pipeline.cloud_scrub import scrub_llm_output
 
-    value = {GROQ: [GITHUB, 3], "n": {OPENAI: None}}
+    value = {GROQ: [GITHUB, 3], "n": {OPENAI: None}, 7: "seven"}
 
-    assert scrub_llm_output(value) == {GROQ: ["[REDACTED:github]", 3], "n": {OPENAI: None}}
-    assert scrub_llm_output(value, scrub_keys=True) == {
+    assert scrub_llm_output(value) == {
         "[REDACTED:groq]": ["[REDACTED:github]", 3],
         "n": {"[REDACTED:openai]": None},
+        7: "seven",
     }
+
+
+def test_scrub_llm_output_key_collision_drops_secret_keys_and_later_value_wins():
+    # The contract: two secret-bearing keys that redact to the same placeholder
+    # collapse into one entry. No secret survives; the later value is kept.
+    from brainlayer.pipeline.cloud_scrub import scrub_llm_output
+
+    other_groq = "gsk_" + "1" * 52
+    value = {GROQ: "first", "plain": 0, other_groq: "second"}
+
+    assert scrub_llm_output(value) == {"[REDACTED:groq]": "second", "plain": 0}
+
+
+# ── B2: JSON nested inside JSON strings ──────────────────────────────────
+
+
+def test_double_encoded_json_with_escaped_token_is_redacted(tmp_path):
+    inner = '[{"tool": "' + _escaped(GROQ) + '", "count": 1}]'
+    assert GROQ not in inner and GROQ not in json.dumps(inner)
+
+    record = _persist(tmp_path, tool_usage_stats=json.dumps(inner))
+
+    assert json.loads(record["tool_usage_stats"]) == [{"tool": "[REDACTED:groq]", "count": 1}]
+
+
+def test_json_string_leaf_and_key_with_escaped_token_are_redacted(tmp_path):
+    leaf = '{"env": ["' + _escaped(GITHUB) + '"]}'
+    key = '"' + _escaped(OPENAI) + '"'
+
+    record = _persist(tmp_path, tool_usage_stats=[{"tool": "Bash", "args": leaf, key: 2}])
+
+    (item,) = record["tool_usage_stats"]
+    assert json.loads(item["args"]) == {"env": ["[REDACTED:github]"]}
+    assert [json.loads(k) for k in item if k not in ("tool", "args")] == ["[REDACTED:openai]"]
+    assert list(item.values())[-1] == 2
+
+
+def test_json_strings_up_to_the_depth_limit_are_redacted(tmp_path):
+    from brainlayer.pipeline.cloud_scrub import MAX_JSON_STRING_DEPTH
+
+    layered = [{"tool": _escaped(GROQ), "count": 4}]
+    value = json.dumps(layered)
+    for _ in range(MAX_JSON_STRING_DEPTH - 1):
+        value = json.dumps(value)
+
+    record = _persist(tmp_path, tool_usage_stats=value)
+
+    decoded = record["tool_usage_stats"]
+    while isinstance(decoded, str):
+        decoded = json.loads(decoded)
+    assert decoded == [{"tool": "[REDACTED:groq]", "count": 4}]
+
+
+def test_json_strings_past_the_depth_limit_fail_closed(tmp_path):
+    from brainlayer.pipeline.cloud_scrub import MAX_JSON_STRING_DEPTH, CloudScrubError
+    from brainlayer.vector_store import VectorStore
+
+    value = json.dumps([{"tool": _escaped(GROQ), "count": 4}])
+    for _ in range(MAX_JSON_STRING_DEPTH):
+        value = json.dumps(value)
+
+    store = VectorStore(tmp_path / "session.db")
+    try:
+        with pytest.raises(CloudScrubError, match="nested"):
+            store.upsert_session_enrichment({"session_id": "s-1", "tool_usage_stats": value})
+        count = list(store.conn.cursor().execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
+    finally:
+        store.close()
+    assert count == 0
+
+
+# ── B1: NER relation-property keys ───────────────────────────────────────
+
+
+def test_ner_relation_property_keys_do_not_persist_a_token(tmp_path):
+    from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
+    from brainlayer.vector_store import VectorStore
+
+    response = json.dumps(
+        {
+            "entities": [{"text": "Etan", "type": "person"}, {"text": "brainlayer", "type": "project"}],
+            "relations": [
+                {
+                    "source": "Etan",
+                    "target": "brainlayer",
+                    "type": "builds",
+                    "fact": "Etan builds brainlayer",
+                    "properties": {GITHUB: "v", "meta": {GROQ: {"deeper": [OPENAI]}}},
+                }
+            ],
+        }
+    )
+    store = VectorStore(tmp_path / "kg.db")
+    try:
+        store.upsert_chunks(
+            [
+                {
+                    "id": "chunk-1",
+                    "content": "Etan builds brainlayer every day",
+                    "metadata": "{}",
+                    "source_file": "t.jsonl",
+                    "project": "brainlayer",
+                    "content_type": "user_message",
+                    "value_type": "HIGH",
+                    "char_count": 32,
+                }
+            ],
+            [[0.1] * 1024],
+        )
+        stats = extract_kg_from_chunk(store, "chunk-1", use_llm=True, llm_caller=lambda prompt: response)
+        rows = list(store.conn.cursor().execute("SELECT relation_type, properties, fact FROM kg_relations"))
+    finally:
+        store.close()
+
+    assert stats["relations_created"] >= 1
+    _assert_not_recoverable([list(row) for row in rows], where="kg_relations rows")
+    (builds,) = [row for row in rows if row[0] == "builds"]
+    properties = json.loads(builds[1])
+    assert properties["meta"] == {"[REDACTED:groq]": {"deeper": ["[REDACTED:openai]"]}}
+    assert properties["[REDACTED:github]"] == "v"
