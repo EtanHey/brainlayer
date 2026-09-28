@@ -284,3 +284,232 @@ final class BrainBarServerDebugLogGateTests: XCTestCase {
         XCTAssertEqual(BrainBarServer.loggableMethod([:]), "<no method>")
     }
 }
+
+// MARK: - PR #993 review round 1 (Codex Sol): B1, B2, B3, N1, N2
+
+final class BrainBarLogFileRotationAndDirectoryTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-logfile-r2-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func mode(_ path: String) -> mode_t? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        return info.st_mode & 0o777
+    }
+
+    private func size(_ path: String) -> Int {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return -1 }
+        return Int(info.st_size)
+    }
+
+    /// B2: a `.1` this process cannot replace (planted by another user in the
+    /// sticky /tmp, simulated here by a directory) must not turn the cap off.
+    func testFailedRotationStopsAppendingInsteadOfGrowingPastTheCap() throws {
+        let target = directory.appendingPathComponent("debug.log").path
+        try FileManager.default.createDirectory(atPath: target + ".1", withIntermediateDirectories: false)
+        let file = BrainBarLogFile(path: target, maxBytes: 512)
+        for index in 0..<200 {
+            file.append("line \(index) padding padding padding")
+        }
+        XCTAssertLessThanOrEqual(size(target), 512, "A failed rotation must stop appends, not ignore the cap.")
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target + ".1", isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue, "The unreplaceable .1 is left alone.")
+    }
+
+    /// N1: an existing private log directory is tightened to 0700.
+    func testPrivateDirectoryLogTightensAnExistingParent() throws {
+        let parent = directory.appendingPathComponent("Logs/BrainBar", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        XCTAssertEqual(mode(parent.path), 0o755)
+        BrainBarLog.lifecycleLogFile(path: parent.appendingPathComponent("lifecycle.log").path).append("started")
+        XCTAssertEqual(mode(parent.path), 0o700)
+    }
+
+    /// N1 guard: the debug log lives in /tmp, whose mode must never be touched.
+    func testDebugLogNeverChmodsItsParent() throws {
+        let parent = directory.appendingPathComponent("shared", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        let file = try XCTUnwrap(BrainBarLog.debugLogFile(environment: ["BRAINBAR_DEBUG_LOG": "1"], path: parent.appendingPathComponent("debug.log").path))
+        file.append("trace")
+        XCTAssertEqual(mode(parent.path), 0o755)
+    }
+}
+
+final class BrainBarServerEarlyExitDebugLogTests: XCTestCase {
+    /// N2: a stale world-readable debug log is tightened even when startup is
+    /// rejected before the socket ever listens.
+    func testRejectedStartStillTightensAStaleDebugLog() throws {
+        let short = UUID().uuidString.prefix(8)
+        let directory = URL(fileURLWithPath: "/tmp/bbdn-\(short)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let debugLogPath = directory.appendingPathComponent("debug.log").path
+        FileManager.default.createFile(atPath: debugLogPath, contents: Data("legacy\n".utf8), attributes: [.posixPermissions: 0o644])
+        let lockPath = directory.appendingPathComponent("brainbar.lock").path
+        let heldLock = try BrainBarInstanceLock.acquire(lockPath: lockPath)
+        defer { withExtendedLifetime(heldLock) {} }
+
+        let server = BrainBarServer(
+            socketPath: directory.appendingPathComponent("s.sock").path,
+            dbPath: directory.appendingPathComponent("brainbar.db").path,
+            enableHybridSearchHelper: false,
+            instanceLockPath: lockPath,
+            diagnostics: .daemon(
+                environment: [:],
+                debugLogPath: debugLogPath,
+                lifecycleLogPath: directory.appendingPathComponent("lifecycle.log").path
+            )
+        )
+        let rejected = expectation(description: "start rejected by the held instance lock")
+        server.onStartRejected = { _ in rejected.fulfill() }
+        server.start()
+        wait(for: [rejected], timeout: 5)
+        server.stop()
+
+        var info = stat()
+        XCTAssertEqual(lstat(debugLogPath, &info), 0)
+        XCTAssertEqual(info.st_mode & 0o777, 0o600)
+        XCTAssertEqual(try String(contentsOfFile: debugLogPath, encoding: .utf8), "legacy\n")
+    }
+}
+
+/// B1 + B3: the profiling sink and the helper-failure diagnostics never carry
+/// a client-chosen value or the helper's exception text.
+final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
+    private static let syntheticQuery = "zqx-synthetic-query-4471"
+    private static let syntheticToken = "sk-ant-api03-SYNTHETICTOKEN0000000000000000000000000000"
+
+    private var captured: [String] = []
+    private let lock = NSLock()
+    private var originalProfile: String?
+    private var tempDBPath: String?
+
+    override func setUp() {
+        super.setUp()
+        originalProfile = ProcessInfo.processInfo.environment["BRAINLAYER_SEARCH_PROFILE"]
+        setenv("BRAINLAYER_SEARCH_PROFILE", "1", 1)
+        SearchProfileLogger.sink = { [weak self] line in
+            guard let self else { return }
+            self.lock.lock()
+            self.captured.append(line)
+            self.lock.unlock()
+        }
+    }
+
+    override func tearDown() {
+        SearchProfileLogger.sink = SearchProfileLogger.defaultSink
+        if let originalProfile {
+            setenv("BRAINLAYER_SEARCH_PROFILE", originalProfile, 1)
+        } else {
+            unsetenv("BRAINLAYER_SEARCH_PROFILE")
+        }
+        if let tempDBPath {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: tempDBPath + suffix)
+            }
+        }
+        super.tearDown()
+    }
+
+    private var profileLines: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return captured.joined(separator: "\n")
+    }
+
+    private func assertNoPayload(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(text.contains(Self.syntheticQuery), text, file: file, line: line)
+        XCTAssertFalse(text.contains("SYNTHETICTOKEN"), text, file: file, line: line)
+    }
+
+    func testAcceptedQueryIDIsOnlyTheGeneratedShape() {
+        XCTAssertEqual(SearchProfileLogger.acceptedQueryID("q-0123456789ab"), "q-0123456789ab")
+        XCTAssertEqual(SearchProfileLogger.acceptedQueryID("q-0123456789AB"), "q-0123456789AB")
+        let generated = SearchProfileLogger.newQueryID()
+        XCTAssertEqual(SearchProfileLogger.acceptedQueryID(generated), generated)
+        XCTAssertNil(SearchProfileLogger.acceptedQueryID(Self.syntheticToken))
+        XCTAssertNil(SearchProfileLogger.acceptedQueryID("q-0123456789ab-and-more"))
+        XCTAssertNil(SearchProfileLogger.acceptedQueryID(12345))
+        XCTAssertNil(SearchProfileLogger.acceptedQueryID(nil))
+    }
+
+    func testProfileLoggerDropsAPayloadShapedQueryIDAtTheSink() {
+        SearchProfileLogger.log(scope: "search.brainbar", step: "unit", queryID: Self.syntheticToken)
+        XCTAssertFalse(profileLines.isEmpty)
+        assertNoPayload(profileLines)
+    }
+
+    func testRouterNeitherForwardsNorLogsAClientChosenProfileID() throws {
+        let dbPath = NSTemporaryDirectory() + "brainbar-profile-\(UUID().uuidString).db"
+        tempDBPath = dbPath
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let helper = RecordingHybridSearchClient(error: HybridSearchHelperError.helperError(Self.syntheticToken))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        _ = router.handle([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": Self.syntheticQuery,
+                    "_profile_query_id": Self.syntheticToken,
+                ] as [String: Any],
+            ] as [String: Any],
+        ])
+
+        let forwarded = try XCTUnwrap(helper.requests.first?["_profile_query_id"] as? String)
+        XCTAssertNotNil(SearchProfileLogger.acceptedQueryID(forwarded), forwarded)
+        XCTAssertFalse(profileLines.isEmpty, "Profiling was enabled, so the router must have logged.")
+        assertNoPayload(profileLines)
+    }
+
+    func testHelperClientProfileLinesCarryNoClientIDOrErrorText() {
+        let client = HybridSearchHelperClient(
+            socketPath: "/tmp/bb-missing-\(UUID().uuidString.prefix(8)).sock",
+            dbPath: "/tmp/brainlayer-test.db",
+            pythonExecutable: "/no/such/python/\(Self.syntheticQuery)",
+            environment: [:]
+        )
+        XCTAssertThrowsError(try client.search(arguments: [
+            "query": Self.syntheticQuery,
+            "_profile_query_id": Self.syntheticToken,
+        ]))
+        XCTAssertTrue(profileLines.contains("helper_rpc_done"), profileLines)
+        assertNoPayload(profileLines)
+    }
+
+    func testHelperErrorClassFromTheWireIsAnIdentifierOrAPlaceholder() {
+        XCTAssertEqual(HybridSearchHelperError.helperErrorClass(fromResponse: "ValueError"), "ValueError")
+        XCTAssertEqual(HybridSearchHelperError.helperErrorClass(fromResponse: "JSONDecodeError"), "JSONDecodeError")
+        XCTAssertEqual(HybridSearchHelperError.helperErrorClass(fromResponse: "could not search for \(Self.syntheticQuery)"), "<unrecognized>")
+        XCTAssertEqual(HybridSearchHelperError.helperErrorClass(fromResponse: Self.syntheticToken), "<unrecognized>")
+        XCTAssertEqual(HybridSearchHelperError.helperErrorClass(fromResponse: nil), "<missing>")
+    }
+
+    func testLoggableErrorIsAFixedClassForEveryErrorShape() {
+        XCTAssertEqual(HybridSearchHelperError.loggable(HybridSearchHelperError.helperError("ValueError")), "helperError(ValueError)")
+        XCTAssertEqual(HybridSearchHelperError.loggable(HybridSearchHelperError.helperError(Self.syntheticToken)), "helperError(<unrecognized>)")
+        XCTAssertEqual(HybridSearchHelperError.loggable(HybridSearchHelperError.read(35)), "read(errno 35)")
+        XCTAssertEqual(HybridSearchHelperError.loggable(HybridSearchHelperError.launch(Self.syntheticQuery)), "launch")
+        XCTAssertEqual(HybridSearchHelperError.loggable(HybridSearchHelperError.socketPathTooLong(Self.syntheticQuery)), "socketPathTooLong")
+        let foreign = NSError(domain: Self.syntheticQuery, code: 7, userInfo: [NSLocalizedDescriptionKey: Self.syntheticToken])
+        XCTAssertEqual(HybridSearchHelperError.loggable(foreign), "NSError")
+        assertNoPayload(HybridSearchHelperError.loggable(RecordingHybridSearchClientError.injectedFailure))
+    }
+}

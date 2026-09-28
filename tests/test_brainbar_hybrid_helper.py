@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import uuid
@@ -221,3 +222,63 @@ def test_handle_connection_ignores_client_disconnect_on_response(monkeypatch, tm
             raise BrokenPipeError("client disconnected")
 
     helper._handle_connection(ClosedSocket())
+
+
+_SYNTHETIC_PAYLOAD = "zqx-synthetic-query-4471 sk-ant-api03-SYNTHETICTOKEN0000000000000000000000000000"
+
+
+def test_handle_connection_returns_error_class_never_exception_text(monkeypatch, tmp_path):
+    """PR #993 B3: the Swift client logs this field, so it must carry a fixed class only."""
+    helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "test.db")
+    monkeypatch.setattr(helper, "_read_line", lambda _conn: b'{"method":"brain_search","arguments":{"query":"x"}}')
+
+    def failing_request(_request):
+        raise ValueError(f"could not search for {_SYNTHETIC_PAYLOAD}")
+
+    monkeypatch.setattr(helper, "_handle_request", failing_request)
+
+    sent: list[bytes] = []
+
+    class RecordingSocket:
+        def sendall(self, payload):
+            sent.append(payload)
+
+    helper._handle_connection(RecordingSocket())
+
+    assert len(sent) == 1
+    raw = sent[0].decode("utf-8")
+    assert "zqx-synthetic-query-4471" not in raw
+    assert "SYNTHETICTOKEN" not in raw
+    assert json.loads(raw) == {"ok": False, "error": "ValueError"}
+
+
+def test_handle_connection_error_class_for_undecodable_request(monkeypatch, tmp_path):
+    helper = HybridSearchHelper(socket_path=tmp_path / "helper.sock", db_path=tmp_path / "test.db")
+    monkeypatch.setattr(helper, "_read_line", lambda _conn: f"not json {_SYNTHETIC_PAYLOAD}".encode())
+
+    sent: list[bytes] = []
+
+    class RecordingSocket:
+        def sendall(self, payload):
+            sent.append(payload)
+
+    helper._handle_connection(RecordingSocket())
+
+    response = json.loads(sent[0].decode("utf-8"))
+    assert response == {"ok": False, "error": "JSONDecodeError"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("q-0123456789ab", "q-0123456789ab"),
+        ("q-0123456789AB", "q-0123456789AB"),
+        (_SYNTHETIC_PAYLOAD, None),
+        ("q-0123456789ab-and-more", None),
+        (12345, None),
+        (None, None),
+    ],
+)
+def test_profile_query_id_accepts_only_the_generated_shape(raw, expected):
+    """PR #993 B1: a client-chosen _profile_query_id must not reach the profiling sink."""
+    assert HybridSearchHelper._accepted_profile_query_id(raw) == expected
