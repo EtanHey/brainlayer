@@ -50,18 +50,73 @@ def scrub_for_cloud(text: str) -> str:
 def scrub_llm_output(value: T) -> T:
     """Redact secrets from every string inside an LLM output value.
 
-    Walks dicts, lists and tuples; dict keys are left alone because they are
-    schema field names, not model-authored content. Non-text leaves pass through.
+    Walks dicts, lists and tuples, and scrubs string dict keys as well as values:
+    a model writes free-form mappings (relation properties, tool stats), so a key
+    can be model-authored content. Schema field names never match a secret shape,
+    so scrubbing them is a no-op. Two keys that redact to the same placeholder
+    collapse into one entry and the later value wins — no secret survives, and
+    that loss is deliberate. Non-text leaves pass through.
     """
     if isinstance(value, str):
         return _scrub_text(value)  # type: ignore[return-value]
     if isinstance(value, dict):
-        return {key: scrub_llm_output(item) for key, item in value.items()}  # type: ignore[return-value]
+        return {  # type: ignore[return-value]
+            (_scrub_text(key) if isinstance(key, str) else key): scrub_llm_output(item) for key, item in value.items()
+        }
     if isinstance(value, list):
         return [scrub_llm_output(item) for item in value]  # type: ignore[return-value]
     if isinstance(value, tuple):
         return tuple(scrub_llm_output(item) for item in value)  # type: ignore[return-value]
     return value
+
+
+MAX_JSON_STRING_DEPTH = 3
+
+
+def normalize_json_strings(value: T, *, depth_used: int = 0) -> T:
+    """Rewrite every string that is itself JSON into an escape-free form.
+
+    JSON may spell any character as a ``\\uXXXX`` escape, and a string can hold a
+    whole JSON document, so a token can sit behind any number of encodings that a
+    text scrub never sees. Every string (value or key) that decodes to a JSON
+    container or JSON string is decoded, normalized recursively, and re-encoded
+    with ``ensure_ascii=False``, so the token is literal text for
+    ``scrub_llm_output``. The string keeps its type, so the stored shape does not
+    change.
+
+    ``depth_used`` counts decodes the caller already did. A string still holding
+    JSON after ``MAX_JSON_STRING_DEPTH`` decodes on one path raises
+    ``CloudScrubError``: nothing that deep is written.
+    """
+    if isinstance(value, str):
+        return _normalize_json_text(value, depth_used)  # type: ignore[return-value]
+    if isinstance(value, dict):
+        return {  # type: ignore[return-value]
+            normalize_json_strings(key, depth_used=depth_used): normalize_json_strings(item, depth_used=depth_used)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [normalize_json_strings(item, depth_used=depth_used) for item in value]  # type: ignore[return-value]
+    if isinstance(value, tuple):
+        return tuple(normalize_json_strings(item, depth_used=depth_used) for item in value)  # type: ignore[return-value]
+    return value
+
+
+def _normalize_json_text(text: str, depth_used: int) -> str:
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        return text
+    except RecursionError:
+        # Too deep to decode means too deep to inspect; never pass it through.
+        raise CloudScrubError("JSON nested in a string too deep to decode; refusing to persist it") from None
+    if not isinstance(decoded, (dict, list, str)):
+        return text  # numbers, booleans and null cannot hide text
+    if depth_used >= MAX_JSON_STRING_DEPTH:
+        raise CloudScrubError(
+            f"JSON nested in strings deeper than {MAX_JSON_STRING_DEPTH} levels; refusing to persist it"
+        )
+    return json.dumps(normalize_json_strings(decoded, depth_used=depth_used + 1), ensure_ascii=False)
 
 
 def scrub_gemini_batch_jsonl(path: Path | str) -> None:
