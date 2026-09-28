@@ -251,8 +251,7 @@ def test_json_string_leaf_and_key_with_escaped_token_are_redacted(tmp_path):
 def test_json_strings_up_to_the_depth_limit_are_redacted(tmp_path):
     from brainlayer.pipeline.cloud_scrub import MAX_JSON_STRING_DEPTH
 
-    layered = [{"tool": _escaped(GROQ), "count": 4}]
-    value = json.dumps(layered)
+    value = '[{"tool": "' + _escaped(GROQ) + '", "count": 4}]'
     for _ in range(MAX_JSON_STRING_DEPTH - 1):
         value = json.dumps(value)
 
@@ -268,7 +267,7 @@ def test_json_strings_past_the_depth_limit_fail_closed(tmp_path):
     from brainlayer.pipeline.cloud_scrub import MAX_JSON_STRING_DEPTH, CloudScrubError
     from brainlayer.vector_store import VectorStore
 
-    value = json.dumps([{"tool": _escaped(GROQ), "count": 4}])
+    value = '[{"tool": "' + _escaped(GROQ) + '", "count": 4}]'
     for _ in range(MAX_JSON_STRING_DEPTH):
         value = json.dumps(value)
 
@@ -276,6 +275,22 @@ def test_json_strings_past_the_depth_limit_fail_closed(tmp_path):
     try:
         with pytest.raises(CloudScrubError, match="nested"):
             store.upsert_session_enrichment({"session_id": "s-1", "tool_usage_stats": value})
+        count = list(store.conn.cursor().execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
+    finally:
+        store.close()
+    assert count == 0
+
+
+def test_json_string_too_deep_to_decode_fails_closed(tmp_path):
+    from brainlayer.pipeline.cloud_scrub import CloudScrubError
+    from brainlayer.vector_store import VectorStore
+
+    deep = "[" * 100_000 + '"' + _escaped(GROQ) + '"' + "]" * 100_000
+
+    store = VectorStore(tmp_path / "session.db")
+    try:
+        with pytest.raises(CloudScrubError, match="too deep"):
+            store.upsert_session_enrichment({"session_id": "s-1", "tool_usage_stats": [{"tool": deep}]})
         count = list(store.conn.cursor().execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
     finally:
         store.close()

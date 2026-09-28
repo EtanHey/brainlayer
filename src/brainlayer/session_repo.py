@@ -950,10 +950,11 @@ class SessionMixin:
 
         Model-authored fields are secret-scrubbed before the write, dict keys
         included: the session model writes these dicts free-form. A JSON field
-        given as a string is decoded first, so a token hidden behind a JSON
-        escape is scrubbed as the value it decodes to.
+        given as a string is decoded first, and JSON nested inside its strings is
+        normalized (bounded, fail-closed), so a token hidden behind a JSON escape
+        is scrubbed as the value it decodes to.
         """
-        from .pipeline.cloud_scrub import scrub_llm_output
+        from .pipeline.cloud_scrub import normalize_json_strings, scrub_llm_output
 
         cursor = self.conn.cursor()
         enrichment = dict(enrichment)
@@ -981,13 +982,16 @@ class SessionMixin:
             if field not in json_fields:
                 enrichment[field] = scrub_llm_output(value)
                 continue
+            depth_used = 0
             if isinstance(value, str):
                 try:
                     value = json.loads(value)
                 except ValueError:
                     enrichment[field] = scrub_llm_output(value)  # not JSON: stored as the text it is
                     continue
-            enrichment[field] = json.dumps(scrub_llm_output(value, scrub_keys=True))
+                depth_used = 1
+            value = normalize_json_strings(value, depth_used=depth_used)
+            enrichment[field] = json.dumps(scrub_llm_output(value))
 
         cursor.execute(
             """
