@@ -146,7 +146,10 @@ final class AgentActivityMonitor {
     /// CLI and is not an app-bundled helper, bridge/proxy, or non-session mode; a
     /// candidate counts only when none of its ancestors is itself a candidate, so a
     /// session's wrappers, MCP children and nested CLIs fold into that one session.
-    static func parse(_ snapshot: String) -> AgentActivitySnapshot {
+    static func parse(
+        _ snapshot: String,
+        executablePath: (Int32) -> String? = { _ in nil }
+    ) -> AgentActivitySnapshot {
         let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
         var parentByPID: [Int32: Int32] = [:]
         var candidates: [Int32: AgentFamily] = [:]
