@@ -1134,9 +1134,17 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testSearchAliasExpansionPreservesMultiwordSemantics() throws {
+        db.exec("""
+            INSERT INTO kg_entities (id, entity_type, name)
+            VALUES ('entity-project-atlas', 'project', 'Project Atlas');
+        """)
+        db.exec("""
+            INSERT INTO kg_entity_aliases (alias, entity_id)
+            VALUES ('AtlasX', 'entity-project-atlas');
+        """)
         try db.insertChunk(
             id: "alias-good",
-            content: "Hershkovits reviewed the release plan yesterday.",
+            content: "Project Atlas reviewed rollout yesterday.",
             sessionId: "session-alias-good",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -1144,14 +1152,14 @@ final class DatabaseTests: XCTestCase {
         )
         try db.insertChunk(
             id: "alias-bad",
-            content: "Met with Hershkovits yesterday.",
+            content: "Met with Project Atlas yesterday.",
             sessionId: "session-alias-bad",
             project: "brainlayer",
             contentType: "assistant_text",
             importance: 8
         )
 
-        let results = try db.search(query: "Hershkovitz release plan", limit: 10)
+        let results = try db.search(query: "AtlasX rollout", limit: 10)
         let resultIDs = results.compactMap { $0["chunk_id"] as? String }
 
         XCTAssertTrue(resultIDs.contains("alias-good"))

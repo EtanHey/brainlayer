@@ -1,6 +1,7 @@
 """Tests for BMPM-backed Hebrew alias resolution."""
 
 import importlib.util
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -40,15 +41,25 @@ def prompt_search():
     return load_hook_module("brainlayer-prompt-search.py")
 
 
-def _upsert_person(store: VectorStore, entity_id: str = "person-etan", name: str = "Etan Heyman") -> str:
+@pytest.fixture(autouse=True)
+def synthetic_alias_seed(tmp_path, monkeypatch):
+    seed_path = tmp_path / "alias-seeds.json"
+    seed_path.write_text(
+        json.dumps([["נועה", "Noa Example", "hebrew"], ["NoaExample", "Noa Example", "handle"]]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BRAINLAYER_KG_ALIAS_SEED_PATH", str(seed_path))
+
+
+def _upsert_person(store: VectorStore, entity_id: str = "person-noa", name: str = "Noa Example") -> str:
     return store.upsert_entity(entity_id, "person", name, metadata={})
 
 
 def test_phonetic_key_generates():
     from brainlayer.phonetic import phonetic_key
 
-    english = phonetic_key("Etan")
-    hebrew = phonetic_key("איתן")
+    english = phonetic_key("Noa")
+    hebrew = phonetic_key("נועה")
 
     assert isinstance(english, str)
     assert isinstance(hebrew, str)
@@ -59,14 +70,14 @@ def test_phonetic_key_generates():
 def test_phonetic_match_hebrew_english():
     from brainlayer.phonetic import phonetic_match
 
-    assert phonetic_match("Etan", "איתן")
+    assert phonetic_match("Noa", "נועה")
 
 
 def test_phonetic_match_handles(store):
     entity_id = _upsert_person(store)
-    store.add_entity_alias("EtanHey", entity_id, alias_type="handle")
+    store.add_entity_alias("NoaExample", entity_id, alias_type="handle")
 
-    resolved = store.resolve_entity("EtanHey")
+    resolved = store.resolve_entity("NoaExample")
 
     assert resolved is not None
     assert resolved["id"] == entity_id
@@ -75,7 +86,7 @@ def test_phonetic_match_handles(store):
 def test_seed_aliases_populates(tmp_path):
     db_path = tmp_path / "seed.db"
     store = VectorStore(db_path)
-    entity_id = store.upsert_entity("person-etan", "person", "Etan Heyman", metadata={})
+    entity_id = store.upsert_entity("person-noa", "person", "Noa Example", metadata={})
     store.close()
 
     from scripts.seed_aliases import seed_aliases
@@ -90,14 +101,27 @@ def test_seed_aliases_populates(tmp_path):
     conn.close()
 
     assert inserted >= 2
-    assert ("איתן", "hebrew", entity_id) in aliases
+    assert ("נועה", "hebrew", entity_id) in aliases
     assert any(alias_type == "phonetic" for _, alias_type, _ in aliases)
+
+
+def test_alias_seed_defaults_empty_and_rejects_malformed_config(monkeypatch, tmp_path):
+    from scripts.seed_aliases import _load_known_aliases
+
+    monkeypatch.delenv("BRAINLAYER_KG_ALIAS_SEED_PATH", raising=False)
+    assert _load_known_aliases() == []
+
+    seed_path = tmp_path / "invalid-alias-seeds.json"
+    seed_path.write_text(json.dumps({"alias": "Noa"}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_KG_ALIAS_SEED_PATH", str(seed_path))
+    with pytest.raises(ValueError, match="list of"):
+        _load_known_aliases()
 
 
 def test_resolve_entity_exact(store):
     entity_id = _upsert_person(store)
 
-    resolved = store.resolve_entity("Etan Heyman")
+    resolved = store.resolve_entity("Noa Example")
 
     assert resolved is not None
     assert resolved["id"] == entity_id
@@ -105,9 +129,9 @@ def test_resolve_entity_exact(store):
 
 def test_resolve_entity_alias(store):
     entity_id = _upsert_person(store)
-    store.add_entity_alias("איתן", entity_id, alias_type="hebrew")
+    store.add_entity_alias("נועה", entity_id, alias_type="hebrew")
 
-    resolved = store.resolve_entity("איתן")
+    resolved = store.resolve_entity("נועה")
 
     assert resolved is not None
     assert resolved["id"] == entity_id
@@ -120,21 +144,21 @@ def test_resolve_entity_phonetic(store):
     seed_aliases(store.db_path)
 
     resolved = entity_lookup(
-        query="איתן",
+        query="נועה",
         store=store,
         embed_fn=lambda _: [0.0] * 1024,
         entity_type="person",
     )
 
     assert resolved is not None
-    assert resolved["name"] == "Etan Heyman"
+    assert resolved["name"] == "Noa Example"
 
 
 def test_hook_detects_hebrew_entity(prompt_search, tmp_path):
     db_path = tmp_path / "hook.db"
     store = VectorStore(db_path)
     entity_id = _upsert_person(store)
-    store.add_entity_alias("איתן", entity_id, alias_type="hebrew")
+    store.add_entity_alias("נועה", entity_id, alias_type="hebrew")
 
     from scripts.seed_aliases import seed_aliases
 
@@ -142,7 +166,7 @@ def test_hook_detects_hebrew_entity(prompt_search, tmp_path):
     store.close()
 
     conn = sqlite3.connect(db_path)
-    matches = prompt_search.detect_entities_in_prompt("מה איתן מעדיף לפגישות?", conn)
+    matches = prompt_search.detect_entities_in_prompt("מה נועה מעדיף לפגישות?", conn)
     conn.close()
 
     assert any(match["id"] == entity_id for match in matches)
@@ -153,11 +177,11 @@ def test_hook_runs_phonetic_fallback_even_with_exact_match(prompt_search, tmp_pa
     store = VectorStore(db_path)
     person_id = _upsert_person(store)
     project_id = store.upsert_entity("project-brainlayer", "project", "BrainLayer", metadata={})
-    store.add_entity_alias(phonetic_key("Etan"), person_id, alias_type="phonetic")
+    store.add_entity_alias(phonetic_key("Noa"), person_id, alias_type="phonetic")
     store.close()
 
     conn = sqlite3.connect(db_path)
-    matches = prompt_search.detect_entities_in_prompt("Tell me about BrainLayer and what does איתן think?", conn)
+    matches = prompt_search.detect_entities_in_prompt("Tell me about BrainLayer and what does נועה think?", conn)
     conn.close()
 
     assert {match["id"] for match in matches} == {person_id, project_id}
@@ -165,15 +189,15 @@ def test_hook_runs_phonetic_fallback_even_with_exact_match(prompt_search, tmp_pa
 
 def test_alias_lookup_performance(store):
     entity_id = _upsert_person(store)
-    store.add_entity_alias("איתן", entity_id, alias_type="hebrew")
+    store.add_entity_alias("נועה", entity_id, alias_type="hebrew")
 
     # Warm cache and import cost before timing.
-    store.resolve_entity("איתן")
+    store.resolve_entity("נועה")
 
     start = time.perf_counter()
     iterations = 200
     for _ in range(iterations):
-        resolved = store.resolve_entity("איתן")
+        resolved = store.resolve_entity("נועה")
         assert resolved is not None
         assert resolved["id"] == entity_id
     avg_ms = ((time.perf_counter() - start) / iterations) * 1000

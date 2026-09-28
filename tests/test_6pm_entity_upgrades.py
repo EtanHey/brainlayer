@@ -54,7 +54,7 @@ def person_entity(store, mock_embed):
                 "duration_minutes": 30,
             },
             "contact_info": {
-                "email": "avi.simon@example.com",
+                "email": "sample.person@example.com",
                 "phone": "+972-54-1234567",
             },
         },
@@ -162,7 +162,7 @@ class TestPersonProfileSchema:
         entity = store.get_entity(person_entity)
         meta = entity["metadata"]
         assert "contact_info" in meta
-        assert meta["contact_info"]["email"] == "avi.simon@example.com"
+        assert meta["contact_info"]["email"] == "sample.person@example.com"
 
     def test_person_entity_type_is_person(self, store, person_entity):
         """Entity type is 'person'."""
