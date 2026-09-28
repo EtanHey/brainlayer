@@ -117,7 +117,7 @@ struct AgentActivitySnapshot: Sendable, Equatable {
         "Agents = top-level Claude, Codex, Gemini and Cursor CLI sessions; app helpers, MCP bridges and each session's child processes are not counted."
 }
 
-final class AgentActivityMonitor {
+final class AgentActivityMonitor: Sendable {
     private let snapshotProvider: @Sendable () -> String?
     private let executablePathResolver: @Sendable (Int32) -> String?
 
