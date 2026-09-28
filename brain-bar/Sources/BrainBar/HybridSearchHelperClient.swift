@@ -188,7 +188,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
                 try self.waitUntilReadyLocked(timeout: self.readinessTimeout)
                 NSLog("[BrainBar] Hybrid search helper ready socket=%@", self.socketPath)
             } catch {
-                NSLog("[BrainBar] Hybrid search helper warmup failed: %@", String(describing: error))
+                NSLog("[BrainBar] Hybrid search helper warmup failed: %@", HybridSearchHelperError.loggable(error))
                 self.stopLocked()
             }
         }
@@ -205,7 +205,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
     }
 
     func search(arguments: [String: Any]) throws -> HybridSearchResponse {
-        let profileQueryID = (arguments["_profile_query_id"] as? String)
+        let profileQueryID = SearchProfileLogger.acceptedQueryID(arguments["_profile_query_id"])
             ?? (SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil)
         let profileStartedAt = SearchProfileLogger.now()
         SearchProfileLogger.log(scope: "search.brainbar", step: "helper_rpc_start", queryID: profileQueryID)
@@ -237,7 +237,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
                 step: "helper_rpc_done",
                 queryID: profileQueryID,
                 durMS: SearchProfileLogger.durationMS(since: profileStartedAt),
-                fields: ["error": String(describing: error)]
+                fields: ["error": HybridSearchHelperError.loggable(error)]
             )
             throw error
         }
@@ -321,7 +321,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
             process = proc
             NSLog("[BrainBar] Hybrid search helper started pid=%d socket=%@", proc.processIdentifier, socketPath)
         } catch {
-            NSLog("[BrainBar] Failed to start hybrid search helper: %@", String(describing: error))
+            NSLog("[BrainBar] Failed to start hybrid search helper: %@", HybridSearchHelperError.loggable(error))
             process = nil
             throw HybridSearchHelperError.launch(String(describing: error))
         }
@@ -330,8 +330,7 @@ final class HybridSearchHelperClient: HybridSearchClientProtocol, HybridSearchRe
     private func send(arguments: [String: Any]) throws -> HybridSearchResponse {
         let decoded = try sendRequest(method: "brain_search", arguments: arguments, timeout: socketIOTimeout)
         if let ok = decoded["ok"] as? Bool, !ok {
-            let message = decoded["error"] as? String ?? "unknown helper error"
-            throw HybridSearchHelperError.helperError(message)
+            throw HybridSearchHelperError.helperError(HybridSearchHelperError.helperErrorClass(fromResponse: decoded["error"]))
         }
         guard let text = decoded["text"] as? String else {
             throw HybridSearchHelperError.invalidResponse
@@ -592,6 +591,46 @@ enum HybridSearchHelperError: LocalizedError {
             return "hybrid helper error: \(message)"
         case .notReady:
             return "hybrid helper is not ready"
+        }
+    }
+
+    /// The helper reports a failure as its Python exception class name. Anything
+    /// that is not shaped like one (`ValueError`, `JSONDecodeError`) is replaced,
+    /// because older helpers sent `str(exc)`, which can carry the query.
+    static func helperErrorClass(fromResponse raw: Any?) -> String {
+        guard let raw = raw as? String else { return "<missing>" }
+        let scalars = Array(raw.unicodeScalars)
+        let isASCIIAlnum: (Unicode.Scalar) -> Bool = {
+            ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0)
+        }
+        guard (1...64).contains(scalars.count),
+              let first = scalars.first, ("A"..."Z").contains(first),
+              scalars.allSatisfy(isASCIIAlnum),
+              raw.hasSuffix("Error") || raw.hasSuffix("Exception")
+        else {
+            return "<unrecognized>"
+        }
+        return raw
+    }
+
+    /// A fixed description for log sinks: the case name plus errno or size, never
+    /// a message, path or foreign error's text. Non-helper errors log their type.
+    static func loggable(_ error: Error) -> String {
+        guard let helperError = error as? HybridSearchHelperError else {
+            return String(describing: type(of: error))
+        }
+        switch helperError {
+        case .socket(let code): return "socket(errno \(code))"
+        case .socketPathTooLong: return "socketPathTooLong"
+        case .connect(let code): return "connect(errno \(code))"
+        case .configureSocket(let code): return "configureSocket(errno \(code))"
+        case .write(let code): return "write(errno \(code))"
+        case .read(let code): return "read(errno \(code))"
+        case .launch: return "launch"
+        case .responseTooLarge(let limit): return "responseTooLarge(\(limit))"
+        case .invalidResponse: return "invalidResponse"
+        case .helperError(let errorClass): return "helperError(\(helperErrorClass(fromResponse: errorClass)))"
+        case .notReady: return "notReady"
         }
     }
 }

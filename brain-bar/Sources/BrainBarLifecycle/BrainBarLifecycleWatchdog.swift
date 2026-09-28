@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import os
 
 public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     public struct Configuration: Sendable {
@@ -10,8 +11,9 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         let checkInterval: TimeInterval
         let terminateGraceInterval: TimeInterval
         let relaunchCommand: RelaunchCommand
-        /// Every restart decision is appended here as well as to NSLog, so a
-        /// restart is explainable from the daemon's own log.
+        /// Every restart decision is appended here (0600, rotated, no payloads)
+        /// as well as to unified logging, so a restart stays explainable after
+        /// the process that made it is gone.
         let eventLogPath: String?
 
         public init(
@@ -83,7 +85,6 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     public static let uiLaunchAgentLabel = "com.brainlayer.brainbar"
     public static let daemonLaunchAgentLabel = "com.brainlayer.brainbar-daemon"
     public static let daemonSocketPath = "/tmp/brainbar.sock"
-    public static let daemonDebugLogPath = "/tmp/brainbar-debug.log"
     /// How long the daemon gets to answer a `ping` before a stale heartbeat
     /// is treated as a hang.
     public static let daemonProbeTimeout: TimeInterval = 5
@@ -98,6 +99,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     /// process has nothing to probe (the UI app), and awake-time staleness is
     /// the failure signal on its own.
     private let livenessProbe: (@Sendable () -> Bool)?
+    private let eventLog: BrainBarLogFile?
+    private static let logger = BrainBarLog.logger("watchdog")
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.lifecycle-watchdog", qos: .utility)
     private var timer: DispatchSourceTimer?
     private var isRestarting = false
@@ -126,6 +129,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         self.relaunch = relaunch
         self.clock = clock
         self.livenessProbe = livenessProbe
+        eventLog = configuration.eventLogPath.map(BrainBarLog.lifecycleLogFile(path:))
     }
 
     var hasLivenessProbe: Bool { livenessProbe != nil }
@@ -228,18 +232,11 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         }
     }
 
+    /// `message` is built only from the watched name, fixed evidence strings,
+    /// durations and PIDs, so it is public in unified logging.
     private func log(_ message: String) {
-        NSLog("[BrainBarWatchdog] %@", message)
-        guard let path = configuration.eventLogPath else { return }
-        Self.appendEventLogLine("[BrainBarWatchdog] \(message)", to: path, now: clock.wallNow())
-    }
-
-    static func appendEventLogLine(_ message: String, to path: String, now: Date) {
-        let line = "[\(ISO8601DateFormatter().string(from: now))] \(message)\n"
-        let fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
-        guard fd >= 0 else { return }
-        defer { close(fd) }
-        _ = line.withCString { write(fd, $0, strlen($0)) }
+        Self.logger.notice("\(message, privacy: .public)")
+        eventLog?.append("[BrainBarWatchdog] \(message)", now: clock.wallNow())
     }
 
     /// Wall-clock mtime check. Sleep counts here, so the watchdog never
@@ -486,7 +483,9 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             process.waitUntilExit()
             return process.terminationStatus == 0
         } catch {
-            NSLog("[BrainBarWatchdog] Failed to run %@ %@: %@", command.executablePath, command.arguments.joined(separator: " "), String(describing: error))
+            logger.error(
+                "Failed to run \(command.executablePath, privacy: .public) \(command.arguments.joined(separator: " "), privacy: .public): \(String(describing: error), privacy: .private)"
+            )
             return false
         }
     }
@@ -497,7 +496,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
                 watchedName: "BrainBarDaemon",
                 heartbeatPath: daemonHeartbeatPath,
                 relaunchCommand: .launchctlKickstart(label: daemonLaunchAgentLabel),
-                eventLogPath: daemonDebugLogPath
+                eventLogPath: BrainBarLog.lifecycleLogPath
             ),
             processProvider: {
                 runningPIDs(named: "BrainBarDaemon", bundleIdentifiers: ["com.brainlayer.brainbar-daemon", "com.brainlayer.BrainBarDaemon"])
@@ -514,7 +513,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
                 watchedName: "BrainBar",
                 heartbeatPath: uiHeartbeatPath,
                 relaunchCommand: .launchctlKickstart(label: uiLaunchAgentLabel),
-                eventLogPath: daemonDebugLogPath
+                eventLogPath: BrainBarLog.lifecycleLogPath
             ),
             processProvider: {
                 runningPIDs(named: "BrainBar", bundleIdentifiers: ["com.brainlayer.BrainBar"])
