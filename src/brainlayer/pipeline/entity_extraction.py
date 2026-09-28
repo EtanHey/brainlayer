@@ -271,13 +271,15 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
     if not response:
         return entities, relations
 
-    # Extract JSON from response. Entity names and relation facts are
-    # model-authored and reach the KG tables, so scrub them like any LLM output.
+    # Extract JSON from response. Entity names, relation facts and free-form
+    # relation properties are model-authored and reach the KG tables, so scrub
+    # them like any LLM output — after normalizing JSON nested in their strings,
+    # so a token behind a JSON escape is scrubbed too (fail-closed past the bound).
     parsed = _extract_json(response)
     if parsed:
-        from .cloud_scrub import scrub_llm_output
+        from .cloud_scrub import normalize_json_strings, scrub_llm_output
 
-        parsed = scrub_llm_output(parsed)
+        parsed = scrub_llm_output(normalize_json_strings(parsed))
     if not parsed:
         return entities, relations
 
