@@ -300,7 +300,7 @@ def test_json_string_too_deep_to_decode_fails_closed(tmp_path):
 # ── B1: NER relation-property keys ───────────────────────────────────────
 
 
-def test_ner_relation_property_keys_do_not_persist_a_token(tmp_path):
+def _persist_ner_relation(tmp_path, properties):
     from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
     from brainlayer.vector_store import VectorStore
 
@@ -313,7 +313,7 @@ def test_ner_relation_property_keys_do_not_persist_a_token(tmp_path):
                     "target": "brainlayer",
                     "type": "builds",
                     "fact": "Etan builds brainlayer",
-                    "properties": {GITHUB: "v", "meta": {GROQ: {"deeper": [OPENAI]}}},
+                    "properties": properties,
                 }
             ],
         }
@@ -343,6 +343,39 @@ def test_ner_relation_property_keys_do_not_persist_a_token(tmp_path):
     assert stats["relations_created"] >= 1
     _assert_not_recoverable([list(row) for row in rows], where="kg_relations rows")
     (builds,) = [row for row in rows if row[0] == "builds"]
-    properties = json.loads(builds[1])
+    return json.loads(builds[1])
+
+
+def test_ner_relation_property_keys_do_not_persist_a_token(tmp_path):
+    properties = _persist_ner_relation(tmp_path, {GITHUB: "v", "meta": {GROQ: {"deeper": [OPENAI]}}})
+
     assert properties["meta"] == {"[REDACTED:groq]": {"deeper": ["[REDACTED:openai]"]}}
     assert properties["[REDACTED:github]"] == "v"
+
+
+def test_ner_relation_property_json_strings_with_escaped_tokens_are_redacted(tmp_path):
+    # B2's shape at the other free-form sink: a property value (or key) that is
+    # itself JSON, hiding a token behind a \u escape.
+    leaf = '{"env": ["' + _escaped(GROQ) + '"]}'
+    key = '"' + _escaped(GITHUB) + '"'
+
+    properties = _persist_ner_relation(tmp_path, {"args": leaf, key: "v"})
+
+    assert json.loads(properties["args"]) == {"env": ["[REDACTED:groq]"]}
+    assert '"[REDACTED:github]"' in properties
+
+
+# ── B2 at the scalar columns ─────────────────────────────────────────────
+
+
+def test_scalar_session_fields_holding_escaped_json_are_redacted(tmp_path):
+    # A scalar column is not decoded by its readers, but the value must not
+    # carry a token that one standards-compliant JSON decode reconstructs.
+    record = _persist(
+        tmp_path,
+        session_summary='"' + _escaped(GROQ) + '"',
+        what_worked='["' + _escaped(OPENAI) + '"]',
+    )
+
+    assert json.loads(record["session_summary"]) == "[REDACTED:groq]"
+    assert json.loads(record["what_worked"]) == ["[REDACTED:openai]"]
