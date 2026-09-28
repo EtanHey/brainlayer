@@ -217,6 +217,36 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
 
+    /// #987 R1 B1/B2: the bundle decision reads the TERMINAL executable path, argv[0]. It
+    /// never assumes `ucomm` is the file name (Claude names itself by version), and never
+    /// stops at an earlier path component that happens to share the executable's name.
+    func test_the_terminal_executable_path_decides_not_ucomm_or_an_earlier_component() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(920, 1, "2.1.281", "/Users/u/Foo.app/Contents/Resources/claude --model x"),
+            Self.row(921, 1, "codex", "/Users/u/codex/Foo.app/Contents/Resources/codex"),
+            Self.row(922, 1, "SkyComputerUseService", "/Users/u/SkyComputerUseService/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .claude), 0)
+        XCTAssertEqual(activity.count(for: .codex), 0)
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    /// #987 R1 N1 policy: the framework Python runs as `…/Python.app/Contents/MacOS/Python`,
+    /// and like any `*.app/Contents/` executable it is app-bundled, whatever script it hosts.
+    /// No agent CLI is Python-hosted today; the same script under a Python that is not in a
+    /// bundle is still detected.
+    func test_python_app_hosted_processes_are_app_bundled_by_policy() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(930, 1, "zsh", "-zsh"),
+            Self.row(931, 930, "Python", "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python /Users/u/.local/bin/gemini --model x"),
+            Self.row(932, 930, "python3", "/opt/homebrew/bin/python3 /Users/u/.local/bin/gemini --model x"),
+        ].joined(separator: "\n"))
+
+        XCTAssertEqual(activity.count(for: .gemini), 1, "only the non-bundled python's gemini counts")
+        XCTAssertEqual(activity.totalActiveAgents, 1)
+    }
+
     /// #984: only the executable's own path decides. A real CLI whose ARGUMENTS name an app
     /// bundle, or that is launched through an interpreter outside one, is still a session.
     func test_a_cli_that_merely_mentions_an_app_bundle_is_still_a_session() {
