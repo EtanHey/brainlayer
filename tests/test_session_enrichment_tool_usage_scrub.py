@@ -1,0 +1,167 @@
+"""``tool_usage_stats`` is LLM output and is scrubbed before it is persisted.
+
+The session-analysis model writes ``tool_usage_stats`` as a free-form list of
+dicts, and ``parse_session_enrichment`` passes the items through unvalidated.
+A model that copies a token into a tool name, a label, a nested value or a
+dict KEY must not put it into ``session_enrichments`` at rest.
+
+Tokens are assembled at runtime from obviously fake characters, so no
+provider-shaped literal lives in this file.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+GROQ = "gsk_" + "0" * 52
+GITHUB = "ghp_" + "0" * 36
+OPENAI = "sk-" + "0" * 40
+TOKENS = {"groq": GROQ, "github": GITHUB, "openai": OPENAI}
+
+
+def _assert_no_token(blob: str, *, where: str) -> None:
+    leaked = [name for name, token in TOKENS.items() if token in blob]
+    assert not leaked, f"{where} carried unredacted synthetic token(s): {leaked}"
+
+
+def _persist(tmp_path, **fields):
+    from brainlayer.vector_store import VectorStore
+
+    store = VectorStore(tmp_path / "session.db")
+    try:
+        store.upsert_session_enrichment({"session_id": "s-1", "session_summary": "a plain summary", **fields})
+        raw = list(store.conn.cursor().execute("SELECT * FROM session_enrichments WHERE session_id = 's-1'"))
+        record = store.get_session_enrichment("s-1")
+    finally:
+        store.close()
+    _assert_no_token(json.dumps([list(map(str, row)) for row in raw]), where="session_enrichments row")
+    _assert_no_token(json.dumps(record, default=str), where="session enrichment record")
+    return record
+
+
+def test_tool_usage_stats_list_of_dicts_is_persisted_redacted(tmp_path):
+    stats = [
+        {"tool": f"Bash {GROQ}", "count": 3},
+        {"tool": "Read", "count": 7, "label": GITHUB},
+    ]
+
+    record = _persist(tmp_path, tool_usage_stats=stats)
+
+    stored = record["tool_usage_stats"]
+    assert [sorted(item) for item in stored] == [["count", "tool"], ["count", "label", "tool"]]
+    assert [item["count"] for item in stored] == [3, 7]
+    assert stored[0]["tool"].startswith("Bash [REDACTED:")
+    assert stored[1]["tool"] == "Read"
+    assert stored[1]["label"].startswith("[REDACTED:")
+
+
+def test_tool_usage_stats_json_string_is_persisted_redacted(tmp_path):
+    stats = [{"tool": f"Edit {OPENAI}", "count": 2}]
+
+    record = _persist(tmp_path, tool_usage_stats=json.dumps(stats))
+
+    assert record["tool_usage_stats"][0]["count"] == 2
+    assert record["tool_usage_stats"][0]["tool"].startswith("Edit [REDACTED:")
+
+
+def test_tool_usage_stats_json_string_with_escaped_token_is_redacted(tmp_path):
+    # JSON lets a model write any character as \\uXXXX. Scrubbing the raw text
+    # would miss the escaped form; the decoded value is the token.
+    escaped = "\\u" + format(ord(GROQ[0]), "04x") + GROQ[1:]
+    raw = '[{"tool": "' + escaped + '", "count": 1}]'
+    assert GROQ not in raw and json.loads(raw)[0]["tool"] == GROQ
+
+    record = _persist(tmp_path, tool_usage_stats=raw)
+
+    assert record["tool_usage_stats"] == [{"tool": "[REDACTED:groq]", "count": 1}]
+
+
+def test_tool_usage_stats_nested_values_and_keys_are_redacted(tmp_path):
+    stats = [
+        {
+            "tool": "Bash",
+            "count": 2,
+            "args": {"env": [GROQ, "plain"], "meta": {"depth": 1, "flag": True, "note": None, "ratio": 0.5}},
+        },
+        {OPENAI: 4},
+    ]
+
+    record = _persist(tmp_path, tool_usage_stats=stats)
+
+    first, second = record["tool_usage_stats"]
+    assert first["count"] == 2
+    assert first["args"]["env"] == ["[REDACTED:groq]", "plain"]
+    assert first["args"]["meta"] == {"depth": 1, "flag": True, "note": None, "ratio": 0.5}
+    assert list(second.values()) == [4]
+    assert list(second)[0].startswith("[REDACTED:")
+
+
+def test_model_authored_dict_keys_in_other_json_fields_are_redacted(tmp_path):
+    # Same class: decisions_made / corrections items are model-written dicts too.
+    record = _persist(
+        tmp_path,
+        decisions_made=[{"decision": "ship it", GITHUB: "why"}],
+        corrections=[{GROQ: {"nested": OPENAI}}],
+    )
+
+    assert record["decisions_made"][0]["decision"] == "ship it"
+    assert "why" in record["decisions_made"][0].values()
+    assert record["corrections"][0] == {"[REDACTED:groq]": {"nested": "[REDACTED:openai]"}}
+
+
+def test_tool_usage_stats_scrub_failure_writes_nothing(tmp_path, monkeypatch):
+    from brainlayer.pipeline import cloud_scrub
+    from brainlayer.vector_store import VectorStore
+
+    def boom(text):
+        raise RuntimeError("scrubber down")
+
+    monkeypatch.setattr(cloud_scrub, "scrub_secrets", boom)
+    store = VectorStore(tmp_path / "session.db")
+    try:
+        with pytest.raises(cloud_scrub.CloudScrubError):
+            store.upsert_session_enrichment({"session_id": "s-1", "tool_usage_stats": [{"tool": "Bash", "count": 1}]})
+        count = list(store.conn.cursor().execute("SELECT COUNT(*) FROM session_enrichments"))[0][0]
+    finally:
+        store.close()
+    assert count == 0
+
+
+def test_enrich_session_end_to_end_redacts_tool_usage_stats(tmp_path):
+    from brainlayer.pipeline.session_enrichment import enrich_session
+    from brainlayer.vector_store import VectorStore
+
+    response = json.dumps(
+        {
+            "session_summary": "The agent fixed a bug in the watcher.",
+            "tool_usage_stats": [{"tool": f"Bash {GROQ}", "count": 5}, {GITHUB: 1}],
+        }
+    )
+    store = VectorStore(tmp_path / "session.db")
+    try:
+        store.conn.cursor().execute(
+            "INSERT INTO chunks (id, content, metadata, source_file, content_type, created_at, char_count) "
+            "VALUES ('c1', ?, '{}', '/p/sess-9.jsonl', 'user_message', '2026-09-28T00:00:00Z', 80)",
+            ("user: please fix the watcher bug that drops lines on rotate, thanks a lot " * 2,),
+        )
+        record = enrich_session(store, "sess-9", lambda prompt: response, project="p")
+    finally:
+        store.close()
+
+    assert record is not None
+    _assert_no_token(json.dumps(record, default=str), where="enrich_session record")
+    assert record["tool_usage_stats"][0] == {"tool": "Bash [REDACTED:groq]", "count": 5}
+
+
+def test_scrub_llm_output_keys_are_opt_in():
+    from brainlayer.pipeline.cloud_scrub import scrub_llm_output
+
+    value = {GROQ: [GITHUB, 3], "n": {OPENAI: None}}
+
+    assert scrub_llm_output(value) == {GROQ: ["[REDACTED:github]", 3], "n": {OPENAI: None}}
+    assert scrub_llm_output(value, scrub_keys=True) == {
+        "[REDACTED:groq]": ["[REDACTED:github]", 3],
+        "n": {"[REDACTED:openai]": None},
+    }
