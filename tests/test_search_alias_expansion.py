@@ -47,7 +47,7 @@ def mock_model():
 async def test_brain_search_expands_lexical_defense_variants(tmp_path, mock_model):
     store = VectorStore(tmp_path / "lexical-defense.db")
     try:
-        _insert_chunk(store, chunk_id="chunk-hershkovits", content="Met with Hershkovits about the release plan.")
+        _insert_chunk(store, chunk_id="chunk-repogolem", content="Met with repo golden about the release plan.")
         store.build_binary_index()
         cursor = store.conn.cursor()
         cursor.execute("DELETE FROM chunk_vectors")
@@ -57,10 +57,10 @@ async def test_brain_search_expands_lexical_defense_variants(tmp_path, mock_mode
             patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
             patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
         ):
-            _, structured = await _brain_search(query="Hershkovitz", project="brainlayer", detail="compact")
+            _, structured = await _brain_search(query="repoGolem", project="brainlayer", detail="compact")
 
         assert structured["total"] == 1
-        assert structured["results"][0]["chunk_id"] == "chunk-hershkovits"
+        assert structured["results"][0]["chunk_id"] == "chunk-repogolem"
     finally:
         store.close()
 
@@ -127,8 +127,8 @@ async def test_brain_search_ignores_transient_busy_errors_during_alias_expansion
 async def test_brain_search_alias_expansion_preserves_multiword_query_semantics(tmp_path, mock_model):
     store = VectorStore(tmp_path / "kg-multiword.db")
     try:
-        _insert_chunk(store, chunk_id="chunk-good", content="Hershkovits reviewed the release plan yesterday.")
-        _insert_chunk(store, chunk_id="chunk-bad", content="Met with Hershkovits yesterday.")
+        _insert_chunk(store, chunk_id="chunk-good", content="repo golden reviewed the release plan yesterday.")
+        _insert_chunk(store, chunk_id="chunk-bad", content="Met with repo golden yesterday.")
         store.build_binary_index()
         cursor = store.conn.cursor()
         cursor.execute("DELETE FROM chunk_vectors")
@@ -138,9 +138,7 @@ async def test_brain_search_alias_expansion_preserves_multiword_query_semantics(
             patch("brainlayer.mcp.search_handler._get_vector_store", return_value=store),
             patch("brainlayer.mcp.search_handler._get_embedding_model", return_value=mock_model),
         ):
-            _, structured = await _brain_search(
-                query="Hershkovitz release plan", project="brainlayer", detail="compact"
-            )
+            _, structured = await _brain_search(query="repoGolem release plan", project="brainlayer", detail="compact")
 
         result_ids = [item["chunk_id"] for item in structured["results"]]
         assert "chunk-good" in result_ids

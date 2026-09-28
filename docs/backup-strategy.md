@@ -28,7 +28,7 @@ The database runs in WAL mode and has active writers from BrainBar, enrichment, 
 
 Direct Google Drive API upload is used because the post-repair machine no longer has Google Drive Desktop mounted at the old CloudStorage path. Historical DriveFS logs show the previous path was:
 
-`~/Library/CloudStorage/GoogleDrive-etanface@gmail.com/My Drive/Brain Drive`
+`~/Library/CloudStorage/you@example.com/My Drive/Brain Drive`
 
 That mount is not present after repair, and `/Applications/Google Drive.app` is also absent. The API path avoids depending on that local mount.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 
 import pytest
@@ -12,7 +13,7 @@ from brainlayer.eval.phoenix_gate.baseline_store import (
 from brainlayer.eval.phoenix_gate.models import BaselineKey, ExperimentScore, HarnessFault
 from brainlayer.eval.phoenix_gate.phoenix_client import (
     DEFAULT_BASE_URL,
-    PHOENIX_TAILNET_BASE_URL,
+    PhoenixRestClient,
     aggregate_evaluator_means,
     extract_dataset_examples,
     validate_evaluators_for_run,
@@ -82,9 +83,16 @@ def test_baseline_key_requires_all_six_canonical_metadata_fields() -> None:
         BaselineKey.from_metadata(missing_model_version)
 
 
-def test_phoenix_base_url_is_tailnet_default_not_localhost() -> None:
-    assert PHOENIX_TAILNET_BASE_URL == "http://100.114.179.86:6006"
-    assert DEFAULT_BASE_URL == PHOENIX_TAILNET_BASE_URL
+def test_phoenix_base_url_requires_explicit_configuration(monkeypatch) -> None:
+    assert not DEFAULT_BASE_URL or DEFAULT_BASE_URL.startswith(("http://", "https://"))
+    with pytest.raises(HarnessFault, match="Phoenix base URL is required"):
+        PhoenixRestClient(base_url="")
+    from brainlayer.eval.phoenix_gate import phoenix_client
+
+    with monkeypatch.context() as patch:
+        patch.delenv("PHOENIX_BASE_URL", raising=False)
+        assert importlib.reload(phoenix_client).DEFAULT_BASE_URL == ""
+    importlib.reload(phoenix_client)
 
 
 def test_aggregate_evaluator_means_allows_true_zero_but_fails_silent_zero() -> None:

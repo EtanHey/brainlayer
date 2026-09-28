@@ -86,6 +86,8 @@ eval_results/*.jsonl
 
 # Generated local eval/graph outputs
 eval_results/
+results/
+artifacts/
 graphify-out/
 *.bak-*
 *.json.lock

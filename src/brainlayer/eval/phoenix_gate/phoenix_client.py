@@ -13,8 +13,7 @@ from typing import Any
 
 from brainlayer.eval.phoenix_gate.models import BaselineKey, DatasetExample, ExperimentScore, HarnessFault
 
-PHOENIX_TAILNET_BASE_URL = "http://100.114.179.86:6006"
-DEFAULT_BASE_URL = os.environ.get("PHOENIX_BASE_URL", PHOENIX_TAILNET_BASE_URL)
+DEFAULT_BASE_URL = os.environ.get("PHOENIX_BASE_URL", "")
 
 
 def validate_evaluators_for_run(evaluators: object) -> Mapping[str, Any]:
@@ -150,6 +149,8 @@ class PhoenixRestClient:
         request_json: Callable[[str], Any] | None = None,
         timeout_seconds: float = 10.0,
     ) -> None:
+        if not base_url:
+            raise HarnessFault("Phoenix base URL is required; set PHOENIX_BASE_URL or pass --base-url")
         self.base_url = base_url.rstrip("/")
         self._request_json = request_json
         self.timeout_seconds = timeout_seconds
