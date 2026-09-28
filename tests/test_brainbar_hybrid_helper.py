@@ -282,3 +282,31 @@ def test_handle_connection_error_class_for_undecodable_request(monkeypatch, tmp_
 def test_profile_query_id_accepts_only_the_generated_shape(raw, expected):
     """PR #993 B1: a client-chosen _profile_query_id must not reach the profiling sink."""
     assert HybridSearchHelper._accepted_profile_query_id(raw) == expected
+
+
+def test_python_mcp_brain_search_never_forwards_a_client_profile_query_id(monkeypatch):
+    """PR #993 round 2 B1 guard: the Python MCP boundary builds its _brain_recall call from
+    named fields only, so a client `_profile_query_id` never becomes a profile id there.
+    The helper's only other caller is BrainBar's router, which now always generates the id."""
+    import asyncio
+
+    import brainlayer.mcp as mcp_module
+    from brainlayer.mcp.palette import ToolPalette
+
+    monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette("full"))
+    monkeypatch.setenv("BRAINLAYER_SEARCH_PROFILE", "1")
+    client_value = "q-c0ffee00c0de"
+    received: list[dict] = []
+
+    async def fake_brain_recall(**kwargs):
+        received.append(kwargs)
+        return []
+
+    monkeypatch.setattr(mcp_module, "_brain_recall", fake_brain_recall)
+    asyncio.run(mcp_module.call_tool("brain_search", {"query": client_value, "_profile_query_id": client_value}))
+
+    assert len(received) == 1
+    kwargs = received[0]
+    assert "profile_query_id" not in kwargs
+    assert "_profile_query_id" not in kwargs
+    assert [key for key, value in kwargs.items() if value == client_value] == ["query"]

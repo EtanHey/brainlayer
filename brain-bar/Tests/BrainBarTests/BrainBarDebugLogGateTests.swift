@@ -487,6 +487,62 @@ final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
         assertNoPayload(profileLines)
     }
 
+    /// Round 2 B1, the reviewer's exact case: a client-chosen value that is
+    /// valid-shaped is still client text. The router must generate the id itself.
+    func testRouterIgnoresAValidShapedClientProfileID() throws {
+        let clientValue = "q-c0ffee00c0de"
+        let dbPath = NSTemporaryDirectory() + "brainbar-profile-\(UUID().uuidString).db"
+        tempDBPath = dbPath
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let helper = RecordingHybridSearchClient(error: HybridSearchHelperError.helperError("ValueError"))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        _ = router.handle([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": [
+                    "query": clientValue,
+                    "_profile_query_id": clientValue,
+                ] as [String: Any],
+            ] as [String: Any],
+        ])
+
+        let forwarded = try XCTUnwrap(helper.requests.first?["_profile_query_id"] as? String)
+        XCTAssertNotEqual(forwarded, clientValue, "The helper must receive the router's own id, never the client's.")
+        XCTAssertNotNil(SearchProfileLogger.acceptedQueryID(forwarded), forwarded)
+        XCTAssertFalse(profileLines.isEmpty, "Profiling was enabled, so the router must have logged.")
+        XCTAssertFalse(profileLines.contains(clientValue), profileLines)
+    }
+
+    func testRouterSendsNoProfileIDToTheHelperWhenProfilingIsOff() throws {
+        unsetenv("BRAINLAYER_SEARCH_PROFILE")
+        let dbPath = NSTemporaryDirectory() + "brainbar-profile-\(UUID().uuidString).db"
+        tempDBPath = dbPath
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        let helper = RecordingHybridSearchClient(error: HybridSearchHelperError.helperError("ValueError"))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+
+        _ = router.handle([
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "brain_search",
+                "arguments": ["query": "anything", "_profile_query_id": "q-c0ffee00c0de"] as [String: Any],
+            ] as [String: Any],
+        ])
+
+        XCTAssertEqual(helper.requests.count, 1)
+        XCTAssertNil(helper.requests.first?["_profile_query_id"], "A client id must never be forwarded, profiling or not.")
+    }
+
     func testHelperClientProfileLinesCarryNoClientIDOrErrorText() {
         let client = HybridSearchHelperClient(
             socketPath: "/tmp/bb-missing-\(UUID().uuidString.prefix(8)).sock",
