@@ -948,29 +948,16 @@ class SessionMixin:
     def upsert_session_enrichment(self, enrichment: Dict[str, Any]) -> None:
         """Insert or update a session enrichment record.
 
-        Model-authored text fields are secret-scrubbed before the write.
+        Model-authored fields are secret-scrubbed before the write, dict keys
+        included: the session model writes these dicts free-form. A JSON field
+        given as a string is decoded first, so a token hidden behind a JSON
+        escape is scrubbed as the value it decodes to.
         """
         from .pipeline.cloud_scrub import scrub_llm_output
 
         cursor = self.conn.cursor()
         enrichment = dict(enrichment)
         session_id = enrichment["session_id"]
-        for field in (
-            "session_summary",
-            "primary_intent",
-            "outcome",
-            "decisions_made",
-            "corrections",
-            "learnings",
-            "mistakes",
-            "patterns",
-            "topic_tags",
-            "what_worked",
-            "what_failed",
-        ):
-            if field in enrichment:
-                enrichment[field] = scrub_llm_output(enrichment[field])
-
         json_fields = [
             "decisions_made",
             "corrections",
@@ -980,9 +967,27 @@ class SessionMixin:
             "topic_tags",
             "tool_usage_stats",
         ]
-        for field in json_fields:
-            if field in enrichment and not isinstance(enrichment[field], str):
-                enrichment[field] = json.dumps(enrichment[field])
+        for field in (
+            "session_summary",
+            "primary_intent",
+            "outcome",
+            "what_worked",
+            "what_failed",
+            *json_fields,
+        ):
+            if field not in enrichment:
+                continue
+            value = enrichment[field]
+            if field not in json_fields:
+                enrichment[field] = scrub_llm_output(value)
+                continue
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    enrichment[field] = scrub_llm_output(value)  # not JSON: stored as the text it is
+                    continue
+            enrichment[field] = json.dumps(scrub_llm_output(value, scrub_keys=True))
 
         cursor.execute(
             """

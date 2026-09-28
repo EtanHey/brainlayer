@@ -78,6 +78,22 @@ def test_tool_usage_stats_json_string_with_escaped_token_is_redacted(tmp_path):
     assert record["tool_usage_stats"] == [{"tool": "[REDACTED:groq]", "count": 1}]
 
 
+def test_json_field_string_forms_round_trip_after_scrub(tmp_path):
+    # A JSON string that decodes to a bare string stays valid JSON; text that is
+    # not JSON is scrubbed and stored as the text it is.
+    from brainlayer.vector_store import VectorStore
+
+    record = _persist(tmp_path, tool_usage_stats=json.dumps(f"Bash {GROQ}"), patterns=f"not json {GITHUB}")
+
+    assert record["tool_usage_stats"] == "Bash [REDACTED:groq]"
+    store = VectorStore(tmp_path / "session.db")
+    try:
+        (raw_patterns,) = list(store.conn.cursor().execute("SELECT patterns FROM session_enrichments"))[0]
+    finally:
+        store.close()
+    assert raw_patterns == "not json [REDACTED:github]"
+
+
 def test_tool_usage_stats_nested_values_and_keys_are_redacted(tmp_path):
     stats = [
         {

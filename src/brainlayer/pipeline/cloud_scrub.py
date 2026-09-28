@@ -47,20 +47,28 @@ def scrub_for_cloud(text: str) -> str:
     return _scrub_text(text)
 
 
-def scrub_llm_output(value: T) -> T:
+def scrub_llm_output(value: T, *, scrub_keys: bool = False) -> T:
     """Redact secrets from every string inside an LLM output value.
 
-    Walks dicts, lists and tuples; dict keys are left alone because they are
-    schema field names, not model-authored content. Non-text leaves pass through.
+    Walks dicts, lists and tuples. Non-text leaves pass through. Dict keys are
+    left alone by default because they are usually schema field names; pass
+    ``scrub_keys=True`` when the model writes the dicts free-form, so a key is
+    model-authored content too. Two keys that redact to the same placeholder
+    collapse into one entry (the later value wins).
     """
     if isinstance(value, str):
         return _scrub_text(value)  # type: ignore[return-value]
     if isinstance(value, dict):
-        return {key: scrub_llm_output(item) for key, item in value.items()}  # type: ignore[return-value]
+        return {  # type: ignore[return-value]
+            (_scrub_text(key) if scrub_keys and isinstance(key, str) else key): scrub_llm_output(
+                item, scrub_keys=scrub_keys
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [scrub_llm_output(item) for item in value]  # type: ignore[return-value]
+        return [scrub_llm_output(item, scrub_keys=scrub_keys) for item in value]  # type: ignore[return-value]
     if isinstance(value, tuple):
-        return tuple(scrub_llm_output(item) for item in value)  # type: ignore[return-value]
+        return tuple(scrub_llm_output(item, scrub_keys=scrub_keys) for item in value)  # type: ignore[return-value]
     return value
 
 
