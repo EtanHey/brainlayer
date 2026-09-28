@@ -61,3 +61,13 @@ def test_whisper_entity_gbnf_contains_protected_entities():
     assert "root ::= protected_entity" in grammar
     assert '"BrainLayer"' in grammar
     assert '"BrainLayer"' in grammar
+
+
+def test_brainbar_bundle_has_no_personal_lexical_defaults():
+    root = DATA_PATH.parents[2]
+    for relative_path in (
+        "brain-bar/Sources/BrainBar/BrainDatabase.swift",
+        "brain-bar/Sources/BrainBarDaemon/BrainDatabase.swift",
+    ):
+        source = (root / relative_path).read_text(encoding="utf-8")
+        assert "private static let lexicalDefenseReplacements: [String: [String]] = [:]" in source

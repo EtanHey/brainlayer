@@ -1,9 +1,31 @@
 import json
 
+import pytest
+
+from brainlayer import kg_promotion
 from brainlayer.pipeline.digest import entity_lookup
 from brainlayer.vector_store import VectorStore
 
 # Repair (c): promotion skips archived_at/lineage, not status='archived'.
+
+
+@pytest.fixture(autouse=True)
+def synthetic_given_name_alias(monkeypatch):
+    monkeypatch.setattr(kg_promotion, "_KNOWN_GIVEN_NAME_ALIASES", {"alex": {"אלכס"}})
+
+
+def test_given_name_aliases_ship_empty_and_load_optional_user_config(monkeypatch, tmp_path):
+    monkeypatch.delenv("BRAINLAYER_GIVEN_NAME_ALIASES_PATH", raising=False)
+    assert kg_promotion._load_known_given_name_aliases() == {}
+
+    config = tmp_path / "given-name-aliases.json"
+    config.write_text(json.dumps({"Alex": ["אלכס"]}), encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_GIVEN_NAME_ALIASES_PATH", str(config))
+    assert kg_promotion._load_known_given_name_aliases() == {"alex": {"אלכס"}}
+
+    config.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be an object"):
+        kg_promotion._load_known_given_name_aliases()
 
 
 def _insert_chunk(
@@ -34,13 +56,13 @@ def test_promotes_identification_tagged_person_surfaces_to_canonical_entity(tmp_
 
     store = VectorStore(tmp_path / "kg-promotion.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="chunk-en",
-            content="Michal Hershkovits coached Etan for the speakers workshop.",
+            content="Alex Sample coached Noa for the speakers workshop.",
             raw_entities=[
-                {"name": "Michal Hershkovits", "type": "person", "relation": "coach"},
+                {"name": "Alex Sample", "type": "person", "relation": "coach"},
                 {"name": "TechGym Speakers Workshop", "type": "concept", "relation": "context"},
             ],
             tags=[tag, "workshop-coaching"],
@@ -48,24 +70,24 @@ def test_promotes_identification_tagged_person_surfaces_to_canonical_entity(tmp_
         _insert_chunk(
             store,
             chunk_id="chunk-he",
-            content="היי מיכל, אשמח להשתתף בסדנא",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס, אשמח להשתתף בסדנא",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=[tag, "hebrew"],
         )
 
         stats = promote_raw_entity_identities(store, entity_type="person")
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is not None
         assert entity["entity_type"] == "person"
-        assert entity["name"] == "Michal Hershkovits"
-        hebrew_entity = store.resolve_entity("מיכל")
+        assert entity["name"] == "Alex Sample"
+        hebrew_entity = store.resolve_entity("אלכס")
         assert hebrew_entity is not None
         assert hebrew_entity["id"] == entity["id"]
 
         aliases = {(row["alias"], row["alias_type"]) for row in store.get_entity_aliases(entity["id"])}
-        assert ("מיכל", "raw_surface") in aliases
-        assert ("michal-hershkovits-identification", "identity_tag") in aliases
+        assert ("אלכס", "raw_surface") in aliases
+        assert ("alex-sample-identification", "identity_tag") in aliases
 
         linked = {row["chunk_id"] for row in store.get_entity_chunks(entity["id"], limit=10, include_audit=True)}
         assert linked == {"chunk-en", "chunk-he"}
@@ -81,32 +103,32 @@ def test_identity_tag_does_not_alias_co_mentioned_people(tmp_path):
 
     store = VectorStore(tmp_path / "kg-promotion-co-mentioned.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="chunk-co-mentioned",
-            content="Michal Hershkovits coached Etan Hey for the speakers workshop.",
+            content="Alex Sample coached Noa Hey for the speakers workshop.",
             raw_entities=[
-                {"name": "Michal Hershkovits", "type": "person", "relation": "coach"},
-                {"name": "Etan Hey", "type": "person", "relation": "student"},
+                {"name": "Alex Sample", "type": "person", "relation": "coach"},
+                {"name": "Noa Hey", "type": "person", "relation": "student"},
             ],
             tags=[tag],
         )
         _insert_chunk(
             store,
             chunk_id="chunk-he",
-            content="היי מיכל, אשמח להשתתף בסדנא",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס, אשמח להשתתף בסדנא",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=[tag],
         )
 
         promote_raw_entity_identities(store, entity_type="person")
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is not None
         aliases = {row["alias"] for row in store.get_entity_aliases(entity["id"])}
-        assert "Etan Hey" not in aliases
-        assert store.resolve_entity("Etan Hey") is None
+        assert "Noa Hey" not in aliases
+        assert store.resolve_entity("Noa Hey") is None
     finally:
         store.close()
 
@@ -156,32 +178,32 @@ def test_promoted_alias_resolves_through_entity_lookup_for_person(tmp_path):
 
     store = VectorStore(tmp_path / "kg-promotion-lookup.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="chunk-en",
-            content="Michal Hershkovits coached Etan for the speakers workshop.",
-            raw_entities=[{"name": "Michal Hershkovits", "type": "person", "relation": "coach"}],
+            content="Alex Sample coached Noa for the speakers workshop.",
+            raw_entities=[{"name": "Alex Sample", "type": "person", "relation": "coach"}],
             tags=[tag],
         )
         _insert_chunk(
             store,
             chunk_id="chunk-he",
-            content="היי מיכל, אשמח להשתתף בסדנא",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס, אשמח להשתתף בסדנא",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=[tag],
         )
 
         promote_raw_entity_identities(store, entity_type="person")
 
         by_full_name = entity_lookup(
-            query="Michal Hershkovits",
+            query="Alex Sample",
             store=store,
             embed_fn=lambda _: [0.0] * 1024,
             entity_type="person",
         )
         by_hebrew_alias = entity_lookup(
-            query="מיכל",
+            query="אלכס",
             store=store,
             embed_fn=lambda _: [0.0] * 1024,
             entity_type="person",
@@ -190,7 +212,7 @@ def test_promoted_alias_resolves_through_entity_lookup_for_person(tmp_path):
         assert by_full_name is not None
         assert by_hebrew_alias is not None
         assert by_hebrew_alias["id"] == by_full_name["id"]
-        assert by_hebrew_alias["name"] == "Michal Hershkovits"
+        assert by_hebrew_alias["name"] == "Alex Sample"
     finally:
         store.close()
 
@@ -247,37 +269,37 @@ def test_identity_tag_can_promote_matching_raw_surfaces_from_other_chunks(tmp_pa
 
     store = VectorStore(tmp_path / "kg-promotion-real-shape.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="identity-tag-only",
-            content="Can't find Michal Hershkovits anywhere, but she is the speakers workshop coach.",
+            content="Can't find Alex Sample anywhere, but she is the speakers workshop coach.",
             raw_entities=[],
             tags=[tag, "workshop-coaching"],
         )
         _insert_chunk(
             store,
             chunk_id="raw-spelling-drift",
-            content="Slide example uses Michal Herskovits as the search target.",
-            raw_entities=[{"name": "Michal Herskovits", "type": "person", "relation": "search target"}],
+            content="Slide example uses Alex Herskovits as the search target.",
+            raw_entities=[{"name": "Alex Herskovits", "type": "person", "relation": "search target"}],
             tags=["presentation-dev"],
         )
         _insert_chunk(
             store,
             chunk_id="raw-hebrew",
-            content="היי מיכל, אשמח להשתתף בסדנא",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס, אשמח להשתתף בסדנא",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=["hebrew"],
         )
 
         stats = promote_raw_entity_identities(store, entity_type="person")
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is not None
-        spelling_drift_entity = store.resolve_entity("Michal Herskovits")
+        spelling_drift_entity = store.resolve_entity("Alex Herskovits")
         assert spelling_drift_entity is not None
         assert spelling_drift_entity["id"] == entity["id"]
-        hebrew_entity = store.resolve_entity("מיכל")
+        hebrew_entity = store.resolve_entity("אלכס")
         assert hebrew_entity is not None
         assert hebrew_entity["id"] == entity["id"]
         assert stats["entities_promoted"] == 1
@@ -290,37 +312,37 @@ def test_chunk_promotion_includes_untagged_matching_raw_surfaces(tmp_path):
 
     store = VectorStore(tmp_path / "kg-promotion-chunk-shape.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="identity-tag-only",
-            content="Michal Hershkovits is the speakers workshop coach.",
+            content="Alex Sample is the speakers workshop coach.",
             raw_entities=[],
             tags=[tag],
         )
         _insert_chunk(
             store,
             chunk_id="raw-spelling-drift",
-            content="Slide example uses Michal Herskovits as the search target.",
-            raw_entities=[{"name": "Michal Herskovits", "type": "person", "relation": "search target"}],
+            content="Slide example uses Alex Herskovits as the search target.",
+            raw_entities=[{"name": "Alex Herskovits", "type": "person", "relation": "search target"}],
             tags=["presentation-dev"],
         )
         _insert_chunk(
             store,
             chunk_id="raw-hebrew",
-            content="היי מיכל, אשמח להשתתף בסדנא",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס, אשמח להשתתף בסדנא",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=["hebrew"],
         )
 
         stats = promote_chunk_raw_entities(store, "identity-tag-only", entity_type="person")
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is not None
-        spelling_drift_entity = store.resolve_entity("Michal Herskovits")
+        spelling_drift_entity = store.resolve_entity("Alex Herskovits")
         assert spelling_drift_entity is not None
         assert spelling_drift_entity["id"] == entity["id"]
-        hebrew_entity = store.resolve_entity("מיכל")
+        hebrew_entity = store.resolve_entity("אלכס")
         assert hebrew_entity is not None
         assert hebrew_entity["id"] == entity["id"]
         assert stats["entities_promoted"] == 1
@@ -361,26 +383,26 @@ def test_chunk_promotion_excludes_archived_identity_tag_chunks(tmp_path):
 
     store = VectorStore(tmp_path / "kg-promotion-archived.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="active",
-            content="Michal Hershkovits is the speakers workshop coach.",
-            raw_entities=[{"name": "Michal Hershkovits", "type": "person", "relation": "coach"}],
+            content="Alex Sample is the speakers workshop coach.",
+            raw_entities=[{"name": "Alex Sample", "type": "person", "relation": "coach"}],
             tags=[tag],
         )
         _insert_chunk(
             store,
             chunk_id="archived",
-            content="היי מיכל, archived note",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס, archived note",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=[tag],
         )
         store.conn.cursor().execute("UPDATE chunks SET archived_at = '2026-05-18T00:00:00Z' WHERE id = 'archived'")
 
         stats = promote_chunk_raw_entities(store, "active", entity_type="person")
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is None
         assert stats["entities_promoted"] == 0
         assert stats["chunks_scanned"] == 1
@@ -417,19 +439,19 @@ def test_dry_run_alias_count_excludes_canonical_name(tmp_path):
 
     store = VectorStore(tmp_path / "kg-promotion-dry-run.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         _insert_chunk(
             store,
             chunk_id="chunk-en",
-            content="Michal Hershkovits coached Etan.",
-            raw_entities=[{"name": "Michal Hershkovits", "type": "person", "relation": "coach"}],
+            content="Alex Sample coached Noa.",
+            raw_entities=[{"name": "Alex Sample", "type": "person", "relation": "coach"}],
             tags=[tag],
         )
         _insert_chunk(
             store,
             chunk_id="chunk-he",
-            content="היי מיכל",
-            raw_entities=[{"name": "מיכל", "type": "person", "relation": "recipient"}],
+            content="היי אלכס",
+            raw_entities=[{"name": "אלכס", "type": "person", "relation": "recipient"}],
             tags=[tag],
         )
 
@@ -445,8 +467,8 @@ def test_raw_entity_promotion_is_idempotent(tmp_path):
 
     store = VectorStore(tmp_path / "kg-promotion-idempotent.db")
     try:
-        tag = "michal-hershkovits-identification"
-        for chunk_id, surface in (("chunk-en", "Michal Hershkovits"), ("chunk-he", "מיכל")):
+        tag = "alex-sample-identification"
+        for chunk_id, surface in (("chunk-en", "Alex Sample"), ("chunk-he", "אלכס")):
             _insert_chunk(
                 store,
                 chunk_id=chunk_id,
@@ -457,7 +479,7 @@ def test_raw_entity_promotion_is_idempotent(tmp_path):
 
         first = promote_raw_entity_identities(store, entity_type="person")
         second = promote_raw_entity_identities(store, entity_type="person")
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
 
         assert first["entities_promoted"] == 1
         assert first["chunks_linked"] == 2

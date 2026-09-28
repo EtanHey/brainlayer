@@ -610,7 +610,7 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
     words = query.split()
     candidates: list[str] = []
 
-    # Generate bigrams (most entity names are 2 words: "Avi Simon", "Michal Cohen")
+    # Generate bigrams (most entity names are 2 words: "Avi Simon", "Alex Cohen")
     for i in range(len(words) - 1):
         bigram = f"{words[i]} {words[i + 1]}"
         # Only check bigrams where at least one word is capitalized or all-caps
@@ -1634,7 +1634,7 @@ def _smart_detect_mode(query: str | None, mode: str | None) -> str:
     Heuristics:
     - "stats" / "how many" / "count" → stats
     - "context" / "right now" / "working on" → context
-    - Capitalized proper-noun pattern (e.g. "BrainLayer", "Etan Heyman") → entity
+    - Capitalized proper-noun pattern (e.g. "BrainLayer", "Noa Example") → entity
     - Default → search
     """
     if mode is not None:

@@ -36,10 +36,7 @@ final class BrainDatabase: @unchecked Sendable {
     private static let fallbackReplayGitsRootEnv = "BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"
     private static let brainLayerQueueDirEnv = "BRAINLAYER_QUEUE_DIR"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
-    private static let lexicalDefenseReplacements: [String: [String]] = [
-        "hershkovitz": ["Hershkovits"],
-        "hershkovits": ["Hershkovitz"]
-    ]
+    private static let lexicalDefenseReplacements: [String: [String]] = [:]
 
     enum TrigramStartupRepairDecision: Equatable {
         case noRepairNeeded

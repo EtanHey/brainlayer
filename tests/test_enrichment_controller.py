@@ -1316,7 +1316,7 @@ def test_meta_research_filter_preserves_real_content():
         "We decided to keep the enrichment controller in a single file until the batch path is stabilized.",
         "def build_index(query: str) -> list[str]:\n    return [query.strip()]",
         "Ofir said the strategy should defer position sizing until volatility normalizes.",
-        "Conversation note: Etan wants the daemon restart deferred until after the migration lands.",
+        "Conversation note: Noa wants the daemon restart deferred until after the migration lands.",
     ]
 
     assert all(not is_meta_research(sample) for sample in samples)
@@ -1422,13 +1422,15 @@ def test_apply_enrichment_persists_raw_entities():
     assert row == (json.dumps(entities),)
 
 
-def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
+def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path, monkeypatch):
+    from brainlayer import kg_promotion
     from brainlayer.enrichment_controller import _apply_enrichment
     from brainlayer.vector_store import VectorStore
 
+    monkeypatch.setattr(kg_promotion, "_KNOWN_GIVEN_NAME_ALIASES", {"alex": {"אלכס"}})
     store = VectorStore(tmp_path / "apply-promotion.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         cursor = store.conn.cursor()
         cursor.execute(
             """INSERT INTO chunks (
@@ -1438,9 +1440,9 @@ def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
                       ?, 'test', ?, ?)""",
             (
                 "existing",
-                "Michal Hershkovits coached Etan.",
-                len("Michal Hershkovits coached Etan."),
-                json.dumps([{"name": "Michal Hershkovits", "type": "person", "relation": "coach"}]),
+                "Alex Sample coached Noa.",
+                len("Alex Sample coached Noa."),
+                json.dumps([{"name": "Alex Sample", "type": "person", "relation": "coach"}]),
                 json.dumps([tag]),
             ),
         )
@@ -1451,19 +1453,19 @@ def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
                 char_count, source, tags
             ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text',
                       ?, 'test', ?)""",
-            ("new", "היי מיכל", len("היי מיכל"), json.dumps([tag])),
+            ("new", "היי אלכס", len("היי אלכס"), json.dumps([tag])),
         )
         cursor.execute("INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)", ("new", tag))
 
         _apply_enrichment(
             store,
-            _candidate("new", "היי מיכל"),
-            {"summary": "s", "entities": [{"name": "מיכל", "type": "person", "relation": "recipient"}]},
+            _candidate("new", "היי אלכס"),
+            {"summary": "s", "entities": [{"name": "אלכס", "type": "person", "relation": "recipient"}]},
         )
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is not None
-        hebrew_entity = store.resolve_entity("מיכל")
+        hebrew_entity = store.resolve_entity("אלכס")
         assert hebrew_entity is not None
         assert hebrew_entity["id"] == entity["id"]
     finally:

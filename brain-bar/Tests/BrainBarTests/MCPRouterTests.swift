@@ -230,7 +230,7 @@ final class MCPRouterTests: XCTestCase {
         let tools = listedTools(MCPRouter(profile: "core"))
         let data = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
 
-        // RATIFIED 2026-08-19 (Etan): 1500 -> 1600. The +100 bytes buy outcome
+        // RATIFIED 2026-08-19 (Noa): 1500 -> 1600. The +100 bytes buy outcome
         // disambiguation in the brain_store description -- agents were re-storing
         // on ambiguous responses, and the DEFAULT palette is the only description
         // they see without expand_palette.
@@ -496,7 +496,7 @@ final class MCPRouterTests: XCTestCase {
                 text: #"""
 ┌─ brain_search: "techgym speakers workshop" ─ 1 result
 ├─ [1] manual-a0b8a  score:0.97  imp: 8  2026-05-16
-│  brainlayer       │ Michal speakers workshop manual chunk
+│  brainlayer       │ Alex speakers workshop manual chunk
 └─
 """#,
                 metadata: [
@@ -551,12 +551,12 @@ final class MCPRouterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
-        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertRelation(sourceId: "entity-noa", targetId: "entity-brainlayer", relationType: "works_on")
         try db.insertChunk(
             id: "swift-fts-result",
-            content: "Etan BrainLayer local fallback result",
+            content: "Noa BrainLayer local fallback result",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -574,7 +574,7 @@ final class MCPRouterTests: XCTestCase {
             "method": "tools/call",
             "params": [
                 "name": "brain_search",
-                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+                "arguments": ["query": "Noa BrainLayer", "num_results": 3]
             ] as [String: Any]
         ])
 
@@ -584,7 +584,7 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertEqual(text, helperText)
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertFalse(text.contains("### ◆ Etan"), "Swift KG facts must not duplicate Python helper entity output.")
+        XCTAssertFalse(text.contains("### ◆ Noa"), "Swift KG facts must not duplicate Python helper entity output.")
         XCTAssertFalse(text.contains("WORKS_ON"), "Swift KG facts must not be prepended on hybrid helper success.")
     }
 
@@ -708,12 +708,12 @@ No results found.
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
-        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertRelation(sourceId: "entity-noa", targetId: "entity-brainlayer", relationType: "works_on")
         try db.insertChunk(
             id: "fallback-kg-result",
-            content: "Etan BrainLayer fallback result from BrainBar database search",
+            content: "Noa BrainLayer fallback result from BrainBar database search",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -730,7 +730,7 @@ No results found.
             "method": "tools/call",
             "params": [
                 "name": "brain_search",
-                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+                "arguments": ["query": "Noa BrainLayer", "num_results": 3]
             ] as [String: Any]
         ])
 
@@ -739,7 +739,7 @@ No results found.
         let text = content.first?["text"] as? String ?? ""
 
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertTrue(text.contains("## Entity: Etan"), text)
+        XCTAssertTrue(text.contains("## Entity: Noa"), text)
         XCTAssertTrue(text.contains("### KG Facts"), text)
         XCTAssertTrue(text.contains("works_on: BrainLayer"), text)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
@@ -750,12 +750,12 @@ No results found.
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "person-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
-        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertRelation(sourceId: "person-noa", targetId: "company-domica", relationType: "cto_of")
         try db.insertChunk(
             id: "fallback-expired-kg-result",
-            content: "Etan Domica fallback result from BrainBar database search",
+            content: "Noa Domica fallback result from BrainBar database search",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -768,7 +768,7 @@ No results found.
                 UPDATE kg_relations
                 SET expired_at = '2026-05-24T00:00:00Z',
                     valid_until = '2026-05-24T00:00:00Z'
-                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                WHERE source_id = 'person-noa' AND target_id = 'company-domica'
                 """,
                 nil,
                 nil,
@@ -782,11 +782,11 @@ No results found.
         router.setDatabase(db)
 
         let text = try toolText(router.handle(toolCall(id: 173, name: "brain_search", arguments: [
-            "query": "Etan Domica",
+            "query": "Noa Domica",
             "num_results": 3
         ])))
 
-        XCTAssertTrue(text.contains("## Entity: Etan"), text)
+        XCTAssertTrue(text.contains("## Entity: Noa"), text)
         XCTAssertTrue(text.contains("- cto_of: Domica (expired 2026-05-24)"), text)
     }
 
@@ -795,12 +795,12 @@ No results found.
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "person-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
-        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertRelation(sourceId: "person-noa", targetId: "company-domica", relationType: "cto_of")
         try db.insertChunk(
             id: "fallback-lapsed-kg-result",
-            content: "Etan Domica fallback result from BrainBar database search",
+            content: "Noa Domica fallback result from BrainBar database search",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -813,7 +813,7 @@ No results found.
                 UPDATE kg_relations
                 SET valid_until = '2025-05-24T00:00:00Z',
                     expired_at = NULL
-                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                WHERE source_id = 'person-noa' AND target_id = 'company-domica'
                 """,
                 nil,
                 nil,
@@ -827,7 +827,7 @@ No results found.
         router.setDatabase(db)
 
         let text = try toolText(router.handle(toolCall(id: 174, name: "brain_search", arguments: [
-            "query": "Etan Domica",
+            "query": "Noa Domica",
             "num_results": 3
         ])))
 
@@ -1291,7 +1291,7 @@ No results found.
             "params": [
                 "name": "brain_digest",
                 "arguments": [
-                    "content": "Etan Heyman discussed BrainLayer architecture. The project uses SQLite and Swift for a fast retrieval pipeline.",
+                    "content": "Noa Example discussed BrainLayer architecture. The project uses SQLite and Swift for a fast retrieval pipeline.",
                     "project": "gen16-router-scope"
                 ] as [String: Any]
             ] as [String: Any]
@@ -1708,7 +1708,7 @@ No results found.
             id: "proj-1",
             type: "project",
             name: "BrainLayer",
-            metadata: #"{"language":"Swift","owner":"Etan"}"#
+            metadata: #"{"language":"Swift","owner":"Noa"}"#
         )
         try db.insertEntity(id: "tool-1", type: "tool", name: "Claude Code")
         try db.insertRelation(sourceId: "proj-1", targetId: "tool-1", relationType: "used_by")
@@ -3469,7 +3469,7 @@ private func openSQLiteConnection(path: String) throws -> OpaquePointer {
 // MARK: - Issue #726 Part B — tool-description house style
 //
 // skillCreator's measured norm across 86 golems skills (check-skill-library.mjs):
-// median 125 chars, p90 263, max 475. Etan, 2026-08-19: "the tool descriptions
+// median 125 chars, p90 263, max 475. Noa, 2026-08-19: "the tool descriptions
 // should be extremely short. Just tell them what to do with it." The shape is
 // (a) what it does as a verb phrase, (b) the words a user actually says, and
 // (c) a one-clause not-for ONLY where a sibling tool is genuinely confusable.
