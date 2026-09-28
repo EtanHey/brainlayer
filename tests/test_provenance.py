@@ -154,7 +154,7 @@ def test_alias_normalization_strips_trailing_punctuation_and_repeated_whitespace
 
 
 def test_alias_normalization_handles_hebrew_unicode_idempotently():
-    normalized = normalize_entity("  נועה  היימן!!! ")
+    normalized = normalize_entity("  דנה דוגמה!!! ")
     assert normalized
     assert normalize_entity(normalized) == normalized
 

@@ -230,7 +230,7 @@ final class MCPRouterTests: XCTestCase {
         let tools = listedTools(MCPRouter(profile: "core"))
         let data = try JSONSerialization.data(withJSONObject: tools, options: [.sortedKeys])
 
-        // RATIFIED 2026-08-19 (Noa): 1500 -> 1600. The +100 bytes buy outcome
+        // RATIFIED 2026-08-19 (Etan): 1500 -> 1600. The +100 bytes buy outcome
         // disambiguation in the brain_store description -- agents were re-storing
         // on ambiguous responses, and the DEFAULT palette is the only description
         // they see without expand_palette.
@@ -3469,7 +3469,7 @@ private func openSQLiteConnection(path: String) throws -> OpaquePointer {
 // MARK: - Issue #726 Part B — tool-description house style
 //
 // skillCreator's measured norm across 86 golems skills (check-skill-library.mjs):
-// median 125 chars, p90 263, max 475. Noa, 2026-08-19: "the tool descriptions
+// median 125 chars, p90 263, max 475. Etan, 2026-08-19: "the tool descriptions
 // should be extremely short. Just tell them what to do with it." The shape is
 // (a) what it does as a verb phrase, (b) the words a user actually says, and
 // (c) a one-clause not-for ONLY where a sibling tool is genuinely confusable.

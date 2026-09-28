@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +16,7 @@ def synthetic_given_name_alias(monkeypatch):
     monkeypatch.setattr(kg_promotion, "_KNOWN_GIVEN_NAME_ALIASES", {"alex": {"אלכס"}})
 
 
-def test_given_name_aliases_ship_empty_and_load_optional_user_config(monkeypatch, tmp_path):
+def test_given_name_aliases_ship_empty_and_load_optional_user_config(monkeypatch, tmp_path, caplog):
     monkeypatch.delenv("BRAINLAYER_GIVEN_NAME_ALIASES_PATH", raising=False)
     assert kg_promotion._load_known_given_name_aliases() == {}
 
@@ -24,8 +26,33 @@ def test_given_name_aliases_ship_empty_and_load_optional_user_config(monkeypatch
     assert kg_promotion._load_known_given_name_aliases() == {"alex": {"אלכס"}}
 
     config.write_text("[]", encoding="utf-8")
-    with pytest.raises(ValueError, match="must be an object"):
-        kg_promotion._load_known_given_name_aliases()
+    with caplog.at_level("WARNING", logger="brainlayer.kg_promotion"):
+        assert kg_promotion._load_known_given_name_aliases() == {}
+    assert [record.message for record in caplog.records] == ["given-name alias config ignored: ValueError"]
+
+
+def test_given_name_aliases_ignore_malformed_json_without_logging_payload(monkeypatch, tmp_path, caplog):
+    config = tmp_path / "given-name-aliases.json"
+    config.write_text("{private-payload", encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_GIVEN_NAME_ALIASES_PATH", str(config))
+
+    with caplog.at_level("WARNING", logger="brainlayer.kg_promotion"):
+        assert kg_promotion._load_known_given_name_aliases() == {}
+    assert [record.message for record in caplog.records] == ["given-name alias config ignored: JSONDecodeError"]
+    assert "private-payload" not in caplog.text
+
+
+def test_given_name_aliases_ignore_unreadable_file_without_logging_path(monkeypatch, tmp_path, caplog):
+    config = tmp_path / "given-name-aliases.json"
+    config.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("BRAINLAYER_GIVEN_NAME_ALIASES_PATH", str(config))
+
+    with patch.object(Path, "read_text", side_effect=PermissionError("private-payload")):
+        with caplog.at_level("WARNING", logger="brainlayer.kg_promotion"):
+            assert kg_promotion._load_known_given_name_aliases() == {}
+    assert [record.message for record in caplog.records] == ["given-name alias config ignored: PermissionError"]
+    assert str(config) not in caplog.text
+    assert "private-payload" not in caplog.text
 
 
 def _insert_chunk(
