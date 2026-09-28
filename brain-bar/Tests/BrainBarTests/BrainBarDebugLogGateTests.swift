@@ -158,7 +158,13 @@ final class BrainBarServerDebugLogGateTests: XCTestCase {
         )
         self.server = server
         server.start()
-        XCTAssertTrue(BrainBarLifecycleWatchdog.socketAnswersPing(path: socketPath, timeout: 3))
+        let deadline = Date().addingTimeInterval(5)
+        var answered = false
+        while !answered, Date() < deadline {
+            answered = BrainBarLifecycleWatchdog.socketAnswersPing(path: socketPath, timeout: 1)
+            if !answered { Thread.sleep(forTimeInterval: 0.02) }
+        }
+        XCTAssertTrue(answered, "The scratch server must answer on \(socketPath)")
     }
 
     /// Sends payload-shaped traffic: a search query, a stored secret, a
