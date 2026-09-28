@@ -24,7 +24,7 @@ DEFAULT_SEED_ENTITIES: dict[str, list[str]] = {
         "Dor Zohar",
         "Shachar Gerby",
         "Maor Noah",
-        "Avi Simon",
+        "Rina Vale",
         "Yuval Nir",
         "Daniel Munk",
         "Andrew Huberman",

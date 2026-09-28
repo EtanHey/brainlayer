@@ -98,7 +98,7 @@ SEED_ENTITIES = {
         "Dor Zohar",
         "Shachar Gerby",
         "Maor Noah",
-        "Avi Simon",
+        "Rina Vale",
         "Yuval Nir",
         "Daniel Munk",
     ],

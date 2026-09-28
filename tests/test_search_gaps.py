@@ -186,7 +186,7 @@ class TestFts5AutoMode:
         """match_mode='or' should still use OR for entity search."""
         from brainlayer._helpers import _escape_fts5_query
 
-        result = _escape_fts5_query("Avi Simon", match_mode="or")
+        result = _escape_fts5_query("Rina Vale", match_mode="or")
         assert "OR" in result
 
     def test_hybrid_search_long_query_uses_fts_or_and_returns_results(self, tmp_path, monkeypatch):

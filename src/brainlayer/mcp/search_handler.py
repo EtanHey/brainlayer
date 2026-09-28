@@ -610,7 +610,7 @@ def _detect_entities(query: str, store: Any) -> list[dict]:
     words = query.split()
     candidates: list[str] = []
 
-    # Generate bigrams (most entity names are 2 words: "Avi Simon", "Alex Cohen")
+    # Generate bigrams (most entity names are 2 words: "Rina Vale", "Alex Cohen")
     for i in range(len(words) - 1):
         bigram = f"{words[i]} {words[i + 1]}"
         # Only check bigrams where at least one word is capitalized or all-caps

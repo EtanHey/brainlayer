@@ -40,9 +40,9 @@ def mock_embed():
 def person_entity(store, mock_embed):
     """Create a person entity with 6PM-style profile metadata."""
     entity_id = store.upsert_entity(
-        entity_id="person-avi-simon",
+        entity_id="person-rina-vale",
         entity_type="person",
-        name="Avi Simon",
+        name="Rina Vale",
         metadata={
             "hard_constraints": {
                 "blocked_weekdays": ["SAT"],
@@ -72,7 +72,7 @@ def person_with_chunks(store, mock_embed, person_entity):
         ("Mondays are impossible for me, I have team standup all morning", "user_message"),
         ("Best time for me is after 15:00 on weekdays", "user_message"),
         ("I prefer video calls over phone calls", "user_message"),
-        ("Meeting with Avi went well, he confirmed Thursday 2pm works", "assistant_text"),
+        ("Meeting with Rina went well, he confirmed Thursday 2pm works", "assistant_text"),
     ]
 
     chunk_ids = []
@@ -168,15 +168,15 @@ class TestPersonProfileSchema:
         """Entity type is 'person'."""
         entity = store.get_entity(person_entity)
         assert entity["entity_type"] == "person"
-        assert entity["name"] == "Avi Simon"
+        assert entity["name"] == "Rina Vale"
 
     def test_person_entity_upsert_updates_metadata(self, store, person_entity):
         """Upserting same entity updates metadata without creating duplicate."""
         # Upsert with updated constraints
         updated_id = store.upsert_entity(
-            entity_id="person-avi-simon",
+            entity_id="person-rina-vale",
             entity_type="person",
-            name="Avi Simon",
+            name="Rina Vale",
             metadata={
                 "hard_constraints": {
                     "blocked_weekdays": ["SAT", "FRI"],
@@ -294,7 +294,7 @@ class TestEntityTaggedStore:
         result = store_memory(
             store=store,
             embed_fn=mock_embed,
-            content="Avi mentioned he can't do Mondays at all",
+            content="Rina mentioned he can't do Mondays at all",
             memory_type="note",
             entity_id=person_entity,
         )
@@ -331,13 +331,13 @@ class TestEntityTaggedStore:
         store_memory(
             store=store,
             embed_fn=mock_embed,
-            content="Avi prefers Tuesday afternoons for long meetings",
+            content="Rina prefers Tuesday afternoons for long meetings",
             memory_type="note",
             entity_id=person_entity,
         )
 
         # Search scoped to entity
-        embedding = mock_embed("when does Avi prefer meetings")
+        embedding = mock_embed("when does Rina prefer meetings")
         results = store.search(
             query_embedding=embedding,
             n_results=10,
@@ -377,21 +377,21 @@ class TestBrainGetPersonLogic:
         from brainlayer.pipeline.digest import entity_lookup
 
         # Need to add embedding to the entity for semantic search
-        entity_embedding = mock_embed("Avi Simon person")
+        entity_embedding = mock_embed("Rina Vale person")
         store.conn.cursor().execute(
             "INSERT INTO kg_vec_entities (entity_id, embedding) VALUES (?, ?)",
             (person_entity, serialize_f32(entity_embedding)),
         )
 
         result = entity_lookup(
-            query="Avi Simon",
+            query="Rina Vale",
             store=store,
             embed_fn=mock_embed,
             entity_type="person",
         )
 
         assert result is not None
-        assert result["name"] == "Avi Simon"
+        assert result["name"] == "Rina Vale"
         assert result["entity_type"] == "person"
         assert "hard_constraints" in result["metadata"]
 
@@ -399,14 +399,14 @@ class TestBrainGetPersonLogic:
         """entity_lookup result includes structured profile fields."""
         from brainlayer.pipeline.digest import entity_lookup
 
-        entity_embedding = mock_embed("Avi Simon person")
+        entity_embedding = mock_embed("Rina Vale person")
         store.conn.cursor().execute(
             "INSERT INTO kg_vec_entities (entity_id, embedding) VALUES (?, ?)",
             (person_entity, serialize_f32(entity_embedding)),
         )
 
         result = entity_lookup(
-            query="Avi Simon",
+            query="Rina Vale",
             store=store,
             embed_fn=mock_embed,
             entity_type="person",

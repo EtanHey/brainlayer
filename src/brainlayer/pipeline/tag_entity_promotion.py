@@ -59,7 +59,7 @@ ACTIVITY_TAGS = {
 
 PERSON_TAGS = {
     "andrew-huberman",
-    "avi-simon",
+    "rina-vale",
     "daniel-munk",
     "dor-zohar",
     "etan-heyman",

@@ -224,7 +224,7 @@ def test_digest_extracts_action_items(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Action items: 1. Send the proposal to Avi by Friday. 2. Schedule a follow-up meeting with Dor.",
+        content="Action items: 1. Send the proposal to Rina by Friday. 2. Schedule a follow-up meeting with Dor.",
         store=store,
         embed_fn=dummy_embed,
     )

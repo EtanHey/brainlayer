@@ -247,7 +247,7 @@
     },
     {
       "id": "gold-007",
-      "text": "Cantaloupe AI is a company I previously worked at. Daniel Munk referred me to Avi Simon there.",
+      "text": "Cantaloupe AI is a company I previously worked at. Daniel Munk referred me to Rina Vale there.",
       "source": "user_message",
       "language": "en",
       "entities": [
@@ -264,7 +264,7 @@
           "end": 62
         },
         {
-          "text": "Avi Simon",
+          "text": "Rina Vale",
           "type": "person",
           "start": 78,
           "end": 87
@@ -273,11 +273,11 @@
       "relations": [
         {
           "source": "Daniel Munk",
-          "target": "Avi Simon",
+          "target": "Rina Vale",
           "type": "referred"
         },
         {
-          "source": "Avi Simon",
+          "source": "Rina Vale",
           "target": "Cantaloupe AI",
           "type": "works_at"
         }
@@ -978,26 +978,26 @@
     },
     {
       "id": "gold-029",
-      "text": "We need to check with Avi about the Cantaloupe API integration timeline.",
+      "text": "We need to check with Rina about the Cantaloupe API integration timeline.",
       "source": "user_message",
       "language": "en",
       "entities": [
         {
-          "text": "Avi",
+          "text": "Rina",
           "type": "person",
           "start": 22,
-          "end": 25
+          "end": 26
         },
         {
           "text": "Cantaloupe",
           "type": "company",
-          "start": 36,
-          "end": 46
+          "start": 37,
+          "end": 47
         }
       ],
       "relations": [
         {
-          "source": "Avi",
+          "source": "Rina",
           "target": "Cantaloupe",
           "type": "works_at"
         }

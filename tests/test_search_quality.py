@@ -443,19 +443,19 @@ class TestEntityAwareRouting:
         cursor.execute(
             """INSERT INTO kg_entities (id, entity_type, name, metadata, created_at)
                VALUES (?, ?, ?, '{}', datetime('now'))""",
-            ("ent-1", "person", "Avi Simon"),
+            ("ent-1", "person", "Rina Vale"),
         )
         # Also populate FTS
         cursor.execute(
             "INSERT INTO kg_entities_fts (name, metadata, entity_id) VALUES (?, '{}', ?)",
-            ("Avi Simon", "ent-1"),
+            ("Rina Vale", "ent-1"),
         )
 
         from brainlayer.mcp.search_handler import _detect_entities
 
-        entities = _detect_entities("What does Avi Simon prefer for meetings?", store)
+        entities = _detect_entities("What does Rina Vale prefer for meetings?", store)
         assert len(entities) >= 1
-        assert any(e["name"].lower() == "avi simon" for e in entities)
+        assert any(e["name"].lower() == "rina vale" for e in entities)
 
     def test_entity_detection_returns_empty_for_no_match(self, store):
         """When no entity names match, return empty list."""

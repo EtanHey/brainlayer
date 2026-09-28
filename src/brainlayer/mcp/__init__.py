@@ -783,7 +783,7 @@ def _full_tool_definitions() -> list[Tool]:
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": "Person name to look up (e.g., 'Avi Simon'). Searches by FTS + semantic match.",
+                            "description": "Person name to look up (e.g., 'Rina Vale'). Searches by FTS + semantic match.",
                         },
                         "context": {
                             "type": "string",
