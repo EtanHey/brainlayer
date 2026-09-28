@@ -45,7 +45,7 @@ public enum BrainBarLog {
     }
 
     public static func lifecycleLogFile(path: String = lifecycleLogPath) -> BrainBarLogFile {
-        BrainBarLogFile(path: path, maxBytes: lifecycleLogMaxBytes)
+        BrainBarLogFile(path: path, maxBytes: lifecycleLogMaxBytes, privateDirectory: true)
     }
 }
 
@@ -54,30 +54,46 @@ public enum BrainBarLog {
 /// Opened with `O_NOFOLLOW` and refused unless it is a regular file owned by
 /// this user, so a planted symlink in `/tmp` can neither receive lines nor be
 /// chmod'ed. Mode 0600 is enforced on every open, which also tightens a file
-/// an older build created 0644. Callers pass only counts, states, PIDs and
-/// fixed strings; this type does not scrub.
+/// an older build created 0644. If rotation fails (e.g. another user planted
+/// the `.1` path in the sticky /tmp), appends stop for this instance rather
+/// than grow past the cap. Callers pass only counts, states, PIDs and fixed
+/// strings; this type does not scrub.
 public final class BrainBarLogFile: @unchecked Sendable {
     public let path: String
     public let maxBytes: Int
+    /// The parent directory belongs to BrainBar alone and is kept at 0700.
+    /// Never set for a file in a shared directory such as /tmp.
+    public let privateDirectory: Bool
     private let lock = NSLock()
+    private var appendsStopped = false
+    private var reportedOpenFailure = false
+    private static let logger = BrainBarLog.logger("logfile")
 
     public var rotatedPath: String { path + ".1" }
 
-    public init(path: String, maxBytes: Int) {
+    public init(path: String, maxBytes: Int, privateDirectory: Bool = false) {
         self.path = path
         self.maxBytes = max(1, maxBytes)
+        self.privateDirectory = privateDirectory
     }
 
     public func append(_ message: String, now: Date = Date()) {
         let line = Array("[\(ISO8601DateFormatter().string(from: now))] \(message)\n".utf8)
         lock.lock()
         defer { lock.unlock() }
-        guard var fd = openOwned(create: true) else { return }
+        guard !appendsStopped, var fd = openOwned(create: true) else { return }
         var info = stat()
         if fstat(fd, &info) == 0, info.st_size > 0, Int(info.st_size) + line.count > maxBytes {
             close(fd)
             // rename(2) replaces the previous generation atomically.
-            _ = rename(path, rotatedPath)
+            guard rename(path, rotatedPath) == 0 else {
+                let code = errno
+                appendsStopped = true
+                Self.logger.error(
+                    "log rotation failed (errno \(code, privacy: .public)); appends stopped for \(self.path, privacy: .private)"
+                )
+                return
+            }
             guard let reopened = openOwned(create: true) else { return }
             fd = reopened
         }
@@ -101,12 +117,17 @@ public final class BrainBarLogFile: @unchecked Sendable {
                     withIntermediateDirectories: true,
                     attributes: [.posixPermissions: 0o700]
                 )
+            } else if privateDirectory, !parent.isEmpty {
+                Self.tightenPrivateDirectory(parent)
             }
         }
         var flags = O_WRONLY | O_APPEND | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
         if create { flags |= O_CREAT }
         let fd = open(path, flags, 0o600)
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else {
+            if errno != ENOENT { reportOpenFailureOnce(errno) }
+            return nil
+        }
         var info = stat()
         guard fstat(fd, &info) == 0,
               info.st_mode & S_IFMT == S_IFREG,
@@ -114,8 +135,31 @@ public final class BrainBarLogFile: @unchecked Sendable {
               fchmod(fd, 0o600) == 0
         else {
             close(fd)
+            reportOpenFailureOnce(EPERM)
             return nil
         }
         return fd
+    }
+
+    private func reportOpenFailureOnce(_ code: Int32) {
+        guard !reportedOpenFailure else { return }
+        reportedOpenFailure = true
+        Self.logger.error(
+            "log file refused (errno \(code, privacy: .public)): not an owned regular file at \(self.path, privacy: .private)"
+        )
+    }
+
+    /// chmod 0700 on an existing directory, only when it is a real directory
+    /// (not a symlink) owned by this user.
+    private static func tightenPrivateDirectory(_ directory: String) {
+        var info = stat()
+        guard lstat(directory, &info) == 0,
+              info.st_mode & S_IFMT == S_IFDIR,
+              info.st_uid == getuid(),
+              info.st_mode & 0o777 != 0o700
+        else {
+            return
+        }
+        _ = chmod(directory, 0o700)
     }
 }

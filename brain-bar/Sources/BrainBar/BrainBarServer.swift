@@ -272,6 +272,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func startOnQueue() {
+        // First, before any early return: a stale debug log from an older build
+        // is 0644 and holds request bytes, whether or not this start succeeds.
+        diagnostics.staleDebugLog?.tightenExisting()
         do {
             instanceLock = try BrainBarInstanceLock.acquire(lockPath: instanceLockPath)
         } catch BrainBarInstanceLock.AcquireError.alreadyRunning {
@@ -397,7 +400,6 @@ final class BrainBarServer: @unchecked Sendable {
 
         NSLog("[BrainBar] Server listening on %@", socketPath)
         Self.logger.notice("SERVER STARTED pid=\(getpid(), privacy: .public) socket=\(self.socketPath, privacy: .private)")
-        diagnostics.staleDebugLog?.tightenExisting()
         diagnostics.lifecycleLog?.append("SERVER STARTED — listening on \(socketPath) pid=\(getpid())")
         trace("SERVER STARTED — listening on \(socketPath)")
 

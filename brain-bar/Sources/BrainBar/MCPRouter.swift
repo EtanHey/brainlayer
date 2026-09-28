@@ -750,7 +750,7 @@ final class MCPRouter: @unchecked Sendable {
 
     private func handleBrainSearch(_ args: [String: Any]) throws -> ToolOutput {
         let profileStartedAt = SearchProfileLogger.now()
-        let profileQueryID = (args["_profile_query_id"] as? String)
+        let profileQueryID = SearchProfileLogger.acceptedQueryID(args["_profile_query_id"])
             ?? (SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil)
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
@@ -860,7 +860,7 @@ final class MCPRouter: @unchecked Sendable {
                     kgSection = localKGSection()
                 }
             } catch {
-                NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
+                NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", HybridSearchHelperError.loggable(error))
                 let fallback = try searchViaBrainBarDatabase()
                 textSection = fallback.text
                 metadata = fallback.metadata

@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
@@ -23,6 +24,9 @@ from typing import Any, Callable
 
 from . import search_profile
 
+# A profile id is only ever the shape search_profile.new_query_id() (and BrainBar's
+# SearchProfileLogger.newQueryID()) generates; anything else is client-chosen text.
+_PROFILE_QUERY_ID_RE = re.compile(r"q-[0-9A-Fa-f]{12}")
 _ACCEPT_TIMEOUT_SECONDS = 0.25
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 
@@ -217,13 +221,21 @@ class HybridSearchHelper:
             request = json.loads(raw.decode("utf-8"))
             response = self._dispatch_with_deadline(request)
         except Exception as exc:
-            response = {"ok": False, "error": str(exc)}
+            # The class name only: BrainBar logs this field, and an exception message
+            # can carry the query or file contents (PR #993 review, B3).
+            response = {"ok": False, "error": type(exc).__name__}
 
         payload = json.dumps(_json_safe(response), separators=(",", ":")).encode("utf-8") + b"\n"
         try:
             conn.sendall(payload)
         except OSError:
             return
+
+    @staticmethod
+    def _accepted_profile_query_id(raw: object) -> str | None:
+        if isinstance(raw, str) and _PROFILE_QUERY_ID_RE.fullmatch(raw):
+            return raw
+        return None
 
     @staticmethod
     def _read_line(conn: socket.socket) -> bytes:
@@ -269,7 +281,7 @@ class HybridSearchHelper:
     async def _search(self, arguments: dict[str, Any]) -> tuple[str, dict[str, Any] | None, bool]:
         from brainlayer.mcp.search_handler import _brain_search
 
-        query_id = str(arguments.get("_profile_query_id") or "") or None
+        query_id = self._accepted_profile_query_id(arguments.get("_profile_query_id"))
         if search_profile.enabled() and query_id is None:
             query_id = search_profile.new_query_id()
         source = arguments.get("source")

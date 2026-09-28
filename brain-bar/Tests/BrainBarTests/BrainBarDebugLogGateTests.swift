@@ -385,14 +385,30 @@ final class BrainBarServerEarlyExitDebugLogTests: XCTestCase {
     }
 }
 
+private final class ProfileLineCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func append(_ line: String) {
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
+    }
+
+    var joined: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines.joined(separator: "\n")
+    }
+}
+
 /// B1 + B3: the profiling sink and the helper-failure diagnostics never carry
 /// a client-chosen value or the helper's exception text.
 final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
     private static let syntheticQuery = "zqx-synthetic-query-4471"
     private static let syntheticToken = "sk-ant-api03-SYNTHETICTOKEN0000000000000000000000000000"
 
-    private var captured: [String] = []
-    private let lock = NSLock()
+    private let capture = ProfileLineCapture()
     private var originalProfile: String?
     private var tempDBPath: String?
 
@@ -400,12 +416,8 @@ final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
         super.setUp()
         originalProfile = ProcessInfo.processInfo.environment["BRAINLAYER_SEARCH_PROFILE"]
         setenv("BRAINLAYER_SEARCH_PROFILE", "1", 1)
-        SearchProfileLogger.sink = { [weak self] line in
-            guard let self else { return }
-            self.lock.lock()
-            self.captured.append(line)
-            self.lock.unlock()
-        }
+        let capture = capture
+        SearchProfileLogger.sink = { line in capture.append(line) }
     }
 
     override func tearDown() {
@@ -423,11 +435,7 @@ final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
         super.tearDown()
     }
 
-    private var profileLines: String {
-        lock.lock()
-        defer { lock.unlock() }
-        return captured.joined(separator: "\n")
-    }
+    private var profileLines: String { capture.joined }
 
     private func assertNoPayload(_ text: String, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertFalse(text.contains(Self.syntheticQuery), text, file: file, line: line)
