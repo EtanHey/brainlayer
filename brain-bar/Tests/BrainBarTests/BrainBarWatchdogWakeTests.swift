@@ -366,14 +366,28 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
         XCTAssertTrue(eventLog().contains("no liveness probe"), eventLog())
     }
 
-    func testFactoriesProbeTheDaemonSocketAndLogToTheDaemonLog() {
+    func testFactoriesProbeTheDaemonSocketAndLogToTheLifecycleLog() {
         let daemon = BrainBarLifecycleWatchdog.makeDaemonWatchdog()
         XCTAssertTrue(daemon.hasLivenessProbe, "The daemon watchdog must probe the socket before killing.")
-        XCTAssertEqual(daemon.eventLogPath, BrainBarLifecycleWatchdog.daemonDebugLogPath)
+        XCTAssertEqual(daemon.eventLogPath, BrainBarLog.lifecycleLogPath)
         let ui = BrainBarLifecycleWatchdog.makeUIWatchdog(bundlePath: "/nonexistent/BrainBar.app")
         XCTAssertFalse(ui.hasLivenessProbe)
-        XCTAssertEqual(ui.eventLogPath, BrainBarLifecycleWatchdog.daemonDebugLogPath)
-        XCTAssertEqual(BrainBarLifecycleWatchdog.daemonDebugLogPath, "/tmp/brainbar-debug.log")
+        XCTAssertEqual(ui.eventLogPath, BrainBarLog.lifecycleLogPath)
+        XCTAssertNotEqual(daemon.eventLogPath, BrainBarLog.debugLogPath, "Restart decisions must not depend on the debug flag.")
+    }
+
+    func testRestartDecisionsLandInA0600EventLog() throws {
+        let clock = MutableClock(wall: Date(timeIntervalSince1970: 1_790_000_000), uptimeNanos: 500_000_000_000)
+        let recorder = Recorder(probeAnswers: false, pids: [333])
+        let relaunched = expectation(description: "hung UI is relaunched")
+        let watchdog = makeWatchdog(clock: clock, recorder: recorder, withProbe: false, relaunched: relaunched)
+        watchdog.checkNow()
+        clock.awake(seconds: 60)
+        watchdog.checkNow()
+        wait(for: [relaunched], timeout: 2)
+        let attributes = try FileManager.default.attributesOfItem(atPath: eventLogPath)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertTrue(eventLog().contains("[BrainBarWatchdog]"), eventLog())
     }
 
     func testRelaunchedProcessGetsAFreshGraceBeforeItsFirstHeartbeat() throws {

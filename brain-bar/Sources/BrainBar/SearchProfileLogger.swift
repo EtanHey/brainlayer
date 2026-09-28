@@ -9,6 +9,26 @@ enum SearchProfileLogger {
         "q-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12))"
     }
 
+    /// The profiling sink. Tests swap it to capture lines; production uses NSLog.
+    static let defaultSink: @Sendable (String) -> Void = { line in NSLog("%@", line) }
+    nonisolated(unsafe) static var sink: @Sendable (String) -> Void = defaultSink
+
+    /// Defense in depth for ids that cross an internal boundary (router → helper
+    /// client → Python helper): only the exact shape `newQueryID()` (and Python's
+    /// `search_profile.new_query_id()`) produces is accepted, `q-` plus 12 ASCII hex
+    /// digits. A shape check cannot prove origin, so a client-supplied id is never
+    /// read at all: `MCPRouter` always generates its own.
+    static func acceptedQueryID(_ raw: Any?) -> String? {
+        guard let raw = raw as? String else { return nil }
+        let scalars = Array(raw.unicodeScalars)
+        guard scalars.count == 14, raw.hasPrefix("q-") else { return nil }
+        let hex = scalars.dropFirst(2)
+        guard hex.allSatisfy({ ("0"..."9").contains($0) || ("a"..."f").contains($0) || ("A"..."F").contains($0) }) else {
+            return nil
+        }
+        return raw
+    }
+
     static func now() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
     }
@@ -32,7 +52,7 @@ enum SearchProfileLogger {
             "step": step
         ]
         if let queryID {
-            event["query_id"] = queryID
+            event["query_id"] = acceptedQueryID(queryID) ?? "<rejected>"
         }
         if let durMS {
             event["dur_ms"] = durMS
@@ -47,7 +67,7 @@ enum SearchProfileLogger {
               let line = String(data: data, encoding: .utf8) else {
             return
         }
-        NSLog("%@", line)
+        sink(line)
     }
 
     private static func isoTimestamp() -> String {
