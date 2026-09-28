@@ -242,18 +242,34 @@ final class AgentActivityMonitor {
     /// Helpers shipped inside a desktop app bundle (ChatGPT.app's Codex framework and
     /// bundled `codex`, Claude.app, Cursor.app) are never CLI sessions — wherever the
     /// bundle lives (#984: Codex's computer-use helper under `~/.codex/computer-use/`).
+    /// That includes the framework Python, which runs as `…/Python.app/Contents/MacOS/Python`
+    /// (#987 N1): no agent CLI is Python-hosted today.
     private static func isAppBundled(executable: String, command: String) -> Bool {
         if (command.hasPrefix("/applications/") && command.contains(".app/"))
             || command.hasPrefix("/system/") {
             return true
         }
-        // argv[0] may contain spaces ("Codex Computer Use.app"), so it cannot be split
-        // off on whitespace. `ucomm` is its basename (truncated to 16 characters), so
-        // the executable's directory is everything before the first "/<ucomm>"; only
-        // that directory decides, never a bundle path that appears in the arguments.
-        guard command.hasPrefix("/"), !executable.isEmpty,
-              let basename = command.range(of: "/" + executable) else { return false }
-        return command[..<basename.lowerBound].contains(".app/contents/")
+        guard let path = executablePath(executable: executable, command: command) else { return false }
+        let directories = path.split(separator: "/").dropLast()
+        return zip(directories, directories.dropFirst()).contains { $0.hasSuffix(".app") && $1 == "contents" }
+    }
+
+    /// argv[0] when it is an absolute path — the executable itself, never a path in the
+    /// arguments. It may contain spaces ("Codex Computer Use.app"), so it is the shortest
+    /// prefix of args that ends at a space or the end of args and whose file name is the
+    /// process's `ucomm` (truncated to 16). When no prefix ends in `ucomm` (Claude names
+    /// its process by version, "2.1.281"), argv[0] is the first whitespace-free token.
+    private static func executablePath(executable: String, command: String) -> Substring? {
+        guard command.hasPrefix("/") else { return nil }
+        let ends = command.indices.filter { command[$0] == " " } + [command.endIndex]
+        for end in ends {
+            let candidate = command[..<end]
+            let name = candidate.split(separator: "/").last ?? ""
+            if String(name.prefix(ucommColumnWidth)).trimmingCharacters(in: .whitespaces) == executable {
+                return candidate
+            }
+        }
+        return command[..<ends[0]]
     }
 
     /// Shells, launch wrappers and text tools are never the session process: a real
