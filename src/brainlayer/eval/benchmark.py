@@ -68,7 +68,7 @@ DEFAULT_QUERY_SUITE: list[tuple[str, str]] = [
     ("known_entity_t3_code", "T3 Code"),
     ("known_entity_theo_browne", "Theo Browne"),
     ("known_entity_brainlayer_architecture", "BrainLayer architecture"),
-    ("known_entity_avi_simon", "Avi Simon"),
+    ("known_entity_rina_vale", "Rina Vale"),
     ("known_entity_voicelayer", "VoiceLayer"),
     ("health_dopamine", "dopamine"),
     ("health_huberman_protocol", "Huberman protocol"),

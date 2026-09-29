@@ -324,7 +324,7 @@ DEEP_TRIGGERS = {
 # Keywords that signal assumption-prone prompts (personal facts, biography, specs)
 # When detected: inject a search-before-assume reminder.
 # Source: Phase 3 session mining — agents assumed M4 Max (wrong), tax history (wrong),
-# Avi Tour (voice transcription error). All would have been caught by brain_search.
+# Rina Tour (voice transcription error). All would have been caught by brain_search.
 ASSUME_TRIGGERS = {
     "hardware",
     "laptop",

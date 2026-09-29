@@ -70,12 +70,12 @@ def test_digest_content_returns_structured_result(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Etan met with Dor Zohar to discuss the Domica project. They decided to use React Native.",
+        content="Etan met with Person Alpha to discuss the Domica project. They decided to use React Native.",
         store=store,
         embed_fn=dummy_embed,
         title="Meeting notes",
         project="domica",
-        participants=["Etan Heyman", "Dor Zohar"],
+        participants=["Etan Heyman", "Person Alpha"],
     )
 
     assert result["digest_id"] is not None
@@ -117,10 +117,10 @@ def test_digest_content_extracts_entities(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Etan Heyman discussed brainlayer architecture with Dor Zohar at Cantaloupe AI.",
+        content="Etan Heyman discussed brainlayer architecture with Person Alpha at Cantaloupe AI.",
         store=store,
         embed_fn=dummy_embed,
-        participants=["Etan Heyman", "Dor Zohar"],
+        participants=["Etan Heyman", "Person Alpha"],
     )
 
     entity_names = [e["name"] for e in result["entities"]]
@@ -224,7 +224,7 @@ def test_digest_extracts_action_items(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Action items: 1. Send the proposal to Avi by Friday. 2. Schedule a follow-up meeting with Dor.",
+        content="Action items: 1. Send the proposal to Rina by Friday. 2. Schedule a follow-up meeting with Dor.",
         store=store,
         embed_fn=dummy_embed,
     )
@@ -763,12 +763,12 @@ def test_full_digest_pipeline(tmp_path):
 
     # Digest some content
     result = digest_content(
-        content="Etan Heyman and Dor Zohar discussed the Domica project at Cantaloupe AI headquarters.",
+        content="Etan Heyman and Person Alpha discussed the Domica project at Cantaloupe AI headquarters.",
         store=store,
         embed_fn=dummy_embed,
         title="Team meeting",
         project="domica",
-        participants=["Etan Heyman", "Dor Zohar"],
+        participants=["Etan Heyman", "Person Alpha"],
     )
 
     assert result["stats"]["entities_found"] >= 2

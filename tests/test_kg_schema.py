@@ -463,7 +463,7 @@ class TestEntityFTS:
 
     def test_fts_search_by_name(self, store):
         store.upsert_entity("person-1", "person", "Etan Heyman")
-        store.upsert_entity("person-2", "person", "Yuval Cohen")
+        store.upsert_entity("person-2", "person", "Delta Cohen")
         store.upsert_entity("company-1", "company", "Cantaloupe Systems")
 
         results = store.search_entities("Etan")
@@ -576,7 +576,7 @@ class TestKGStats:
 
     def test_stats_populated(self, store):
         store.upsert_entity("person-1", "person", "Etan")
-        store.upsert_entity("person-2", "person", "Yuval")
+        store.upsert_entity("person-2", "person", "Delta")
         store.upsert_entity("company-1", "company", "Cantaloupe")
         store.add_relation("rel-1", "person-1", "company-1", "client_of")
         store.add_relation("rel-2", "person-2", "company-1", "works_at")

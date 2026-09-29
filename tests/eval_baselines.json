@@ -4,16 +4,16 @@
     "db": "/Users/etanheyman/.local/share/brainlayer/brainlayer.db",
     "cases": [
       {
-        "name": "entity_avi_simon",
-        "query": "Avi Simon platform invites schedule",
-        "expected_snippets": ["avi simon", "6pm", "6PM"],
+        "name": "entity_rina_vale",
+        "query": "Rina Vale platform invites schedule",
+        "expected_snippets": ["Rina Vale", "6pm", "6PM"],
         "top_n": 3,
         "project": null,
         "tag": null,
         "passed": true,
         "actual_rank": 1,
         "top_chunk_id": "manual-82fa7ad5a3614d46",
-        "top_snippet": "Avi Simon \u2014 6PM Platform Tech Advisor Call (Feb 24, 2026)\n\nContext: 60-min tech screen call with Avi"
+        "top_snippet": "Rina Vale \u2014 6PM Platform Tech Advisor Call (Feb 24, 2026)\n\nContext: 60-min tech screen call with Rina"
       },
       {
         "name": "entity_fedor",
@@ -29,15 +29,15 @@
       },
       {
         "name": "entity_yuval_mehayom",
-        "query": "MeHayom Yuval sprint payment",
-        "expected_snippets": ["yuval", "Yuval", "MeHayom"],
+        "query": "MeHayom Delta sprint payment",
+        "expected_snippets": ["delta", "Delta", "MeHayom"],
         "top_n": 3,
         "project": null,
         "tag": null,
         "passed": true,
         "actual_rank": 1,
         "top_chunk_id": "manual-6494601725414371",
-        "top_snippet": "[2026-03-10] MeHayom Sprint 1: First 50% payment (2,100 NIS) landed in bank. Yuval added Etan to App"
+        "top_snippet": "[2026-03-10] MeHayom Sprint 1: First 50% payment (2,100 NIS) landed in bank. Delta added Etan to App"
       },
       {
         "name": "tag_decision",
@@ -247,11 +247,11 @@
     "score_pct": 100.0,
     "cases": [
       {
-        "name": "hook_entity_avi_simon",
-        "query": "What are Avi Simon's meeting preferences?",
-        "expected": ["[entity:", "entity: avi simon", "person"],
+        "name": "hook_entity_rina_vale",
+        "query": "What are Rina Vale's meeting preferences?",
+        "expected": ["[entity:", "entity: Rina Vale", "person"],
         "passed": true,
-        "output_preview": "[Entity: Avi Simon \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
+        "output_preview": "[Entity: Rina Vale \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
       },
       {
         "name": "hook_entity_fedor",
@@ -262,10 +262,10 @@
       },
       {
         "name": "hook_entity_first_line",
-        "query": "Tell me about Avi Simon and his 6PM project",
+        "query": "Tell me about Rina Vale and his 6PM project",
         "expected": ["[entity"],
         "passed": true,
-        "output_preview": "[Entity: Avi Simon \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
+        "output_preview": "[Entity: Rina Vale \u2014 person]\n- [? (golems)] # Family Brain \u2014 Multi-User BrainLayer + Relationship Ecosystem | > From \"Etan's tools\" to a people/busine"
       },
       {
         "name": "hook_no_entity_generic",

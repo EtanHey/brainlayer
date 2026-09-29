@@ -68,12 +68,14 @@ _PERSONAL_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-_PERSON_NAME_RE = re.compile(
-    r"(\betan\b|etan@heyman\.net|heyman\.net|\bYuval Rapoport\b|"
-    r"\bGal Rava\b|\bSamantha Cerqueira\b|\bDaniel Munk\b|\bOren Efraim\b|"
-    r"\bOren Ephraim\b|\bAvi Simon\b|\bMichal Cohen\b|\bChase\b)",
-    re.IGNORECASE,
+_NAME_WORD = r"[A-Z][a-z]{1,30}(?:[-'][A-Z][a-z]{1,30})?"
+_CONTEXTUAL_PERSON_NAME_RE = re.compile(
+    rf"\b(?i:met|spoke with|talked to|called|contacted|introduced|client|friend|person named)\s+"
+    rf"{_NAME_WORD}\s+{_NAME_WORD}\b"
 )
+_EMAIL_ADDRESS_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
+
 _PERSONAL_RISK_RE = re.compile(
     r"("
     r"\betan\b|etan@heyman\.net|heyman\.net|\bjournal\b|\bpersonal\b|\bmy life\b|\bfamily\b|"
@@ -145,8 +147,8 @@ def has_personal_risk_signal(content: str | None) -> bool:
 
 
 def has_person_name_signal(content: str | None) -> bool:
-    """Return true for known personal-name signals in Etan's corpus."""
-    return bool(content and _PERSON_NAME_RE.search(content))
+    """Recognize a contextual full name or email without bundled identities."""
+    return bool(content and (_CONTEXTUAL_PERSON_NAME_RE.search(content) or _EMAIL_ADDRESS_RE.search(content)))
 
 
 def has_hebrew_signal(content: str | None) -> bool:

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from ..vector_store import VectorStore
+from .batch_extraction import DEFAULT_SEED_ENTITIES
 
 ACTIVITY_TAG_PREFIXES = ("act:", "dom:", "meta/")
 ACTIVITY_TAGS = {
@@ -57,18 +58,6 @@ ACTIVITY_TAGS = {
     "svg",
 }
 
-PERSON_TAGS = {
-    "andrew-huberman",
-    "avi-simon",
-    "daniel-munk",
-    "dor-zohar",
-    "etan-heyman",
-    "joshua-anderson",
-    "maor-noah",
-    "shachar-gerby",
-    "theo-browne",
-    "yuval-nir",
-}
 
 TECHNOLOGY_TAGS = {
     "1password",
@@ -108,6 +97,13 @@ COMMUNITY_MARKERS = {"community", "collective", "crew", "forum", "group", "guild
 def _slugify_tag(tag: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")
     return re.sub(r"-{2,}", "-", normalized)
+
+
+def _person_tags_from_seed_names(names: list[str]) -> set[str]:
+    return {_slugify_tag(name) for name in names if name.strip()}
+
+
+PERSON_TAGS = _person_tags_from_seed_names(DEFAULT_SEED_ENTITIES["person"])
 
 
 def classify_tag_entity_type(tag: str) -> str:

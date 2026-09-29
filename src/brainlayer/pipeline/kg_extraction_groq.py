@@ -24,8 +24,8 @@ _MULTI_CHUNK_NER_PROMPT = """Extract named entities and relationships from devel
 Entity types (choose carefully):
 - person: Human names only (First Last). NOT project names, repos, or tools.
 - agent: AI agents and autonomous tools (*Claude, *Golem, Ralph, ClaudeGolem).
-- company: Business entities (Cantaloupe AI, Domica, MeHayom, Weby, Union).
-- project: Code repos, apps, products (brainlayer, golems, voicelayer, 6pm, soltome).
+- company: Business entities (Example Corp, Anthropic, OpenAI).
+- project: Code repos, apps, products (brainlayer, golems, voicelayer).
 - tool: Developer tools and services (CodeRabbit, Railway, Vercel).
 - technology: Languages, frameworks, libraries (Python, React, SQLite, Convex).
 - topic: Abstract concepts only when not fitting above types.

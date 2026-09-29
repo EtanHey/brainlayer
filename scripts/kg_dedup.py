@@ -130,7 +130,7 @@ def cleanup_kg(store: VectorStore, dry_run: bool = True):
     # ── 6. Add useful aliases ──
     aliases = [
         ("person", "Etan Heyman", ["Etan", "etanheyman", "EtanHey", "@EtanHey"]),
-        ("person", "Dor Zohar", ["Dor"]),
+        ("person", "Person Alpha", ["Dor"]),
         ("golem", "brainClaude", ["brainlayer-claude", "brainclaude"]),
         ("golem", "golemsClaude", ["golemsclaude", "orcClaude"]),
         ("project", "brainlayer", ["zikaron", "BrainLayer"]),

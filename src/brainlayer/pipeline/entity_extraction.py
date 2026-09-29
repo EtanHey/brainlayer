@@ -185,7 +185,7 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 ## Entity types (be precise — choose the most specific type):
 - person: Human individuals (First Last). NOT repos, tools, or agents.
 - agent: AI coding agents (orcClaude, coachClaude, brainClaude, Ralph, etc.). NOT humans.
-- company: Businesses and organizations (Anthropic, Weby, Cantaloupe AI).
+- company: Businesses and organizations (Example Corp, Anthropic, OpenAI).
 - project: Code repositories, apps, products (BrainLayer, VoiceLayer, 6PM).
 - tool: Developer tools and services (Docker, Railway, Supabase, CodeRabbit).
 - technology: Languages, frameworks, protocols (SQLite, SwiftUI, MCP, TypeScript).
@@ -197,15 +197,15 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 - owns: person → project/company/source. "Etan owns BrainLayer"
 - hosts: person → source. "Andrew Huberman hosts Huberman Lab"
 - appears_on: person → source. "Andy Galpin appears_on Huberman Lab"
-- works_at: person → company. "Josh Anderson works at Cantaloupe AI"
+- works_at: person → company. "Alex Example works at Example Corp"
 - uses: entity → tool/technology. "BrainLayer uses SQLite"
 - depends_on: project → technology/tool. "VoiceLayer depends on whisper-cpp"
 - deployed_on: project/service → tool. "Golems deployed on Railway"
 - fixes: agent/person → topic/project. "brainClaude fixes dark mode regression"
 - configures: config → project/service. "CLAUDE.md configures BrainLayer hooks"
 - spawns: agent → agent. "orcClaude spawns brainlayerClaude"
-- client_of: person → person/company. "Yuval is client of Etan"
-- affiliated_with: person → company. "Josh affiliated with Cantaloupe AI"
+- client_of: person → person/company. "Alex Example is a client of Blair Sample"
+- affiliated_with: person → company. "Alex Example is affiliated with Example Corp"
 - coaches: agent → entity. "coachClaude coaches scheduling"
 - builds: person/agent → project. "Etan builds VoiceLayer"
 - related_to: generic fallback (use ONLY if no specific type fits)
@@ -218,7 +218,7 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 - Each relation MUST have a substantive description — reject empty relations
 - Strength is 0.0-1.0: explicit statements=0.9+, implied=0.5-0.8, speculative=0.3-0.5
 - Decompose N-ary relationships into binary pairs
-- Include Hebrew entity names if present (e.g., MeHayom/מהיום)
+- Include Hebrew entity names if present (e.g., דוגמה)
 - If no entities found, return: {{"entities": [], "relations": []}}
 
 Text:

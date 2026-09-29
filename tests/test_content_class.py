@@ -13,6 +13,19 @@ from brainlayer.store import store_memory
 from brainlayer.vector_store import VectorStore
 
 
+def test_person_name_signal_recognizes_contextual_synthetic_name_without_project_false_positive() -> None:
+    from brainlayer.content_class import has_person_name_signal
+
+    assert has_person_name_signal("I met Rina Vale after the workshop.")
+    assert not has_person_name_signal("Project Atlas release plan is ready.")
+
+
+def test_contextual_person_name_keeps_operational_content_visible() -> None:
+    from brainlayer.content_class import keep_visible_signals
+
+    assert "person_name" in keep_visible_signals("I spoke with Rina Vale about the schedule.")
+
+
 def _embed(seed: float) -> list[float]:
     return [seed + (i / 10000.0) for i in range(1024)]
 

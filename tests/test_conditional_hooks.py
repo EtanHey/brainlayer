@@ -751,7 +751,7 @@ class TestPromptSearchConditional:
         assert capsys.readouterr().out == ""
 
     def test_detect_correction_categorizes_common_prompts(self, prompt_search):
-        assert prompt_search.detect_correction("No, that's wrong. Avi works at Lightricks.") == "factual"
+        assert prompt_search.detect_correction("No, that's wrong. Rina works at Lightricks.") == "factual"
         assert prompt_search.detect_correction("Please don't do that again.") == "preference"
         assert prompt_search.detect_correction("This response is too verbose.") == "style"
         assert prompt_search.detect_correction("לא נכון, תתקן את זה") == "factual"
@@ -809,7 +809,7 @@ class TestPromptSearchConditional:
         monkeypatch.setattr(
             prompt_search.sys,
             "stdin",
-            io.StringIO('{"prompt":"No, that\'s wrong. Avi works at Lightricks.","session_id":"sess-1"}'),
+            io.StringIO('{"prompt":"No, that\'s wrong. Rina works at Lightricks.","session_id":"sess-1"}'),
         )
 
         with pytest.raises(SystemExit):

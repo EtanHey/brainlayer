@@ -385,8 +385,8 @@ SUMMARY STYLE BY CONTENT TYPE:
 FEW-SHOT EXAMPLES:
 
 BAD (score 1/5 — meta-description, no facts):
-  Input: [conversation about storing Mehayom project architecture decisions]
-  Output: "The user is instructing the AI to store specific knowledge about the Mehayom project"
+  Input: [conversation about a sample project architecture decision]
+  Output: "The conversation discussed architecture."
   WHY BAD: Says nothing about WHAT knowledge. Zero retrievable facts.
 
 BAD (score 2/5 — vague, loses specifics):
