@@ -44,6 +44,10 @@
 - #994: Privacy: remaining evaluation and result exports are untracked, and personal entries are removed from shipped data.
 - #997: Privacy: personal spelling variants are removed from BrainBar source; user-specific aliases load from optional local config.
 - #998: Privacy: real people are removed from shipped defaults and LLM prompt examples; person seeds load from optional local config.
+- #1002: Weekly maintenance waits a bounded time for an in-flight daily backup and reuses its verified result. Destructive steps start only inside the quiet window; scheduled FTS repair uses a read-only check, and every scheduled job's CLI has a guard test.
+- #1004: The test gate has per-test and overall deadlines that name the stuck test. A concurrent search test no longer hangs in multi-threaded OpenBLAS matrix multiplication.
+- #1005: BrainBarDaemon survives an MCP client closing before its connection is accepted; SIGPIPE is ignored and the failed response write is handled as EPIPE.
+- #1008: Weekly backup rechecks for a completed, verified daily backup after acquiring the backup lock, preventing a duplicate multi-gigabyte copy.
 
 ## [1.5.43] - 2026-09-28
 
