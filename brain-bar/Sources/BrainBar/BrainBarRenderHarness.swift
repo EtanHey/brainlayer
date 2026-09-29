@@ -133,7 +133,13 @@ enum BrainBarRenderHarness {
                     )
                     print("[brainbar-render] \(artifact)")
                 }
+                let inPlace = try render(
+                    breakpoint: breakpoint, scenario: .readable, detailsExpanded: true,
+                    outputDirectory: outputDirectory, fixedHeight: 640, collapseInPlace: true
+                )
+                print("[brainbar-render] \(inPlace)")
             }
+            try verifyCollapseInPlaceLeavesNoBlankTail(in: outputDirectory)
             try verifyDirectionalStatesDiffer(in: outputDirectory)
             try verifyAttentionDisclosureChangesPixels(in: outputDirectory)
             Darwin.exit(EXIT_SUCCESS)
@@ -286,7 +292,8 @@ enum BrainBarRenderHarness {
         detailsExpanded: Bool,
         outputDirectory: URL,
         fixedHeight: CGFloat? = nil,
-        afterCollapse: Bool = false
+        afterCollapse: Bool = false,
+        collapseInPlace: Bool = false
     ) throws -> String {
         let panelState = BrainBarDashboardPanelState()
         panelState.detailsExpanded = detailsExpanded || afterCollapse
@@ -329,7 +336,7 @@ enum BrainBarRenderHarness {
         // state in every filename so the two producers cannot overwrite each other.
         let suffix = detailsExpanded ? "-details-expanded" : ""
         let name = fixedHeight == nil ? "dashboard-cli-\(breakpoint.name)-\(scenario.rawValue)\(suffix)"
-            : "dashboard-fixed-\(breakpoint.name)-\(afterCollapse ? "after-collapse" : detailsExpanded ? "expanded" : "collapsed")"
+            : "dashboard-fixed-\(breakpoint.name)-\(collapseInPlace ? "collapsed-in-place" : afterCollapse ? "after-collapse" : detailsExpanded ? "expanded" : "collapsed")"
 
         let measuringHost = NSHostingView(rootView: view)
         measuringHost.frame = NSRect(x: 0, y: 0, width: breakpoint.width, height: 10_000)
@@ -355,7 +362,16 @@ enum BrainBarRenderHarness {
             guard let scroll = scrollViews(in: host).first(where: { ($0.documentView?.bounds.height ?? 0) > 0 }),
                   let document = scroll.documentView else { throw Failure("\(name): dashboard scroll view is missing") }
             let clip = scroll.contentView
-            if afterCollapse {
+            if collapseInPlace {
+                // #964: expand, scroll to the bottom, collapse, and capture exactly where the
+                // viewport settles. No manual re-scroll, so a pinned document height shows up
+                // as a blank tail in the pixels.
+                clip.scroll(to: NSPoint(x: 0, y: max(document.bounds.maxY - clip.bounds.height, 0)))
+                scroll.reflectScrolledClipView(clip)
+                settle(host)
+                panelState.detailsExpanded = false
+                settle(host)
+            } else if afterCollapse {
                 clip.scroll(to: NSPoint(x: 0, y: max(document.bounds.maxY - clip.bounds.height, 0)))
                 scroll.reflectScrolledClipView(clip)
                 panelState.detailsExpanded = false
@@ -364,10 +380,12 @@ enum BrainBarRenderHarness {
                 scroll.reflectScrolledClipView(clip)
                 settle(host)
             }
-            let bottom = document.isFlipped ? max(document.bounds.maxY - clip.bounds.height, document.bounds.minY) : document.bounds.minY
-            clip.scroll(to: NSPoint(x: 0, y: bottom))
-            scroll.reflectScrolledClipView(clip)
-            settle(host)
+            if !collapseInPlace {
+                let bottom = document.isFlipped ? max(document.bounds.maxY - clip.bounds.height, document.bounds.minY) : document.bounds.minY
+                clip.scroll(to: NSPoint(x: 0, y: bottom))
+                scroll.reflectScrolledClipView(clip)
+                settle(host)
+            }
         }
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             throw Failure("\(name): AppKit could not allocate an off-screen bitmap")
@@ -394,7 +412,7 @@ enum BrainBarRenderHarness {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             try VNImageRequestHandler(cgImage: image).perform([request])
-            for label in ["Details", detailsExpanded ? "Last seen" : "Details"] {
+            for label in ["Details", detailsExpanded && !collapseInPlace ? "Last seen" : "Details"] {
                 guard request.results?.contains(where: {
                     $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(label) == true && $0.boundingBox.minY > 0.025
                 }) == true else { throw Failure("\(name): \(label) or bottom padding clipped") }
@@ -409,6 +427,22 @@ enum BrainBarRenderHarness {
         }
         return "\(name) \(Int(size.width))×\(Int(size.height))\(cardReceipt); wrote \(url.path) "
             + "(\(emittedPNG.count) bytes, \(colors) sampled colors)"
+    }
+
+    /// #964: collapsing Details while scrolled to the bottom must settle on the same pixels as
+    /// the collapsed dashboard scrolled to its bottom. A pinned document height leaves a blank
+    /// tail in the viewport and fails this comparison.
+    private static func verifyCollapseInPlaceLeavesNoBlankTail(in outputDirectory: URL) throws {
+        for breakpoint in breakpoints {
+            let collapsed = outputDirectory.appendingPathComponent("dashboard-fixed-\(breakpoint.name)-collapsed.png")
+            let inPlace = outputDirectory.appendingPathComponent("dashboard-fixed-\(breakpoint.name)-collapsed-in-place.png")
+            guard try Data(contentsOf: collapsed) == Data(contentsOf: inPlace) else {
+                throw Failure(
+                    "collapse-in-place probe at \(breakpoint.width)pt: collapsing Details at the bottom "
+                        + "did not settle on the collapsed dashboard (blank tail or lost reflow)"
+                )
+            }
+        }
     }
 
     private static func verifyAttentionDisclosureChangesPixels(in outputDirectory: URL) throws {
