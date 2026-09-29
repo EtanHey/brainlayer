@@ -38,6 +38,13 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.44] - 2026-09-29
+
+- #993: BrainBar diagnostics now use unified logging, while lifecycle events go to an owner-only `~/Library/Logs/BrainBar/lifecycle.log`. A rotating mode-0600 debug file is enabled only by `BRAINBAR_DEBUG_LOG=1`; request payloads are never logged.
+- #994: Privacy: remaining evaluation and result exports are untracked, and personal entries are removed from shipped data.
+- #997: Privacy: personal spelling variants are removed from BrainBar source; user-specific aliases load from optional local config.
+- #998: Privacy: real people are removed from shipped defaults and LLM prompt examples; person seeds load from optional local config.
+
 ## [1.5.43] - 2026-09-28
 
 - #987: BrainBar Runtime "Agents" no longer counts app-bundled helpers, including the Codex Computer Use helper, as sessions. Bundle membership comes from the kernel's executable path (fixes #984).
