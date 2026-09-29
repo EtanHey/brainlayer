@@ -8,6 +8,7 @@
 // Also handles notifications (no response) and unknown methods (error).
 
 import Foundation
+import BrainBarLifecycle
 
 final class MCPRouter: @unchecked Sendable {
     private enum ToolProfile {
@@ -288,7 +289,7 @@ final class MCPRouter: @unchecked Sendable {
         default:
             if explicitProfile == nil, let rawProfile = environmentProfile {
                 let message = "BrainBar: unknown \(profileEnvironmentKey)=\(rawProfile); using core profile\n"
-                FileHandle.standardError.write(Data(message.utf8))
+                BrainBarSignalSafety.write(Data(message.utf8), to: .standardError, context: "tool profile warning")
             }
             return .core
         }
