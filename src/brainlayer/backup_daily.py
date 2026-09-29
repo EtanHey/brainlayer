@@ -101,6 +101,10 @@ DAILY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DRIVE_KEEP)
 WEEKLY_RETENTION = DriveRetentionPolicy(keep_latest=DEFAULT_DRIVE_KEEP)
 
 
+class BackupAlreadyRunningError(RuntimeError):
+    """The shared backup staging lock is held by another backup."""
+
+
 @dataclass(frozen=True)
 class SQLiteBackupArtifact:
     gzip_path: Path
@@ -1592,7 +1596,7 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
                         "error": error,
                     },
                 )
-                raise RuntimeError(error) from exc
+                raise BackupAlreadyRunningError(error) from exc
             try:
                 return func(*args, **kwargs)
             finally:
