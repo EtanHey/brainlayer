@@ -201,26 +201,31 @@ final class WatcherHealthStatusTests: XCTestCase {
 
     // MARK: #1013 review round 1
 
-    /// B1: a stopped watcher says since when: the last heartbeat bounds it from below.
-    func testStoppedSaysSinceTheLastHeartbeat() {
+    /// B1 (round 2): a heartbeat proves the watcher was alive AT that time, so it bounds the stop
+    /// from above, never below. launchd records no stop time: the text says the stop time is
+    /// unknown and gives the last heartbeat as a fact, with no "for at least" claim.
+    func testStoppedGivesTheLastHeartbeatWithoutClaimingAStopDuration() {
         let status = WatcherHealthStatus.derive(
             launchd: .notRunning("com.brainlayer.watch is not loaded"),
             file: file(ageSeconds: 900),
             now: now
         )
+        let text = status.reasonText(now: now) ?? ""
         XCTAssertEqual(
-            status.reasonText(now: now),
-            "Watcher is not running (com.brainlayer.watch is not loaded) · since at least 15m ago (last heartbeat) · "
+            text,
+            "Watcher is not running (com.brainlayer.watch is not loaded) · stop time unknown; last heartbeat 15m ago · "
                 + "Restart it from Settings → Jobs → Ingest, or check ~/Library/Logs/brainlayer/watch.err.log"
         )
+        XCTAssertFalse(text.contains("at least"), text)
+        XCTAssertFalse(text.contains("since"), text)
     }
 
-    /// B1: with no readable heartbeat there is no honest start time, so it says so.
-    func testStoppedWithoutAHeartbeatSaysSinceUnknown() {
+    /// B1: with no readable heartbeat there is nothing to report but the unknown stop time.
+    func testStoppedWithoutAHeartbeatSaysStopTimeUnknown() {
         for read in [WatcherHealthFileRead.missing(path: "/x/watcher-health.json"), nil] {
             let text = WatcherHealthStatus.derive(launchd: .notRunning("com.brainlayer.watch is not running"), file: read, now: now)
                 .reasonText(now: now) ?? ""
-            XCTAssertTrue(text.contains(" · since unknown — no readable heartbeat · "), text)
+            XCTAssertTrue(text.contains(" · stop time unknown — no readable heartbeat · "), text)
         }
     }
 
@@ -274,6 +279,47 @@ final class WatcherHealthStatusTests: XCTestCase {
             file: WatcherHealthReader.parse(partial, path: "/x/watcher-health.json"),
             now: now
         ) else { return XCTFail("a partial snapshot must read as unknown, never running") }
+    }
+
+    /// B3 (round 2): a snapshot whose required or alert fields carry an unexpected type cannot
+    /// prove a healthy watcher. `"alert_reasons": [17]` once parsed as zero alerts and read Running.
+    func testMalformedFieldTypesAreUnreadableNeverRunning() {
+        let fresh = ISO8601DateFormatter().string(from: now.addingTimeInterval(-70))
+        let base = #""updated_at": "\#(fresh)", "poll_count": 7, "alert_reasons": []"#
+        let cases: [(json: String, reason: String)] = [
+            (#"{"updated_at": "\#(fresh)", "poll_count": 7, "alert_reasons": [17]}"#, "alert_reasons must be a list of strings"),
+            (#"{"updated_at": "\#(fresh)", "poll_count": 7, "alert_reasons": ["db_probe_failed", null]}"#, "alert_reasons must be a list of strings"),
+            (#"{"updated_at": "\#(fresh)", "poll_count": 7, "alert_reasons": "db_probe_failed"}"#, "alert_reasons must be a list of strings"),
+            (#"{"updated_at": 1800000000, "poll_count": 7, "alert_reasons": []}"#, "updated_at must be an ISO-8601 timestamp"),
+            (#"{"updated_at": "\#(fresh)", "poll_count": "7", "alert_reasons": []}"#, "poll_count must be an integer"),
+            (#"{"updated_at": "\#(fresh)", "poll_count": true, "alert_reasons": []}"#, "poll_count must be an integer"),
+            (#"{"updated_at": "\#(fresh)", "poll_count": 7.5, "alert_reasons": []}"#, "poll_count must be an integer"),
+            (#"{\#(base), "db_probe_failed": "yes"}"#, "db_probe_failed must be a boolean"),
+            (#"{\#(base), "db_probe_failed": 1}"#, "db_probe_failed must be a boolean"),
+            (#"{\#(base), "max_offset_lag_bytes": "big"}"#, "max_offset_lag_bytes must be an integer"),
+            (#"{\#(base), "file_ingestion_failure_count": 1.5}"#, "file_ingestion_failure_count must be an integer"),
+            (#"{\#(base), "quarantined_record_count_total": true}"#, "quarantined_record_count_total must be an integer"),
+            (#"{\#(base), "file_ingestion_failures": {}}"#, "file_ingestion_failures must be a list"),
+            (#"{\#(base), "quarantined_records": "none"}"#, "quarantined_records must be a list"),
+        ]
+        for (json, expected) in cases {
+            let read = WatcherHealthReader.parse(Data(json.utf8), path: "/x/watcher-health.json")
+            guard case let .unreadable(_, reason) = read else {
+                XCTFail("\(json) must be unreadable, got \(read)")
+                continue
+            }
+            XCTAssertEqual(reason, expected, json)
+            let status = WatcherHealthStatus.derive(launchd: .running, file: read, now: now)
+            guard case .unknown = status else {
+                XCTFail("\(json) must read as unknown, never \(status)")
+                continue
+            }
+        }
+        // The well-typed shape with every optional field present still parses.
+        let valid = #"{\#(base), "db_probe_failed": false, "max_offset_lag_bytes": 0, "file_ingestion_failure_count": 0, "quarantined_record_count_total": 0, "file_ingestion_failures": [], "quarantined_records": []}"#
+        guard case .readable = WatcherHealthReader.parse(Data(valid.utf8), path: "/x") else {
+            return XCTFail("a well-typed snapshot must stay readable")
+        }
     }
 
     // MARK: unknown, never a false running or down

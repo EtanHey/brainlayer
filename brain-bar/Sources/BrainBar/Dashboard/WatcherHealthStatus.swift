@@ -74,11 +74,12 @@ enum WatcherHealthStatus: Sendable, Equatable {
         switch launchd {
         case let .notRunning(detail):
             // launchd is authoritative for "is the process there"; a fresh file cannot revive it.
-            // launchd records no stop time, so the last heartbeat is the honest lower bound.
+            // launchd records no stop time. A heartbeat proves the watcher was alive AT that time,
+            // so it only bounds the stop from above: report it as a fact, never as a duration.
             let since: String = if case let .readable(health) = file {
-                "since at least \(age(health.updatedAt, now: now)) (last heartbeat)"
+                "stop time unknown; last heartbeat \(age(health.updatedAt, now: now))"
             } else {
-                "since unknown — no readable heartbeat"
+                "stop time unknown — no readable heartbeat"
             }
             return .stopped(
                 reason: "Watcher is not running (\(detail)) · \(since) · Restart it from Settings → Jobs → Ingest, or check \(logHint)"
@@ -264,30 +265,68 @@ enum WatcherHealthReader {
         }
         // The watcher writes these together in one atomic snapshot; a snapshot missing any of them
         // cannot prove a live, healthy watcher (#1013 review B3).
-        let updatedAt = date(payload["updated_at"])
-        let pollCount = payload["poll_count"] as? Int
-        let alertReasons = payload["alert_reasons"] as? [Any]
-        let missing = [
-            updatedAt == nil ? "updated_at" : nil,
-            pollCount == nil ? "poll_count" : nil,
-            alertReasons == nil ? "alert_reasons" : nil,
-        ].compactMap { $0 }
-        guard missing.isEmpty, let updatedAt, let pollCount, let alertReasons else {
+        let missing = ["updated_at", "poll_count", "alert_reasons"].filter { payload[$0] == nil || payload[$0] is NSNull }
+        guard missing.isEmpty else {
             return .unreadable(path: path, reason: "missing required field(s): \(missing.joined(separator: ", "))")
+        }
+        // Every present field must carry the producer's type. Coercing or dropping a bad value
+        // (e.g. `"alert_reasons": [17]` read as zero alerts) would let a malformed file read as
+        // Running (#1013 round-2 B3).
+        guard let updatedAt = date(payload["updated_at"]) else {
+            return .unreadable(path: path, reason: "updated_at must be an ISO-8601 timestamp")
+        }
+        guard let rawReasons = payload["alert_reasons"] as? [Any],
+              let alertReasons = rawReasons as? [String], alertReasons.count == rawReasons.count else {
+            return .unreadable(path: path, reason: "alert_reasons must be a list of strings")
+        }
+        let integerKeys = [
+            "poll_count", "max_offset_lag_bytes", "file_ingestion_failure_count", "quarantined_record_count_total",
+        ]
+        var integers: [String: Int] = [:]
+        for key in integerKeys {
+            guard let value = payload[key] else { continue }
+            guard let integer = strictInteger(value) else {
+                return .unreadable(path: path, reason: "\(key) must be an integer")
+            }
+            integers[key] = integer
+        }
+        var dbProbeFailed = false
+        if let value = payload["db_probe_failed"] {
+            guard let flag = strictBool(value) else {
+                return .unreadable(path: path, reason: "db_probe_failed must be a boolean")
+            }
+            dbProbeFailed = flag
+        }
+        for key in ["file_ingestion_failures", "quarantined_records"] {
+            if let value = payload[key], !(value is [Any]) {
+                return .unreadable(path: path, reason: "\(key) must be a list")
+            }
         }
         return .readable(WatcherHealthFile(
             updatedAt: updatedAt,
-            pollCount: pollCount,
-            alertReasons: alertReasons.compactMap { $0 as? String },
-            dbProbeFailed: payload["db_probe_failed"] as? Bool ?? false,
-            maxOffsetLagBytes: payload["max_offset_lag_bytes"] as? Int ?? 0,
-            fileIngestionFailureCount: payload["file_ingestion_failure_count"] as? Int ?? 0,
+            pollCount: integers["poll_count"] ?? 0,
+            alertReasons: alertReasons,
+            dbProbeFailed: dbProbeFailed,
+            maxOffsetLagBytes: integers["max_offset_lag_bytes"] ?? 0,
+            fileIngestionFailureCount: integers["file_ingestion_failure_count"] ?? 0,
             fileIngestionFailuresListed: (payload["file_ingestion_failures"] as? [Any])?.count,
             earliestFileIngestionFailureAt: earliestObservedAt(payload["file_ingestion_failures"]),
-            quarantinedRecordCount: payload["quarantined_record_count_total"] as? Int ?? 0,
+            quarantinedRecordCount: integers["quarantined_record_count_total"] ?? 0,
             quarantinedRecordsListed: (payload["quarantined_records"] as? [Any])?.count,
             earliestQuarantinedRecordAt: earliestObservedAt(payload["quarantined_records"])
         ))
+    }
+
+    /// JSON numbers arrive as NSNumber, which bridges `true` to 1 and `1` to true. Only a
+    /// non-boolean whole number is an integer here.
+    private static func strictInteger(_ value: Any) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return value as? Int
+    }
+
+    private static func strictBool(_ value: Any) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
     }
 
     private static func earliestObservedAt(_ value: Any?) -> Date? {
