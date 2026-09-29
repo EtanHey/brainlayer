@@ -47,6 +47,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
             bucketCount: 4,
             lastWriteAt: now.addingTimeInterval(-10),
             lastEnrichedAt: now.addingTimeInterval(-10),
+            watcherHealth: .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-70), pollCount: 1)),
             watcherProcessProbeResult: .running(pid: 42),
             watcherRecentDistinctChunkCount: 2,
             watcherFlowReadability: .readable

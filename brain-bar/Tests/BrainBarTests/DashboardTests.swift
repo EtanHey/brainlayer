@@ -175,6 +175,7 @@ final class DashboardTests: XCTestCase {
             recentWatcherWriteBuckets: [2, 0, 0],
             recentEnrichmentBuckets: [0, 0, 0],
             activityWindowMinutes: 15,
+            watcherHealth: .readable(WatcherHealthFile(updatedAt: Date().addingTimeInterval(-70), pollCount: 1)),
             watcherProcessProbeResult: .running(pid: 42),
             watcherRecentDistinctChunkCount: 2,
             watcherFlowReadability: .readable
@@ -308,7 +309,10 @@ final class DashboardTests: XCTestCase {
             .appendingPathComponent("watcher-health-\(UUID().uuidString).json")
         try """
         {
+          "updated_at": "2026-09-29T21:34:07.711548+00:00",
+          "poll_count": 72,
           "alerting": true,
+          "alert_reasons": ["offset_lag"],
           "files_tracked": 7,
           "max_offset_lag_bytes": 2097152,
           "active_jsonl_entries_per_minute": 44.0,
@@ -323,9 +327,23 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.watcherHealth?.filesTracked, 7)
-        XCTAssertEqual(stats.watcherHealth?.alerting, true)
-        XCTAssertEqual(stats.watcherHealth?.summaryText, "lag 2 MB")
+        guard case let .readable(health) = stats.watcherHealth else {
+            return XCTFail("dashboard stats must carry the watcher-health read, got \(String(describing: stats.watcherHealth))")
+        }
+        XCTAssertEqual(health.pollCount, 72)
+        XCTAssertEqual(health.alertReasons, ["offset_lag"])
+        XCTAssertEqual(health.maxOffsetLagBytes, 2_097_152)
+    }
+
+    func testDashboardStatsReportsAMissingWatcherHealthFileAsMissing() throws {
+        let healthURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("watcher-health-missing-\(UUID().uuidString).json")
+        let restoreHealthPath = setDashboardWatcherHealthPath(healthURL)
+        defer { restoreHealthPath() }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.watcherHealth, .missing(path: healthURL.path))
     }
 
     func testDashboardStatsRecentEnrichmentCountSharesBucketSource() {

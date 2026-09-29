@@ -279,38 +279,35 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
             checkingReason = reason
         }
 
+        // Watcher health comes from the one WatcherHealthStatus (#966): the same title and
+        // reason line the watcher lane, Settings footer and Ingest group show.
+        let watcherReason = flow.watcherStatusReason ?? flow.watcherStatus.title
         let health: (String, String, BrainBarHeroHealthTone)
-        switch flow.watcherFlowState {
-        case .offline:
-            health = ("Needs attention", "Watcher is offline.", .red)
-        case .stalled:
-            health = ("Needs attention", "Watcher flow needs attention.", .red)
-        default:
-            if flow.ingress.status == .unavailable {
-                health = ("Needs attention", "Ingest health is unavailable.", .red)
-            } else if let backupFailure {
-                health = ("Needs attention", backupFailure, .red)
-            } else if let checkingReason {
-                health = ("Checking health", checkingReason, .amber)
-            } else if let staleBackupAge {
-                health = (
-                    "Check health",
-                    "Backup status is \(staleBackupAge); waiting for a fresh observability check.",
-                    .amber
-                )
-            } else {
-                switch flow.watcherFlowState {
-                case .unknown:
-                    health = ("Check health", "Watcher health is unknown.", .amber)
-                case .runningFlowUnverified:
-                    health = ("Check health", "Watcher is running, but flow could not be verified.", .amber)
-                case .flowing:
-                    health = ("Healthy", "Watcher is flowing; DB and transcript backups are verified.", .green)
-                case .runningNoRecentFlow:
-                    health = ("Healthy", "Watcher is running with no recent work; DB and transcript backups are verified.", .green)
-                case .offline, .stalled:
-                    health = ("Needs attention", "Watcher health needs attention.", .red)
-                }
+        if flow.watcherStatus.needsAttention {
+            health = ("Needs attention", watcherReason, .red)
+        } else if flow.ingress.status == .unavailable {
+            health = ("Needs attention", "Ingest health is unavailable.", .red)
+        } else if let backupFailure {
+            health = ("Needs attention", backupFailure, .red)
+        } else if let checkingReason {
+            health = ("Checking health", checkingReason, .amber)
+        } else if let staleBackupAge {
+            health = (
+                "Check health",
+                "Backup status is \(staleBackupAge); waiting for a fresh observability check.",
+                .amber
+            )
+        } else if case .unknown = flow.watcherStatus {
+            health = ("Check health", watcherReason, .amber)
+        } else {
+            switch flow.watcherFlowState {
+            case .flowing:
+                health = ("Healthy", "Watcher is flowing; DB and transcript backups are verified.", .green)
+            case .runningNoRecentFlow:
+                health = ("Healthy", "Watcher is running with no recent work; DB and transcript backups are verified.", .green)
+            case .runningFlowUnverified, .offline, .unknown:
+                // The heartbeat says the watcher is healthy, but chunk-flow evidence is unreadable.
+                health = ("Check health", "Watcher is running, but flow could not be verified.", .amber)
             }
         }
 

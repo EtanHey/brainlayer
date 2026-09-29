@@ -245,7 +245,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         let result = try BrainBarOnePageTestFixture.dashboardResult(
             indexedToday: BrainBarDashboardFixture.stats.recentActivityBuckets.reduce(0, +)
         )
-        let collector = BrainBarDashboardFixture.makeCollector()
+        let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: BrainBarOnePageTestFixture.now)
         let view = BrainBarDashboardPreview.make(
             collector: collector,
             observabilityResult: result,
@@ -426,7 +426,9 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             (.watcherOffline, "dashboard-watcher-offline"),
             (.watcherUnknown, "dashboard-watcher-unknown"),
             (.watcherRunningNoRecentFlow, "dashboard-watcher-running-no-recent-flow"),
-            (.watcherStalledWithPendingWork, "dashboard-watcher-stalled-pending-work"),
+            (.watcherIdleWithReplayDebt, "dashboard-watcher-idle-with-replay-debt"),
+            (.watcherDegraded, "dashboard-watcher-degraded"),
+            (.watcherHealthMissing, "dashboard-watcher-health-missing"),
         ]
 
         for (state, name) in states {

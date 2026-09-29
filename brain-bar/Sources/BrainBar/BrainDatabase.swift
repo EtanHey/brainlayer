@@ -88,49 +88,6 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     struct DashboardStats: Sendable, Equatable {
-        struct WatcherHealth: Sendable, Equatable {
-            let alerting: Bool
-            let filesTracked: Int
-            let maxOffsetLagBytes: Int
-            let activeEntriesPerMinute: Double
-            let realtimeInsertsPerMinute: Double
-            let updatedAt: Date?
-
-            init(
-                alerting: Bool,
-                filesTracked: Int,
-                maxOffsetLagBytes: Int,
-                activeEntriesPerMinute: Double,
-                realtimeInsertsPerMinute: Double,
-                updatedAt: Date? = nil
-            ) {
-                self.alerting = alerting
-                self.filesTracked = filesTracked
-                self.maxOffsetLagBytes = maxOffsetLagBytes
-                self.activeEntriesPerMinute = activeEntriesPerMinute
-                self.realtimeInsertsPerMinute = realtimeInsertsPerMinute
-                self.updatedAt = updatedAt
-            }
-
-            var summaryText: String {
-                if alerting {
-                    if maxOffsetLagBytes >= 1_048_576 {
-                        return "lag \(Int((Double(maxOffsetLagBytes) / 1_048_576.0).rounded())) MB"
-                    }
-                    return "coverage alert"
-                }
-                if filesTracked > 0 {
-                    return "\(filesTracked) files"
-                }
-                return "idle"
-            }
-
-            func isFresh(now: Date = Date(), maxAgeSeconds: TimeInterval = 300) -> Bool {
-                guard let updatedAt else { return false }
-                return now.timeIntervalSince(updatedAt) <= maxAgeSeconds
-            }
-        }
-
         let chunkCount: Int
         let enrichedChunkCount: Int
         let failedEnrichmentCount: Int
@@ -161,7 +118,9 @@ final class BrainDatabase: @unchecked Sendable {
         let pendingStoreFlushQueueDepth: Int
         let pendingStoreOldestQueuedAt: Date?
         let pendingStoreFlushRatePerMinute: Double
-        let watcherHealth: WatcherHealth?
+        /// watcher-health.json beside the resolved DB, read by `WatcherHealthReader` (#966).
+        /// nil only where nothing sampled it (tests, previews).
+        let watcherHealth: WatcherHealthFileRead?
         let replayDebtBreakdown: ReplayDebtBreakdown
         let watcherProcessProbeResult: WatcherProcessProbeResult?
         let watcherRecentDistinctChunkCount: Int
@@ -198,7 +157,7 @@ final class BrainDatabase: @unchecked Sendable {
             pendingStoreFlushQueueDepth: Int? = nil,
             pendingStoreOldestQueuedAt: Date? = nil,
             pendingStoreFlushRatePerMinute: Double = 0,
-            watcherHealth: WatcherHealth? = nil,
+            watcherHealth: WatcherHealthFileRead? = nil,
             replayDebtBreakdown: ReplayDebtBreakdown? = nil,
             watcherProcessProbeResult: WatcherProcessProbeResult? = nil,
             watcherRecentDistinctChunkCount: Int? = nil,
@@ -447,6 +406,46 @@ final class BrainDatabase: @unchecked Sendable {
                 watcherHealth: watcherHealth,
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: result,
+                watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
+                watcherFlowReadability: watcherFlowReadability
+            )
+        }
+
+        func withWatcherHealth(_ health: WatcherHealthFileRead?) -> DashboardStats {
+            DashboardStats(
+                chunkCount: chunkCount,
+                enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: failedEnrichmentCount,
+                skippedEnrichmentCount: skippedEnrichmentCount,
+                pendingEnrichmentCount: pendingEnrichmentCount,
+                enrichmentPercent: enrichmentPercent,
+                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                databaseSizeBytes: databaseSizeBytes,
+                recentActivityBuckets: recentActivityBuckets,
+                recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
+                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
+                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                liveWindowMinutes: liveWindowMinutes,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: lastEnrichedAt,
+                signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
+                vectorIndexedChunkCount: vectorIndexedChunkCount,
+                ftsIndexedChunkCount: ftsIndexedChunkCount,
+                trigramIndexedChunkCount: trigramIndexedChunkCount,
+                signalCoverageIsAvailable: signalCoverageIsAvailable,
+                pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
+                pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
+                pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
+                watcherHealth: health,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
                 watcherFlowReadability: watcherFlowReadability
             )
@@ -2258,43 +2257,8 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private func watcherHealthSnapshot() -> DashboardStats.WatcherHealth? {
-        let envPath = ProcessInfo.processInfo.environment["BRAINLAYER_WATCHER_HEALTH_PATH"]
-        let healthPath = envPath ?? URL(fileURLWithPath: path)
-            .deletingLastPathComponent()
-            .appendingPathComponent("watcher-health.json")
-            .path
-        guard let data = FileManager.default.contents(atPath: healthPath),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return DashboardStats.WatcherHealth(
-            alerting: payload["alerting"] as? Bool ?? false,
-            filesTracked: payload["files_tracked"] as? Int ?? 0,
-            maxOffsetLagBytes: payload["max_offset_lag_bytes"] as? Int ?? 0,
-            activeEntriesPerMinute: payload["active_jsonl_entries_per_minute"] as? Double ?? 0,
-            realtimeInsertsPerMinute: payload["db_realtime_inserts_per_minute"] as? Double ?? 0,
-            updatedAt: Self.parseWatcherHealthUpdatedAt(payload["updated_at"] as? String)
-        )
-    }
-
-    private static func parseWatcherHealthUpdatedAt(_ rawValue: String?) -> Date? {
-        guard let rawValue else { return nil }
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: trimmed) {
-            return date
-        }
-        if let date = ISO8601DateFormatter().date(from: trimmed) {
-            return date
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
-        return formatter.date(from: trimmed)
+    private func watcherHealthSnapshot() -> WatcherHealthFileRead {
+        WatcherHealthReader.read(url: WatcherHealthReader.url(dbPath: path))
     }
 
     func dataVersion() throws -> Int {

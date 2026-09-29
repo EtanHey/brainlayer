@@ -36,7 +36,9 @@ enum BrainBarDashboardFixture {
         case watcherOffline
         case watcherUnknown
         case watcherRunningNoRecentFlow
-        case watcherStalledWithPendingWork
+        case watcherIdleWithReplayDebt
+        case watcherDegraded
+        case watcherHealthMissing
         case queueDraining
         case queueBacklogged
     }
@@ -44,6 +46,12 @@ enum BrainBarDashboardFixture {
     /// Fixed "data fetched at" instant. Renders only via `absoluteTimeString`.
     /// 2023-11-14 22:13:20 UTC — an arbitrary but constant epoch.
     static let fetchedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    /// A heartbeat 70 s old: normal poll spacing (~60-95 s), so the watcher reads as running.
+    static let healthyWatcherHealth = WatcherHealthFileRead.readable(WatcherHealthFile(
+        updatedAt: fetchedAt.addingTimeInterval(-70),
+        pollCount: 72,
+        maxOffsetLagBytes: 2_048
+    ))
     static let coverageDBError = "open(\"/Users/fixture/.local/share/brainlayer/fixture.db\", 14)"
 
     private static let readableReplayDebt = BrainDatabase.ReplayDebtBreakdown(
@@ -197,17 +205,36 @@ enum BrainBarDashboardFixture {
     static let watcherUnknownStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,
         watcherProcessProbeResult: .failure("fixture watcher process probe failed"),
-        watcherRecentDistinctChunkCount: 0
+        watcherRecentDistinctChunkCount: 0,
+        watcherHealth: .missing(path: "~/.local/share/brainlayer/watcher-health.json")
     )
     static let watcherRunningNoRecentFlowStats = makeStats(
         replayDebtBreakdown: emptyReplayDebt,
         watcherProcessProbeResult: .running(pid: 4242),
         watcherRecentDistinctChunkCount: 0
     )
-    static let watcherStalledWithPendingWorkStats = makeStats(
+    /// #966: the watcher is healthy and idle while BrainBar has replay debt. Replay debt is its
+    /// own thing (the Queue card), not "watcher needs attention".
+    static let watcherIdleWithReplayDebtStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,
         watcherProcessProbeResult: .running(pid: 4242),
         watcherRecentDistinctChunkCount: 0
+    )
+    static let watcherDegradedStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .running(pid: 4242),
+        watcherHealth: .readable(WatcherHealthFile(
+            updatedAt: fetchedAt.addingTimeInterval(-70),
+            pollCount: 72,
+            alertReasons: ["file_ingestion_failure"],
+            fileIngestionFailureCount: 2,
+            earliestFileIngestionFailureAt: fetchedAt.addingTimeInterval(-7_200)
+        ))
+    )
+    static let watcherHealthMissingStats = makeStats(
+        replayDebtBreakdown: readableReplayDebt,
+        watcherProcessProbeResult: .running(pid: 4242),
+        watcherHealth: .missing(path: "~/.local/share/brainlayer/watcher-health.json")
     )
     static let queueDrainingStats = makeStats(
         replayDebtBreakdown: readableReplayDebt,
@@ -255,6 +282,7 @@ enum BrainBarDashboardFixture {
         zeroFlow: Bool = false,
         agentWriteReadability: MetricEvidenceReadability = .readable,
         watcherFlowReadability: MetricEvidenceReadability = .readable,
+        watcherHealth: WatcherHealthFileRead = healthyWatcherHealth
     ) -> DashboardStats {
         let windowScale = max(activityWindowMinutes / 60, 1)
         let watcherBuckets = watcherRecentDistinctChunkCount == 0
@@ -290,14 +318,7 @@ enum BrainBarDashboardFixture {
             pendingStoreFlushQueueDepth: replayDebtBreakdown.pendingStores.snapshot.depth,
             pendingStoreOldestQueuedAt: nil,
             pendingStoreFlushRatePerMinute: 45,
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 14,
-                maxOffsetLagBytes: 2_048,
-                activeEntriesPerMinute: 12.5,
-                realtimeInsertsPerMinute: 9.0,
-                updatedAt: fetchedAt
-            ),
+            watcherHealth: watcherHealth,
             replayDebtBreakdown: replayDebtBreakdown,
             watcherProcessProbeResult: watcherProcessProbeResult,
             watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
@@ -342,9 +363,10 @@ enum BrainBarDashboardFixture {
     /// (no DB, no observers, no timers — `start()` is never called).
     static func makeCollector(
         _ operatorState: OperatorState = .live,
-        agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity
+        agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity,
+        watcherHeartbeatAt: Date? = nil
     ) -> StatsCollector {
-        let fixtureStats: DashboardStats
+        var fixtureStats: DashboardStats
         switch operatorState {
         case .loading, .coverageLoading:
             fixtureStats = loadingStats
@@ -356,8 +378,12 @@ enum BrainBarDashboardFixture {
             fixtureStats = watcherUnknownStats
         case .watcherRunningNoRecentFlow:
             fixtureStats = watcherRunningNoRecentFlowStats
-        case .watcherStalledWithPendingWork:
-            fixtureStats = watcherStalledWithPendingWorkStats
+        case .watcherIdleWithReplayDebt:
+            fixtureStats = watcherIdleWithReplayDebtStats
+        case .watcherDegraded:
+            fixtureStats = watcherDegradedStats
+        case .watcherHealthMissing:
+            fixtureStats = watcherHealthMissingStats
         case .queueDraining:
             fixtureStats = queueDrainingStats
         case .queueBacklogged:
@@ -368,6 +394,12 @@ enum BrainBarDashboardFixture {
             fixtureStats = unavailableStats
         case .live, .stale, .error:
             fixtureStats = stats
+        }
+        // Renders judged at another clock (e.g. the one-page golden date) move the heartbeat with
+        // it, so a healthy fixture never reads as a stale watcher.
+        if let watcherHeartbeatAt, case var .readable(health) = fixtureStats.watcherHealth {
+            health.updatedAt = watcherHeartbeatAt.addingTimeInterval(-70)
+            fixtureStats = fixtureStats.withWatcherHealth(.readable(health))
         }
         let freshness: SnapshotFreshnessState
         let lastDataFetchedAt: Date?
@@ -382,7 +414,9 @@ enum BrainBarDashboardFixture {
              .watcherOffline,
              .watcherUnknown,
              .watcherRunningNoRecentFlow,
-             .watcherStalledWithPendingWork,
+             .watcherIdleWithReplayDebt,
+             .watcherDegraded,
+             .watcherHealthMissing,
              .queueDraining,
              .queueBacklogged,
              .empty,
