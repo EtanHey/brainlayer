@@ -111,10 +111,15 @@ struct BrainBarBackupSources: Sendable {
     ) -> BrainBarBackupScheduleRow {
         let plist = paths.launchAgents.appendingPathComponent("\(job.launchdLabel).plist")
         let schedule = BackupScheduleRead.parse(plist: readFile(plist), path: plist.path)
-        let lastRun = BackupLogReader.lastRun(kind, log: readFile(log)).map { receipt in
+        let logData = readFile(log)
+        let completed = BackupLogReader.lastRun(kind, log: logData).map { receipt in
             let verification = receipt.verified.map { $0 ? " · verified" : " · NOT verified" } ?? ""
             return "Last run \(formatDate(receipt.at))\(verification)"
         } ?? "No run recorded in \(log.lastPathComponent)"
+        // An aborted pass never becomes the last run; a newer one is shown beside it.
+        let lastRun = BackupLogReader.lastIncompleteAttempt(kind, log: logData).map { attempt in
+            "\(completed) · last attempt \(formatDate(attempt.at)) not completed: \(attempt.reason)"
+        } ?? completed
         let nextRun = schedule.nextRun(after: now, calendar: calendar).map { "Next run \(formatDate($0))" } ?? "Next run unknown"
         return BrainBarBackupScheduleRow(
             title: title, cadence: schedule.text, lastRun: lastRun, nextRun: nextRun, localCopy: localCopy

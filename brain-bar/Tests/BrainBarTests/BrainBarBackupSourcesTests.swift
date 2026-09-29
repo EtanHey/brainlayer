@@ -113,4 +113,31 @@ final class BrainBarBackupSourcesTests: XCTestCase {
         viewModel.revealBackup(transcripts)
         XCTAssertEqual(recorder.revealed.map(\.path), ["/d/jsonl-backups/claude-jsonl-2026-09-29.tar.gz"])
     }
+
+    /// #1015 B1 surfaced: an aborted weekly pass newer than the last completed one is shown as an
+    /// attempt beside the real last run, never as the last run itself.
+    func testWeeklyRowShowsANewerIncompleteAttemptSeparately() {
+        let logText = """
+        {"ts": "2026-08-30T02:23:03+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 15926001664}
+        {"ts": "2026-09-27T01:40:00+00:00", "mode": "full", "dry_run": false, "backup_status": "unavailable", "vacuum_after_bytes": null}
+        """
+        let files: [String: Data] = ["/d/maintenance.log": Data(logText.utf8)]
+        let sources = BrainBarBackupSources(
+            paths: .init(
+                launchAgents: URL(fileURLWithPath: "/LA"),
+                databaseLog: URL(fileURLWithPath: "/d/backup-daily.log"),
+                archiveLog: URL(fileURLWithPath: "/d/jsonl-backup.log"),
+                maintenanceLog: URL(fileURLWithPath: "/d/maintenance.log"),
+                snapshotDirectory: URL(fileURLWithPath: "/d/backups"),
+                archiveDirectory: URL(fileURLWithPath: "/d/jsonl-backups")
+            ),
+            readFile: { files[$0.path] },
+            listDirectory: { _ in [] }
+        )
+        let weekly = sources.rows(now: date("2026-09-29T10:00:00Z"), calendar: calendar("UTC"), formatDate: { ISO8601DateFormatter().string(from: $0) })[2]
+        XCTAssertEqual(
+            weekly.lastRun,
+            "Last run 2026-08-30T02:23:03Z · last attempt 2026-09-27T01:40:00Z not completed: backup unavailable, VACUUM skipped"
+        )
+    }
 }
