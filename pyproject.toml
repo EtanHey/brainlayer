@@ -82,10 +82,12 @@ dev = [
     "numpy<2",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.3.1",
     "ruff>=0.1.0",
     "scikit-learn<1.6",
     "setuptools>=70.0.0,<81",
     "tiktoken>=0.7.0",
+    "threadpoolctl>=3.0.0",
     "umap-learn>=0.5.0",
 ]
 docs = [
@@ -121,6 +123,7 @@ pythonpath = ["src"]
 markers = [
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
     "embedding_model: tests that deliberately load a real embedding model (deselected by scripts/run_tests.sh)",
+    "timeout: maximum duration for an individual test",
     "integration: tests that need the real production DB (268K+ chunks)",
     "live: tests that need the live production DB or mutable local hooks state",
     "slow: tests that load ML models or take >30s",

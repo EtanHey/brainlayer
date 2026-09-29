@@ -390,7 +390,7 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
-      scripts/run_tests.sh|.githooks/pre-push)
+      scripts/run_tests.sh|scripts/ci/run_with_deadline.py|.githooks/pre-push)
         test_path="$TEST_ROOT/test_run_tests_script.py"
         if [ -f "$test_path" ]; then
           append_unique "$test_path"
@@ -414,10 +414,11 @@ map_changed_files_to_pytests() {
 }
 
 run_pytest() {
+  local -a timeout_args=(--timeout=300 --timeout-method=thread)
   if [ "$BRAINLAYER_USE_UV" = "1" ] && command -v uv >/dev/null 2>&1; then
-    uv run --extra dev pytest "$@"
+    uv run --extra dev pytest "${timeout_args[@]}" "$@"
   else
-    pytest "$@"
+    pytest "${timeout_args[@]}" "$@"
   fi
 }
 

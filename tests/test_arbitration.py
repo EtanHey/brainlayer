@@ -11,8 +11,10 @@ import time
 from pathlib import Path
 
 import apsw
+import numpy  # noqa: F401 - load OpenBLAS before the SLA test's threadpool limit is installed
 import pytest
 import sqlite_vec
+from threadpoolctl import threadpool_limits
 
 
 def _producer(queue_dir: str, worker_id: int, count: int) -> None:
@@ -928,6 +930,8 @@ def test_drain_daemon_serializes_three_concurrent_producers(tmp_path, monkeypatc
     assert "database is locked" not in log_path.read_text(encoding="utf-8").lower()
 
 
+@pytest.mark.timeout(30, method="thread")
+@threadpool_limits.wrap(limits=1, user_api="blas")
 def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp_path, monkeypatch):
     """Real drain + hotlane writers must not starve interactive store->search."""
     from brainlayer.drain import drain_once
@@ -999,21 +1003,32 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
     drain_writes = 0
     hotlane_embeddings = 0
     counters_lock = threading.Lock()
+    worker_deadline = time.monotonic() + 10.0
+    worker_errors: list[str] = []
 
     def drain_loop() -> None:
         nonlocal drain_writes
-        while not stop.is_set():
-            drained = drain_once(
-                db_path=db_path,
-                queue_dir=queue_dir,
-                batch_size=8,
-                log_path=log_path,
-                embed_fn=lambda _text: [0.0625] * 1024,
-            )
-            if drained:
+        try:
+            while not stop.is_set() and time.monotonic() < worker_deadline:
+                drained = drain_once(
+                    db_path=db_path,
+                    queue_dir=queue_dir,
+                    batch_size=8,
+                    log_path=log_path,
+                    embed_fn=lambda _text: [0.0625] * 1024,
+                )
+                if drained:
+                    with counters_lock:
+                        drain_writes += drained
+                time.sleep(0.005)
+            if not stop.is_set():
                 with counters_lock:
-                    drain_writes += drained
-            time.sleep(0.005)
+                    worker_errors.append("test-drain-loop reached its deadline")
+                stop.set()
+        except BaseException as exc:
+            with counters_lock:
+                worker_errors.append(f"test-drain-loop: {type(exc).__name__}")
+            stop.set()
 
     def recording_cycle(**kwargs):
         nonlocal hotlane_embeddings
@@ -1024,47 +1039,53 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
         return result
 
     def hotlane_loop() -> None:
-        hotlane.STOP = False
-        hotlane.run(
-            db_path=db_path,
-            interval=0.005,
-            recent_limit=4,
-            backlog_interval=0.005,
-            backlog_batch=4,
-            enrich_interval=9999,
-            enrich_limit=0,
-            enrich_since_hours=24,
-            vector_store_cls=VectorStore,
-            model_factory=_FastEmbeddingModel,
-            cycle_fn=recording_cycle,
-            sleep_fn=lambda seconds: time.sleep(min(seconds, 0.005)),
-            max_cycles=400,
-            queue_dir=queue_dir,
-        )
+        try:
+            hotlane.run(
+                db_path=db_path,
+                interval=0.005,
+                recent_limit=4,
+                backlog_interval=0.005,
+                backlog_batch=4,
+                enrich_interval=9999,
+                enrich_limit=0,
+                enrich_since_hours=24,
+                vector_store_cls=VectorStore,
+                model_factory=_FastEmbeddingModel,
+                cycle_fn=recording_cycle,
+                sleep_fn=lambda seconds: time.sleep(min(seconds, 0.005)),
+                max_cycles=400,
+                queue_dir=queue_dir,
+            )
+        except BaseException as exc:
+            with counters_lock:
+                worker_errors.append(f"test-hotlane-loop: {type(exc).__name__}")
+            stop.set()
 
     drain_thread = threading.Thread(target=drain_loop, name="test-drain-loop", daemon=True)
     hotlane_thread = threading.Thread(target=hotlane_loop, name="test-hotlane-loop", daemon=True)
-    drain_thread.start()
-    hotlane_thread.start()
+    readonly_store = None
+    try:
+        hotlane.STOP = False
+        drain_thread.start()
+        hotlane_thread.start()
 
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        with counters_lock:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
             high_priority_queue_empty = not any(
                 path for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-")
             )
-            if drain_writes >= 8 and hotlane_embeddings > 0 and high_priority_queue_empty:
-                break
-        time.sleep(0.01)
-    with counters_lock:
-        assert drain_writes >= 8
-        assert hotlane_embeddings > 0
-    assert not any(path for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-"))
+            with counters_lock:
+                if drain_writes >= 8 and hotlane_embeddings > 0 and high_priority_queue_empty:
+                    break
+            time.sleep(0.01)
+        with counters_lock:
+            assert drain_writes >= 8
+            assert hotlane_embeddings > 0
+        assert not any(path for path in queue_dir.glob("*.jsonl") if not path.name.startswith("enrichment-"))
 
-    readonly_store = VectorStore(db_path, readonly=True)
-    monkeypatch.setattr(search_handler, "_get_vector_store", lambda: readonly_store)
+        readonly_store = VectorStore(db_path, readonly=True)
+        monkeypatch.setattr(search_handler, "_get_vector_store", lambda: readonly_store)
 
-    try:
         roundtrip_started = time.perf_counter()
         store_started = time.perf_counter()
         store_result = asyncio.run(
@@ -1112,11 +1133,53 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
         ), search_payload
         assert roundtrip_latency < 2.0
     finally:
-        readonly_store.close()
         stop.set()
         hotlane.STOP = True
-        drain_thread.join(timeout=2)
-        hotlane_thread.join(timeout=2)
+        for thread in (drain_thread, hotlane_thread):
+            if thread.ident is not None:
+                thread.join(timeout=2)
+        if readonly_store is not None:
+            readonly_store.close()
+        stuck = [thread.name for thread in (drain_thread, hotlane_thread) if thread.is_alive()]
+        if stuck or worker_errors:
+            with counters_lock:
+                counts = f"drain_writes={drain_writes}, hotlane_embeddings={hotlane_embeddings}"
+                errors = list(worker_errors)
+            pytest.fail(f"concurrent writer SLA workers failed: stuck={stuck}, {counts}, errors={errors}")
+
+
+def test_concurrent_writer_sla_stuck_writer_fails_with_bounded_diagnostic(tmp_path, monkeypatch):
+    """A wedged drain must fail with its name and leave no writer running."""
+    from brainlayer import drain
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def stuck_drain(**_kwargs):
+        entered.set()
+        release.wait(20)
+        raise SystemExit
+
+    class StuckHotlane:
+        STOP = False
+
+        def run(self, **_kwargs):
+            release.wait(20)
+
+    hotlane = StuckHotlane()
+    monkeypatch.setattr(drain, "drain_once", stuck_drain)
+    monkeypatch.setattr(sys.modules[__name__], "_load_hotlane_module", lambda: hotlane)
+    started = time.monotonic()
+    try:
+        with pytest.raises((AssertionError, pytest.fail.Exception)) as exc:
+            test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp_path, monkeypatch)
+        assert entered.is_set()
+        assert "test-drain-loop" in str(exc.value)
+        assert "drain_writes=" in str(exc.value)
+        assert time.monotonic() - started < 9
+    finally:
+        release.set()
+        hotlane.STOP = True
 
 
 def test_queue_sanitizes_source_and_drain_preserves_supersedes(tmp_path):
