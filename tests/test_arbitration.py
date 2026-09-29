@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import apsw
+import numpy  # noqa: F401 - load OpenBLAS before the SLA test's threadpool limit is installed
 import pytest
 import sqlite_vec
 from threadpoolctl import threadpool_limits
