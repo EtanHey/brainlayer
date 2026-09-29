@@ -5,13 +5,17 @@ import Foundation
 /// "Real-time JSONL Watcher".
 struct WatcherHealthFile: Sendable, Equatable {
     var updatedAt: Date
-    var pollCount: Int?
+    var pollCount: Int
     var alertReasons: [String] = []
     var dbProbeFailed = false
     var maxOffsetLagBytes = 0
     var fileIngestionFailureCount = 0
+    /// How many failures the producer listed in detail (it caps the list at 100). nil = not reported.
+    var fileIngestionFailuresListed: Int?
     var earliestFileIngestionFailureAt: Date?
     var quarantinedRecordCount = 0
+    /// How many quarantined records the producer listed in detail (capped at 100). nil = not reported.
+    var quarantinedRecordsListed: Int?
     var earliestQuarantinedRecordAt: Date?
 }
 
@@ -47,6 +51,9 @@ struct WatcherHealthIssue: Sendable, Equatable {
     let what: String
     let since: Date?
     let action: String
+    /// Set when `since` is only a lower bound on the true start (the producer's detail list was
+    /// capped), e.g. "100 of 150 listed". The text then reads "since at least …".
+    var sinceBoundNote: String? = nil
 }
 
 /// The one watcher-health truth (#966). Every surface that shows watcher health renders this
@@ -67,7 +74,15 @@ enum WatcherHealthStatus: Sendable, Equatable {
         switch launchd {
         case let .notRunning(detail):
             // launchd is authoritative for "is the process there"; a fresh file cannot revive it.
-            return .stopped(reason: "Watcher is not running (\(detail)). Restart it from Settings → Jobs → Ingest, or check \(logHint).")
+            // launchd records no stop time, so the last heartbeat is the honest lower bound.
+            let since: String = if case let .readable(health) = file {
+                "since at least \(age(health.updatedAt, now: now)) (last heartbeat)"
+            } else {
+                "since unknown — no readable heartbeat"
+            }
+            return .stopped(
+                reason: "Watcher is not running (\(detail)) · \(since) · Restart it from Settings → Jobs → Ingest, or check \(logHint)"
+            )
         case .running:
             switch file {
             case nil:
@@ -132,14 +147,16 @@ enum WatcherHealthStatus: Sendable, Equatable {
                 issues.append(WatcherHealthIssue(
                     what: "\(count) transcript \(count == 1 ? "file" : "files") could not be ingested",
                     since: health.earliestFileIngestionFailureAt,
-                    action: "See file_ingestion_failures in watcher-health.json"
+                    action: "See file_ingestion_failures in watcher-health.json",
+                    sinceBoundNote: cappedNote(listed: health.fileIngestionFailuresListed, total: count)
                 ))
             case "quarantined_record":
                 let count = max(health.quarantinedRecordCount, 1)
                 issues.append(WatcherHealthIssue(
                     what: "\(count) transcript \(count == 1 ? "record" : "records") quarantined",
                     since: health.earliestQuarantinedRecordAt,
-                    action: "Review quarantined_records in watcher-health.json"
+                    action: "Review quarantined_records in watcher-health.json",
+                    sinceBoundNote: cappedNote(listed: health.quarantinedRecordsListed, total: count)
                 ))
             default:
                 issues.append(WatcherHealthIssue(
@@ -159,6 +176,14 @@ enum WatcherHealthStatus: Sendable, Equatable {
         return issues.isEmpty
             ? .running(heartbeatAt: health.updatedAt)
             : .degraded(issues: issues, heartbeatAt: health.updatedAt)
+    }
+
+    /// The producer lists at most 100 failure/quarantine details (failures: first 100 by path;
+    /// quarantines: the newest 100). A shorter list than the count means the listed earliest is
+    /// only a lower bound on when the problem started.
+    private static func cappedNote(listed: Int?, total: Int) -> String? {
+        guard let listed, listed < total else { return nil }
+        return "\(listed) of \(total) listed"
     }
 
     private static func megabytes(_ bytes: Int) -> String {
@@ -198,7 +223,10 @@ enum WatcherHealthStatus: Sendable, Equatable {
             return reason
         case let .degraded(issues, heartbeatAt):
             guard let first = issues.first else { return nil }
-            let when = first.since.map { "since \(Self.age($0, now: now))" } ?? "as of \(Self.age(heartbeatAt, now: now))"
+            let when = first.since.map { since in
+                first.sinceBoundNote.map { "since at least \(Self.age(since, now: now)) (\($0))" }
+                    ?? "since \(Self.age(since, now: now))"
+            } ?? "as of \(Self.age(heartbeatAt, now: now))"
             let more = issues.count > 1 ? " (+\(issues.count - 1) more)" : ""
             return "\(first.what) · \(when) · \(first.action)\(more)"
         }
@@ -234,18 +262,30 @@ enum WatcherHealthReader {
         guard let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return .unreadable(path: path, reason: "not a JSON object")
         }
-        guard let updatedAt = date(payload["updated_at"]) else {
-            return .unreadable(path: path, reason: "no parseable updated_at")
+        // The watcher writes these together in one atomic snapshot; a snapshot missing any of them
+        // cannot prove a live, healthy watcher (#1013 review B3).
+        let updatedAt = date(payload["updated_at"])
+        let pollCount = payload["poll_count"] as? Int
+        let alertReasons = payload["alert_reasons"] as? [Any]
+        let missing = [
+            updatedAt == nil ? "updated_at" : nil,
+            pollCount == nil ? "poll_count" : nil,
+            alertReasons == nil ? "alert_reasons" : nil,
+        ].compactMap { $0 }
+        guard missing.isEmpty, let updatedAt, let pollCount, let alertReasons else {
+            return .unreadable(path: path, reason: "missing required field(s): \(missing.joined(separator: ", "))")
         }
         return .readable(WatcherHealthFile(
             updatedAt: updatedAt,
-            pollCount: payload["poll_count"] as? Int,
-            alertReasons: (payload["alert_reasons"] as? [Any])?.compactMap { $0 as? String } ?? [],
+            pollCount: pollCount,
+            alertReasons: alertReasons.compactMap { $0 as? String },
             dbProbeFailed: payload["db_probe_failed"] as? Bool ?? false,
             maxOffsetLagBytes: payload["max_offset_lag_bytes"] as? Int ?? 0,
             fileIngestionFailureCount: payload["file_ingestion_failure_count"] as? Int ?? 0,
+            fileIngestionFailuresListed: (payload["file_ingestion_failures"] as? [Any])?.count,
             earliestFileIngestionFailureAt: earliestObservedAt(payload["file_ingestion_failures"]),
             quarantinedRecordCount: payload["quarantined_record_count_total"] as? Int ?? 0,
+            quarantinedRecordsListed: (payload["quarantined_records"] as? [Any])?.count,
             earliestQuarantinedRecordAt: earliestObservedAt(payload["quarantined_records"])
         ))
     }

@@ -199,6 +199,83 @@ final class WatcherHealthStatusTests: XCTestCase {
         XCTAssertEqual(status.reasonText(now: now), reason)
     }
 
+    // MARK: #1013 review round 1
+
+    /// B1: a stopped watcher says since when: the last heartbeat bounds it from below.
+    func testStoppedSaysSinceTheLastHeartbeat() {
+        let status = WatcherHealthStatus.derive(
+            launchd: .notRunning("com.brainlayer.watch is not loaded"),
+            file: file(ageSeconds: 900),
+            now: now
+        )
+        XCTAssertEqual(
+            status.reasonText(now: now),
+            "Watcher is not running (com.brainlayer.watch is not loaded) · since at least 15m ago (last heartbeat) · "
+                + "Restart it from Settings → Jobs → Ingest, or check ~/Library/Logs/brainlayer/watch.err.log"
+        )
+    }
+
+    /// B1: with no readable heartbeat there is no honest start time, so it says so.
+    func testStoppedWithoutAHeartbeatSaysSinceUnknown() {
+        for read in [WatcherHealthFileRead.missing(path: "/x/watcher-health.json"), nil] {
+            let text = WatcherHealthStatus.derive(launchd: .notRunning("com.brainlayer.watch is not running"), file: read, now: now)
+                .reasonText(now: now) ?? ""
+            XCTAssertTrue(text.contains(" · since unknown — no readable heartbeat · "), text)
+        }
+    }
+
+    /// B2: the producer lists at most 100 failures/quarantines. When the list is shorter than the
+    /// count, the listed earliest is only a lower bound on the true start, and the text says so.
+    func testCappedDetailListsGiveALowerBoundNotAFalseStart() throws {
+        let listedEarliest = now.addingTimeInterval(-7_200)
+        let capped = WatcherHealthStatus.derive(launchd: .running, file: .readable(WatcherHealthFile(
+            updatedAt: now.addingTimeInterval(-70),
+            pollCount: 72,
+            alertReasons: ["quarantined_record"],
+            quarantinedRecordCount: 150,
+            quarantinedRecordsListed: 100,
+            earliestQuarantinedRecordAt: listedEarliest
+        )), now: now)
+        let text = try XCTUnwrap(capped.reasonText(now: now))
+        XCTAssertTrue(text.contains("150 transcript records quarantined · since at least 2h ago (100 of 150 listed) · "), text)
+
+        let complete = WatcherHealthStatus.derive(launchd: .running, file: .readable(WatcherHealthFile(
+            updatedAt: now.addingTimeInterval(-70),
+            pollCount: 72,
+            alertReasons: ["file_ingestion_failure"],
+            fileIngestionFailureCount: 2,
+            fileIngestionFailuresListed: 2,
+            earliestFileIngestionFailureAt: listedEarliest
+        )), now: now)
+        XCTAssertTrue(complete.reasonText(now: now)?.contains("could not be ingested · since 2h ago · ") == true)
+    }
+
+    /// B2: the reader records how many details were listed, so truncation is visible to the model.
+    func testReaderCountsListedDetails() {
+        let failures = (0..<100).map { _ in #"{"observed_at": "2026-09-29T20:00:00+00:00"}"# }.joined(separator: ",")
+        let payload = #"{"updated_at": "2026-09-29T21:34:07+00:00", "poll_count": 7, "alert_reasons": ["file_ingestion_failure"], "file_ingestion_failure_count": 101, "file_ingestion_failures": ["# + failures + "]}"
+        guard case let .readable(parsed) = WatcherHealthReader.parse(Data(payload.utf8), path: "/x") else {
+            return XCTFail("valid snapshot must be readable")
+        }
+        XCTAssertEqual(parsed.fileIngestionFailureCount, 101)
+        XCTAssertEqual(parsed.fileIngestionFailuresListed, 100)
+    }
+
+    /// B3: the watcher always writes updated_at, poll_count and alert_reasons together. A fresh
+    /// object missing any of them is not proof of a healthy watcher: it is unreadable, so Unknown.
+    func testPartialSnapshotIsNeverRunning() {
+        let partial = Data(#"{"updated_at": "2026-09-29T21:34:07+00:00"}"#.utf8)
+        guard case let .unreadable(_, reason) = WatcherHealthReader.parse(partial, path: "/x/watcher-health.json") else {
+            return XCTFail("a partial snapshot must be unreadable")
+        }
+        XCTAssertEqual(reason, "missing required field(s): poll_count, alert_reasons")
+        guard case .unknown = WatcherHealthStatus.derive(
+            launchd: .running,
+            file: WatcherHealthReader.parse(partial, path: "/x/watcher-health.json"),
+            now: now
+        ) else { return XCTFail("a partial snapshot must read as unknown, never running") }
+    }
+
     // MARK: unknown, never a false running or down
 
     func testRunningButHealthFileMissingIsUnknownWithThePath() {
