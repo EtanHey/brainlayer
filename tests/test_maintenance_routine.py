@@ -278,6 +278,7 @@ def test_fresh_weekly_backup_uses_supervised_process_and_kills_stuck_group(tmp_p
     assert exc.value.code == 76
     assert observed["args"][-2:] == ["-m", "brainlayer.backup_daily"]
     assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"] == "45"
+    assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] == "6"
     assert observed["kwargs"]["start_new_session"] is True
     assert observed["pid"] == 45210
     assert observed["signal"] == maintenance.signal.SIGKILL
@@ -337,38 +338,90 @@ def test_weekly_backup_rechecks_after_lock_race(tmp_path, monkeypatch):
 
     config = _config(tmp_path, now=dt.datetime(2026, 9, 27, 4, 0, tzinfo=dt.UTC))
     config.backup_log_path = tmp_path / "backup.log"
-    config.backup_wait_poll_seconds = 1
-    clock = [0.0]
+    config.backup_wait_poll_seconds = 0
     calls = [0]
 
     def backup(*_args):
         calls[0] += 1
         if calls[0] == 1:
+            _write_jsonl(
+                config.backup_log_path,
+                [
+                    {
+                        "attempted_at": "2026-09-27T03:17:00+00:00",
+                        "db": str(config.db_path),
+                        "uploaded": True,
+                        "verified": True,
+                        "drive_file": {"id": "verified-daily"},
+                    }
+                ],
+            )
             raise maintenance.BackupAlreadyRunningError("backup already running")
         pytest.fail("duplicate backup after daily completion")
 
-    def finish(seconds):
-        clock[0] += seconds
-        _write_jsonl(
-            config.backup_log_path,
-            [
-                {
-                    "attempted_at": "2026-09-27T03:17:00+00:00",
-                    "db": str(config.db_path),
-                    "uploaded": True,
-                    "verified": True,
-                    "drive_file": {"id": "verified-daily"},
-                }
-            ],
-        )
-
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: False)
     monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", backup)
-    monkeypatch.setattr(maintenance.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(maintenance.time, "sleep", finish)
 
     assert maintenance._weekly_backup(config)["drive_file"]["id"] == "verified-daily"
     assert calls[0] == 1
+
+
+def test_weekly_child_rechecks_verified_receipt_after_acquiring_backup_lock(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    db_path = tmp_path / "brainlayer.db"
+    log_path = tmp_path / "backup.log"
+    staging_dir = tmp_path / "staging"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", "6")
+
+    @backup_daily._serialized_backup_run
+    def backup(db_path, staging_dir, log_path):
+        pytest.fail("duplicate backup after daily completion")
+
+    # The weekly parent observed no receipt. The daily finishes before the child
+    # acquires .backup.lock; the child must recheck while holding that lock.
+    _write_jsonl(
+        log_path,
+        [
+            {
+                "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                "db": str(db_path),
+                "uploaded": True,
+                "verified": True,
+                "drive_file": {"id": "verified-daily"},
+            }
+        ],
+    )
+    assert backup(db_path=db_path, staging_dir=staging_dir, log_path=log_path)["drive_file"]["id"] == "verified-daily"
+
+
+def test_weekly_child_does_not_reuse_unverified_receipt(tmp_path, monkeypatch):
+    from brainlayer import backup_daily
+
+    db_path = tmp_path / "brainlayer.db"
+    log_path = tmp_path / "backup.log"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", "6")
+    _write_jsonl(
+        log_path,
+        [
+            {
+                "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                "db": str(db_path),
+                "uploaded": True,
+                "verified": False,
+                "drive_file": {"id": "unverified"},
+            }
+        ],
+    )
+    runs = []
+
+    @backup_daily._serialized_backup_run
+    def backup(db_path, staging_dir, log_path):
+        runs.append(1)
+        return {"uploaded": True, "verified": True, "drive_file": {"id": "fresh"}}
+
+    assert backup(db_path=db_path, staging_dir=tmp_path / "staging", log_path=log_path)["drive_file"]["id"] == "fresh"
+    assert runs == [1]
 
 
 def test_full_dry_run_reports_backup_contention_without_waiting(tmp_path, monkeypatch):
