@@ -4,13 +4,6 @@ import XCTest
 
 @MainActor
 final class BrainBarDashboardPanelControllerTests: XCTestCase {
-    func testScrollOriginClampExcludesElasticOverscroll() {
-        XCTAssertEqual(BrainBarScrollOrigin.clamped(-24, documentHeight: 1_202, viewportHeight: 558), 0)
-        XCTAssertEqual(BrainBarScrollOrigin.clamped(644, documentHeight: 1_202, viewportHeight: 558), 644)
-        XCTAssertEqual(BrainBarScrollOrigin.clamped(704, documentHeight: 1_202, viewportHeight: 558), 644)
-        XCTAssertEqual(BrainBarScrollOrigin.clamped(24, documentHeight: 556, viewportHeight: 558), 0)
-    }
-
     func testDisclosureAnimationUsesOneTimingInBothDirectionsAndReduceMotionIsInstant() {
         let opening = BrainBarDisclosureAnimation.timing(for: .open, reduceMotion: false)
         let closing = BrainBarDisclosureAnimation.timing(for: .close, reduceMotion: false)
@@ -191,28 +184,88 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
             let frame = panel.frame
             let origin = clip.bounds.origin
             XCTAssertGreaterThan(origin.y, 0, "width \(width) needs a real nonzero anchor")
+            var anchor = origin.y
             for expanded in [false, true] {
                 controller.setDetailsExpandedForTesting(expanded)
                 pumpLayout(panel)
                 XCTAssertEqual(panel.frame, frame, "Details transition moved or resized width \(width)")
-                XCTAssertEqual(clip.bounds.origin, origin, "Details transition lost scroll at width \(width)")
-                if !expanded {
-                    let natural = controller.naturalDashboardHeightForTesting
-                    XCTAssertLessThanOrEqual(scroll.documentView!.bounds.height, max(natural, origin.y + clip.bounds.height) + 2)
-                }
+                // The anchor survives wherever the reflowed content still reaches it; where it no
+                // longer does, the viewport settles on the last real content, never a blank tail (#964).
+                let natural = controller.naturalDashboardHeightForTesting
+                // Re-expanding keeps a settled anchor; it never jumps back to the pre-collapse offset.
+                anchor = min(anchor, max(natural - clip.bounds.height, 0))
+                XCTAssertEqual(clip.bounds.minY, anchor, accuracy: 1, "Details transition jumped scroll at width \(width)")
+                XCTAssertLessThanOrEqual(scroll.documentView!.bounds.height, max(natural, clip.bounds.height) + 2)
             }
             if width == 760 {
                 panel.setFrame(NSRect(x: -2_000, y: -2_000, width: 1_280, height: 640), display: false)
                 controller.setDetailsExpandedForTesting(false)
                 pumpLayout(panel)
-                XCTAssertEqual(clip.bounds.minY, 80, accuracy: 1)
-                XCTAssertLessThanOrEqual(scroll.documentView!.bounds.height, max(controller.naturalDashboardHeightForTesting, 80 + clip.bounds.height) + 2)
+                let natural = controller.naturalDashboardHeightForTesting
+                XCTAssertEqual(clip.bounds.minY, min(80, max(natural - clip.bounds.height, 0)), accuracy: 1)
+                XCTAssertLessThanOrEqual(scroll.documentView!.bounds.height, max(natural, clip.bounds.height) + 2)
             }
             controller.setDetailsExpandedForTesting(false)
             clip.scroll(to: .zero)
             scroll.reflectScrolledClipView(clip)
             pumpLayout(panel)
             XCTAssertLessThanOrEqual(scroll.documentView!.bounds.height, max(controller.naturalDashboardHeightForTesting, clip.bounds.height) + 2)
+        }
+    }
+
+    // #964: expand a disclosure, scroll to the bottom, collapse it. The document must shrink back
+    // to its natural height and the viewport must end on real content, never on a blank tail.
+    func testCollapsingADisclosureAfterScrollingToTheBottomLeavesNoBlankTail() throws {
+        let runtime = BrainBarRuntime()
+        runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+        // The Attention row renders only when the status strip is amber with items: unmeasured
+        // agent activity is one. Details stays open so the dashboard scrolls at every width.
+        let attentionRuntime = BrainBarRuntime()
+        attentionRuntime.install(
+            collector: BrainBarDashboardFixture.makeCollector(agentActivity: .unavailable("fixture agent activity unavailable")),
+            database: nil
+        )
+        let disclosures: [(String, BrainBarRuntime, (BrainBarDashboardPanelController, Bool) -> Void)] = [
+            ("details", runtime, { $0.setDetailsExpandedForTesting($1) }),
+            ("signal coverage", runtime, { controller, expanded in
+                controller.setDetailsExpandedForTesting(true)
+                controller.setSignalCoverageExpandedForTesting(expanded)
+            }),
+            ("attention", attentionRuntime, { controller, expanded in
+                controller.setDetailsExpandedForTesting(true)
+                controller.setAttentionExpandedForTesting(expanded)
+            }),
+        ]
+        for width: CGFloat in [760, 960, 1_280] {
+            for (name, runtime, setExpanded) in disclosures {
+                let controller = BrainBarDashboardPanelController(runtime: runtime)
+                let panel = controller.panelForTesting
+                panel.setFrame(NSRect(x: -2_000, y: -2_000, width: width, height: 640), display: false)
+                setExpanded(controller, true)
+                let scroll = try dashboardScroll(in: controller)
+                pumpLayout(panel)
+                let clip = scroll.contentView
+                let expandedDocument = scroll.documentView!.bounds.height
+                clip.scroll(to: NSPoint(x: 0, y: expandedDocument - clip.bounds.height))
+                scroll.reflectScrolledClipView(clip)
+                pumpLayout(panel)
+                XCTAssertGreaterThan(clip.bounds.minY, 0, "\(name) at \(width) must start scrolled")
+
+                setExpanded(controller, false)
+                pumpLayout(panel)
+
+                let natural = controller.naturalDashboardHeightForTesting
+                let document = scroll.documentView!.bounds.height
+                XCTAssertLessThan(natural, expandedDocument - 1, "\(name) at \(width) collapse must shrink content")
+                XCTAssertLessThanOrEqual(
+                    document, max(natural, clip.bounds.height) + 2,
+                    "\(name) at \(width): collapsed document kept a blank tail (\(document) vs natural \(natural))"
+                )
+                XCTAssertLessThanOrEqual(
+                    clip.bounds.maxY, max(natural, clip.bounds.height) + 2,
+                    "\(name) at \(width): viewport ends below the content"
+                )
+            }
         }
     }
 

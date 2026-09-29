@@ -270,6 +270,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
     func setSignalCoverageExpandedForTesting(_ expanded: Bool) { panelState.signalCoverageExpanded = expanded }
+    func setAttentionExpandedForTesting(_ expanded: Bool) { panelState.attentionExpanded = expanded }
 
     var selectedTabForTesting: BrainBarTab { panelState.selectedTab }
 
