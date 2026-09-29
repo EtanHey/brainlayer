@@ -102,7 +102,7 @@ BRAINLAYER_PREPUSH=1 env \
   -u GIT_INDEX_FILE \
   -u GIT_WORK_TREE \
   -u GIT_COMMON_DIR \
-  bash scripts/run_tests.sh
+  python3 scripts/ci/run_with_deadline.py --seconds 1800 --label pre-push -- bash scripts/run_tests.sh
 exit_status=$?
 
 if [ $exit_status -ne 0 ]; then

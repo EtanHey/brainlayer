@@ -3,12 +3,14 @@
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "run_tests.sh"
 HOOK_PATH = Path(__file__).resolve().parent.parent / ".githooks" / "pre-push"
+GATE_RUNNER_PATH = Path(__file__).resolve().parent.parent / "scripts" / "ci" / "run_with_deadline.py"
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -174,6 +176,9 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
     hook = repo / ".githooks" / "pre-push"
     hook.parent.mkdir(parents=True)
     hook.write_text(HOOK_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    runner = repo / "scripts" / "ci" / "run_with_deadline.py"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text(GATE_RUNNER_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     return env_log
 
 
@@ -304,6 +309,49 @@ def test_run_tests_aggregates_exit_codes_and_keeps_running(tmp_path: Path) -> No
     assert result.returncode == 6
     assert pytest_log.read_text().strip()
     assert bun_log.read_text().strip()
+
+
+def test_run_tests_passes_per_test_timeout_to_every_pytest_invocation(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+    pytest_log, _ = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=None)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["PYTEST_LOG"] = str(pytest_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = pytest_log.read_text().splitlines()
+    assert calls
+    assert all("--timeout=300 --timeout-method=thread" in call for call in calls)
+
+
+def test_gate_deadline_names_a_stuck_test_and_fails_boundedly() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(GATE_RUNNER_PATH),
+            "--seconds",
+            "0.2",
+            "--label",
+            "pre-push",
+            "--",
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('tests/test_arbitration.py::test_stuck ', end='', flush=True); time.sleep(60)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 124
+    assert "tests/test_arbitration.py::test_stuck" in result.stderr
+    assert "push blocked" in result.stderr
 
 
 def test_run_tests_skips_bun_when_no_typescript_tests_exist(tmp_path: Path) -> None:
