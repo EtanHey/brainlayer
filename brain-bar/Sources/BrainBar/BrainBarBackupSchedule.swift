@@ -2,16 +2,20 @@ import Foundation
 
 /// When a backup LaunchAgent runs, read from its INSTALLED plist (#968).
 enum BackupCadence: Equatable, Sendable {
-    /// `weekday` uses launchd's numbering: 0 and 7 are Sunday.
-    case calendar(hour: Int, minute: Int, weekday: Int?)
+    /// One `StartCalendarInterval` entry. Omitted fields are launchd wildcards; `weekday` uses
+    /// launchd's numbering (0 and 7 are Sunday). Only representable shapes are constructed.
+    case calendar(hour: Int?, minute: Int, weekday: Int? = nil, day: Int? = nil, month: Int? = nil)
     case interval(seconds: Int)
 
     var text: String {
         switch self {
-        case let .calendar(hour, minute, weekday):
+        case let .calendar(hour, minute, weekday, day, month):
+            guard let hour else { return String(format: "hourly at :%02d", minute) }
             let time = String(format: "%02d:%02d", hour, minute)
-            guard let weekday else { return "daily at \(time)" }
-            return "weekly on \(Self.weekdays[weekday % 7]) at \(time)"
+            if let month, let day { return "yearly on \(Self.months[month - 1]) \(day) at \(time)" }
+            if let day { return "monthly on day \(day) at \(time)" }
+            if let weekday { return "weekly on \(Self.weekdays[weekday % 7]) at \(time)" }
+            return "daily at \(time)"
         case let .interval(seconds):
             if seconds % 3_600 == 0 { return Self.every(seconds / 3_600, "hour") }
             if seconds % 60 == 0 { return Self.every(seconds / 60, "minute") }
@@ -19,8 +23,12 @@ enum BackupCadence: Equatable, Sendable {
         }
     }
 
-    /// launchd weekday order (0 = Sunday); fixed so the text never depends on the user's locale.
+    /// Fixed English names so the text never depends on the user's locale.
     private static let weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    private static let months = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
 
     private static func every(_ count: Int, _ unit: String) -> String {
         count == 1 ? "every \(unit)" : "every \(count) \(unit)s"
@@ -29,10 +37,49 @@ enum BackupCadence: Equatable, Sendable {
     /// The next calendar match after `date`. An interval job's next run depends on launchd's own
     /// clock, so it is not guessed.
     func nextRun(after date: Date, calendar: Calendar) -> Date? {
-        guard case let .calendar(hour, minute, weekday) = self else { return nil }
-        var components = DateComponents(hour: hour, minute: minute, second: 0)
+        guard case let .calendar(hour, minute, weekday, day, month) = self else { return nil }
+        var components = DateComponents(month: month, day: day, hour: hour, minute: minute, second: 0)
         if let weekday { components.weekday = (weekday % 7) + 1 }
         return calendar.nextDate(after: date, matching: components, matchingPolicy: .nextTime)
+    }
+
+    /// Builds a cadence from one `StartCalendarInterval` dict, or explains why it can't be shown.
+    fileprivate static func fromCalendarEntry(_ entry: [String: Any]) -> Result<BackupCadence, ScheduleProblem> {
+        let ranges: [(key: String, range: ClosedRange<Int>)] = [
+            ("Minute", 0...59), ("Hour", 0...23), ("Day", 1...31), ("Weekday", 0...7), ("Month", 1...12),
+        ]
+        var values: [String: Int] = [:]
+        for (key, range) in ranges {
+            guard let raw = entry[key] else { continue }
+            guard let value = raw as? Int else { return .failure(.invalid("non-integer \(key)")) }
+            guard range.contains(value) else { return .failure(.invalid("invalid \(key) \(value)")) }
+            values[key] = value
+        }
+        let unknownKeys = Set(entry.keys).subtracting(ranges.map(\.key))
+        if let key = unknownKeys.sorted().first { return .failure(.notRepresentable("unknown key \(key)")) }
+        guard let minute = values["Minute"] else { return .failure(.notRepresentable("no Minute: every minute")) }
+        if values["Day"] != nil, values["Weekday"] != nil {
+            return .failure(.notRepresentable("Day with Weekday"))
+        }
+        if values["Month"] != nil, values["Day"] == nil { return .failure(.notRepresentable("Month without Day")) }
+        if values["Hour"] == nil, values.keys.contains(where: { $0 != "Minute" }) {
+            return .failure(.notRepresentable("no Hour with a date constraint"))
+        }
+        return .success(.calendar(
+            hour: values["Hour"], minute: minute, weekday: values["Weekday"], day: values["Day"], month: values["Month"]
+        ))
+    }
+}
+
+fileprivate enum ScheduleProblem: Error {
+    case invalid(String)
+    case notRepresentable(String)
+
+    var text: String {
+        switch self {
+        case let .invalid(reason): reason
+        case let .notRepresentable(reason): "a schedule that is not representable (\(reason))"
+        }
     }
 }
 
@@ -45,22 +92,37 @@ enum BackupScheduleRead: Equatable, Sendable {
         guard let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
             return .unknown(reason: "\(path) is not a readable plist")
         }
-        let entries = (plist["StartCalendarInterval"] as? [[String: Int]])
-            ?? (plist["StartCalendarInterval"] as? [String: Int]).map { [$0] }
-        if let entries, !entries.isEmpty {
-            let cadences = entries.compactMap { entry -> BackupCadence? in
-                guard let hour = entry["Hour"], let minute = entry["Minute"] else { return nil }
-                return .calendar(hour: hour, minute: minute, weekday: entry["Weekday"])
+        var cadences: [BackupCadence] = []
+        // launchd evaluates StartCalendarInterval and StartInterval independently: keep both.
+        if let calendarValue = plist["StartCalendarInterval"] {
+            let entries: [[String: Any]]
+            if let single = calendarValue as? [String: Any] {
+                entries = [single]
+            } else if let array = calendarValue as? [Any], let dicts = array as? [[String: Any]], !dicts.isEmpty {
+                entries = dicts
+            } else {
+                return .unknown(reason: "\(path) has a StartCalendarInterval that is neither a dict nor an array of dicts")
             }
-            guard cadences.count == entries.count else {
-                return .unknown(reason: "\(path) has a StartCalendarInterval without Hour and Minute")
+            for (index, entry) in entries.enumerated() {
+                switch BackupCadence.fromCalendarEntry(entry) {
+                case let .success(cadence):
+                    cadences.append(cadence)
+                case let .failure(problem):
+                    let suffix = entries.count > 1 ? " (entry \(index + 1))" : ""
+                    return .unknown(reason: "\(path) has \(problem.text)\(suffix)")
+                }
             }
-            return .scheduled(cadences)
         }
-        if let seconds = plist["StartInterval"] as? Int, seconds > 0 {
-            return .scheduled([.interval(seconds: seconds)])
+        if let intervalValue = plist["StartInterval"] {
+            guard let seconds = intervalValue as? Int, seconds > 0 else {
+                return .unknown(reason: "\(path) has an invalid StartInterval")
+            }
+            cadences.append(.interval(seconds: seconds))
         }
-        return .unknown(reason: "\(path) has no StartCalendarInterval or StartInterval")
+        guard !cadences.isEmpty else {
+            return .unknown(reason: "\(path) has no StartCalendarInterval or StartInterval")
+        }
+        return .scheduled(cadences)
     }
 
     var text: String {
@@ -70,8 +132,11 @@ enum BackupScheduleRead: Equatable, Sendable {
         }
     }
 
+    /// The soonest calendar match. When an interval also drives the job, launchd's own clock may
+    /// fire it sooner, so no next run is claimed.
     func nextRun(after date: Date, calendar: Calendar) -> Date? {
         guard case let .scheduled(cadences) = self else { return nil }
+        if cadences.contains(where: { if case .interval = $0 { true } else { false } }) { return nil }
         return cadences.compactMap { $0.nextRun(after: date, calendar: calendar) }.min()
     }
 }
@@ -82,7 +147,43 @@ struct BackupRunReceipt: Equatable, Sendable {
     let verified: Bool?
 }
 
+/// A weekly pass that wrote its final row but did not complete (#1015 review B1).
+struct BackupIncompleteAttempt: Equatable, Sendable {
+    let at: Date
+    let reason: String
+}
+
 enum BackupLogReader {
+    /// A completed full pass: its final (non-dry-run) row records the VACUUM it ran. Newer rows carry
+    /// `backup_status: "verified"`; rows from before #1002 carry no backup_status at all. A final row
+    /// whose backup was unavailable or whose post-backup gate failed aborted before VACUUM.
+    private static func isCompletedFullPass(_ row: [String: Any]) -> Bool {
+        guard row["mode"] as? String == "full", row["dry_run"] as? Bool == false,
+              row["vacuum_after_bytes"] is NSNumber else { return false }
+        let status = row["backup_status"] as? String
+        return status == nil || status == "verified"
+    }
+
+    /// The newest full-pass attempt that wrote a final row without completing, when it is newer than
+    /// the last completed pass. Progress rows and dry runs are not attempts.
+    static func lastIncompleteAttempt(_ kind: Kind, log data: Data?) -> BackupIncompleteAttempt? {
+        guard kind == .weeklyMaintenance, let data, let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.split(separator: "\n").reversed() {
+            guard let row = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                  row["mode"] as? String == "full", row["dry_run"] as? Bool == false else { continue }
+            if isCompletedFullPass(row) { return nil }
+            guard let at = isoDate(row["ts"]) else { continue }
+            let reason = switch row["backup_status"] as? String {
+            case "unavailable": "backup unavailable, VACUUM skipped"
+            case "gates_failed": "post-backup safety gate failed, VACUUM skipped"
+            case let status?: "backup \(status), VACUUM skipped"
+            case nil: "VACUUM did not run"
+            }
+            return BackupIncompleteAttempt(at: at, reason: reason)
+        }
+        return nil
+    }
+
     enum Kind: Sendable { case databaseBackup, transcriptArchive, weeklyMaintenance }
 
     static func lastRun(_ kind: Kind, log data: Data?) -> BackupRunReceipt? {
@@ -99,9 +200,7 @@ enum BackupLogReader {
                 guard let at = isoDate(row["attempted_at"]) else { continue }
                 return BackupRunReceipt(at: at, verified: row["verified"] as? Bool ?? false)
             case .weeklyMaintenance:
-                // Only a completed full pass; progress rows (backup waits) and dry runs don't count.
-                guard row["mode"] as? String == "full", row["dry_run"] as? Bool == false,
-                      let at = isoDate(row["ts"]) else { continue }
+                guard isCompletedFullPass(row), let at = isoDate(row["ts"]) else { continue }
                 return BackupRunReceipt(at: at, verified: nil)
             }
         }

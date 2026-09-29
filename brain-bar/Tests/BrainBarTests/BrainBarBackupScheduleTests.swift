@@ -110,7 +110,7 @@ final class BrainBarBackupScheduleTests: XCTestCase {
         """.utf8)
         XCTAssertEqual(BackupLogReader.lastRun(.transcriptArchive, log: archiveLog)?.verified, false)
         let maintenanceLog = Data("""
-        {"ts": "2026-09-27T01:30:00+00:00", "mode": "full", "dry_run": false}
+        {"ts": "2026-09-27T01:30:00+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 15926001664}
         {"ts": "2026-09-28T01:05:00+00:00", "mode": "full", "backup_status": "waiting"}
         {"ts": "2026-09-29T01:05:00+00:00", "mode": "light", "dry_run": false}
         {"ts": "2026-09-29T02:00:00+00:00", "mode": "full", "dry_run": true}
@@ -141,5 +141,104 @@ final class BrainBarBackupScheduleTests: XCTestCase {
             "claude-jsonl-2026-09-29.tar.gz"
         )
         XCTAssertNil(BackupLocalFiles.latestSnapshot(in: [".backup.lock"]))
+    }
+
+    // MARK: #1015 review round 1
+
+    private func calendarPlist(_ entry: String) -> Data {
+        plist("<key>StartCalendarInterval</key><dict>\(entry)</dict>")
+    }
+
+    private func int(_ key: String, _ value: Int) -> String { "<key>\(key)</key><integer>\(value)</integer>" }
+
+    /// B1: only a completed full pass is a "last run". A final row whose backup was unavailable or
+    /// whose post-backup gate failed aborted before VACUUM; it is reported as an attempt, not a run.
+    func testAbortedMaintenancePassIsNeverTheLastRun() {
+        let log = Data("""
+        {"ts": "2026-08-30T02:23:03+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 15926001664}
+        {"ts": "2026-09-20T01:10:00+00:00", "mode": "full", "dry_run": false, "backup_status": "gates_failed", "vacuum_after_bytes": null}
+        {"ts": "2026-09-27T01:40:00+00:00", "mode": "full", "dry_run": false, "backup_status": "unavailable", "vacuum_after_bytes": null}
+        """.utf8)
+        XCTAssertEqual(
+            BackupLogReader.lastRun(.weeklyMaintenance, log: log),
+            BackupRunReceipt(at: date("2026-08-30T02:23:03Z"), verified: nil)
+        )
+        XCTAssertEqual(
+            BackupLogReader.lastIncompleteAttempt(.weeklyMaintenance, log: log),
+            BackupIncompleteAttempt(at: date("2026-09-27T01:40:00Z"), reason: "backup unavailable, VACUUM skipped")
+        )
+        let completedLater = log + Data(("\n" + #"{"ts": "2026-10-04T01:30:00+00:00", "mode": "full", "dry_run": false, "backup_status": "verified", "vacuum_after_bytes": 1}"#).utf8)
+        XCTAssertEqual(BackupLogReader.lastRun(.weeklyMaintenance, log: completedLater)?.at, date("2026-10-04T01:30:00Z"))
+        XCTAssertNil(
+            BackupLogReader.lastIncompleteAttempt(.weeklyMaintenance, log: completedLater),
+            "an attempt older than the last completed pass is history, not news"
+        )
+    }
+
+    /// B2: out-of-range or non-integer calendar values never trap and never produce false text.
+    func testInvalidCalendarValuesAreAnHonestUnknown() {
+        let cases: [(String, String)] = [
+            (int("Weekday", -1) + int("Hour", 4) + int("Minute", 0), "invalid Weekday -1"),
+            (int("Weekday", 8) + int("Hour", 4) + int("Minute", 0), "invalid Weekday 8"),
+            (int("Hour", 24) + int("Minute", 0), "invalid Hour 24"),
+            (int("Hour", 3) + int("Minute", 60), "invalid Minute 60"),
+            ("<key>Hour</key><string>3</string>" + int("Minute", 17), "non-integer Hour"),
+        ]
+        for (entry, reason) in cases {
+            let read = BackupScheduleRead.parse(plist: calendarPlist(entry), path: "/LA/x.plist")
+            XCTAssertEqual(read.text, "Schedule unknown — /LA/x.plist has \(reason)", entry)
+            XCTAssertNil(read.nextRun(after: date("2026-09-29T10:00:00Z"), calendar: calendar("UTC")))
+        }
+    }
+
+    /// B3: every launchd calendar shape is rendered faithfully or reported as not representable.
+    func testEveryLaunchdCalendarShape() {
+        let utc = calendar("UTC")
+        let after = date("2026-09-29T10:00:00Z")
+        func read(_ entry: String) -> BackupScheduleRead { BackupScheduleRead.parse(plist: calendarPlist(entry), path: "/LA/x.plist") }
+
+        let hourly = read(int("Minute", 5))
+        XCTAssertEqual(hourly.text, "hourly at :05")
+        XCTAssertEqual(hourly.nextRun(after: after, calendar: utc), date("2026-09-29T10:05:00Z"))
+
+        let monthly = read(int("Day", 1) + int("Hour", 3) + int("Minute", 17))
+        XCTAssertEqual(monthly.text, "monthly on day 1 at 03:17")
+        XCTAssertEqual(monthly.nextRun(after: after, calendar: utc), date("2026-10-01T03:17:00Z"))
+
+        let yearly = read(int("Month", 1) + int("Day", 1) + int("Hour", 3) + int("Minute", 17))
+        XCTAssertEqual(yearly.text, "yearly on January 1 at 03:17")
+        XCTAssertEqual(yearly.nextRun(after: after, calendar: utc), date("2027-01-01T03:17:00Z"))
+
+        // launchd fires when EITHER Day or Weekday matches; a single calendar match can't express that.
+        XCTAssertEqual(
+            read(int("Day", 1) + int("Weekday", 0) + int("Hour", 3) + int("Minute", 17)).text,
+            "Schedule unknown — /LA/x.plist has a schedule that is not representable (Day with Weekday)"
+        )
+        XCTAssertEqual(
+            read(int("Month", 1) + int("Hour", 3) + int("Minute", 17)).text,
+            "Schedule unknown — /LA/x.plist has a schedule that is not representable (Month without Day)"
+        )
+        XCTAssertEqual(
+            read(int("Hour", 3)).text,
+            "Schedule unknown — /LA/x.plist has a schedule that is not representable (no Minute: every minute)"
+        )
+
+        // launchd evaluates StartCalendarInterval and StartInterval independently: show both.
+        let mixed = BackupScheduleRead.parse(
+            plist: plist(
+                "<key>StartCalendarInterval</key><dict>\(int("Hour", 3) + int("Minute", 17))</dict><key>StartInterval</key><integer>21600</integer>"
+            ),
+            path: "/LA/x.plist"
+        )
+        XCTAssertEqual(mixed.text, "daily at 03:17 and every 6 hours")
+        XCTAssertNil(mixed.nextRun(after: after, calendar: utc), "the interval part can fire sooner; its clock is launchd's")
+
+        let badArray = BackupScheduleRead.parse(
+            plist: plist(
+                "<key>StartCalendarInterval</key><array><dict>\(int("Hour", 3) + int("Minute", 17))</dict><dict>\(int("Hour", 25) + int("Minute", 0))</dict></array>"
+            ),
+            path: "/LA/x.plist"
+        )
+        XCTAssertEqual(badArray.text, "Schedule unknown — /LA/x.plist has invalid Hour 25 (entry 2)")
     }
 }
