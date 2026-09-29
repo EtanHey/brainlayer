@@ -5,6 +5,7 @@ final class BrainBarDashboardHeroTests: XCTestCase {
     @MainActor
     private func fixtureFlow(
         watcher state: WatcherFlowState = .flowing,
+        status: WatcherHealthStatus? = nil,
         ingressStatus: DashboardFlowLaneStatus? = nil
     ) -> DashboardFlowSummary {
         let baseline = DashboardFlowSummary.derive(
@@ -45,8 +46,8 @@ final class BrainBarDashboardHeroTests: XCTestCase {
             queue: baseline.queue,
             enrichment: baseline.enrichment,
             watcherFlowState: state,
-            watcherHealth: baseline.watcherHealth,
-            watcherHealthIsFresh: baseline.watcherHealthIsFresh
+            watcherStatus: status ?? baseline.watcherStatus,
+            watcherStatusReason: (status ?? baseline.watcherStatus).reasonText(now: BrainBarDashboardFixture.fetchedAt)
         )
     }
 
@@ -219,14 +220,24 @@ final class BrainBarDashboardHeroTests: XCTestCase {
     }
 
     @MainActor
-    func testWatcherOfflineAndStalledMakeHealthRed() {
-        for state in [WatcherFlowState.offline, .stalled] {
+    func testStoppedAndDegradedWatcherMakeHealthRedWithTheSharedReason() {
+        let now = BrainBarDashboardFixture.fetchedAt
+        let statuses: [WatcherHealthStatus] = [
+            .stopped(reason: "Watcher is not running (launchd reports com.brainlayer.watch is not running)."),
+            .degraded(
+                issues: [WatcherHealthIssue(what: "2 transcript files could not be ingested", since: now.addingTimeInterval(-7_200), action: "See file_ingestion_failures")],
+                heartbeatAt: now.addingTimeInterval(-70)
+            ),
+        ]
+        for status in statuses {
             let hero = BrainBarHeroPresentation.derive(
-                flow: fixtureFlow(watcher: state),
+                flow: fixtureFlow(status: status),
                 stats: BrainBarDashboardFixture.stats,
                 backupTruth: .measured(healthyBackups())
             )
-            XCTAssertEqual(hero.healthTone, .red, "state=\(state)")
+            XCTAssertEqual(hero.healthVerdict, "Needs attention", "status=\(status)")
+            XCTAssertEqual(hero.healthTone, .red, "status=\(status)")
+            XCTAssertEqual(hero.healthReason, status.reasonText(now: now), "the hero shows the one shared reason")
         }
     }
 
@@ -243,15 +254,22 @@ final class BrainBarDashboardHeroTests: XCTestCase {
     }
 
     @MainActor
-    func testUnknownAndUnverifiedWatcherFlowMakeHealthAmber() {
-        for state in [WatcherFlowState.unknown, .runningFlowUnverified] {
-            let hero = BrainBarHeroPresentation.derive(
-                flow: fixtureFlow(watcher: state),
-                stats: BrainBarDashboardFixture.stats,
-                backupTruth: .measured(healthyBackups())
-            )
-            XCTAssertEqual(hero.healthTone, .amber, "state=\(state)")
-        }
+    func testUnknownWatcherHealthAndUnverifiedFlowMakeHealthAmber() {
+        let unknown = WatcherHealthStatus.unknown(reason: "Watcher is running, but its health file is missing at /x.")
+        let hero = BrainBarHeroPresentation.derive(
+            flow: fixtureFlow(status: unknown),
+            stats: BrainBarDashboardFixture.stats,
+            backupTruth: .measured(healthyBackups())
+        )
+        XCTAssertEqual(hero.healthTone, .amber)
+        XCTAssertEqual(hero.healthReason, "Watcher is running, but its health file is missing at /x.")
+
+        let unverified = BrainBarHeroPresentation.derive(
+            flow: fixtureFlow(watcher: .runningFlowUnverified),
+            stats: BrainBarDashboardFixture.stats,
+            backupTruth: .measured(healthyBackups())
+        )
+        XCTAssertEqual(unverified.healthTone, .amber)
     }
 
     @MainActor

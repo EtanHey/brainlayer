@@ -24,12 +24,15 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
     case healthy
     case awaitingRun
     case unhealthy
+    /// The watcher's health cannot be determined (#966): an honest "can't tell", not a failure.
+    case unknown
 
     var title: String {
         switch self {
         case .healthy: "Healthy"
         case .awaitingRun: "Awaiting next run"
         case .unhealthy: "Needs attention"
+        case .unknown: "Status unknown"
         }
     }
 }
@@ -83,9 +86,16 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
     func status(
         settings: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting],
         observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation],
-        formatDate: (Date) -> String
+        formatDate: (Date) -> String,
+        watcher: WatcherHealthStatus? = nil,
+        now: Date = Date()
     ) -> BrainLayerLaunchdGroupStatus {
-        let reason = jobs.compactMap { job -> String? in
+        // Ingest owns the watcher, so its health is the one WatcherHealthStatus (#966): the same
+        // reason the Dashboard and footer show, not a second launchd-only verdict.
+        let ingestWatcher = self == .ingest ? watcher : nil
+        let watcherAttention = ingestWatcher?.needsAttention == true ? ingestWatcher?.reasonText(now: now) : nil
+        let watcherUnknown: String? = if case .unknown = ingestWatcher { ingestWatcher?.reasonText(now: now) } else { nil }
+        let jobReason = jobs.compactMap { job -> String? in
             guard settings[job]?.enabled == true else { return "\(job.humanGroupLabel) is disabled." }
             guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
             switch observation.loadState {
@@ -103,13 +113,14 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                 return "\(job.humanGroupLabel) status is unavailable."
             }
         }.first
+        let reason = watcherAttention ?? jobReason
         let awaitingRun = jobs.contains { job in
             guard let observation = observations[job] else { return false }
             return observation.loadState == .loaded && observation.runs == 0 && observation.lastExitCode == nil
         }
         return BrainLayerLaunchdGroupStatus(
-            health: reason != nil ? .unhealthy : awaitingRun ? .awaitingRun : .healthy,
-            attentionReason: reason,
+            health: reason != nil ? .unhealthy : watcherUnknown != nil ? .unknown : awaitingRun ? .awaitingRun : .healthy,
+            attentionReason: reason ?? watcherUnknown,
             lastRunText: jobs.map { job in
                 "\(job.humanGroupLabel) \(observations[job]?.lastRunAt.map(formatDate) ?? "No run recorded")"
             }.joined(separator: " · "),

@@ -15,11 +15,26 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
     @Published private(set) var configReadSucceeded = true
     @Published private(set) var embeddingProcess: BrainBarEmbeddingProcessState
+    /// watcher-health.json beside the resolved DB: the same file the Dashboard reads (#966).
+    @Published private(set) var watcherHealth: WatcherHealthFileRead?
+
+    /// The one watcher-health truth, from this view's launchd observation plus the health file.
+    var watcherStatus: WatcherHealthStatus {
+        WatcherHealthStatus.derive(
+            launchd: WatcherLaunchdEvidence(
+                setting: config.launchdJobs[.watch],
+                loadState: config.launchdJobs[.watch]?.loadState
+            ),
+            file: watcherHealth,
+            now: now()
+        )
+    }
 
     var footerPresentation: BrainBarSettingsFooterPresentation {
         BrainBarSettingsFooterPresentation(
             config: configReadSucceeded ? config : nil,
-            watcher: config.launchdJobs[.watch]?.loadState
+            watcher: watcherStatus,
+            now: now()
         )
     }
 
@@ -37,6 +52,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let now: @Sendable () -> Date
     private let observabilityURL: URL?
     private let observabilityRead: @Sendable (URL) async -> ObservabilityReadResult
+    private let watcherHealthURL: URL?
+    private let watcherHealthRead: @Sendable (URL) -> WatcherHealthFileRead
+    private var watcherHealthGeneration: UInt64 = 0
     private let confirmAPIKeyOverwrite: (() -> Bool)?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
@@ -57,7 +75,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
             await Task.detached { ObservabilityReader.read(url: url) }.value
-        }
+        },
+        watcherHealthURL: URL? = nil,
+        initialWatcherHealth: WatcherHealthFileRead? = nil,
+        watcherHealthRead: @escaping @Sendable (URL) -> WatcherHealthFileRead = { WatcherHealthReader.read(url: $0) }
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
@@ -68,6 +89,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.observabilityURL = observabilityURL
         self.observabilityRead = observabilityRead
         self.confirmAPIKeyOverwrite = confirmAPIKeyOverwrite
+        self.watcherHealthURL = watcherHealthURL
+        self.watcherHealthRead = watcherHealthRead
+        watcherHealth = initialWatcherHealth
         observabilityResult = initialObservabilityResult
         launchdObservations = initialLaunchdObservations.isEmpty
             ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
@@ -93,6 +117,19 @@ final class BrainBarSettingsViewModel: ObservableObject {
         refreshObservabilityStatus()
         if refreshStatusOnLoad {
             refreshLaunchdStatus()
+        }
+    }
+
+    /// Re-reads watcher-health.json off the main actor; only the newest request publishes.
+    func refreshWatcherHealth() {
+        guard let watcherHealthURL else { return }
+        watcherHealthGeneration &+= 1
+        let generation = watcherHealthGeneration
+        let read = watcherHealthRead
+        Task {
+            let result = await Task.detached { read(watcherHealthURL) }.value
+            guard generation == watcherHealthGeneration else { return }
+            watcherHealth = result
         }
     }
 
@@ -179,7 +216,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
         group.status(
             settings: config.launchdJobs,
             observations: launchdObservations,
-            formatDate: DashboardMetricFormatter.jobDateTimeString
+            formatDate: DashboardMetricFormatter.jobDateTimeString,
+            watcher: watcherStatus,
+            now: now()
         )
     }
 
@@ -201,6 +240,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func refreshLaunchdStatus() {
         isRefreshingLaunchdStatus = true
         refreshEmbeddingResidency()
+        refreshWatcherHealth()
         let provider = launchdStatusProvider
         Task {
             let observations = await Task.detached {
@@ -493,11 +533,13 @@ final class BrainBarSettingsViewModel: ObservableObject {
 }
 
 enum BrainBarSettingsFooterState: Equatable {
-    case watcherRunning, systemOff, unavailable
+    case watcher(WatcherHealthStatus)
+    case systemOff
+    case unavailable
 
     var title: String {
         switch self {
-        case .watcherRunning: "Watcher running"
+        case let .watcher(status): status.title
         case .systemOff: "System off"
         case .unavailable: "Status unavailable"
         }
@@ -506,13 +548,16 @@ enum BrainBarSettingsFooterState: Equatable {
 
 struct BrainBarSettingsFooterPresentation {
     let state: BrainBarSettingsFooterState
+    /// The watcher's reason line (what · since · what to do), identical to the Dashboard's.
+    let detail: String?
     let locality: String
     let showsLock: Bool
     let symbol: String
 
-    init(config: BrainLayerConfig?, watcher: BrainLayerLaunchdLoadState?) {
+    init(config: BrainLayerConfig?, watcher: WatcherHealthStatus?, now: Date = Date()) {
         guard let config else {
             state = .unavailable
+            detail = nil
             locality = "Memory on this Mac · Enrichment unknown · Backups unknown"
             showsLock = false
             symbol = "questionmark.circle"
@@ -521,10 +566,13 @@ struct BrainBarSettingsFooterPresentation {
 
         if !config.systemEnabled {
             state = .systemOff
-        } else if watcher == .running {
-            state = .watcherRunning
+            detail = nil
+        } else if let watcher {
+            state = .watcher(watcher)
+            detail = watcher.reasonText(now: now)
         } else {
             state = .unavailable
+            detail = nil
         }
 
         let enrichment: String
@@ -610,7 +658,8 @@ struct BrainBarSettingsView: View {
         self.activationRevision = activationRevision
         _navigation = StateObject(wrappedValue: navigation)
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
-            observabilityURL: Self.observabilityURL(databasePath: databasePath)
+            observabilityURL: Self.observabilityURL(databasePath: databasePath),
+            watcherHealthURL: WatcherHealthReader.url(dbPath: databasePath)
         ))
     }
 
@@ -688,11 +737,18 @@ struct BrainBarSettingsView: View {
         return HStack(spacing: 12) {
             HStack(spacing: 7) {
                 Circle()
-                    .fill(presentation.state == .watcherRunning
-                        ? BrainBarStateTheme.active.theme.swiftUIColor : Color.brainBarTextMuted)
+                    .fill(footerDotColor(presentation.state))
                     .frame(width: 6, height: 6)
                 Text(presentation.state.title)
                     .font(.system(size: 11, weight: .semibold))
+                if let detail = presentation.detail {
+                    Text(detail)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextMuted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(detail)
+                }
             }
             Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1, height: 14)
             HStack(spacing: 6) {
@@ -710,6 +766,15 @@ struct BrainBarSettingsView: View {
         .background(Color.brainBarGlassSecondary)
         .overlay(alignment: .top) { Color.brainBarBorderSoft.frame(height: 1) }
         .accessibilityElement(children: .combine)
+    }
+
+    private func footerDotColor(_ state: BrainBarSettingsFooterState) -> Color {
+        guard case let .watcher(status) = state else { return Color.brainBarTextMuted }
+        switch status {
+        case .running: return BrainBarStateTheme.active.theme.swiftUIColor
+        case .degraded, .stopped: return BrainBarStateTheme.degraded.theme.swiftUIColor
+        case .unknown: return Color.brainBarTextMuted
+        }
     }
 
     private var header: some View {
@@ -843,25 +908,33 @@ private struct BrainBarJobGroupCard: View {
     let group: BrainLayerLaunchdJobGroup
     @ObservedObject var viewModel: BrainBarSettingsViewModel
 
+    static func symbol(_ health: BrainLayerLaunchdGroupHealth) -> String {
+        switch health {
+        case .healthy: "checkmark.circle.fill"
+        case .awaitingRun: "clock.fill"
+        case .unhealthy: "exclamationmark.triangle.fill"
+        case .unknown: "questionmark.circle.fill"
+        }
+    }
+
+    static func color(_ health: BrainLayerLaunchdGroupHealth) -> Color {
+        switch health {
+        case .healthy: BrainBarStateTheme.active.theme.swiftUIColor
+        case .awaitingRun: BrainBarStateTheme.loading.theme.swiftUIColor
+        case .unhealthy: BrainBarStateTheme.error.theme.swiftUIColor
+        case .unknown: Color.brainBarTextMuted
+        }
+    }
+
     var body: some View {
         let status = viewModel.groupStatus(group)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(group.title).font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Label(
-                    status.health.title,
-                    systemImage: status.health == .healthy ? "checkmark.circle.fill" :
-                        status.health == .awaitingRun ? "clock.fill" : "exclamationmark.triangle.fill"
-                )
+                Label(status.health.title, systemImage: Self.symbol(status.health))
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(
-                        status.health == .healthy
-                            ? BrainBarStateTheme.active.theme.swiftUIColor
-                            : status.health == .awaitingRun
-                                ? BrainBarStateTheme.loading.theme.swiftUIColor
-                                : BrainBarStateTheme.error.theme.swiftUIColor
-                    )
+                    .foregroundStyle(Self.color(status.health))
                 Toggle(group.title, isOn: Binding(
                     get: { viewModel.isGroupEnabled(group) },
                     set: { viewModel.setGroup(group, enabled: $0) }
@@ -873,7 +946,7 @@ private struct BrainBarJobGroupCard: View {
             if let reason = status.attentionReason {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(BrainBarStateTheme.error.theme.swiftUIColor)
+                    .foregroundStyle(status.health == .unknown ? Color.brainBarTextMuted : BrainBarStateTheme.error.theme.swiftUIColor)
             }
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)

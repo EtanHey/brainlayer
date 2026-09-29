@@ -341,7 +341,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         snapshotFreshness: SnapshotFreshnessState? = nil,
         collector providedCollector: StatsCollector? = nil
     ) throws -> BrainBarOnePagePresentation {
-        let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector()
+        let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
         let flow = DashboardFlowSummary.derive(
             daemon: collector.daemon,
             stats: collector.stats,

@@ -41,9 +41,11 @@ enum WatcherProcessProbeResult: Sendable, Equatable {
     case failure(String)
 }
 
+/// Whether watcher-ingested chunks are landing. Flow only: whether the watcher is healthy is
+/// `WatcherHealthStatus` (#966). BrainBar's replay debt is not watcher work and no longer
+/// feeds this (it was the source of the false "Watcher flow needs attention").
 enum WatcherFlowState: Sendable, Equatable {
     case flowing
-    case stalled
     case runningNoRecentFlow
     case offline
     case runningFlowUnverified
@@ -52,8 +54,7 @@ enum WatcherFlowState: Sendable, Equatable {
     static func derive(
         process: WatcherProcessProbeResult,
         recentDistinctChunkCount: Int,
-        recentFlowReadable: Bool,
-        pendingWorkCount: Int
+        recentFlowReadable: Bool
     ) -> WatcherFlowState {
         switch process {
         case .failure:
@@ -63,7 +64,6 @@ enum WatcherFlowState: Sendable, Equatable {
         case .running:
             guard recentFlowReadable else { return .runningFlowUnverified }
             if recentDistinctChunkCount > 0 { return .flowing }
-            if pendingWorkCount > 0 { return .stalled }
             return .runningNoRecentFlow
         }
     }
@@ -71,7 +71,6 @@ enum WatcherFlowState: Sendable, Equatable {
     var label: String {
         switch self {
         case .flowing: return "FLOWING"
-        case .stalled: return "STALLED"
         case .runningNoRecentFlow: return "RUNNING · NO RECENT FLOW"
         case .offline: return "OFFLINE"
         case .runningFlowUnverified: return "RUNNING · FLOW UNVERIFIED"
@@ -390,8 +389,10 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let queue: DashboardQueueSummary
     let enrichment: DashboardFlowLane
     let watcherFlowState: WatcherFlowState
-    let watcherHealth: DashboardStats.WatcherHealth?
-    let watcherHealthIsFresh: Bool
+    /// The one watcher-health truth every surface renders (#966).
+    let watcherStatus: WatcherHealthStatus
+    /// `watcherStatus.reasonText(now:)` at derive time, so every surface shows the same line.
+    let watcherStatusReason: String?
 
     var isUnavailable: Bool {
         ingress.status == .unavailable || enrichment.status == .unavailable || queue.status == .unavailable
@@ -414,8 +415,12 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let watcherFlowState = WatcherFlowState.derive(
             process: watcherProcess,
             recentDistinctChunkCount: stats.watcherRecentDistinctChunkCount,
-            recentFlowReadable: stats.watcherFlowReadability.isReadable,
-            pendingWorkCount: stats.replayDebtBreakdown.deduplicatedTotal
+            recentFlowReadable: stats.watcherFlowReadability.isReadable
+        )
+        let watcherStatus = WatcherHealthStatus.derive(
+            launchd: WatcherLaunchdEvidence(process: stats.watcherProcessProbeResult),
+            file: stats.watcherHealth,
+            now: now
         )
 
         let ingressStatus: DashboardFlowLaneStatus
@@ -624,8 +629,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 tertiaryAccentColor: nil
             ),
             watcherFlowState: watcherFlowState,
-            watcherHealth: stats.watcherHealth,
-            watcherHealthIsFresh: stats.watcherHealth?.isFresh(now: now) ?? false
+            watcherStatus: watcherStatus,
+            watcherStatusReason: watcherStatus.reasonText(now: now)
         )
     }
 
@@ -887,11 +892,11 @@ extension DashboardFlowSummary {
         case .jsonlWatcher:
             let watcherValues = ingress.secondaryValues
             let watcherTotal = watcherValues.reduce(0, +)
-            let watcherStatus = jsonlWatcherStatus(flowState: watcherFlowState)
+            let laneStatus = jsonlWatcherStatus(flowState: watcherFlowState)
             return DashboardFlowLane(
                 name: "Watcher-ingested chunks",
-                status: watcherStatus,
-                statusText: watcherFlowState.label,
+                status: laneStatus,
+                statusText: jsonlWatcherStatusText,
                 windowLabel: ingress.windowLabel,
                 activityWindowMinutes: ingress.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
@@ -902,7 +907,7 @@ extension DashboardFlowSummary {
                     totalEvents: watcherTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
-                lastEventText: jsonlWatcherLastEventText(
+                lastEventText: watcherStatusReason ?? jsonlWatcherLastEventText(
                     totalEvents: watcherTotal,
                     latestBucketCount: watcherValues.last ?? 0,
                     windowLabel: ingress.windowLabel
@@ -976,12 +981,20 @@ extension DashboardFlowSummary {
         switch flowState {
         case .flowing:
             return .live
-        case .stalled:
-            return .queued
         case .runningNoRecentFlow:
             return .idle
         case .offline, .runningFlowUnverified, .unknown:
             return .unavailable
+        }
+    }
+
+    /// Health first (from `WatcherHealthStatus`), then flow when the watcher is healthy.
+    private var jsonlWatcherStatusText: String {
+        switch watcherStatus {
+        case .running: watcherFlowState.label
+        case .degraded: "NEEDS ATTENTION"
+        case .stopped: "STOPPED"
+        case .unknown: "UNKNOWN"
         }
     }
 
