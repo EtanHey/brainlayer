@@ -518,7 +518,9 @@ final class BrainBarServer: @unchecked Sendable {
         _ = fcntl(clientFD, F_SETFL, flags | O_NONBLOCK)
 
         var nosigpipe: Int32 = 1
-        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+        if setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            NSLog("[BrainBar] SO_NOSIGPIPE unavailable on accepted fd %d (errno %d)", clientFD, errno)
+        }
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: queue)
         readSource.setEventHandler { [weak self] in

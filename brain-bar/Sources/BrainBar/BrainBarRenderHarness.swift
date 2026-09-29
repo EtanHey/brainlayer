@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import BrainBarLifecycle
 import Darwin
 import SwiftUI
 import Vision
@@ -137,7 +138,11 @@ enum BrainBarRenderHarness {
             try verifyAttentionDisclosureChangesPixels(in: outputDirectory)
             Darwin.exit(EXIT_SUCCESS)
         } catch {
-            FileHandle.standardError.write(Data("[brainbar-render] ERROR: \(error.localizedDescription)\n".utf8))
+            BrainBarSignalSafety.write(
+                Data("[brainbar-render] ERROR: \(error.localizedDescription)\n".utf8),
+                to: .standardError,
+                context: "render error"
+            )
             Darwin.exit(EXIT_FAILURE)
         }
     }

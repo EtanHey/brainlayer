@@ -98,6 +98,7 @@ final class SocketIntegrationTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        BrainBarSignalSafety.ignoreSIGPIPE()
         originalMCPProfile = ProcessInfo.processInfo.environment["BRAINLAYER_MCP_PROFILE"]
         setenv("BRAINLAYER_MCP_PROFILE", "full", 1)
         tempDBPath = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"

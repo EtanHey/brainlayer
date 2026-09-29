@@ -4,6 +4,7 @@ import Foundation
 @main
 enum BrainBarDaemonMain {
     static func main() {
+        BrainBarSignalSafety.ignoreSIGPIPE()
         let uiWatchdog = startUIWatchdog()
         // BRAINBAR_DEBUG_LOG=1 in this process's environment (the LaunchAgent's
         // EnvironmentVariables, or `launchctl setenv` before a kickstart) turns
