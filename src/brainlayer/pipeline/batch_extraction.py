@@ -39,8 +39,23 @@ def _load_person_seed_entities() -> list[str]:
 # Public technical defaults only. Local person seeds never enter the package.
 DEFAULT_SEED_ENTITIES: dict[str, list[str]] = {
     "person": _load_person_seed_entities(),
-    "company": [],
-    "project": ["brainlayer", "golems", "orchestrator"],
+    "company": ["Cantaloupe AI", "Domica", "MeHayom", "ProductDZ", "Weby", "Union"],
+    "project": [
+        "brainlayer",
+        "voicelayer",
+        "golems",
+        "songscript",
+        "domica",
+        "rudy-monorepo",
+        "union",
+        "orchestrator",
+        "etanheyman.com",
+        "golem-profiles",
+        "6pm",
+        "6pm-mini",
+        "soltome",
+        "yichus",
+    ],
     "agent": [
         "golemsClaude",
         "brainClaude",

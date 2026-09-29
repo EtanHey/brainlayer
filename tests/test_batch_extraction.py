@@ -88,8 +88,11 @@ class TestSeedEntities:
         assert "FileNotFoundError" in caplog.text
         assert str(tmp_path) not in caplog.text
 
-    def test_default_company_seeds_are_empty(self):
-        assert DEFAULT_SEED_ENTITIES["company"] == []
+    def test_seed_has_companies(self):
+        assert "company" in DEFAULT_SEED_ENTITIES
+        names = DEFAULT_SEED_ENTITIES["company"]
+        assert "Domica" in names
+        assert "Cantaloupe AI" in names
 
     def test_seed_has_projects(self):
         assert "project" in DEFAULT_SEED_ENTITIES

@@ -204,9 +204,9 @@ class TestHebrewPrefixStripping:
         from brainlayer.pipeline.entity_resolution import resolve_entity
 
         entity_id = _upsert(store, "person", "Person Alpha")
-        store.add_entity_alias("דור זוהר", entity_id, alias_type="hebrew")
+        store.add_entity_alias("אדם לדוגמה", entity_id, alias_type="hebrew")
 
-        resolved = resolve_entity("דור זוהר", "person", "", store)
+        resolved = resolve_entity("אדם לדוגמה", "person", "", store)
         assert resolved == entity_id
 
 
