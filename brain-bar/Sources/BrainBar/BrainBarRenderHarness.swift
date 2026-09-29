@@ -106,6 +106,7 @@ enum BrainBarRenderHarness {
             try verifyDirectionalStateCoverage()
             try verifyReadableChartMarkerContract()
             try renderUnifiedSettings(in: outputDirectory)
+            try renderWatcherTruth(in: outputDirectory)
             sampleReceipts.record(BrainBarOperationReceipt(
                 kind: .search, durationMillis: 142, count: 10, recordedAt: BrainBarDashboardFixture.fetchedAt
             ))
@@ -191,6 +192,122 @@ enum BrainBarRenderHarness {
             }
         }
         print("[brainbar-render] chart-marker contract PASS: All chunks, Agent, Watcher each have one marker on the latest complete bucket")
+    }
+
+    /// #966: each watcher-health state rendered on both surfaces that show it: the Dashboard
+    /// (hero + watcher lane) and Settings → Jobs (Ingest card + footer). One status, one reason.
+    private static func renderWatcherTruth(in outputDirectory: URL) throws {
+        let now = BrainBarDashboardFixture.fetchedAt
+        let degradedFile = WatcherHealthFileRead.readable(WatcherHealthFile(
+            updatedAt: now.addingTimeInterval(-70),
+            pollCount: 72,
+            alertReasons: ["file_ingestion_failure"],
+            fileIngestionFailureCount: 2,
+            earliestFileIngestionFailureAt: now.addingTimeInterval(-7_200)
+        ))
+        let missingFile = WatcherHealthFileRead.missing(path: "~/.local/share/brainlayer/watcher-health.json")
+        let states: [(name: String, dashboard: BrainBarDashboardFixture.OperatorState,
+                      launchd: BrainLayerLaunchdLoadState, file: WatcherHealthFileRead, title: String)] = [
+            ("running", .live, .running, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher running"),
+            ("idle-replay-debt", .watcherIdleWithReplayDebt, .running, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher running"),
+            ("degraded", .watcherDegraded, .running, degradedFile, "Watcher needs attention"),
+            ("stopped", .watcherOffline, .unloaded, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher stopped"),
+            ("unknown", .watcherHealthMissing, .running, missingFile, "Watcher status unknown"),
+        ]
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-watcher-render-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let store = BrainLayerConfigStore(configURL: fixtureDirectory.appendingPathComponent("watcher-render.env"))
+        try store.save(.defaultConfig)
+
+        for state in states {
+            for breakpoint in breakpoints {
+                let collector = BrainBarDashboardFixture.makeCollector(state.dashboard)
+                let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now)
+                guard flow.watcherStatus.title == state.title else {
+                    throw Failure("watcher-\(state.name): dashboard status \(flow.watcherStatus.title), expected \(state.title)")
+                }
+                let dashboardState = BrainBarDashboardPanelState()
+                dashboardState.attentionExpanded = true
+                let dashboard = BrainBarDashboardPreview.make(
+                    collector: collector,
+                    receiptStore: sampleReceipts,
+                    observabilityResult: BrainBarDashboardFixture.readableObservabilityResult,
+                    now: now,
+                    panelState: dashboardState
+                )
+                let measuring = NSHostingView(rootView: dashboard)
+                measuring.frame = NSRect(x: 0, y: 0, width: breakpoint.width, height: 10_000)
+                settle(measuring)
+                try writeWatcherRender(
+                    dashboard,
+                    size: NSSize(width: breakpoint.width, height: ceil(dashboardState.fittingHeight)),
+                    name: "watcher-\(state.name)-dashboard-\(breakpoint.name)",
+                    in: outputDirectory
+                )
+
+                let viewModel = BrainBarSettingsViewModel(
+                    store: store,
+                    launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                    runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
+                        observation: .unknown("Fixture runtime state unavailable.")
+                    ),
+                    initialLaunchdObservations: [
+                        .watch: .init(loadState: state.launchd, runs: 7, lastExitCode: 0,
+                                      lastRunAt: now.addingTimeInterval(-3_600), nextRunAt: nil, isContinuous: true),
+                        .index: .init(loadState: .loaded, runs: 4, lastExitCode: 0,
+                                      lastRunAt: now.addingTimeInterval(-1_800),
+                                      nextRunAt: now.addingTimeInterval(1_800), isContinuous: false),
+                        .maintenanceNightly: .init(loadState: .loaded, runs: 3, lastExitCode: 0,
+                                                   lastRunAt: now.addingTimeInterval(-43_200),
+                                                   nextRunAt: now.addingTimeInterval(43_200), isContinuous: false),
+                        .maintenanceWeekly: .init(loadState: .loaded, runs: 1, lastExitCode: 0,
+                                                  lastRunAt: now.addingTimeInterval(-259_200),
+                                                  nextRunAt: now.addingTimeInterval(345_600), isContinuous: false),
+                    ],
+                    refreshStatusOnLoad: false,
+                    now: { now },
+                    initialObservabilityResult: .unreadable("Fixture backup status unavailable."),
+                    initialWatcherHealth: state.file
+                )
+                guard viewModel.footerPresentation.state.title == state.title else {
+                    throw Failure("watcher-\(state.name): footer \(viewModel.footerPresentation.state.title), expected \(state.title)")
+                }
+                let settingsState = BrainBarDashboardPanelState()
+                let settings = BrainBarUnifiedWindowPreview.make(
+                    collector: collector,
+                    settingsViewModel: viewModel,
+                    panelState: settingsState,
+                    section: .jobs
+                )
+                try writeWatcherRender(
+                    settings,
+                    size: NSSize(width: breakpoint.width, height: max(settingsState.fittingHeight, 640)),
+                    name: "watcher-\(state.name)-settings-\(breakpoint.name)",
+                    in: outputDirectory
+                )
+            }
+        }
+    }
+
+    private static func writeWatcherRender(_ view: some View, size: NSSize, name: String, in outputDirectory: URL) throws {
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(origin: .zero, size: size)
+        settle(host)
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            throw Failure("\(name): AppKit could not allocate an off-screen bitmap")
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw Failure("\(name): AppKit could not encode PNG data")
+        }
+        guard png.count > 5_000, distinctSampledColorCount(in: bitmap) > 16 else {
+            throw Failure("\(name): refusing a blank or trivial render (\(png.count) PNG bytes)")
+        }
+        let url = outputDirectory.appendingPathComponent("\(name).png")
+        try png.write(to: url, options: .atomic)
+        print("[brainbar-render] \(name) \(Int(size.width))×\(Int(size.height)); wrote \(url.path)")
     }
 
     private static func renderUnifiedSettings(in outputDirectory: URL) throws {
