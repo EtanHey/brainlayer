@@ -8,6 +8,7 @@ import fcntl
 import functools
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -25,7 +26,6 @@ from .backup_daily import (
     WEEKLY_RETENTION,
     BackupAlreadyRunningError,
     _backup_log_path,
-    run_backup,
 )
 from .drain import BurnDrainResult, burn_drain_once
 from .launchd_primitive import is_launchd_label_loaded
@@ -756,8 +756,7 @@ def _run_coordinated_fts_repair_unlocked(db_path: Path, *, repo_root: Path | Non
         raise
     finally:
         root = repo_root or Path(os.environ.get("BRAINLAYER_REPO_ROOT", Path.cwd()))
-        resumable = {service: loaded_before[service] and booted_out.get(service, False) for service in services}
-        resume_failures = _resume_services(root, services, resumable)
+        resume_failures = _resume_services(root, services, booted_out)
         if resume_failures and body_error is not None:
             body_error.add_note(_format_resume_failures(resume_failures))
     if resume_failures:
@@ -809,23 +808,85 @@ def _recent_verified_backup(config: MaintenanceConfig) -> dict[str, Any] | None:
     return None
 
 
+def _remaining_quiet_window_seconds(config: MaintenanceConfig) -> int:
+    now = config.now_fn()
+    start = now.replace(hour=config.quiet_window_start_hour, minute=0, second=0, microsecond=0)
+    if now < start:
+        start -= dt.timedelta(days=1)
+    end = start + dt.timedelta(minutes=config.quiet_window_duration_minutes)
+    return max(0, int((end - now).total_seconds()))
+
+
+def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) -> dict[str, Any]:
+    """Use the daily process-group supervisor with a deadline inside the quiet window."""
+    if WEEKLY_RETENTION != DAILY_RETENTION:
+        raise MaintenanceAbort("weekly retention differs from supervised daily backup; VACUUM skipped", code=76)
+    env = os.environ.copy()
+    env.update(
+        {
+            "BRAINLAYER_DB": str(config.db_path),
+            "BRAINLAYER_BACKUP_STAGING_DIR": str(config.backup_staging_dir),
+            "BRAINLAYER_BACKUP_LOG_PATH": str(config.backup_log_path or _backup_log_path(None, db_path=config.db_path)),
+            "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(timeout_seconds),
+        }
+    )
+    env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "brainlayer.backup_daily"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds + 10)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise MaintenanceAbort("fresh weekly backup timed out; VACUUM skipped", code=76) from exc
+    if process.returncode != 0:
+        if _backup_lock_is_held(config.backup_staging_dir):
+            raise BackupAlreadyRunningError("backup lock acquired during fresh weekly backup")
+        raise MaintenanceAbort(f"fresh weekly backup exited {process.returncode}; VACUUM skipped", code=76)
+    for line in reversed(stdout.splitlines()):
+        try:
+            result = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, dict) and "verified" in result:
+            return result
+    raise MaintenanceAbort(
+        f"fresh weekly backup returned no receipt ({len(stderr)} stderr bytes); VACUUM skipped", code=76
+    )
+
+
 def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
     deadline = time.monotonic() + config.backup_wait_timeout_seconds
     waited = False
     while True:
-        held = _backup_lock_is_held(config.backup_staging_dir)
+        try:
+            held = _backup_lock_is_held(config.backup_staging_dir)
+        except OSError as exc:
+            raise MaintenanceAbort(f"backup lock unreadable ({type(exc).__name__}); VACUUM skipped", code=76) from exc
         if not held:
-            receipt = _recent_verified_backup(config)
+            try:
+                receipt = _recent_verified_backup(config)
+            except OSError as exc:
+                raise MaintenanceAbort(
+                    f"backup receipt unreadable ({type(exc).__name__}); VACUUM skipped", code=76
+                ) from exc
             if receipt is not None and WEEKLY_RETENTION == DAILY_RETENTION:
                 _write_log(config.log_path, {"mode": "full", "backup_status": "reused_verified", "waited": waited})
                 return receipt
+            remaining_window = _remaining_quiet_window_seconds(config)
+            if remaining_window < 1:
+                raise MaintenanceAbort("no quiet-window time remains for fresh backup; VACUUM skipped", code=76)
             try:
-                backup = run_backup(
-                    db_path=config.db_path,
-                    staging_dir=config.backup_staging_dir,
-                    log_path=config.backup_log_path,
-                    retention_policy=WEEKLY_RETENTION,
-                )
+                backup = _run_bounded_weekly_backup(config, remaining_window)
             except BackupAlreadyRunningError:
                 held = True
             except Exception as exc:
@@ -879,6 +940,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     # writers or starting the destructive VACUUM phase.
     backup = None
     backup_abort = None
+    post_backup_gates_failed = False
     if mode == "full":
         try:
             backup = _weekly_backup(config)
@@ -889,17 +951,28 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             backup_abort = exc
             result.backup_status = "unavailable"
             result.actions.append(f"vacuum_skipped={exc.reason}")
+        try:
+            _run_gates(config)
+        except MaintenanceAbort as exc:
+            post_backup_gates_failed = True
+            backup_abort = MaintenanceAbort(f"post-backup gate failed: {exc.reason}; VACUUM skipped", code=76)
+            result.backup_status = "gates_failed"
+            result.actions.append(f"vacuum_skipped={backup_abort.reason}")
+            backup = None
 
     services = DEFAULT_SERVICES
     if mode == "burn":
         services = (*REFEED_SERVICES, "drain")
     resume_failures: list[tuple[str, Exception]] = []
     body_error: BaseException | None = None
+    if post_backup_gates_failed:
+        services = ()
     loaded_before = {service: _service_is_loaded(service) for service in services}
     booted_out: dict[str, bool] = {}
     try:
         _quiesce_services(tuple(loaded_before), booted_out)
-        result.checkpoint = _checkpoint_full(config.db_path)
+        if not post_backup_gates_failed:
+            result.checkpoint = _checkpoint_full(config.db_path)
         if mode == "full" and backup is not None:
             result.actions.append(f"verified_drive_backup={backup.get('drive_file', {}).get('id')}")
             result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path)
@@ -908,7 +981,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             result.burn = _run_burn_until_empty(config)
             if result.burn.failed_files:
                 raise MaintenanceAbort("burn drain failed; queue files preserved")
-        else:
+        elif not post_backup_gates_failed:
             result.stale_queue = quarantine_stale_queue_files(
                 db_path=config.db_path,
                 queue_dir=config.queue_dir,
@@ -920,8 +993,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         body_error = exc
         raise
     finally:
-        resumable = {service: loaded_before[service] and booted_out.get(service, False) for service in services}
-        resume_failures = _resume_services(config.repo_root, services, resumable)
+        resume_failures = _resume_services(config.repo_root, services, booted_out)
         if resume_failures and body_error is not None:
             resume_failure_reason = _format_resume_failures(resume_failures)
             body_error.add_note(resume_failure_reason)

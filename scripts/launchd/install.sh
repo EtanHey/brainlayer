@@ -11,7 +11,7 @@
 #   ./scripts/launchd/install.sh load enrichment
 #   ./scripts/launchd/install.sh unload enrichment
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
-#   ./scripts/launchd/install.sh repair-fts   # Install weekly explicit FTS repair
+#   ./scripts/launchd/install.sh repair-fts   # Install weekly read-only FTS check
 #   ./scripts/launchd/install.sh backup       # Install daily DB backup only
 #   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs

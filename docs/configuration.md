@@ -124,16 +124,16 @@ BrainLayer includes launchd plist templates for automated operation:
 | `com.brainlayer.watch` | KeepAlive watcher | Watch and queue new conversation writes |
 | `com.brainlayer.drain` | Queue/WatchPaths trigger | Drain queued writes as the single writer |
 | `com.brainlayer.decay` | Weekly | Refresh decay metadata |
-| `com.brainlayer.repair-fts` | Weekly | Repair FTS indexes |
+| `com.brainlayer.repair-fts` | Weekly | Read-only FTS row-count check |
 | `com.brainlayer.wal-checkpoint` | Daily 09:30 | Checkpoint the WAL |
 | `com.brainlayer.backup-daily` | Daily | Backup the BrainLayer DB |
 | `com.brainlayer.jsonl-backup` | Daily | Backup Claude JSONL files |
 | `com.brainlayer.maintenance-nightly` | Nightly | Light maintenance |
 | `com.brainlayer.maintenance-weekly` | Weekly | Full maintenance |
 
-Weekly maintenance waits up to two hours for an in-flight daily DB backup. A recent, verified daily backup is reused because daily and weekly Drive retention policies are the same. If the wait times out or the backup is unverified, light maintenance continues, VACUUM is skipped, and the job exits **76**. The maintenance log records the backup status. `--full --dry-run` reports a held backup lock without waiting or running backup work.
+Weekly maintenance waits up to two hours for an in-flight daily DB backup. A recent, verified daily backup is reused because daily and weekly Drive retention policies are the same. A fresh backup uses the daily process supervisor with a deadline at the end of the quiet window. After the backup wait, it reruns the quiet-window, queue-idle, and writer gates. If the wait times out or the backup is unverified, light maintenance continues, VACUUM is skipped, and the job exits **76**. If a post-backup gate fails, the job skips service bootout and all database maintenance, records the failed gate, and exits **76**. The maintenance log records the backup status. `--full --dry-run` reports a held backup lock without waiting or running backup work.
 
-Maintenance and the scheduled FTS repair share a database-local lock so the 04:30 repair waits for a delayed weekly run. If that lock cannot be obtained within four hours, the waiting job exits **77** without quiescing services or opening a writer.
+Scheduled FTS row-count checks use a read-only connection and do not acquire the maintenance writer lock. Full FTS rebuilds require an explicit offline database copy path.
 
 Manual install and control:
 

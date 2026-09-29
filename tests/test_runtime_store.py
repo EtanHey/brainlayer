@@ -53,7 +53,7 @@ def test_chromadb_migrate_command_requires_explicit_offline_path(tmp_path, monke
     assert not canonical.exists()
 
 
-def test_repair_fts_command_defaults_to_configured_runtime_db_and_accepts_explicit_copy(tmp_path, monkeypatch):
+def test_repair_fts_command_checks_configured_db_readonly_and_repairs_explicit_copy(tmp_path, monkeypatch):
     from brainlayer import maintenance
     from brainlayer.cli import app
 
@@ -63,6 +63,7 @@ def test_repair_fts_command_defaults_to_configured_runtime_db_and_accepts_explic
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: canonical)
     VectorStore(canonical).close()
     OfflineMigrator(copy_path).close()
+    canonical_before = canonical.read_bytes()
     events = []
     monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda service: events.append(("stop", service)) or True)
@@ -71,10 +72,8 @@ def test_repair_fts_command_defaults_to_configured_runtime_db_and_accepts_explic
     missing = CliRunner().invoke(app, ["repair-fts"])
     assert missing.exit_code == 0, missing.output
     assert "chunks_fts" in missing.output
-    assert events == [
-        *(("stop", service) for service in maintenance.DEFAULT_SERVICES),
-        *(("start", service) for service in maintenance.DEFAULT_SERVICES),
-    ]
+    assert events == [], "scheduled FTS check must not stop services or open a live writer"
+    assert canonical.read_bytes() == canonical_before
 
     repaired = CliRunner().invoke(app, ["repair-fts", str(copy_path)])
     assert repaired.exit_code == 0, repaired.output
@@ -84,19 +83,14 @@ def test_repair_fts_command_defaults_to_configured_runtime_db_and_accepts_explic
     assert "canonical" in refused.output.lower()
 
 
-def test_repair_fts_reports_maintenance_lock_timeout_code(monkeypatch):
+def test_repair_fts_no_argument_never_enters_live_repair(monkeypatch):
     from brainlayer import maintenance
     from brainlayer.cli import app
 
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: Path("/tmp/fixture.db"))
-    monkeypatch.setattr(
-        maintenance,
-        "run_coordinated_fts_repair",
-        lambda _db_path: (_ for _ in ()).throw(maintenance.MaintenanceAbort("maintenance lock timed out", code=77)),
-    )
+    monkeypatch.setattr(maintenance, "run_coordinated_fts_repair", lambda _db_path: pytest.fail("live repair"))
     result = CliRunner().invoke(app, ["repair-fts"])
-    assert result.exit_code == 77
-    assert "maintenance lock timed out" in result.output
+    assert result.exit_code != 77
 
 
 def _bootstrap(db_path: Path) -> None:

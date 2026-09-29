@@ -193,7 +193,7 @@ def test_weekly_backup_waits_for_daily_then_reuses_verified_receipt(tmp_path, mo
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", held)
     monkeypatch.setattr(maintenance.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(maintenance.time, "sleep", finish)
-    monkeypatch.setattr(maintenance, "run_backup", lambda **_kwargs: pytest.fail("duplicate backup"))
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_args: pytest.fail("duplicate backup"))
 
     assert maintenance._weekly_backup(config)["drive_file"]["id"] == "verified-daily"
     assert calls[0] == 2
@@ -209,7 +209,7 @@ def test_weekly_backup_timeout_aborts_before_destructive_work(tmp_path, monkeypa
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: True)
     monkeypatch.setattr(maintenance.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(maintenance.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    monkeypatch.setattr(maintenance, "run_backup", lambda **_kwargs: pytest.fail("backup started"))
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_args: pytest.fail("backup started"))
 
     with pytest.raises(maintenance.MaintenanceAbort, match="backup wait timed out") as exc:
         maintenance._weekly_backup(config)
@@ -237,18 +237,99 @@ def test_weekly_backup_without_running_backup_runs_normally(tmp_path, monkeypatc
     config.backup_staging_dir = tmp_path / "staging"
     config.backup_log_path = tmp_path / "backup.log"
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: False)
+    deadlines = []
+
+    def backup(_config, timeout_seconds):
+        deadlines.append(timeout_seconds)
+        return {"verified": True, "uploaded": True, "drive_file": {"id": "verified-weekly"}}
+
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", backup)
+
+    assert maintenance._weekly_backup(config)["drive_file"]["id"] == "verified-weekly"
+    assert deadlines == [7200]
+
+
+def test_fresh_weekly_backup_uses_supervised_process_and_kills_stuck_group(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 9, 27, 4, 0, tzinfo=dt.UTC))
+    config.backup_staging_dir = tmp_path / "staging"
+    config.backup_log_path = tmp_path / "backup.log"
+    observed = {}
+
+    class StuckProcess:
+        pid = 45210
+
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                raise maintenance.subprocess.TimeoutExpired("backup", timeout)
+            return "", ""
+
+    def popen(args, **kwargs):
+        observed["args"] = args
+        observed["kwargs"] = kwargs
+        return StuckProcess()
+
+    monkeypatch.setattr(maintenance.subprocess, "Popen", popen)
+    monkeypatch.setattr(maintenance.os, "killpg", lambda pid, sig: observed.update(pid=pid, signal=sig))
+
+    with pytest.raises(maintenance.MaintenanceAbort, match="timed out") as exc:
+        maintenance._run_bounded_weekly_backup(config, 45)
+    assert exc.value.code == 76
+    assert observed["args"][-2:] == ["-m", "brainlayer.backup_daily"]
+    assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"] == "45"
+    assert observed["kwargs"]["start_new_session"] is True
+    assert observed["pid"] == 45210
+    assert observed["signal"] == maintenance.signal.SIGKILL
+
+
+@pytest.mark.parametrize("broken_reader", ["_backup_lock_is_held", "_recent_verified_backup"])
+def test_weekly_backup_read_errors_use_vacuum_skip_code(tmp_path, monkeypatch, broken_reader):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 9, 27, 4, 5, tzinfo=dt.UTC))
+    monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: False)
+    monkeypatch.setattr(maintenance, "_recent_verified_backup", lambda _config: None)
     monkeypatch.setattr(
         maintenance,
-        "run_backup",
-        lambda **kwargs: {
-            "retention": kwargs["retention_policy"],
-            "verified": True,
-            "uploaded": True,
-            "drive_file": {"id": "verified-weekly"},
-        },
+        broken_reader,
+        lambda _arg: (_ for _ in ()).throw(PermissionError("synthetic denial")),
     )
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_args: pytest.fail("backup started"))
 
-    assert maintenance._weekly_backup(config)["retention"] is maintenance.WEEKLY_RETENTION
+    with pytest.raises(maintenance.MaintenanceAbort, match="VACUUM skipped") as exc:
+        maintenance._weekly_backup(config)
+    assert exc.value.code == 76
+
+
+def test_full_rechecks_window_after_backup_wait_and_skips_vacuum(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    clock = [dt.datetime(2026, 9, 27, 4, 5, tzinfo=dt.UTC)]
+    config = _config(tmp_path, now=clock[0])
+    config.now_fn = lambda: clock[0]
+    _create_enrichment_db(config.db_path)
+    monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
+
+    def finished_backup(_config):
+        clock[0] = dt.datetime(2026, 9, 27, 6, 1, tzinfo=dt.UTC)
+        return {"verified": True, "uploaded": True, "drive_file": {"id": "verified"}}
+
+    monkeypatch.setattr(maintenance, "_weekly_backup", finished_backup)
+    monkeypatch.setattr(
+        maintenance, "_service_is_loaded", lambda _service: pytest.fail("service probed after gate failure")
+    )
+    monkeypatch.setattr(
+        maintenance, "_bootout_service", lambda _service: pytest.fail("service booted out after gate failure")
+    )
+    monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _path: pytest.fail("checkpoint after gate failure"))
+    monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _path: 1.0)
+    monkeypatch.setattr(maintenance, "_vacuum", lambda _path: pytest.fail("VACUUM started after quiet window"))
+
+    with pytest.raises(maintenance.MaintenanceAbort, match="outside quiet window") as exc:
+        maintenance.run_maintenance("full", config=config)
+    assert exc.value.code == 76
+    assert json.loads(config.log_path.read_text().splitlines()[-1])["backup_status"] == "gates_failed"
 
 
 def test_weekly_backup_rechecks_after_lock_race(tmp_path, monkeypatch):
@@ -260,7 +341,7 @@ def test_weekly_backup_rechecks_after_lock_race(tmp_path, monkeypatch):
     clock = [0.0]
     calls = [0]
 
-    def backup(**_kwargs):
+    def backup(*_args):
         calls[0] += 1
         if calls[0] == 1:
             raise maintenance.BackupAlreadyRunningError("backup already running")
@@ -282,7 +363,7 @@ def test_weekly_backup_rechecks_after_lock_race(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: False)
-    monkeypatch.setattr(maintenance, "run_backup", backup)
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", backup)
     monkeypatch.setattr(maintenance.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(maintenance.time, "sleep", finish)
 
@@ -297,7 +378,7 @@ def test_full_dry_run_reports_backup_contention_without_waiting(tmp_path, monkey
     _create_enrichment_db(config.db_path)
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: True)
-    monkeypatch.setattr(maintenance, "run_backup", lambda **_kwargs: pytest.fail("backup started"))
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_args: pytest.fail("backup started"))
 
     result = maintenance.run_maintenance("full", config=config, dry_run=True)
 
@@ -346,7 +427,7 @@ def test_scheduled_fts_repair_waits_for_weekly_maintenance_lock(tmp_path, monkey
         held.close()
 
 
-def test_coordinated_fts_repair_leaves_previously_down_service_down(tmp_path, monkeypatch):
+def test_coordinated_fts_repair_resumes_every_successful_bootout(tmp_path, monkeypatch):
     from brainlayer import maintenance, runtime_store
 
     resumed = []
@@ -369,8 +450,7 @@ def test_coordinated_fts_repair_leaves_previously_down_service_down(tmp_path, mo
 
     monkeypatch.setattr(runtime_store, "WriterRuntimeStore", FakeStore)
     maintenance.run_coordinated_fts_repair(tmp_path / "fixture.db", repo_root=tmp_path)
-    assert "watch" not in resumed
-    assert resumed == [service for service in maintenance.DEFAULT_SERVICES if service != "watch"]
+    assert resumed == list(maintenance.DEFAULT_SERVICES)
 
 
 def test_stale_queue_quarantine_moves_only_already_enriched_matching_hash(tmp_path):
@@ -629,7 +709,7 @@ def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_p
     assert resumed == list(maintenance.DEFAULT_SERVICES)
 
 
-def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path, monkeypatch, capsys):
+def test_maintenance_resumes_successful_bootout_even_after_stale_loaded_probe(tmp_path, monkeypatch, capsys):
     from brainlayer import maintenance
 
     config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.timezone.utc))
@@ -666,7 +746,7 @@ def test_maintenance_leaves_service_down_when_not_loaded_before_quiesce(tmp_path
     expected_events = [("probe", service) for service in expected_services]
     expected_events.extend(("bootout", service) for service in expected_services)
     assert events == expected_events
-    assert resumed == ["index", "drain"]
+    assert resumed == ["enrichment", "index", "drain"]
     assert "maintenance did not boot out service watch; leaving it down" in capsys.readouterr().err
 
 
