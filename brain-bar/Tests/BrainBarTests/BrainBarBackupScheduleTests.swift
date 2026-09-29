@@ -241,4 +241,71 @@ final class BrainBarBackupScheduleTests: XCTestCase {
         )
         XCTAssertEqual(badArray.text, "Schedule unknown — /LA/x.plist has invalid Hour 25 (entry 2)")
     }
+
+
+    // MARK: #1015 review round 2
+
+    /// B4: launchd fires a Day/Month schedule only on dates that exist. A monthly Day=31 skips
+    /// short months and a yearly February 29 waits for a leap year: never a rolled-over March 1.
+    func testMonthlyAndYearlyNextRunsOnlyOnDatesThatExist() {
+        let utc = calendar("UTC")
+        func read(_ entry: String) -> BackupScheduleRead { BackupScheduleRead.parse(plist: calendarPlist(entry), path: "/LA/x.plist") }
+
+        let day31 = read(int("Day", 31) + int("Hour", 3) + int("Minute", 17))
+        XCTAssertEqual(day31.text, "monthly on day 31 at 03:17")
+        XCTAssertEqual(day31.nextRun(after: date("2026-01-31T04:00:00Z"), calendar: utc), date("2026-03-31T03:17:00Z"))
+        XCTAssertEqual(day31.nextRun(after: date("2026-01-31T02:00:00Z"), calendar: utc), date("2026-01-31T03:17:00Z"))
+        XCTAssertEqual(day31.nextRun(after: date("2026-03-31T04:00:00Z"), calendar: utc), date("2026-05-31T03:17:00Z"))
+
+        let day30 = read(int("Day", 30) + int("Hour", 3) + int("Minute", 17))
+        XCTAssertEqual(day30.nextRun(after: date("2026-02-01T00:00:00Z"), calendar: utc), date("2026-03-30T03:17:00Z"))
+
+        let leapDay = read(int("Month", 2) + int("Day", 29) + int("Hour", 3) + int("Minute", 17))
+        XCTAssertEqual(leapDay.text, "yearly on February 29 at 03:17")
+        XCTAssertEqual(leapDay.nextRun(after: date("2026-01-15T00:00:00Z"), calendar: utc), date("2028-02-29T03:17:00Z"))
+
+        // A date that never occurs never runs: Unknown with the reason, and no next-run claim.
+        for (month, day, name) in [(2, 30, "February 30"), (2, 31, "February 31"), (4, 31, "April 31")] {
+            let never = read(int("Month", month) + int("Day", day) + int("Hour", 3) + int("Minute", 17))
+            XCTAssertEqual(never.text, "Schedule unknown — /LA/x.plist has a date that never occurs (\(name))")
+            XCTAssertNil(never.nextRun(after: date("2026-01-15T00:00:00Z"), calendar: utc))
+        }
+    }
+
+    /// B4: exact date matching keeps the clock-only DST behaviour: a skipped time runs at the next
+    /// existing time that day, and a repeated time runs once, at its first occurrence.
+    func testMonthlyNextRunAcrossDaylightSavingTransitions() {
+        let newYork = calendar("America/New_York")
+        // Spring forward (2026-03-08): 02:30 does not exist.
+        let spring = BackupCadence.calendar(hour: 2, minute: 30, day: 8)
+            .nextRun(after: date("2026-03-01T12:00:00Z"), calendar: newYork)
+        let parts = newYork.dateComponents([.month, .day, .hour], from: spring!)
+        XCTAssertEqual([parts.month, parts.day, parts.hour], [3, 8, 3])
+        XCTAssertEqual(
+            spring,
+            BackupCadence.calendar(hour: 2, minute: 30).nextRun(after: date("2026-03-07T17:00:00Z"), calendar: newYork),
+            "a monthly run on the DST day lands where the daily run does"
+        )
+        // Fall back (2026-11-01): 01:30 happens twice; it runs at the first (EDT, UTC-4).
+        let fall = BackupCadence.calendar(hour: 1, minute: 30, day: 1)
+            .nextRun(after: date("2026-10-15T00:00:00Z"), calendar: newYork)
+        XCTAssertEqual(fall, date("2026-11-01T05:30:00Z"))
+    }
+
+    /// B2 residual: a plist <true/> bridges to Int 1 through NSNumber. A boolean is not an integer.
+    func testPlistBooleansAreNotIntegers() {
+        let cases: [(String, String)] = [
+            ("<key>Weekday</key><true/>" + int("Hour", 4) + int("Minute", 0), "non-integer Weekday"),
+            (int("Hour", 4) + "<key>Minute</key><false/>", "non-integer Minute"),
+            ("<key>Day</key><true/>" + int("Hour", 4) + int("Minute", 0), "non-integer Day"),
+            ("<key>Hour</key><real>3.5</real>" + int("Minute", 0), "non-integer Hour"),
+        ]
+        for (entry, reason) in cases {
+            let read = BackupScheduleRead.parse(plist: calendarPlist(entry), path: "/LA/x.plist")
+            XCTAssertEqual(read.text, "Schedule unknown — /LA/x.plist has \(reason)", entry)
+            XCTAssertNil(read.nextRun(after: date("2026-09-29T10:00:00Z"), calendar: calendar("UTC")))
+        }
+        let interval = BackupScheduleRead.parse(plist: plist("<key>StartInterval</key><true/>"), path: "/LA/x.plist")
+        XCTAssertEqual(interval.text, "Schedule unknown — /LA/x.plist has an invalid StartInterval")
+    }
 }

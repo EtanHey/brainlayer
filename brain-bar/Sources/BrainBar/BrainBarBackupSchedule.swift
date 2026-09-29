@@ -30,6 +30,15 @@ enum BackupCadence: Equatable, Sendable {
         "July", "August", "September", "October", "November", "December",
     ]
 
+    /// Leap years included: February 29 exists, so it is a valid (if rare) schedule.
+    private static let daysInLongestMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+    /// A plist `<true/>` parses as an NSNumber that bridges to Int 1. A boolean is not an integer.
+    static func strictInteger(_ value: Any) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return value as? Int
+    }
+
     private static func every(_ count: Int, _ unit: String) -> String {
         count == 1 ? "every \(unit)" : "every \(count) \(unit)s"
     }
@@ -38,9 +47,35 @@ enum BackupCadence: Equatable, Sendable {
     /// clock, so it is not guessed.
     func nextRun(after date: Date, calendar: Calendar) -> Date? {
         guard case let .calendar(hour, minute, weekday, day, month) = self else { return nil }
-        var components = DateComponents(month: month, day: day, hour: hour, minute: minute, second: 0)
-        if let weekday { components.weekday = (weekday % 7) + 1 }
-        return calendar.nextDate(after: date, matching: components, matchingPolicy: .nextTime)
+        guard day != nil || month != nil, let hour else {
+            // Clock-only schedules: every day has the match, and `.nextTime` moves a time skipped
+            // by a DST change to the next existing time that day.
+            var components = DateComponents(hour: hour, minute: minute, second: 0)
+            if let weekday { components.weekday = (weekday % 7) + 1 }
+            return calendar.nextDate(after: date, matching: components, matchingPolicy: .nextTime)
+        }
+        // launchd fires a Day/Month schedule only on dates that exist (#1015 review B4). `.nextTime`
+        // would roll a missing day 31 or February 29 over to the 1st of the next month and drop the
+        // time, so the DATE is matched strictly, then the clock time is placed on that date the same
+        // way a clock-only schedule places it.
+        let dateOnly = DateComponents(month: month, day: day)
+        var searchFrom = calendar.startOfDay(for: date).addingTimeInterval(-1)
+        // A Feb 29 schedule matches within 8 years; this bound only stops a malformed calendar.
+        for _ in 0..<(12 * 9) {
+            guard let matchingDay = calendar.nextDate(after: searchFrom, matching: dateOnly, matchingPolicy: .strict)
+            else { return nil }
+            let dayStart = calendar.startOfDay(for: matchingDay)
+            if let run = calendar.nextDate(
+                after: dayStart.addingTimeInterval(-1),
+                matching: DateComponents(hour: hour, minute: minute, second: 0),
+                matchingPolicy: .nextTime
+            ), calendar.isDate(run, inSameDayAs: dayStart), run > date {
+                return run
+            }
+            // This day's run has passed: the next strict date match is after this day's start.
+            searchFrom = dayStart
+        }
+        return nil
     }
 
     /// Builds a cadence from one `StartCalendarInterval` dict, or explains why it can't be shown.
@@ -51,7 +86,7 @@ enum BackupCadence: Equatable, Sendable {
         var values: [String: Int] = [:]
         for (key, range) in ranges {
             guard let raw = entry[key] else { continue }
-            guard let value = raw as? Int else { return .failure(.invalid("non-integer \(key)")) }
+            guard let value = strictInteger(raw) else { return .failure(.invalid("non-integer \(key)")) }
             guard range.contains(value) else { return .failure(.invalid("invalid \(key) \(value)")) }
             values[key] = value
         }
@@ -62,6 +97,10 @@ enum BackupCadence: Equatable, Sendable {
             return .failure(.notRepresentable("Day with Weekday"))
         }
         if values["Month"] != nil, values["Day"] == nil { return .failure(.notRepresentable("Month without Day")) }
+        // February 30 or April 31 never occurs, so launchd never fires it.
+        if let month = values["Month"], let day = values["Day"], day > daysInLongestMonth[month - 1] {
+            return .failure(.invalid("a date that never occurs (\(months[month - 1]) \(day))"))
+        }
         if values["Hour"] == nil, values.keys.contains(where: { $0 != "Minute" }) {
             return .failure(.notRepresentable("no Hour with a date constraint"))
         }
@@ -114,7 +153,7 @@ enum BackupScheduleRead: Equatable, Sendable {
             }
         }
         if let intervalValue = plist["StartInterval"] {
-            guard let seconds = intervalValue as? Int, seconds > 0 else {
+            guard let seconds = BackupCadence.strictInteger(intervalValue), seconds > 0 else {
                 return .unknown(reason: "\(path) has an invalid StartInterval")
             }
             cadences.append(.interval(seconds: seconds))
