@@ -659,7 +659,7 @@ struct BrainBarSettingsView: View {
         _navigation = StateObject(wrappedValue: navigation)
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
             observabilityURL: Self.observabilityURL(databasePath: databasePath),
-            watcherHealthURL: WatcherHealthReader.url(dbPath: databasePath)
+            watcherHealthURL: WatcherHealthReader.resolvedURL()
         ))
     }
 

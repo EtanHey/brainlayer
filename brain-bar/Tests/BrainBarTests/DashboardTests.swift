@@ -63,6 +63,8 @@ final class DashboardTests: XCTestCase {
         return formatter
     }()
 
+    private var restoreWatcherHealthEnvironment: (() -> Void)?
+
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-dashboard-\(UUID().uuidString).db"
@@ -74,6 +76,7 @@ final class DashboardTests: XCTestCase {
         try? FileManager.default.createDirectory(at: durableQueueRoot, withIntermediateDirectories: true)
         restoreFallbackReplayRoot = setDashboardFallbackReplayGitsRoot(fallbackReplayRoot)
         restoreDurableQueueRoot = setDashboardDurableStoreQueuePath(durableQueueRoot)
+        restoreWatcherHealthEnvironment = isolateWatcherHealthEnvironment(root: fallbackReplayRoot)
         db = BrainDatabase(path: tempDBPath)
     }
 
@@ -81,6 +84,7 @@ final class DashboardTests: XCTestCase {
         db.close()
         restoreFallbackReplayRoot?()
         restoreDurableQueueRoot?()
+        restoreWatcherHealthEnvironment?()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
@@ -333,6 +337,27 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(health.pollCount, 72)
         XCTAssertEqual(health.alertReasons, ["offset_lag"])
         XCTAssertEqual(health.maxOffsetLagBytes, 2_097_152)
+    }
+
+    /// #1014: the Dashboard reads the health file the WATCHER writes, beside BRAINLAYER_DB, not
+    /// beside BrainBar's own database (BRAINBAR_DB_PATH), which can be a different file.
+    func testDashboardStatsReadsWatcherHealthBesideTheWatchersDatabaseNotBrainBars() throws {
+        let watcherDB = fallbackReplayRoot.appendingPathComponent("watcher-db/brainlayer.db")
+        try FileManager.default.createDirectory(at: watcherDB.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"updated_at": "2026-09-29T21:34:07+00:00", "poll_count": 9, "alert_reasons": []}"#
+            .write(to: watcherDB.deletingLastPathComponent().appendingPathComponent("watcher-health.json"), atomically: true, encoding: .utf8)
+        XCTAssertNotEqual(
+            URL(fileURLWithPath: tempDBPath).deletingLastPathComponent().path,
+            watcherDB.deletingLastPathComponent().path,
+            "BrainBar's DB and the watcher's DB must live apart for this test to mean anything"
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        guard case let .readable(health) = stats.watcherHealth else {
+            return XCTFail("expected the watcher's health file, got \(String(describing: stats.watcherHealth))")
+        }
+        XCTAssertEqual(health.pollCount, 9)
     }
 
     func testDashboardStatsReportsAMissingWatcherHealthFileAsMissing() throws {

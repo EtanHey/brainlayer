@@ -250,6 +250,58 @@ enum WatcherHealthReader {
         return URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("watcher-health.json")
     }
 
+    /// The watcher's OWN health path, resolved the way the watcher resolves it (#1014): the watcher's
+    /// launchd environment overlaid by the env file `brainlayer-env-run.sh` exports over it, then
+    /// `BRAINLAYER_WATCHER_HEALTH_PATH`, else beside `BRAINLAYER_DB`, else beside the canonical DB.
+    /// BrainBar's own `BRAINBAR_DB_PATH` names BrainBar's database, not the watcher's, so it never
+    /// steers this.
+    static func watcherURL(environment: [String: String], envFile: String?, home: URL) -> URL {
+        var effective = environment
+        for (key, value) in envFileValues(envFile) { effective[key] = value }
+        func expand(_ path: String) -> String {
+            path == "~" ? home.path : path.hasPrefix("~/") ? home.path + path.dropFirst() : path
+        }
+        let dbPath = effective["BRAINLAYER_DB"].flatMap { $0.isEmpty ? nil : expand($0) }
+            ?? home.appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
+        let override = effective[pathOverrideKey].flatMap { $0.isEmpty ? nil : expand($0) }
+        return url(dbPath: dbPath, environment: override.map { [pathOverrideKey: $0] } ?? [:])
+    }
+
+    /// The live path: this process's environment plus the env file the watcher's LaunchAgent loads.
+    static func resolvedURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        let envFilePath = environment["BRAINLAYER_ENV_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? home.appendingPathComponent(".config/brainlayer/brainlayer.env").path
+        return watcherURL(
+            environment: environment,
+            envFile: try? String(contentsOfFile: envFilePath, encoding: .utf8),
+            home: home
+        )
+    }
+
+    /// The same simple `KEY=value` / `export KEY="value"` lines `brainlayer-env-run.sh` exports.
+    /// Command substitutions are skipped there too.
+    private static func envFileValues(_ text: String?) -> [String: String] {
+        guard let text else { return [:] }
+        var values: [String: String] = [:]
+        for raw in text.split(whereSeparator: \.isNewline) {
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            if line.hasPrefix("export ") { line = String(line.dropFirst("export ".count)) }
+            guard let equals = line.firstIndex(of: "=") else { continue }
+            let key = line[..<equals].trimmingCharacters(in: .whitespaces)
+            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, !value.contains("$("), !value.contains("`") else { continue }
+            if value.count >= 2, let first = value.first, first == value.last, first == "\"" || first == "'" {
+                value = String(value.dropFirst().dropLast())
+            }
+            values[key] = value
+        }
+        return values
+    }
+
     static func read(url: URL) -> WatcherHealthFileRead {
         guard FileManager.default.fileExists(atPath: url.path) else { return .missing(path: url.path) }
         do {

@@ -15,14 +15,19 @@ import SQLite3
 final class DatabaseTests: XCTestCase {
     var db: BrainDatabase!
     var tempDBPath: String!
+    private var restoreWatcherHealthEnvironment: (() -> Void)?
 
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-test-\(UUID().uuidString).db"
+        restoreWatcherHealthEnvironment = isolateWatcherHealthEnvironment(
+            root: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("brainbar-test-watcher-\(UUID().uuidString)")
+        )
         db = BrainDatabase(path: tempDBPath)
     }
 
     override func tearDown() {
+        restoreWatcherHealthEnvironment?()
         db.close()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")

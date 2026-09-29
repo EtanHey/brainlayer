@@ -407,6 +407,53 @@ final class WatcherHealthStatusTests: XCTestCase {
         )
     }
 
+    /// #1014: BrainBar must read the health file the WATCHER writes. The watcher resolves
+    /// BRAINLAYER_DB (from its launchd env, overlaid by brainlayer.env) or the canonical DB, and writes
+    /// watcher-health.json beside it unless BRAINLAYER_WATCHER_HEALTH_PATH overrides it. BrainBar's own
+    /// BRAINBAR_DB_PATH is not the watcher's DB and must never steer this.
+    func testWatcherHealthPathFollowsTheWatchersResolvedDatabase() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        func path(_ env: [String: String], file: String? = nil) -> String {
+            WatcherHealthReader.watcherURL(environment: env, envFile: file, home: home).path
+        }
+        let canonical = "/Users/me/.local/share/brainlayer/watcher-health.json"
+        XCTAssertEqual(path([:]), canonical, "neither set: the canonical DB's directory")
+        XCTAssertEqual(path(["BRAINLAYER_DB": "/data/bl/brainlayer.db"]), "/data/bl/watcher-health.json", "BRAINLAYER_DB set")
+        XCTAssertEqual(path(["BRAINBAR_DB_PATH": "/tmp/fixture/brainbar.db"]), canonical, "BRAINBAR_DB_PATH is BrainBar's, not the watcher's")
+        XCTAssertEqual(
+            path(["BRAINLAYER_DB": "/data/bl/brainlayer.db", "BRAINBAR_DB_PATH": "/tmp/fixture/brainbar.db"]),
+            "/data/bl/watcher-health.json",
+            "both set: the watcher's BRAINLAYER_DB wins"
+        )
+        XCTAssertEqual(
+            path(["BRAINLAYER_DB": "/data/bl/brainlayer.db", "BRAINLAYER_WATCHER_HEALTH_PATH": "/elsewhere/h.json"]),
+            "/elsewhere/h.json",
+            "the explicit health override wins, as in the watcher"
+        )
+    }
+
+    func testWatcherHealthPathHonoursTheEnvFileTheWatcherLoads() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        let file = """
+        # BrainLayer launchd env
+        export BRAINLAYER_DB="~/vaults/brainlayer.db"
+        GOOGLE_API_KEY=redacted
+        """
+        // brainlayer-env-run.sh exports the file over launchd's env, so the file wins.
+        XCTAssertEqual(
+            WatcherHealthReader.watcherURL(environment: ["BRAINLAYER_DB": "/data/bl/brainlayer.db"], envFile: file, home: home).path,
+            "/Users/me/vaults/watcher-health.json"
+        )
+        XCTAssertEqual(
+            WatcherHealthReader.watcherURL(
+                environment: [:],
+                envFile: "BRAINLAYER_WATCHER_HEALTH_PATH='/x/h.json'\nBRAINLAYER_DB=/data/bl/brainlayer.db",
+                home: home
+            ).path,
+            "/x/h.json"
+        )
+    }
+
     func testReaderDistinguishesMissingUnreadableAndReadable() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

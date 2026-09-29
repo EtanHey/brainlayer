@@ -2258,7 +2258,7 @@ final class BrainDatabase: @unchecked Sendable {
     }
 
     private func watcherHealthSnapshot() -> WatcherHealthFileRead {
-        WatcherHealthReader.read(url: WatcherHealthReader.url(dbPath: path))
+        WatcherHealthReader.read(url: WatcherHealthReader.resolvedURL())
     }
 
     func dataVersion() throws -> Int {

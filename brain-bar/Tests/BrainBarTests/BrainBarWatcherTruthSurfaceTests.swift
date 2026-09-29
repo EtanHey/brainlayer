@@ -172,3 +172,19 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         XCTAssertTrue(viewModel.footerPresentation.detail?.contains(url.path) == true)
     }
 }
+
+/// Unit tests that reach `BrainDatabase.dashboardStats()` must never read the real
+/// ~/.config/brainlayer/brainlayer.env or the real watcher-health.json. This points the watcher's
+/// env file at a nonexistent path and BRAINLAYER_DB at a temp directory, and returns the restore.
+func isolateWatcherHealthEnvironment(root: URL) -> () -> Void {
+    let keys = ["BRAINLAYER_ENV_FILE", "BRAINLAYER_DB", "BRAINLAYER_WATCHER_HEALTH_PATH"]
+    let previous = keys.map { ($0, ProcessInfo.processInfo.environment[$0]) }
+    setenv("BRAINLAYER_ENV_FILE", root.appendingPathComponent("no-brainlayer.env").path, 1)
+    setenv("BRAINLAYER_DB", root.appendingPathComponent("watcher-db/brainlayer.db").path, 1)
+    unsetenv("BRAINLAYER_WATCHER_HEALTH_PATH")
+    return {
+        for (key, value) in previous {
+            if let value { setenv(key, value, 1) } else { unsetenv(key) }
+        }
+    }
+}
