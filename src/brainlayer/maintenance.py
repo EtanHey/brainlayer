@@ -21,11 +21,13 @@ from typing import Any, Callable, Mapping, Sequence
 import apsw
 
 from .backup_daily import (
+    BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV,
     DAILY_RETENTION,
     DEFAULT_STAGING_DIR,
     WEEKLY_RETENTION,
     BackupAlreadyRunningError,
     _backup_log_path,
+    _recent_verified_backup_for_reuse,
 )
 from .drain import BurnDrainResult, burn_drain_once
 from .launchd_primitive import is_launchd_label_loaded
@@ -779,33 +781,12 @@ def _backup_lock_is_held(staging_dir: Path) -> bool:
 
 def _recent_verified_backup(config: MaintenanceConfig) -> dict[str, Any] | None:
     log_path = config.backup_log_path or _backup_log_path(None, db_path=config.db_path)
-    try:
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return None
-    now = config.now_fn().astimezone(dt.UTC)
-    for line in reversed(lines):
-        try:
-            receipt = json.loads(line)
-            attempted = dt.datetime.fromisoformat(receipt["attempted_at"])
-        except (ValueError, KeyError, TypeError):
-            continue
-        if attempted.tzinfo is None:
-            continue
-        attempted = attempted.astimezone(dt.UTC)
-        age = now - attempted
-        drive_file = receipt.get("drive_file")
-        if (
-            receipt.get("db") == str(config.db_path)
-            and receipt.get("uploaded") is True
-            and receipt.get("verified") is True
-            and "error_type" not in receipt
-            and isinstance(drive_file, dict)
-            and isinstance(drive_file.get("id"), str)
-            and dt.timedelta(0) <= age <= dt.timedelta(hours=config.backup_reuse_max_age_hours)
-        ):
-            return receipt
-    return None
+    return _recent_verified_backup_for_reuse(
+        log_path,
+        config.db_path,
+        now=config.now_fn(),
+        max_age_hours=config.backup_reuse_max_age_hours,
+    )
 
 
 def _remaining_quiet_window_seconds(config: MaintenanceConfig) -> int:
@@ -828,6 +809,7 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
             "BRAINLAYER_BACKUP_STAGING_DIR": str(config.backup_staging_dir),
             "BRAINLAYER_BACKUP_LOG_PATH": str(config.backup_log_path or _backup_log_path(None, db_path=config.db_path)),
             "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(timeout_seconds),
+            BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV: str(config.backup_reuse_max_age_hours),
         }
     )
     env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)

@@ -61,6 +61,7 @@ BACKUP_ATTEMPT_MAX_AGE_ENV = "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
+BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
 BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
@@ -1572,6 +1573,37 @@ def prune_drive_backups(
     return trashed
 
 
+def _recent_verified_backup_for_reuse(
+    log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
+) -> dict[str, Any] | None:
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return None
+    now = now.astimezone(dt.UTC)
+    for line in reversed(lines):
+        try:
+            receipt = json.loads(line)
+            attempted = dt.datetime.fromisoformat(receipt["attempted_at"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if attempted.tzinfo is None:
+            continue
+        age = now - attempted.astimezone(dt.UTC)
+        drive_file = receipt.get("drive_file")
+        if (
+            receipt.get("db") == str(db_path)
+            and receipt.get("uploaded") is True
+            and receipt.get("verified") is True
+            and "error_type" not in receipt
+            and isinstance(drive_file, dict)
+            and isinstance(drive_file.get("id"), str)
+            and dt.timedelta(0) <= age <= dt.timedelta(hours=max_age_hours)
+        ):
+            return receipt
+    return None
+
+
 def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     @functools.wraps(func)
     def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1598,6 +1630,20 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
                 )
                 raise BackupAlreadyRunningError(error) from exc
             try:
+                # Weekly maintenance's first receipt check precedes this lock. A daily
+                # backup can finish in that gap, so recheck before copying the DB.
+                reuse_age = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
+                if reuse_age is not None:
+                    hours = float(reuse_age)
+                    if not math.isfinite(hours) or hours < 0:
+                        raise ValueError(f"{BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV} must be finite and nonnegative")
+                    db_path = Path(bound.arguments.get("db_path") or get_db_path())
+                    log_path = _backup_log_path(bound.arguments.get("log_path"), db_path=db_path)
+                    receipt = _recent_verified_backup_for_reuse(
+                        log_path, db_path, now=dt.datetime.now(dt.UTC), max_age_hours=hours
+                    )
+                    if receipt is not None:
+                        return receipt
                 return func(*args, **kwargs)
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
