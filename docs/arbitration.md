@@ -14,6 +14,6 @@ BrainLayer uses a single-writer arbitration path for background producers that c
 ## FTS Repair
 
 - Startup no longer performs large synchronous trigram repairs.
-- Run `brainlayer repair-fts` for an explicit `chunks_fts_trigram` rebuild.
-- `scripts/launchd/com.brainlayer.repair-fts.plist` schedules that repair weekly.
+- `brainlayer repair-fts` quiesces resident writer services, rebuilds the configured runtime database through the schema-validated writer, then resumes only services it stopped. The weekly launchd job uses this form.
+- `brainlayer repair-fts <copy.db>` keeps the offline-copy path. An explicit configured database path is refused by the offline migrator.
 - Set `BRAINLAYER_REPAIR=1` only for an operator-controlled process that should run the repair during VectorStore initialization.

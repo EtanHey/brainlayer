@@ -131,6 +131,10 @@ BrainLayer includes launchd plist templates for automated operation:
 | `com.brainlayer.maintenance-nightly` | Nightly | Light maintenance |
 | `com.brainlayer.maintenance-weekly` | Weekly | Full maintenance |
 
+Weekly maintenance waits up to two hours for an in-flight daily DB backup. A recent, verified daily backup is reused because daily and weekly Drive retention policies are the same. If the wait times out or the backup is unverified, light maintenance continues, VACUUM is skipped, and the job exits **76**. The maintenance log records the backup status. `--full --dry-run` reports a held backup lock without waiting or running backup work.
+
+Maintenance and the scheduled FTS repair share a database-local lock so the 04:30 repair waits for a delayed weekly run. If that lock cannot be obtained within four hours, the waiting job exits **77** without quiescing services or opening a writer.
+
 Manual install and control:
 
 ```bash

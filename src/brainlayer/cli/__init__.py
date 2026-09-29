@@ -2843,20 +2843,27 @@ def wal_checkpoint(
 
 @app.command("repair-fts")
 def repair_fts(
-    db_path: Path = typer.Argument(..., help="Explicit offline database copy to repair."),
+    db_path: Path | None = typer.Argument(None, help="Offline database copy; defaults to the configured runtime DB."),
 ) -> None:
-    """Rebuild FTS maintenance tables on an offline copy only."""
+    """Rebuild FTS tables on the configured runtime DB or an explicit offline copy."""
+    from ..maintenance import MaintenanceAbort, run_coordinated_fts_repair
     from ..runtime_store import OfflineMigrator
 
     try:
-        store = OfflineMigrator(db_path)
-        try:
-            result = store.repair_fts(rebuild_trigram=True)
-        finally:
-            store.close()
+        if db_path is None:
+            result = run_coordinated_fts_repair(get_db_path())
+        else:
+            store = OfflineMigrator(db_path)
+            try:
+                result = store.repair_fts(rebuild_trigram=True)
+            finally:
+                store.close()
     except PermissionError as exc:
         rprint(f"[bold red]Repair refused:[/] {exc}")
         raise typer.Exit(1) from exc
+    except MaintenanceAbort as exc:
+        rprint(f"[bold red]Repair postponed:[/] {exc.reason}")
+        raise typer.Exit(exc.code) from exc
     console.print_json(data=result)
 
 
