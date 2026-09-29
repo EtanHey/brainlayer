@@ -218,15 +218,26 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     func testCollapsingADisclosureAfterScrollingToTheBottomLeavesNoBlankTail() throws {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        let disclosures: [(String, (BrainBarDashboardPanelController, Bool) -> Void)] = [
-            ("details", { $0.setDetailsExpandedForTesting($1) }),
-            ("signal coverage", { controller, expanded in
+        // The Attention row renders only when the status strip is amber with items: unmeasured
+        // agent activity is one. Details stays open so the dashboard scrolls at every width.
+        let attentionRuntime = BrainBarRuntime()
+        attentionRuntime.install(
+            collector: BrainBarDashboardFixture.makeCollector(agentActivity: .unavailable("fixture agent activity unavailable")),
+            database: nil
+        )
+        let disclosures: [(String, BrainBarRuntime, (BrainBarDashboardPanelController, Bool) -> Void)] = [
+            ("details", runtime, { $0.setDetailsExpandedForTesting($1) }),
+            ("signal coverage", runtime, { controller, expanded in
                 controller.setDetailsExpandedForTesting(true)
                 controller.setSignalCoverageExpandedForTesting(expanded)
             }),
+            ("attention", attentionRuntime, { controller, expanded in
+                controller.setDetailsExpandedForTesting(true)
+                controller.setAttentionExpandedForTesting(expanded)
+            }),
         ]
         for width: CGFloat in [760, 960, 1_280] {
-            for (name, setExpanded) in disclosures {
+            for (name, runtime, setExpanded) in disclosures {
                 let controller = BrainBarDashboardPanelController(runtime: runtime)
                 let panel = controller.panelForTesting
                 panel.setFrame(NSRect(x: -2_000, y: -2_000, width: width, height: 640), display: false)
