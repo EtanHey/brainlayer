@@ -10,6 +10,8 @@ import Foundation
 struct BrainLayerCLIResult: Equatable, Sendable {
     let terminationStatus: Int32
     let stdout: String
+    /// The runner stopped the CLI at its timeout; it did not finish on its own.
+    var timedOut = false
 }
 
 /// Runs `brainlayer <arguments>`. Nil when the CLI cannot be found or launched. Injected in tests.
@@ -201,9 +203,22 @@ struct ProcessBrainLayerCLIRunner: BrainLayerCLIRunning {
             environment: environment,
             isExecutable: { FileManager.default.isExecutableFile(atPath: $0) }
         ) else { return nil }
+        return Self.spawn(executable: executable, arguments: arguments, environment: environment, timeout: timeout)
+    }
+
+    static let terminationGrace: TimeInterval = 2
+
+    static func spawn(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval,
+        grace: TimeInterval = terminationGrace
+    ) -> BrainLayerCLIResult? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.environment = environment
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
