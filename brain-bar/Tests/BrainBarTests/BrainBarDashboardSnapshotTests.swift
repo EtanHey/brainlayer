@@ -83,7 +83,12 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
             encoding: .utf8
         )
-        XCTAssertTrue(source.contains("statusStrip\n                        summaryTiles(layout: layout)\n                        ingestBand(layout: layout)"))
+        // The Google Drive banner sits between the status strip and the tiles, and only renders
+        // when Drive access needs a click (missing, invalid or expiring).
+        XCTAssertTrue(source.contains(
+            "statusStrip\n                        if let driveAuth {\n                            BrainBarDriveAuthBanner(model: driveAuth)\n                        }\n"
+                + "                        summaryTiles(layout: layout)\n                        ingestBand(layout: layout)"
+        ))
         XCTAssertFalse(source.contains("ObservabilityDashboardView("), "The old lower observability grid must not return.")
         XCTAssertFalse(source.contains("Runtime & Details"), "Technical summaries must stay hidden while Details is collapsed.")
     }

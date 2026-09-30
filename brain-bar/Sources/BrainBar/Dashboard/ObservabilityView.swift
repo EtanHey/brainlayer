@@ -341,9 +341,18 @@ struct ObservabilityBackupStatus: Equatable, Sendable {
     let upload, snapshot, job, freshness: ObservabilityStatusLine
     let retention, archives: ObservabilityStatusLine
     let error: ObservabilityStatusLine?
+    /// `error` is a job alert (#1031): the failed job's own sentence for Etan.
+    var errorIsJobAlert = false
 
     var lines: [ObservabilityStatusLine] {
         [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
+    }
+
+    /// The one red line that speaks for the backups: a job alert, the failed job's own sentence,
+    /// leads whatever else is red (#1029 review B2); otherwise the first red line.
+    var attentionLine: ObservabilityStatusLine? {
+        if errorIsJobAlert, let error, error.tone == .red { return error }
+        return lines.first { $0.tone == .red }
     }
 }
 
@@ -510,12 +519,18 @@ enum ObservabilityPresentation {
             if value == "drive_credentials_restored_backup_pending" {
                 return .init(text: "Google Drive credentials restored — next backup pending", tone: .neutral)
             }
+            // A job alert (#1031) carries a sentence written for Etan: show it as written.
+            if value.hasPrefix(jobAlertPrefix) {
+                let reason = DriveAuthJSON.sanitized(String(value.dropFirst(jobAlertPrefix.count)))
+                return .init(text: reason ?? "Backup alert with no reason given", tone: .red)
+            }
             let kind = value.hasPrefix("jsonl_backup_attempt_") ? "Transcript" : "DB"
             return .init(text: "\(kind) backup error: \(errorText(value))", tone: .red)
         }
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
-            retention: retention, archives: archives, error: error
+            retention: retention, archives: archives, error: error,
+            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true
         )
     }
 
@@ -530,6 +545,8 @@ enum ObservabilityPresentation {
         formatter.locale = .current
         return "\(formatter.string(from: NSNumber(value: value)) ?? String(value)) h"
     }
+
+    private static let jobAlertPrefix = "job_alert:"
 
     private static func errorText(_ value: String) -> String {
         switch value {

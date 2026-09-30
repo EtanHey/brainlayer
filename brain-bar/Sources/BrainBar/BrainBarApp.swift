@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
     private var uiHeartbeatTimer: DispatchSourceTimer?
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
+    private var driveAuthTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
@@ -81,6 +82,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         flushPendingBrainBarURLs()
 
+        // Google Drive access for backups: checked at launch and every 30 minutes, so the day-6
+        // "expires in N h" banner appears without anyone opening Backups.
+        runtime.driveAuth.install(runner: ProcessBrainLayerCLIRunner())
+        Task { [driveAuth = runtime.driveAuth] in await driveAuth.refreshStatus() }
+        driveAuthTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.runtime.driveAuth.refreshStatus() }
+        }
+
         collector.start()
         configureToggleHotkey()
         NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: runtime.launchMode))
@@ -95,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         uiHeartbeatTimer = nil
         daemonWatchdog?.stop()
         daemonWatchdog = nil
+        driveAuthTimer?.invalidate()
+        driveAuthTimer = nil
         hotkeyFileWatcher?.cancel()
         toggleHotkey?.stop()
         collector?.stop()

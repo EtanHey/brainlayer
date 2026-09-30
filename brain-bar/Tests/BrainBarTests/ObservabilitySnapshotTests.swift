@@ -130,6 +130,25 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertEqual(status.error?.text, "DB backup error: Google Drive credentials missing — re-auth needed")
     }
 
+    /// #1031 review N3: a job alert's `error_type` is `job_alert:<reason>`, and the reason is a
+    /// sentence written for Etan. It shows verbatim, not re-capitalised ("Reconnect In Brainbar").
+    func testJobAlertReasonRendersVerbatim() {
+        func status(_ errorType: String) -> ObservabilityStatusLine? {
+            ObservabilityPresentation.backupStatus(for: ObservabilityDocument.Backups(
+                state: "measured", reason: "", inputs: [], freshness: "stale",
+                thresholdHours: nil, retentionInvariant: nil, survivingArchives30D: nil,
+                errorType: errorType, lastVerifiedUpload: nil, dbSnapshot: nil, launchd: nil
+            )).error
+        }
+        XCTAssertEqual(status("job_alert:Drive access expired: Reconnect in BrainBar")?.text, "Drive access expired: Reconnect in BrainBar")
+        XCTAssertEqual(status("job_alert:Drive access expired: Reconnect in BrainBar")?.tone, .red)
+        XCTAssertEqual(
+            status("job_alert:Transcript backup failed; check the backup log")?.text,
+            "Transcript backup failed; check the backup log"
+        )
+        XCTAssertEqual(status("job_alert:  ")?.text, "Backup alert with no reason given")
+    }
+
     func testRestoredDriveCredentialsRenderAsPendingInsteadOfCurrentError() {
         let backups = ObservabilityDocument.Backups(
             state: "measured", reason: "", inputs: [], freshness: "stale",

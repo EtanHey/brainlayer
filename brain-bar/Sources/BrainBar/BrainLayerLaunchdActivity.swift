@@ -178,3 +178,54 @@ extension WatcherLaunchdEvidence {
         }
     }
 }
+
+/// #1029 review B1: the Backups page's one verdict. The group badge, the Google Drive card and the
+/// backup status lines all come from it, so the page can never say "Backups can't upload" beside
+/// "Healthy".
+struct BrainBarBackupsHealth: Equatable, Sendable {
+    enum Badge: Equatable, Sendable {
+        case healthy, awaitingRun, expiring, attention, unknown
+
+        var title: String {
+            switch self {
+            case .healthy: "Healthy"
+            case .awaitingRun: "Awaiting next run"
+            case .expiring: "Drive access expiring"
+            case .attention: "Needs attention"
+            case .unknown: "Status unknown"
+            }
+        }
+    }
+
+    let badge: Badge
+    /// The most severe reason on the page, shown under the badge. Nil when there is none.
+    let reason: String?
+
+    static func derive(
+        job: BrainLayerLaunchdGroupStatus,
+        drive: DriveAuthPresentation?,
+        status: ObservabilityBackupStatus?,
+        statusUnavailableReason: String
+    ) -> Self {
+        // Every red line the page shows, most severe first: the failed job's own alert, Drive
+        // access, the launchd job, then the other backup diagnostics.
+        let red = [
+            status.flatMap { $0.errorIsJobAlert ? $0.attentionLine?.text : nil },
+            drive?.tone == .attention ? drive?.line : nil,
+            job.health == .unhealthy ? job.attentionReason : nil,
+            status.map { $0.attentionLine?.text } ?? statusUnavailableReason,
+        ].compactMap { $0 }
+        if let reason = red.first { return .init(badge: .attention, reason: reason) }
+        switch drive?.tone {
+        case .expiring: return .init(badge: .expiring, reason: drive?.line)
+        case .unknown: return .init(badge: .unknown, reason: drive?.line)
+        case .attention, .connected, nil: break
+        }
+        return switch job.health {
+        case .healthy: .init(badge: .healthy, reason: nil)
+        case .awaitingRun: .init(badge: .awaitingRun, reason: nil)
+        case .unknown: .init(badge: .unknown, reason: job.attentionReason)
+        case .unhealthy: .init(badge: .attention, reason: job.attentionReason)
+        }
+    }
+}
