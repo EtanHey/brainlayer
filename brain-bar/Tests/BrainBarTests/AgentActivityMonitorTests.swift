@@ -3,7 +3,7 @@ import XCTest
 
 final class AgentActivityMonitorTests: XCTestCase {
     func testFailedProcessSnapshotIsUnmeasuredInsteadOfQuiet() {
-        let activity = AgentActivityMonitor(snapshotProvider: { nil }).sample()
+        let activity = AgentActivityMonitor(snapshotProvider: { nil }, executablePathResolver: { _ in nil }).sample()
 
         XCTAssertFalse(activity.isMeasured)
         XCTAssertEqual(activity.summaryText, "Agent activity unavailable: ps capture failed")
@@ -22,7 +22,13 @@ final class AgentActivityMonitorTests: XCTestCase {
          1588     1 Claude Helper    /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process
         """
 
-        let activity = AgentActivityMonitor.parse(snapshot)
+        // Only the kernel path marks the Claude.app helpers as app-bundled (#990).
+        let activity = AgentActivityMonitor.parse(snapshot, executablePath: { pid in
+            [
+                1355: "/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler",
+                1588: "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+            ][pid]
+        })
 
         XCTAssertEqual(activity.count(for: .claude), 1)
         XCTAssertEqual(activity.count(for: .codex), 1)

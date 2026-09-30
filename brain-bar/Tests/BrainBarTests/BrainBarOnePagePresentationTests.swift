@@ -241,7 +241,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     func testLoadingSnapshotDoesNotPromoteStatsDerivedHeroUnknowns() throws {
         let collector = StatsCollector(
             dbPath: "/dev/null",
-            daemonMonitor: DaemonHealthMonitor(targetPID: getpid())
+            daemonMonitor: DaemonHealthMonitor(targetPID: getpid()),
+            agentActivityMonitor: .synthetic
         )
         let presentation = try makePresentation(
             result: BrainBarOnePageTestFixture.healthyResult(),

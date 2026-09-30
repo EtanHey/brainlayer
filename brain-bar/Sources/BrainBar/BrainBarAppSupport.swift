@@ -11,6 +11,7 @@ enum BrainBarAppSupport {
     static func makeStatsCollector(
         dbPath: String,
         targetPID: pid_t,
+        agentActivityMonitor: AgentActivityMonitor,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
         watcherProcessProbe: any WatcherProcessProbing = LaunchctlWatcherProcessProbe(),
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
@@ -18,6 +19,7 @@ enum BrainBarAppSupport {
         makeStatsCollector(
             dbPath: dbPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: targetPID),
+            agentActivityMonitor: agentActivityMonitor,
             brainBusEvents: brainBusEvents,
             watcherProcessProbe: watcherProcessProbe,
             databaseOpenConfiguration: databaseOpenConfiguration
@@ -28,6 +30,7 @@ enum BrainBarAppSupport {
     static func makeStatsCollector(
         dbPath: String,
         daemonMonitor: DaemonHealthMonitor,
+        agentActivityMonitor: AgentActivityMonitor,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
         watcherProcessProbe: any WatcherProcessProbing = LaunchctlWatcherProcessProbe(),
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
@@ -36,6 +39,7 @@ enum BrainBarAppSupport {
             dbPath: dbPath,
             daemonMonitor: daemonMonitor,
             watcherProcessProbe: watcherProcessProbe,
+            agentActivityMonitor: agentActivityMonitor,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: databaseOpenConfiguration
         )
@@ -44,6 +48,7 @@ enum BrainBarAppSupport {
     @MainActor
     static func makeUIStatsCollector(
         dbPath: String,
+        agentActivityMonitor: AgentActivityMonitor,
         brainBusEvents: BrainBusEventSource? = BrainBusClient(),
         daemonMonitor: DaemonHealthMonitor = DaemonHealthMonitor()
     ) -> StatsCollector {
@@ -52,6 +57,7 @@ enum BrainBarAppSupport {
         makeStatsCollector(
             dbPath: dbPath,
             daemonMonitor: daemonMonitor,
+            agentActivityMonitor: agentActivityMonitor,
             brainBusEvents: brainBusEvents,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )

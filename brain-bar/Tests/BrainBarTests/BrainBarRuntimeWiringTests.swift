@@ -29,6 +29,7 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil
         )
         defer { collector.stop() }
@@ -57,6 +58,7 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil
         )
         defer { collector.stop() }

@@ -89,6 +89,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: eventSource
         )
         defer {

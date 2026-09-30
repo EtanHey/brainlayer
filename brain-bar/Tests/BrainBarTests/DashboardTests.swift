@@ -2617,6 +2617,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0.05
         )
         defer { collector.stop() }
@@ -2655,6 +2656,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
@@ -2693,6 +2695,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
@@ -2738,6 +2741,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             brainBusEvents: eventSource
         )
         defer { collector.stop() }
@@ -2766,6 +2770,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             brainBusEvents: eventSource
         )
         defer { collector.stop() }
@@ -2787,6 +2792,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0.05,
             autoRefreshInterval: 60,
             brainBusEvents: eventSource
@@ -2810,6 +2816,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 60,
             brainBusEvents: eventSource
@@ -2834,6 +2841,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 60,
             brainBusEvents: eventSource
@@ -2873,6 +2881,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 60
         )
@@ -2919,7 +2928,8 @@ final class DashboardTests: XCTestCase {
 
         let collector = StatsCollector(
             dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic
         )
         defer { collector.stop() }
 
@@ -2968,7 +2978,8 @@ final class DashboardTests: XCTestCase {
 
         let collector = StatsCollector(
             dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic
         )
         defer { collector.stop() }
 
@@ -2991,9 +3002,10 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
-            agentActivityMonitor: AgentActivityMonitor(snapshotProvider: {
-                sampleCounter.snapshot()
-            })
+            agentActivityMonitor: AgentActivityMonitor(
+                snapshotProvider: { sampleCounter.snapshot() },
+                executablePathResolver: { _ in nil }
+            )
         )
         defer { collector.stop() }
 
@@ -3043,6 +3055,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0.05
         )
         defer { collector.stop() }
@@ -3070,6 +3083,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 0.05,
             brainBusEvents: nil
@@ -3109,6 +3123,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: brokenPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60
         )
         defer { collector.stop() }
@@ -3148,6 +3163,7 @@ final class DashboardTests: XCTestCase {
     func testMakeUIStatsCollectorUsesDiscoveredDaemonPIDWhenProvided() async throws {
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: tempDBPath,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
         )
