@@ -498,7 +498,8 @@ final class BrainBarUXLogicTests: XCTestCase {
         // #966: watcher-health.json is the canonical liveness surface (AGENTS.md). A heartbeat ten
         // minutes old is several missed ~60-95 s polls, so it is shown as a real problem with its
         // reason, no longer ignored as a "historical marker".
-        XCTAssertEqual(watcherLane.status, .idle)
+        XCTAssertEqual(watcherLane.status, .attention, "the pill follows the one watcher state (#1014 R1 B1)")
+        XCTAssertEqual(watcherLane.evidenceStatus, .idle)
         XCTAssertEqual(watcherLane.statusText, "NEEDS ATTENTION")
         XCTAssertTrue(
             watcherLane.lastEventText.hasPrefix("Watcher heartbeat stopped updating · since 10m ago"),
@@ -527,7 +528,8 @@ final class BrainBarUXLogicTests: XCTestCase {
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .unavailable)
+        XCTAssertEqual(watcherLane.status, .stopped, "the pill follows the one watcher state (#1014 R1 B1)")
+        XCTAssertEqual(watcherLane.evidenceStatus, .unavailable)
         XCTAssertEqual(watcherLane.statusText, "STOPPED")
     }
 
@@ -555,7 +557,8 @@ final class BrainBarUXLogicTests: XCTestCase {
                 timeframe: .live
             )
 
-            XCTAssertEqual(lane.status, .unavailable)
+            // The chart reads its evidence status; the watcher lane's pill follows its health (#1014 R1 B1).
+            XCTAssertEqual(lane.evidenceStatus, .unavailable)
             XCTAssertEqual(presentation.metricText, "Unavailable")
             XCTAssertFalse(presentation.showsSparkline)
             XCTAssertFalse(disclosure.accessibilitySummary.contains("Count: 0"))
@@ -695,7 +698,9 @@ final class BrainBarUXLogicTests: XCTestCase {
             .lane(for: .jsonlWatcher)
 
         // A health file without updated_at cannot prove liveness: honest unknown, never running.
-        XCTAssertEqual(watcherLane.status, .idle)
+        // The pill says so too (#1014 R1 B1); the flow evidence alone is idle.
+        XCTAssertEqual(watcherLane.status, .unknown)
+        XCTAssertEqual(watcherLane.evidenceStatus, .idle)
         XCTAssertEqual(watcherLane.statusText, "UNKNOWN")
         XCTAssertTrue(watcherLane.lastEventText.contains("no parseable updated_at"), watcherLane.lastEventText)
     }

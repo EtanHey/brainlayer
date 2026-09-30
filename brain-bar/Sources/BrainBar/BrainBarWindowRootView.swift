@@ -1351,7 +1351,7 @@ private struct BrainBarDashboardView: View {
 
     private func ingestSeriesChart(_ series: PipelineSeries) -> some View {
         let lane = pipelineFlowSummary.lane(for: series)
-        let isUnavailable = lane.status == .unavailable
+        let isUnavailable = lane.evidenceStatus == .unavailable
         let isEmpty = !isUnavailable && lane.values.allSatisfy { $0 == 0 }
         let disclosure = BrainBarDashboardChartDisclosure(
             series: series,
@@ -3101,7 +3101,7 @@ struct BrainBarIngestSeriesPresentation: Equatable {
     let showsSparkline: Bool
 
     init(lane: DashboardFlowLane, locale: Locale = .current) {
-        guard lane.status != .unavailable else {
+        guard lane.evidenceStatus != .unavailable else {
             metricText = "Unavailable"
             showsSparkline = false
             return
@@ -3157,7 +3157,7 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             unitLabel = "success-status chunk rows"
         }
 
-        if lane.status == .unavailable {
+        if lane.evidenceStatus == .unavailable {
             accessibilitySummary = "\(lane.name). Evidence unavailable. Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
             tooltipDisclosure = "Evidence unavailable"
         } else {

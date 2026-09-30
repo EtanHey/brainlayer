@@ -16,7 +16,9 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     private func stats(
         replayDebt: Int,
         process: WatcherProcessProbeResult = .running(pid: 4242),
-        health: WatcherHealthFileRead? = BrainBarDashboardFixture.healthyWatcherHealth
+        health: WatcherHealthFileRead? = BrainBarDashboardFixture.healthyWatcherHealth,
+        recentWatcherChunks: Int = 0,
+        flowReadable: Bool = true
     ) -> DashboardStats {
         DashboardStats(
             chunkCount: 120,
@@ -35,9 +37,70 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             pendingStoreFlushQueueDepth: replayDebt,
             watcherHealth: health,
             watcherProcessProbeResult: process,
-            watcherRecentDistinctChunkCount: 0,
-            watcherFlowReadability: .readable
+            watcherRecentDistinctChunkCount: recentWatcherChunks,
+            watcherFlowReadability: flowReadable ? .readable : .unreadable("flow query failed")
         )
+    }
+
+    private func degradedHealth() -> WatcherHealthFileRead {
+        .readable(WatcherHealthFile(
+            updatedAt: now.addingTimeInterval(-70),
+            pollCount: 72,
+            alertReasons: ["file_ingestion_failure"],
+            fileIngestionFailureCount: 2,
+            earliestFileIngestionFailureAt: now.addingTimeInterval(-7_200)
+        ))
+    }
+
+    // MARK: #1014 review round 1
+
+    /// B1: the lane's status pill rendered "live" (chunks flowed recently) while its body said
+    /// NEEDS ATTENTION. The pill comes from the same `WatcherHealthStatus`.
+    func testDegradedWatcherLaneDoesNotDisplayAHealthyFlowPill() {
+        let flow = DashboardFlowSummary.derive(
+            daemon: nil,
+            stats: stats(replayDebt: 0, health: degradedHealth(), recentWatcherChunks: 5),
+            now: now
+        )
+        let lane = flow.lane(for: .jsonlWatcher)
+        XCTAssertEqual(lane.statusText, "NEEDS ATTENTION")
+        XCTAssertEqual(lane.status.label, "needs attention", "lane pill contradicts its watcher status: \(lane.status.label)")
+        XCTAssertEqual(lane.status.stateTheme, .degraded)
+    }
+
+    /// B1: over every process, health and flow combination, the pill is a function of the one
+    /// watcher state: live/idle/running only while it is Running, and one pill per other state.
+    func testWatcherLanePillFollowsTheOneWatcherStateEverywhere() {
+        let processes: [WatcherProcessProbeResult] = [.running(pid: 1), .absent, .failure("launchctl failed")]
+        let healths: [WatcherHealthFileRead?] = [
+            BrainBarDashboardFixture.healthyWatcherHealth, degradedHealth(),
+            .missing(path: "/data/watcher-health.json"), nil,
+        ]
+        for process in processes {
+            for health in healths {
+                for chunks in [0, 5] {
+                    for readable in [true, false] {
+                        let flow = DashboardFlowSummary.derive(
+                            daemon: nil,
+                            stats: stats(replayDebt: 0, process: process, health: health, recentWatcherChunks: chunks, flowReadable: readable),
+                            now: now
+                        )
+                        let pill = flow.lane(for: .jsonlWatcher).status
+                        let context = "\(process) \(String(describing: health)) chunks=\(chunks) readable=\(readable): \(pill.label)"
+                        switch flow.watcherStatus {
+                        case .running:
+                            XCTAssertTrue([.live, .idle, .running].contains(pill), context)
+                        case .degraded:
+                            XCTAssertEqual(pill, .attention, context)
+                        case .stopped:
+                            XCTAssertEqual(pill, .stopped, context)
+                        case .unknown:
+                            XCTAssertEqual(pill, .unknown, context)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     func testReplayDebtNoLongerImplicatesTheWatcher() {
@@ -173,12 +236,14 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     }
 }
 
-/// Unit tests that reach `BrainDatabase.dashboardStats()` must never read the real
-/// ~/.config/brainlayer/brainlayer.env or the real watcher-health.json. This points the watcher's
-/// env file at a nonexistent path and BRAINLAYER_DB at a temp directory, and returns the restore.
+/// Unit tests that reach `BrainDatabase.dashboardStats()` must never read the real watcher
+/// LaunchAgent, ~/.config/brainlayer/brainlayer.env or the real watcher-health.json. This points the
+/// watcher plist and env file at nonexistent paths and BRAINLAYER_DB at a temp directory, and
+/// returns the restore.
 func isolateWatcherHealthEnvironment(root: URL) -> () -> Void {
-    let keys = ["BRAINLAYER_ENV_FILE", "BRAINLAYER_DB", "BRAINLAYER_WATCHER_HEALTH_PATH"]
+    let keys = ["BRAINLAYER_ENV_FILE", "BRAINLAYER_DB", "BRAINLAYER_WATCHER_HEALTH_PATH", "BRAINBAR_WATCHER_PLIST"]
     let previous = keys.map { ($0, ProcessInfo.processInfo.environment[$0]) }
+    setenv("BRAINBAR_WATCHER_PLIST", root.appendingPathComponent("no-watcher.plist").path, 1)
     setenv("BRAINLAYER_ENV_FILE", root.appendingPathComponent("no-brainlayer.env").path, 1)
     setenv("BRAINLAYER_DB", root.appendingPathComponent("watcher-db/brainlayer.db").path, 1)
     unsetenv("BRAINLAYER_WATCHER_HEALTH_PATH")

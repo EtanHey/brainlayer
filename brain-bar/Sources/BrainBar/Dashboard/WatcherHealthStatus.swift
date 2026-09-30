@@ -250,33 +250,58 @@ enum WatcherHealthReader {
         return URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("watcher-health.json")
     }
 
-    /// The watcher's OWN health path, resolved the way the watcher resolves it (#1014): the watcher's
-    /// launchd environment overlaid by the env file `brainlayer-env-run.sh` exports over it, then
-    /// `BRAINLAYER_WATCHER_HEALTH_PATH`, else beside `BRAINLAYER_DB`, else beside the canonical DB.
-    /// BrainBar's own `BRAINBAR_DB_PATH` names BrainBar's database, not the watcher's, so it never
-    /// steers this.
-    static func watcherURL(environment: [String: String], envFile: String?, home: URL) -> URL {
-        var effective = environment
-        for (key, value) in envFileValues(envFile) { effective[key] = value }
+    /// The watcher's OWN health path, resolved the way the watcher resolves it (#1014). `environment`
+    /// is the watcher's LaunchAgent environment, overlaid by the env file `brainlayer-env-run.sh`
+    /// exports over it. Precedence (#1014 R1 B2): an explicit `BRAINLAYER_WATCHER_HEALTH_PATH`, from
+    /// the watcher's environment and then BrainBar's; else beside the watcher's `BRAINLAYER_DB`, then
+    /// BrainBar's; else beside the canonical DB. BrainBar's own `BRAINBAR_DB_PATH` names BrainBar's
+    /// database, not the watcher's, so it never steers this.
+    static func watcherURL(
+        environment: [String: String],
+        envFile: String?,
+        brainBarEnvironment: [String: String] = [:],
+        home: URL
+    ) -> URL {
+        var watcher = environment
+        for (key, value) in envFileValues(envFile) { watcher[key] = value }
         func expand(_ path: String) -> String {
             path == "~" ? home.path : path.hasPrefix("~/") ? home.path + path.dropFirst() : path
         }
-        let dbPath = effective["BRAINLAYER_DB"].flatMap { $0.isEmpty ? nil : expand($0) }
-            ?? home.appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
-        let override = effective[pathOverrideKey].flatMap { $0.isEmpty ? nil : expand($0) }
-        return url(dbPath: dbPath, environment: override.map { [pathOverrideKey: $0] } ?? [:])
+        func value(_ key: String) -> String? {
+            [watcher[key], brainBarEnvironment[key]].lazy.compactMap { $0 }.first { !$0.isEmpty }.map(expand)
+        }
+        let dbPath = value("BRAINLAYER_DB") ?? home.appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
+        return url(dbPath: dbPath, environment: value(pathOverrideKey).map { [pathOverrideKey: $0] } ?? [:])
     }
 
-    /// The live path: this process's environment plus the env file the watcher's LaunchAgent loads.
+    static let watcherLaunchAgentLabel = "com.brainlayer.watch"
+    /// Where BrainBar looks for the watcher's installed LaunchAgent, when not the standard
+    /// `~/Library/LaunchAgents/com.brainlayer.watch.plist`. Unit tests point it at a path that does
+    /// not exist, so they never read the real ~/Library.
+    static let watcherPlistOverrideKey = "BRAINBAR_WATCHER_PLIST"
+
+    /// The live path (#1014 R1 B2): the installed watcher LaunchAgent's `EnvironmentVariables`, then
+    /// the env file that agent names (else BrainBar's `BRAINLAYER_ENV_FILE`, else the default), then
+    /// this process's environment.
     static func resolvedURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        readFile: (String) -> Data? = { FileManager.default.contents(atPath: $0) }
     ) -> URL {
-        let envFilePath = environment["BRAINLAYER_ENV_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+        func nonEmpty(_ value: String?) -> String? { value.flatMap { $0.isEmpty ? nil : $0 } }
+        let plistPath = nonEmpty(environment[watcherPlistOverrideKey])
+            ?? home.appendingPathComponent("Library/LaunchAgents/\(watcherLaunchAgentLabel).plist").path
+        let launchAgent = readFile(plistPath)
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        let launchAgentEnvironment = (launchAgent?["EnvironmentVariables"] as? [String: Any])?
+            .compactMapValues { $0 as? String } ?? [:]
+        let envFilePath = nonEmpty(launchAgentEnvironment["BRAINLAYER_ENV_FILE"])
+            ?? nonEmpty(environment["BRAINLAYER_ENV_FILE"])
             ?? home.appendingPathComponent(".config/brainlayer/brainlayer.env").path
         return watcherURL(
-            environment: environment,
-            envFile: try? String(contentsOfFile: envFilePath, encoding: .utf8),
+            environment: launchAgentEnvironment,
+            envFile: readFile(envFilePath).flatMap { String(data: $0, encoding: .utf8) },
+            brainBarEnvironment: environment,
             home: home
         )
     }

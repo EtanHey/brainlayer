@@ -23,3 +23,14 @@ Before writing, the harness asserts that the Dashboard's `WatcherHealthStatus` t
 
 - Contact sheets covering all three widths: [dashboard](contact-sheet-dashboard-760-960-1280.png), [settings](contact-sheet-settings-760-960-1280.png).
 - At 760 pt the footer wraps its reason to two lines and truncates the rest, with the full text in the tooltip. The Ingest card above it always shows the full line.
+
+## Watcher lane card (#1014 review round 1, B1)
+
+The lane card's status pill used to follow chunk flow alone, so a degraded watcher with recent chunks showed **live** beside **NEEDS ATTENTION**. The pill now comes from the same `WatcherHealthStatus` as the headline. [Strip of all five states](lane-cards-all-states.png):
+- running: pill "live", headline FLOWING
+- idle-replay-debt: pill "idle", headline RUNNING · NO RECENT FLOW
+- degraded: pill "needs attention", headline NEEDS ATTENTION
+- stopped: pill "stopped", headline STOPPED
+- unknown: pill "unknown", headline UNKNOWN
+
+The harness renders `BrainBarFlowLaneCardPreview` for each state and throws if the pill contradicts the state. The Dashboard and Settings renders above are byte-identical to before this fix.

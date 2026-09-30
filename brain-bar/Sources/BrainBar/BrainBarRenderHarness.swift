@@ -228,6 +228,29 @@ enum BrainBarRenderHarness {
         try store.save(.defaultConfig)
 
         for state in states {
+            // #1014 R1 B1: the watcher lane card's pill comes from the same state as the headline.
+            // Render it on its own (the Dashboard sheets show Details collapsed) and refuse a
+            // contradicting pill.
+            let laneFlow = DashboardFlowSummary.derive(
+                daemon: nil, stats: BrainBarDashboardFixture.makeCollector(state.dashboard).stats, now: now
+            )
+            let lane = laneFlow.lane(for: .jsonlWatcher)
+            let expectedPills: [DashboardFlowLaneStatus] = switch laneFlow.watcherStatus {
+            case .running: [.live, .idle, .running]
+            case .degraded: [.attention]
+            case .stopped: [.stopped]
+            case .unknown: [.unknown]
+            }
+            guard expectedPills.contains(lane.status) else {
+                throw Failure("watcher-\(state.name): lane pill \(lane.status.label) contradicts \(laneFlow.watcherStatus.title)")
+            }
+            try writeWatcherRender(
+                BrainBarFlowLaneCardPreview.make(lane: lane, fetchedAt: now),
+                size: NSSize(width: 380, height: 320),
+                name: "watcher-\(state.name)-lane-card",
+                in: outputDirectory
+            )
+
             for breakpoint in breakpoints {
                 let collector = BrainBarDashboardFixture.makeCollector(state.dashboard)
                 let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now)
