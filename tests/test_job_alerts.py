@@ -28,3 +28,32 @@ def test_consent_warns_once_then_escalates_and_reauthorization_clears(tmp_path):
     assert report("drive-consent", expired, **kwargs)
     assert report("drive-consent", None, **kwargs)
     assert notices == [warn, expired, "BrainLayer drive-consent recovered"]
+
+
+def test_database_backup_exit_reports_and_clears(monkeypatch):
+    from brainlayer import backup_daily, job_alerts
+
+    notices = []
+    monkeypatch.setattr(job_alerts, "report", lambda key, reason: notices.append((key, reason)))
+    monkeypatch.setattr(backup_daily, "_env_flag_enabled", lambda key: False)
+    monkeypatch.setattr(backup_daily, "_configured_backup_timeout_seconds", lambda: 60)
+    monkeypatch.setattr(backup_daily, "_supervise_backup_process", lambda seconds: 1)
+    assert backup_daily.main() == 1
+    monkeypatch.setattr(backup_daily, "_supervise_backup_process", lambda seconds: 0)
+    assert backup_daily.main() == 0
+    assert notices[0][0] == "backup-daily" and "failed" in notices[0][1]
+    assert notices[1] == ("backup-daily", None)
+
+
+def test_weekly_maintenance_abort_reports_failure(monkeypatch):
+    from brainlayer import job_alerts, maintenance
+
+    notices = []
+    monkeypatch.setattr(job_alerts, "report", lambda key, reason: notices.append((key, reason)))
+
+    def abort(mode, *, dry_run):
+        raise maintenance.MaintenanceAbort("fixture")
+
+    monkeypatch.setattr(maintenance, "run_maintenance", abort)
+    assert maintenance.main(["--full"]) == 75
+    assert notices == [("maintenance-full", "BrainLayer full maintenance failed; check the maintenance log")]

@@ -121,6 +121,7 @@ class HealthIssue:
 class HealthCheckConfig:
     db_path: Path = field(default_factory=get_db_path)
     state_path: Path = field(default_factory=lambda: DEFAULT_STATE_PATH)
+    job_alert_path: Path | None = None
     badge_state_path: Path | None = None
     job_opt_path: Path | None = field(default_factory=installed_opt_path)
     job_plist_dir: Path = field(default_factory=lambda: Path("~/Library/LaunchAgents").expanduser())
@@ -1282,6 +1283,11 @@ def _run_health_check_locked(
 
     if state.get("_state_corrupt_now"):
         add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
+
+    from .job_alerts import active_alerts
+
+    for job, reason in active_alerts(config.job_alert_path).items():
+        add_issue(f"job_alert_{job}", "critical", reason)
 
     def publish_badge_state() -> None:
         if config.badge_state_path is None:

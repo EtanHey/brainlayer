@@ -2823,6 +2823,7 @@ def wal_checkpoint(
     quiet: bool = typer.Option(False, "--quiet", help="Silent unless error"),
 ) -> None:
     """Run a SQLite WAL checkpoint through the BrainLayer CLI."""
+    from ..job_alerts import report as report_job_alert
     from ..wal_checkpoint import run_wal_checkpoint
 
     normalized_mode = mode.upper()
@@ -2834,12 +2835,14 @@ def wal_checkpoint(
             run_wal_checkpoint(normalized_mode, retry_busy=True) if retry_busy else run_wal_checkpoint(normalized_mode)
         )
     except FileNotFoundError as e:
+        report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint failed; check the job log")
         if json_output:
             console.print_json(data={"error": str(e)})
         elif not quiet:
             rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
     except Exception as e:
+        report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint failed; check the job log")
         if json_output:
             console.print_json(data={"error": str(e)})
         elif not quiet:
@@ -2857,7 +2860,9 @@ def wal_checkpoint(
         )
 
     if result["busy"]:
+        report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint was busy; check the job log")
         raise typer.Exit(1)
+    report_job_alert("wal-checkpoint", None)
 
 
 @app.command("repair-fts")
@@ -2865,6 +2870,7 @@ def repair_fts(
     db_path: Path | None = typer.Argument(None, help="Offline database copy; omitted means read-only FTS count check."),
 ) -> None:
     """Check live FTS counts read-only, or rebuild an explicit offline copy."""
+    from ..job_alerts import report as report_job_alert
     from ..runtime_store import OfflineMigrator, check_fts_counts
 
     try:
@@ -2877,8 +2883,13 @@ def repair_fts(
             finally:
                 store.close()
     except PermissionError as exc:
+        report_job_alert("repair-fts", "BrainLayer FTS repair failed; check the job log")
         rprint(f"[bold red]Repair refused:[/] {exc}")
         raise typer.Exit(1) from exc
+    except Exception:
+        report_job_alert("repair-fts", "BrainLayer FTS repair failed; check the job log")
+        raise
+    report_job_alert("repair-fts", None)
     console.print_json(data=result)
 
 

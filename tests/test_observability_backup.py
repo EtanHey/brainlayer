@@ -86,6 +86,29 @@ def test_healthy_fixture_matches_frozen_backup_contract(case: str) -> None:
     assert result["inputs"][1]["skipped_lines"] == 2
 
 
+def test_active_job_alert_enters_backup_health_surface_from_supplied_env(tmp_path):
+    alerts = tmp_path / "alerts.json"
+    alerts.write_text(json.dumps({"drive-consent": "Drive access expired: Reconnect in BrainBar"}))
+    env = {**_env("healthy-dev"), "BRAINLAYER_JOB_ALERT_PATH": str(alerts), "BRAINLAYER_DB": str(tmp_path / "db")}
+    seen = []
+
+    def record(path, **kwargs):
+        seen.append(path)
+        return {"path": str(path), "status": kwargs.get("status", "read")}
+
+    result = build_backups_section(env=env, record_input=record, now=NOW)
+    assert result["error_type"] == "job_alert:Drive access expired: Reconnect in BrainBar"
+    assert alerts in seen
+
+    def future_record(path, **kwargs):
+        row = record(path, **kwargs)
+        if path == alerts:
+            row["status"] = "future"
+        return row
+
+    assert build_backups_section(env=env, record_input=future_record, now=NOW)["state"] == "unmeasurable"
+
+
 @pytest.mark.parametrize(
     ("case", "freshness", "error_type"),
     [
