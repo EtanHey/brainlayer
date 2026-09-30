@@ -510,6 +510,11 @@ enum ObservabilityPresentation {
             if value == "drive_credentials_restored_backup_pending" {
                 return .init(text: "Google Drive credentials restored — next backup pending", tone: .neutral)
             }
+            // A job alert (#1031) carries a sentence written for Etan: show it as written.
+            if value.hasPrefix(jobAlertPrefix) {
+                let reason = DriveAuthJSON.sanitized(String(value.dropFirst(jobAlertPrefix.count)))
+                return .init(text: reason ?? "Backup alert with no reason given", tone: .red)
+            }
             let kind = value.hasPrefix("jsonl_backup_attempt_") ? "Transcript" : "DB"
             return .init(text: "\(kind) backup error: \(errorText(value))", tone: .red)
         }
@@ -530,6 +535,8 @@ enum ObservabilityPresentation {
         formatter.locale = .current
         return "\(formatter.string(from: NSNumber(value: value)) ?? String(value)) h"
     }
+
+    private static let jobAlertPrefix = "job_alert:"
 
     private static func errorText(_ value: String) -> String {
         switch value {
