@@ -1285,6 +1285,8 @@ def doctor_command(
             f"[bold]{status}[/] chunks={result.chunk_count} "
             f"recent_unvectored={result.recent_unvectored_chunks} queue={result.queue_count}"
         )
+        if result.cli_path_shadow and result.cli_path_shadow["state"] == "skipped":
+            rprint(f"CLI PATH check skipped: {result.cli_path_shadow['reason']}")
         for issue in result.issues:
             color = "red" if issue.severity == "fatal" else "yellow"
             rprint(f"[{color}]{issue.severity.upper()}[/] {issue.code}: {issue.message}")

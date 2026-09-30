@@ -368,11 +368,20 @@ def _doctor_config(tmp_path: Path, db_path: Path):
     )
 
 
-def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
+@pytest.mark.parametrize("shadow", [False, True])
+def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path, monkeypatch, shadow):
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "healthy.db"
     _build_db(db_path)
+    if shadow:
+        from brainlayer import doctor
+
+        script = tmp_path / "brainlayer"
+        script.write_text("#!/bin/sh\n")
+        script.chmod(0o755)
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(doctor.sys, "prefix", str(tmp_path / "Cellar/brainlayer/1.5.45/libexec/venv"))
 
     result = run_doctor(
         _doctor_config(tmp_path, db_path),
@@ -381,9 +390,9 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    assert result.exit_code == 0
-    assert result.ok is True
-    assert not [issue for issue in result.issues if issue.severity == "fatal"]
+    assert result.exit_code == int(shadow)
+    assert result.ok is (not shadow)
+    assert bool([i for i in result.issues if i.code == "cli_path_shadow" and i.severity == "fatal"]) is shadow
 
 
 def test_spotlight_exclusion_issue_warns_for_unmarked_db_directory(tmp_path):

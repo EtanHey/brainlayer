@@ -8,6 +8,8 @@ indexes.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import sqlite3
 import sys
 import time
@@ -250,9 +252,67 @@ class DoctorResult:
     hotlane_running: bool = False
     roundtrip_latency_seconds: float | None = None
     fts5_health: dict[str, Any] | None = None
+    cli_path_shadow: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _check_cli_path_shadow(result: DoctorResult) -> None:
+    prefix = Path(sys.prefix).resolve()
+    keg = next(
+        (p for p in (prefix, *prefix.parents) if p.parent.name == "brainlayer" and p.parent.parent.name == "Cellar"),
+        None,
+    )
+    result.cli_path_shadow = {"state": "skipped", "reason": "running interpreter is not a BrainLayer keg install"}
+    if keg is None:
+        return
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / "brainlayer"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            resolved = candidate.resolve()
+            if resolved not in seen:
+                paths.append(candidate.absolute())
+                seen.add(resolved)
+    severity = "fatal" if not paths or not paths[0].resolve().is_relative_to(keg) else "warning"
+    duplicates = [p for p in paths if not p.resolve().is_relative_to(keg)]
+    result.cli_path_shadow = {
+        "state": severity if duplicates or not paths else "pass",
+        "paths": [str(p) for p in paths],
+        "prefix": str(keg),
+    }
+    if not paths:
+        result.issues.append(DoctorIssue("cli_path_shadow", "fatal", "No brainlayer executable on PATH"))
+    for path in duplicates:
+        kind, remedy = "plain script", "put the running BrainLayer keg bin directory first on PATH"
+        try:
+            with path.open() as stream:
+                shebang = stream.readline(4096).strip()
+            interpreter = Path(shebang[2:]) if shebang.startswith("#!/") else None
+            if interpreter and interpreter.name.startswith("python"):
+                install = interpreter.parent.parent
+                metadata = list(install.glob("lib/python*/site-packages/brainlayer-*.dist-info/direct_url.json"))
+                user_metadata = list(
+                    (Path.home() / "Library/Python").glob("*/lib/python/site-packages/brainlayer-*.dist-info")
+                )
+                user_metadata += list((Path.home() / ".local/lib").glob("python*/site-packages/brainlayer-*.dist-info"))
+                if any(json.loads(p.read_text()).get("dir_info", {}).get("editable") is True for p in metadata):
+                    kind = "editable install"
+                env = "PYTHONNOUSERSITE=1 " if user_metadata else ""
+                remedy = f"sudo {env}{shlex.quote(str(interpreter.parent / 'pip3'))} uninstall brainlayer"
+                if path.is_relative_to(Path.home() / ".local/bin") or path.is_relative_to(
+                    Path.home() / "Library/Python"
+                ):
+                    remedy = f"{shlex.quote(str(interpreter))} -m pip uninstall brainlayer"
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        result.issues.append(
+            DoctorIssue(
+                "cli_path_shadow", severity, f"{path}: {kind}; {remedy}", {"path": str(path), "remediation": remedy}
+            )
+        )
 
 
 def _ro_conn(db_path: Path) -> sqlite3.Connection:
@@ -580,6 +640,8 @@ def run_doctor(
 
     def warning(code: str, message: str, **details: Any) -> None:
         result.issues.append(DoctorIssue(code, "warning", message, details))
+
+    _check_cli_path_shadow(result)
 
     db_config_error = get_brainlayer_db_config_error()
     if db_config_error is not None:
