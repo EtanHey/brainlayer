@@ -1049,8 +1049,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = run_maintenance(mode, dry_run=args.dry_run)
     except MaintenanceAbort as exc:
+        if not args.dry_run:
+            from .job_alerts import report
+
+            report(f"maintenance-{mode}", f"BrainLayer {mode} maintenance failed; check the maintenance log")
         print(json.dumps({"status": "aborted", "reason": exc.reason}, sort_keys=True), flush=True)
         return exc.code
+    except Exception:
+        if not args.dry_run:
+            from .job_alerts import report
+
+            report(f"maintenance-{mode}", f"BrainLayer {mode} maintenance failed; check the maintenance log")
+        raise
+    if not args.dry_run:
+        from .job_alerts import report
+
+        report(f"maintenance-{mode}", None)
     print(json.dumps({"status": "ok", **_result_to_dict(result)}, sort_keys=True), flush=True)
     return 0
 

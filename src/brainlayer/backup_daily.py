@@ -1902,7 +1902,15 @@ def main() -> int:
     timeout_seconds = _configured_backup_timeout_seconds()
     if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
         return _run_backup_process(timeout_seconds)
-    return _supervise_backup_process(timeout_seconds)
+    from .job_alerts import report
+
+    try:
+        code = _supervise_backup_process(timeout_seconds)
+    except Exception:
+        report("backup-daily", "Database backup failed; check the backup log")
+        raise
+    report("backup-daily", None if code == 0 else "Database backup failed; check the backup log")
+    return code
 
 
 if __name__ == "__main__":

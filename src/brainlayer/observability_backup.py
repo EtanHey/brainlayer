@@ -15,6 +15,7 @@ from brainlayer.health_check import (
     _jsonl_backup_attempt_time,
     inspect_jsonl_backup_health,
 )
+from brainlayer.job_alerts import active_alerts, alert_path
 from brainlayer.paths import get_db_path
 
 LABEL = "com.brainlayer.jsonl-backup"
@@ -296,6 +297,14 @@ def build_backups_section(
         error_type = "drive_credentials_restored_backup_pending"
     if error_type is None and health_issue is not None and health.state in {"invalid", "stale", "failed"}:
         error_type = health_issue.code
+    resolved_alert_path = alert_path(env=env, db_path=db_path)
+    job_alerts = active_alerts(resolved_alert_path)
+    if job_alerts:
+        error_type = "job_alert:" + next(iter(job_alerts.values()))
+        alert_input = record_input(resolved_alert_path, status="read", rows_or_bytes=None)
+        inputs.append(alert_input)
+        if alert_input.get("status") == "future":
+            return _unmeasurable(f"input mtime is later than generated_at: {alert_input['path']}", inputs)
     if all_daily_errors or health.state in {"stale", "failed"}:
         freshness = "stale"
     elif health.state in {"no_op", "verified_bundle"}:

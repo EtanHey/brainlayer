@@ -40,6 +40,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -1284,6 +1285,37 @@ def _audit_staging_temps(staging_dir: Path) -> None:
             print(f"JSONL forever crash remnant: name={path.name} bytes={size}", file=sys.stderr)
 
 
+def _cleanup_stale_staging_temps(staging_dir: Path, *, older_than_days: int = 7) -> None:
+    """Remove only this job's old bundle temps while holding its lock, if free."""
+    staging_dir = Path(staging_dir).expanduser()
+    if older_than_days < 1:
+        raise ValueError("older_than_days must be positive")
+    with (staging_dir / ".jsonl-backup.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        try:
+            cutoff = time.time() - older_than_days * 86400
+            for path in staging_dir.iterdir():
+                if _partial_bundle_date(path.name) is None or path.is_symlink():
+                    continue
+                try:
+                    info = path.lstat()
+                    if not stat.S_ISREG(info.st_mode) or info.st_mtime >= cutoff:
+                        continue
+                    # A replaced candidate cannot inherit the prior file's age proof.
+                    current = path.lstat()
+                    if current.st_ino != info.st_ino or current.st_dev != info.st_dev:
+                        continue
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                print(f"JSONL old temp removed: name={path.name} bytes={info.st_size}", file=sys.stderr)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def _compare_member_to_source(extracted: Any, source_path: Path, *, bundle_digest: str | None = None) -> str:
     """Compare archived bytes with the live source, or their bundle-time digest if it vanished."""
     try:
@@ -1491,6 +1523,7 @@ def _serialized_by_staging_dir(function):
     def wrapper(*args, **kwargs):
         staging_dir = Path(kwargs.get("staging_dir", DEFAULT_STAGING_DIR)).expanduser()
         staging_dir.mkdir(parents=True, exist_ok=True)
+        _cleanup_stale_staging_temps(staging_dir)
         lock_path = staging_dir / ".jsonl-backup.lock"
         with lock_path.open("a") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -1812,6 +1845,8 @@ def _append_terminal_failure(log_path: Path, result: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    from .job_alerts import report
+
     timeout_seconds = _configured_backup_timeout_seconds()
     log_path = Path(os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_LOG_PATH)))
     previous_alarm_handler = None
@@ -1838,6 +1873,7 @@ def main() -> int:
             "error": f"timed out after {timeout_seconds}s",
         }
         _append_terminal_failure(log_path, result)
+        report("jsonl-backup", "Transcript backup timed out; check the backup log")
         print(json.dumps(result, sort_keys=True), flush=True)
         return 124
     except Exception as exc:
@@ -1850,6 +1886,7 @@ def main() -> int:
             "traceback": traceback.format_exc(),
         }
         _append_terminal_failure(log_path, result)
+        report("jsonl-backup", "Transcript backup failed; check the backup log")
         print(json.dumps(result, sort_keys=True), flush=True)
         return 1
     finally:
@@ -1857,7 +1894,9 @@ def main() -> int:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, previous_alarm_handler)
     print(json.dumps(result, sort_keys=True), flush=True)
-    return 0 if result.get("verified", True) else 1
+    code = 0 if result.get("verified", True) else 1
+    report("jsonl-backup", None if code == 0 else "Transcript backup failed verification; check the backup log")
+    return code
 
 
 if __name__ == "__main__":

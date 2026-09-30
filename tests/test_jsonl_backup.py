@@ -80,6 +80,40 @@ def test_crash_partial_is_reported_and_preserved_without_coverage_proof(tmp_path
     assert partial.exists()
 
 
+def test_cleanup_removes_only_old_owned_temp_files_when_lock_is_free(tmp_path, capsys):
+    import os
+    import time
+
+    from brainlayer import jsonl_backup
+
+    old = tmp_path / ".claude-jsonl-2026-09-14.tar.gz.sxftirr4.tmp"
+    fresh = tmp_path / ".claude-jsonl-2026-09-30.tar.gz.fresh.tmp"
+    other = tmp_path / "unrelated.tmp"
+    for path in (old, fresh, other):
+        path.write_bytes(b"fixture")
+    os.utime(old, (time.time() - 9 * 86400, time.time() - 9 * 86400))
+    jsonl_backup._cleanup_stale_staging_temps(tmp_path, older_than_days=7)
+    assert not old.exists()
+    assert fresh.exists() and other.exists()
+    assert f"name={old.name} bytes=7" in capsys.readouterr().err
+
+
+def test_cleanup_preserves_old_temp_when_backup_lock_is_held(tmp_path):
+    import fcntl
+    import os
+    import time
+
+    from brainlayer import jsonl_backup
+
+    old = tmp_path / ".claude-jsonl-2026-09-14.tar.gz.sxftirr4.tmp"
+    old.write_bytes(b"fixture")
+    os.utime(old, (time.time() - 9 * 86400, time.time() - 9 * 86400))
+    with (tmp_path / ".jsonl-backup.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        jsonl_backup._cleanup_stale_staging_temps(tmp_path, older_than_days=7)
+    assert old.exists()
+
+
 def _mock_drive_success(jsonl_backup, monkeypatch, uploads: list[Path] | None = None) -> None:
     monkeypatch.setattr(jsonl_backup.backup_daily, "get_drive_credentials", lambda: object())
     monkeypatch.setattr(jsonl_backup.backup_daily, "build_drive_service", lambda: object())
