@@ -87,6 +87,10 @@ struct BrainBarBackupSources: Sendable {
     let readFile: @Sendable (URL) -> Data?
     let listDirectory: @Sendable (URL) -> [String]
     let isRegularFile: @Sendable (URL) -> Bool
+    /// A maintenance job's stdout tail and its mtime, from one stable snapshot (#1039 R2 B1).
+    var readStdoutTail: @Sendable (URL) -> BrainBarStableRead = {
+        BrainBarStableFileReader.readTail($0, maxBytes: 64 * 1024)
+    }
 
     /// A regular file, read without following a symlink (`attributesOfItem` is lstat), so a link
     /// that could point outside the backups directory never gets Reveal or Copy (#1016 R1 B2).
@@ -121,6 +125,62 @@ struct BrainBarBackupSources: Sendable {
             row("Weekly maintenance", job: .maintenanceWeekly, log: paths.maintenanceLog, kind: .weeklyMaintenance,
                 localCopy: nil, now: now, calendar: calendar, formatDate: formatDate),
         ]
+    }
+
+    /// The Maintenance card's evidence: the weekly's last completed pass (the same #1015 reader the
+    /// Weekly maintenance row uses) and, per maintenance job, ONLY the newest record its last run
+    /// printed to the LaunchAgent's StandardOutPath, stamped with the log's modification time so the
+    /// card can check it belongs to the observed run. An incomplete newest record is never replaced
+    /// by an older one.
+    func maintenanceEvidence() -> BrainLayerMaintenanceEvidence {
+        var records: [BrainLayerLaunchdJob: BrainLayerMaintenanceEvidence.RunRecord] = [:]
+        for job in BrainLayerLaunchdJobGroup.maintenance.jobs {
+            records[job] = newestRunRecord(job)
+        }
+        return BrainLayerMaintenanceEvidence(weeklyCompletion: weeklyCompletion(), runRecords: records)
+    }
+
+    private func weeklyCompletion() -> BrainLayerMaintenanceEvidence.WeeklyCompletion {
+        // Unreadable, not UTF-8, or no parseable row: that is not "no completed pass" (N1).
+        guard let data = readFile(paths.maintenanceLog), let text = String(data: data, encoding: .utf8),
+              text.split(whereSeparator: \.isNewline).contains(where: {
+                  (try? JSONSerialization.jsonObject(with: Data($0.utf8))) is [String: Any]
+              })
+        else { return .unread }
+        return BackupLogReader.lastRun(.weeklyMaintenance, log: data).map { .completed($0.at) } ?? .noneRecorded
+    }
+
+    private func newestRunRecord(_ job: BrainLayerLaunchdJob) -> BrainLayerMaintenanceEvidence.RunRecord {
+        guard let plist = readFile(paths.launchAgents.appendingPathComponent("\(job.launchdLabel).plist"))
+            .flatMap({ try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] })
+        else { return .unavailable("its LaunchAgent could not be read") }
+        guard let stdoutPath = plist["StandardOutPath"] as? String, !stdoutPath.isEmpty else {
+            return .unavailable("its LaunchAgent names no StandardOutPath")
+        }
+        let log = URL(fileURLWithPath: stdoutPath)
+        let data: Data, writtenAt: Date
+        switch readStdoutTail(log) {
+        case let .read(bytes, modifiedAt):
+            (data, writtenAt) = (bytes, modifiedAt)
+        case .unreadable:
+            return .unavailable("\(log.lastPathComponent) could not be read")
+        case .changedWhileReading:
+            // No retry: the next refresh reads it again.
+            return .unavailable("\(log.lastPathComponent) changed while reading")
+        }
+        // The log only grows; its tail holds the last run. Only the newest non-blank line counts.
+        let text = String(decoding: data, as: UTF8.self)
+        guard let newest = text.split(whereSeparator: \.isNewline).last(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }),
+            let row = (try? JSONSerialization.jsonObject(with: Data(newest.utf8))) as? [String: Any],
+            let status = row["status"] as? String
+        else { return .unavailable("the newest record in \(log.lastPathComponent) is incomplete") }
+        guard status == "aborted" else { return .notAnAbort(writtenAt: writtenAt) }
+        guard let reason = row["reason"] as? String, !reason.isEmpty else {
+            return .unavailable("the newest record in \(log.lastPathComponent) is incomplete")
+        }
+        return .aborted(reason: reason, writtenAt: writtenAt)
     }
 
     private func row(
@@ -197,5 +257,52 @@ enum BrainLayerJobEnvironment {
             values[key] = value
         }
         return values
+    }
+}
+
+/// A file's bytes and the mtime they were read under.
+enum BrainBarStableRead: Equatable, Sendable {
+    case read(Data, modifiedAt: Date)
+    case unreadable
+    /// The size or mtime moved between the stat before the read and the one after it.
+    case changedWhileReading
+}
+
+/// Reads a file's tail so its bytes and its mtime cannot disagree: one descriptor, `fstat` before
+/// the read, exactly that many bytes, `fstat` again. A writer that appends in between (the #1039 R2
+/// race: a benign record read, then this run's failure appended before the mtime was sampled) makes
+/// the snapshot unstable instead of stamping old bytes with a new time.
+enum BrainBarStableFileReader {
+    /// `afterRead` runs between the read and the second `fstat`; tests use it to interleave a writer.
+    static func readTail(_ url: URL, maxBytes: Int, afterRead: () -> Void = {}) -> BrainBarStableRead {
+        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else { return .unreadable }
+        defer { close(descriptor) }
+        var before = stat()
+        guard fstat(descriptor, &before) == 0, (before.st_mode & S_IFMT) == S_IFREG else { return .unreadable }
+        let size = Int(before.st_size)
+        let start = max(0, size - maxBytes)
+        var bytes = [UInt8](repeating: 0, count: size - start)
+        var filled = 0
+        while filled < bytes.count {
+            let count = bytes.withUnsafeMutableBytes { buffer in
+                pread(descriptor, buffer.baseAddress! + filled, buffer.count - filled, off_t(start + filled))
+            }
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { return count < 0 ? .unreadable : .changedWhileReading }
+            filled += count
+        }
+        afterRead()
+        var after = stat()
+        guard fstat(descriptor, &after) == 0 else { return .unreadable }
+        guard after.st_size == before.st_size,
+              after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec,
+              after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec
+        else { return .changedWhileReading }
+        let stamp = before.st_mtimespec
+        return .read(
+            Data(bytes),
+            modifiedAt: Date(timeIntervalSince1970: TimeInterval(stamp.tv_sec) + TimeInterval(stamp.tv_nsec) / 1_000_000_000)
+        )
     }
 }

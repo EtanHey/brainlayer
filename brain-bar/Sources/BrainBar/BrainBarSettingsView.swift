@@ -32,6 +32,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     /// Each backup's schedule (installed LaunchAgent), last run (its own log), next run and latest
     /// local copy (#968).
     @Published private(set) var backupSchedules: [BrainBarBackupScheduleRow]
+    /// The Maintenance card's completion history and skip reasons, read with the backup schedules.
+    @Published private(set) var maintenanceEvidence: BrainLayerMaintenanceEvidence
 
     var footerPresentation: BrainBarSettingsFooterPresentation {
         BrainBarSettingsFooterPresentation(
@@ -87,6 +89,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         watcherHealthRead: @escaping @Sendable (URL) -> WatcherHealthFileRead = { WatcherHealthReader.read(url: $0) },
         backupSources: BrainBarBackupSources? = nil,
         initialBackupSchedules: [BrainBarBackupScheduleRow] = [],
+        initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread,
         workspace: any BrainBarWorkspaceActing = BrainBarWorkspace()
     ) {
         self.store = store
@@ -104,6 +107,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.backupSources = backupSources
         self.workspace = workspace
         backupSchedules = initialBackupSchedules
+        maintenanceEvidence = initialMaintenanceEvidence
         observabilityResult = initialObservabilityResult
         launchdObservations = initialLaunchdObservations.isEmpty
             ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
@@ -152,13 +156,17 @@ final class BrainBarSettingsViewModel: ObservableObject {
         backupScheduleGeneration &+= 1
         let generation = backupScheduleGeneration
         let now = now()
-        let rows = Task.detached {
-            backupSources.rows(now: now, calendar: .current, formatDate: DashboardMetricFormatter.jobDateTimeString)
+        let read = Task.detached {
+            (
+                rows: backupSources.rows(now: now, calendar: .current, formatDate: DashboardMetricFormatter.jobDateTimeString),
+                maintenance: backupSources.maintenanceEvidence()
+            )
         }
         Task {
-            let result = await rows.value
+            let result = await read.value
             guard generation == backupScheduleGeneration else { return }
-            backupSchedules = result
+            backupSchedules = result.rows
+            maintenanceEvidence = result.maintenance
         }
     }
 
@@ -250,6 +258,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             observations: launchdObservations,
             formatDate: DashboardMetricFormatter.jobDateTimeString,
             watcher: watcherStatus,
+            maintenance: maintenanceEvidence,
             now: now()
         )
     }
@@ -1061,6 +1070,7 @@ private struct BrainBarJobGroupCard: View {
         case .awaitingRun: "clock.fill"
         case .unhealthy: "exclamationmark.triangle.fill"
         case .unknown: "questionmark.circle.fill"
+        case .skipped: "forward.end.circle.fill"
         }
     }
 
@@ -1069,7 +1079,7 @@ private struct BrainBarJobGroupCard: View {
         case .healthy: BrainBarStateTheme.active.theme.swiftUIColor
         case .awaitingRun: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unhealthy: BrainBarStateTheme.error.theme.swiftUIColor
-        case .unknown: Color.brainBarTextMuted
+        case .unknown, .skipped: Color.brainBarTextMuted
         }
     }
 
@@ -1084,7 +1094,7 @@ private struct BrainBarJobGroupCard: View {
             return Badge(
                 title: status.health.title, symbol: Self.symbol(status.health), color: Self.color(status.health),
                 reason: status.attentionReason,
-                reasonColor: status.health == .unknown ? Color.brainBarTextMuted : BrainBarStateTheme.error.theme.swiftUIColor
+                reasonColor: status.health == .unhealthy ? BrainBarStateTheme.error.theme.swiftUIColor : Color.brainBarTextMuted
             )
         }
         let (symbol, color): (String, Color) = switch backupsHealth.badge {

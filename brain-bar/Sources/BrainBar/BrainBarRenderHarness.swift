@@ -392,10 +392,38 @@ enum BrainBarRenderHarness {
                (.backups, false, backupRows, "-drive-expiring", "expiring", ["compact", "default", "wide"]),
                (.backups, false, backupRows, "-drive-missing", "missing", ["default"]),
                (.backups, false, backupRows, "-drive-invalid-cancelled", "invalid-cancelled", ["default"]),
-               (.backups, false, backupRows, "-drive-reconnecting", "reconnecting", ["default"])]
+               (.backups, false, backupRows, "-drive-reconnecting", "reconnecting", ["default"]),
+               (.jobs, false, [], "-maintenance-skipped", "connected", ["compact", "default", "wide"]),
+               (.jobs, false, [], "-maintenance-stale", "connected", ["compact", "default", "wide"])]
+        // Jobs → Maintenance: the weekly deferred by the quiet-window gate (exit 75), once with a
+        // pass completed 3 days earlier (neutral "Skipped") and once with the last completed pass on
+        // Aug 30 (attention: skips must not hide a pass that stopped completing).
+        let maintenanceNow = at(30, 12, 0)
+        // The weekly's own abort line, written a second after the 00:07 run started.
+        let quietWindowRecord = BrainLayerMaintenanceEvidence.RunRecord.aborted(
+            reason: "outside quiet window: now=2026-09-30T00:07:23.566976+03:00 start_hour=4 duration_minutes=120",
+            writtenAt: at(30, 0, 7).addingTimeInterval(1)
+        )
+        let maintenanceEvidence: [String: BrainLayerMaintenanceEvidence] = [
+            "-maintenance-skipped": .init(weeklyCompletion: .completed(at(27, 4, 31)), runRecords: [.maintenanceWeekly: quietWindowRecord]),
+            "-maintenance-stale": .init(weeklyCompletion: .completed(at(30, 5, 23, month: 8)), runRecords: [.maintenanceWeekly: quietWindowRecord]),
+        ]
         for scenario in settingsScenarios {
           for breakpoint in breakpoints where scenario.widths.contains(breakpoint.name) {
             if scenario.receipt { try store.save(.defaultConfig) }
+            let evidence = maintenanceEvidence[scenario.suffix]
+            let nightly: BrainLayerLaunchdJobObservation = evidence != nil
+                ? .init(loadState: .loaded, runs: 5, lastExitCode: 0, lastRunAt: at(30, 4, 2),
+                        nextRunAt: at(1, 4, 0, month: 10), isContinuous: false)
+                : .init(loadState: .loaded, runs: 0, lastExitCode: nil,
+                        lastRunAt: nil, nextRunAt: Date(timeIntervalSince1970: 1_790_211_600), isContinuous: false)
+            let weekly: BrainLayerLaunchdJobObservation = evidence != nil
+                ? .init(loadState: .loaded, runs: 3, lastExitCode: 75, lastRunAt: at(30, 0, 7),
+                        nextRunAt: at(4, 4, 0, month: 10), isContinuous: false)
+                : .init(loadState: .loaded, runs: 2, lastExitCode: 0,
+                        lastRunAt: Date(timeIntervalSince1970: 1_789_866_900),
+                        nextRunAt: Date(timeIntervalSince1970: 1_790_471_700), isContinuous: false)
+            let fixedNow: Date? = evidence != nil ? maintenanceNow : nil
             let viewModel = BrainBarSettingsViewModel(
                 store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
@@ -409,12 +437,8 @@ enum BrainBarRenderHarness {
                     .index: .init(loadState: .loaded, runs: 4, lastExitCode: 1,
                                   lastRunAt: Date(timeIntervalSince1970: 1_790_161_200),
                                   nextRunAt: Date(timeIntervalSince1970: 1_790_208_900), isContinuous: false),
-                    .maintenanceNightly: .init(loadState: .loaded, runs: 0, lastExitCode: nil,
-                                               lastRunAt: nil, nextRunAt: Date(timeIntervalSince1970: 1_790_211_600),
-                                               isContinuous: false),
-                    .maintenanceWeekly: .init(loadState: .loaded, runs: 2, lastExitCode: 0,
-                                              lastRunAt: Date(timeIntervalSince1970: 1_789_866_900),
-                                              nextRunAt: Date(timeIntervalSince1970: 1_790_471_700), isContinuous: false),
+                    .maintenanceNightly: nightly,
+                    .maintenanceWeekly: weekly,
                 ] : scenario.section == .backups ? [
                     .backupDaily: .init(loadState: .loaded, runs: 3, lastExitCode: 0,
                                         lastRunAt: at(29, 3, 17), nextRunAt: at(30, 3, 17), isContinuous: false),
@@ -422,11 +446,13 @@ enum BrainBarRenderHarness {
                                         lastRunAt: at(29, 5, 1), nextRunAt: at(30, 5, 0), isContinuous: false),
                 ] : [:],
                 refreshStatusOnLoad: false,
+                now: { fixedNow ?? Date() },
                 // The Drive renders get verified, fresh backups, so each shows only its Drive state.
                 initialObservabilityResult: scenario.suffix.hasPrefix("-drive")
                     ? BrainBarDashboardFixture.healthyObservabilityResult
                     : .unreadable("Fixture backup status unavailable."),
-                initialBackupSchedules: scenario.backups
+                initialBackupSchedules: scenario.backups,
+                initialMaintenanceEvidence: evidence ?? .unread
             )
             if scenario.receipt {
                 viewModel.backendDraft = "mlx"
