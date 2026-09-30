@@ -31,6 +31,9 @@ FAKE_TOKENS = {
     "google": "AIza" + "0" * 35,
     "github": "ghp_" + "0" * 36,
     "openai": "sk-" + "0" * 40,
+    "google_oauth_access": "ya29." + "0" * 40,
+    "google_oauth_refresh": "1//0" + "0" * 40,
+    "google_client_secret": "GOCSPX-" + "0" * 28,
 }
 
 
@@ -52,7 +55,110 @@ def test_scrub_secrets_redacts_every_shape_seen_in_enrichment_leak():
     result = scrub_secrets(_payload_with_every_token())
 
     _assert_no_token(result.text, where="scrub_secrets")
-    assert {redaction.provider for redaction in result.redactions} >= {"supabase", "google", "github", "openai"}
+    assert {redaction.provider for redaction in result.redactions} == set(FAKE_TOKENS)
+
+
+@pytest.mark.parametrize("provider", ["google_oauth_access", "google_oauth_refresh", "google_client_secret"])
+def test_oauth_tokens_are_scrubbed_at_rest_and_in_nested_llm_output(provider, tmp_path):
+    from brainlayer.drain import _apply_store
+    from brainlayer.pipeline.cloud_scrub import normalize_json_strings, scrub_llm_output
+    from brainlayer.vector_store import VectorStore
+
+    token = FAKE_TOKENS[provider]
+    placeholder = f"[REDACTED:{provider}]"
+    store = VectorStore(tmp_path / "oauth.db")
+    try:
+        stored = _apply_store(
+            store.conn,
+            {"content": f"note {token}", "tags": [token], "metadata": {"note": token}, "source": "manual"},
+        )
+        row = store.conn.cursor().execute("SELECT * FROM chunks WHERE id = ?", (stored.chunk_id,)).fetchone()
+        assert token not in str(row)
+        assert placeholder in str(row)
+        for table in ("chunks_fts", "chunks_fts_trigram"):
+            assert token not in str(list(store.conn.cursor().execute(f"SELECT * FROM {table}")))
+        store.update_enrichment(stored.chunk_id, summary=token, tags=[token], key_facts=[token])
+        row = store.conn.cursor().execute("SELECT * FROM chunks WHERE id = ?", (stored.chunk_id,)).fetchone()
+        assert token not in str(row)
+        assert placeholder in str(row)
+    finally:
+        store.close()
+
+    encoded = json.dumps({"nested": token}).replace(token[0], f"\\u{ord(token[0]):04x}")
+    output = scrub_llm_output(normalize_json_strings({token: [token, {"encoded": encoded}], "count": 3}))
+    assert token not in json.dumps(output)
+    assert output["count"] == 3
+    assert output[placeholder][0] == placeholder
+    assert json.loads(output[placeholder][1]["encoded"])["nested"] == placeholder
+
+
+@pytest.mark.parametrize("position", ["alone", "before_provider", "after_provider"])
+def test_quarantine_fails_closed_before_gemini_send(position, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline.cloud_scrub import CloudScrubError
+    from brainlayer.pipeline.secret_scrub import scrub_secrets
+
+    # Fixed alphabet filler exercises entropy without a real credential.
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    provider = FAKE_TOKENS["google_oauth_access"]
+    prompt = {"alone": token, "before_provider": f"{token} {provider}", "after_provider": f"{provider} {token}"}[
+        position
+    ]
+    result = scrub_secrets(prompt)
+    assert [item.value for item in result.quarantine] == [token]
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    client = _FakeGeminiClient()
+
+    with pytest.raises(CloudScrubError) as error:
+        controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+
+    assert token not in str(error.value)
+    assert client.models.sent == []
+
+
+@pytest.mark.parametrize("sender", ["call_groq", "call_glm", "call_mlx"])
+def test_quarantine_never_reaches_http_transport(sender, monkeypatch):
+    from brainlayer.pipeline import enrichment
+    from brainlayer.pipeline.cloud_scrub import CloudScrubError
+
+    monkeypatch.setattr(enrichment, "GROQ_API_KEY", "test-not-a-key")
+    sent = _capture_requests_post(monkeypatch, enrichment.requests)
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    with pytest.raises(CloudScrubError):
+        getattr(enrichment, sender)(token)
+
+    assert sent == []
+
+
+def test_quarantine_blocks_batch_upload_without_rewriting_export(monkeypatch, tmp_path):
+    from brainlayer import cloud_backfill
+    from brainlayer.pipeline.cloud_scrub import CloudScrubError
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    export = tmp_path / "quarantined.jsonl"
+    lines = [{"request": {"contents": [{"parts": [{"text": text}]}]}} for text in (_payload_with_every_token(), token)]
+    original = "\n".join(json.dumps(line) for line in lines) + "\n"
+    export.write_text(original, encoding="utf-8")
+    clients = []
+    monkeypatch.setattr(cloud_backfill, "_raise_if_enrich_daily_cap_reached", lambda: None)
+    monkeypatch.setattr(cloud_backfill, "_get_genai_client", lambda: clients.append(1))
+
+    with pytest.raises(CloudScrubError):
+        cloud_backfill.submit_gemini_batch(export, store=None)
+
+    assert clients == []
+    assert export.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["ordinary prose about ya29", "https://example.invalid/1//notes", "0" * 64, "12345678-1234-1234-1234-123456789abc"],
+)
+def test_cloud_scrub_preserves_prose_paths_and_join_keys(text):
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    assert scrub_for_cloud(text) == text
 
 
 # ── INPUT: every remote send is scrubbed ─────────────────────────────────
@@ -341,7 +447,7 @@ def _llm_response_echoing_tokens() -> str:
     t = FAKE_TOKENS
     return json.dumps(
         {
-            "summary": f"Configured the service with {t['supabase']} and {t['google']}",
+            "summary": _payload_with_every_token(),
             "tags": ["deploy", t["github"]],
             "importance": 6,
             "intent": "implementing",

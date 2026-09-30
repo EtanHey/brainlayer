@@ -581,6 +581,165 @@
       "expected_text": "api_key\uff1daB3dE5gH7jK9mN1pQ2rS4tU6vW8xY0zC",
       "expected_providers": [],
       "expected_quarantine_count": 1
+    },
+    {
+      "name": "google_oauth_access-plain",
+      "input": "credential ya29.{{0*40}} end",
+      "expected_text": "credential [REDACTED:google_oauth_access] end",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_access-combining-mark",
+      "input": "credential ya29.{{0*40}}\u0301 end",
+      "expected_text": "credential [REDACTED:google_oauth_access]\u0301 end",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_access-zwj",
+      "input": "credential ya29.{{0*40}}\u200d end",
+      "expected_text": "credential [REDACTED:google_oauth_access]\u200d end",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_access-short",
+      "input": "ya29.short",
+      "expected_text": "ya29.short",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-plain",
+      "input": "credential 1//0{{0*40}} end",
+      "expected_text": "credential [REDACTED:google_oauth_refresh] end",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-combining-mark",
+      "input": "credential 1//0{{0*40}}\u0301 end",
+      "expected_text": "credential [REDACTED:google_oauth_refresh]\u0301 end",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-zwj",
+      "input": "credential 1//0{{0*40}}\u200d end",
+      "expected_text": "credential [REDACTED:google_oauth_refresh]\u200d end",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-short",
+      "input": "1//0short",
+      "expected_text": "1//0short",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-plain",
+      "input": "credential GOCSPX-{{0*28}} end",
+      "expected_text": "credential [REDACTED:google_client_secret] end",
+      "expected_providers": [
+        "google_client_secret"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-combining-mark",
+      "input": "credential GOCSPX-{{0*28}}\u0301 end",
+      "expected_text": "credential [REDACTED:google_client_secret]\u0301 end",
+      "expected_providers": [
+        "google_client_secret"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-zwj",
+      "input": "credential GOCSPX-{{0*28}}\u200d end",
+      "expected_text": "credential [REDACTED:google_client_secret]\u200d end",
+      "expected_providers": [
+        "google_client_secret"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-short",
+      "input": "GOCSPX-short",
+      "expected_text": "GOCSPX-short",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_access-length-19",
+      "input": "ya29.{{0*19}}",
+      "expected_text": "ya29.{{0*19}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_access-length-20",
+      "input": "ya29.{{0*20}}",
+      "expected_text": "[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-length-19",
+      "input": "1//{{0*19}}",
+      "expected_text": "1//{{0*19}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-length-20",
+      "input": "1//{{0*20}}",
+      "expected_text": "[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-length-19",
+      "input": "GOCSPX-{{0*19}}",
+      "expected_text": "GOCSPX-{{0*19}}",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-length-20",
+      "input": "GOCSPX-{{0*20}}",
+      "expected_text": "[REDACTED:google_client_secret]",
+      "expected_providers": [
+        "google_client_secret"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google-access-internal-dot",
+      "input": "ya29.{{0*20}}.{{0*20}}",
+      "expected_text": "[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
+      "expected_quarantine_count": 0
     }
   ]
 }

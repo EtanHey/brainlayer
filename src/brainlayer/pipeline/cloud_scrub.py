@@ -3,7 +3,8 @@
 Two directions, both fail closed:
 
 - ``scrub_for_cloud`` runs on every text sent to a cloud model. If scrubbing
-  raises, it raises ``CloudScrubError`` and the caller must not send.
+  raises or leaves quarantined tokens, it raises ``CloudScrubError`` and the
+  caller must not send.
 - ``scrub_llm_output`` runs on every LLM output value before it is persisted.
   A cloud model copies tokens from its prompt into summaries and key facts,
   so output is scrubbed even when the input already was. If scrubbing raises,
@@ -30,21 +31,29 @@ class CloudScrubError(RuntimeError):
     """Secret scrubbing failed; the text must not be sent or persisted."""
 
 
-def _scrub_text(text: str) -> str:
+def _scrub_text(text: str, *, reject_quarantine: bool = False) -> str:
     try:
-        scrubbed = scrub_secrets(text).text
+        result = scrub_secrets(text)
+        scrubbed = result.text
+        quarantined = reject_quarantine and bool(result.quarantine)
     except Exception as exc:
         raise CloudScrubError(f"secret scrub failed ({type(exc).__name__}); refusing to pass text on") from None
     if not isinstance(scrubbed, str):
         raise CloudScrubError("secret scrub returned non-text; refusing to pass text on")
+    if quarantined:
+        raise CloudScrubError("secret scrub found quarantined tokens; refusing to send text")
     return scrubbed
 
 
 def scrub_for_cloud(text: str) -> str:
-    """Return ``text`` with secrets redacted, ready to send to a remote LLM."""
+    """Redact known secrets and refuse text containing unresolved quarantine.
+
+    Storage keeps quarantine for local review; a remote send must not expose it.
+    Refusal avoids translating original-text offsets after provider redactions.
+    """
     if not isinstance(text, str):
         raise CloudScrubError(f"remote LLM payload must be text, got {type(text).__name__}")
-    return _scrub_text(text)
+    return _scrub_text(text, reject_quarantine=True)
 
 
 def scrub_llm_output(value: T) -> T:
