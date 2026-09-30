@@ -51,7 +51,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         XCTAssertEqual(presentation.totalIndexedChunks, 797_727)
         XCTAssertEqual(presentation.indexedToday, 7)
         XCTAssertNil(presentation.indexedTodayUnavailableText)
-        XCTAssertEqual(presentation.agentWritesText, "175 writes via brain_store in 24 h")
+        XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h")
     }
 
     @MainActor
@@ -66,11 +66,10 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             presentation.indexedTodayUnavailableText,
             "not measured yet today"
         )
+        // #965: agent writes are a live DB count, so a stale observability document does not
+        // make them stale.
         XCTAssertEqual(presentation.agentWritesCount, 175)
-        XCTAssertEqual(
-            presentation.agentWritesText,
-            "brain_store writes (24 h) · as of 2026-09-13 23:50 (stale)"
-        )
+        XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h")
     }
 
     @MainActor
@@ -85,12 +84,9 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             presentation.indexedTodayUnavailableText,
             "as of 14:45 (stale)"
         )
-        XCTAssertEqual(presentation.agentWritesCount, 175)
-        XCTAssertEqual(
-            presentation.agentWritesText,
-            "brain_store writes (24 h) · as of 14:45 (stale)"
-        )
-        XCTAssertEqual(presentation.agentWritesDetailText(locale: Locale(identifier: "en_US")), "175 · as of 14:45 (stale)")
+        XCTAssertEqual(presentation.agentWritesCount, 175, "#965: live from the DB, not the stale document")
+        XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h")
+        XCTAssertEqual(presentation.agentWritesDetailText(locale: Locale(identifier: "en_US")), "175")
     }
 
     @MainActor
@@ -101,8 +97,9 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         )
         XCTAssertNil(presentation.indexedToday)
         XCTAssertEqual(presentation.indexedTodayUnavailableText, "not measured yet today")
-        XCTAssertNil(presentation.agentWritesCount)
-        XCTAssertEqual(presentation.agentWritesText, "brain_store writes · not measured yet")
+        // #965: agent writes come from the DB, not this unmeasured document.
+        XCTAssertEqual(presentation.agentWritesCount, 175)
+        XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h")
     }
 
     @MainActor
@@ -123,49 +120,49 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-901)),
                 "A decoded document can exceed the two-cadence age bound.",
                 "not measured yet today",
-                "brain_store writes (24 h) · as of 2026-09-14 23:47 (stale)"
+                "brain_store calls by agents, last 24 h"
             ),
             (
                 "future-dated",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(300)),
                 "Clock skew can decode to a generated_at later than now.",
                 "observability generated_at is in the future",
-                "brain_store writes · not measured yet"
+                "brain_store calls by agents, last 24 h"
             ),
             (
                 "missing",
                 missing.result,
                 "The non-optional Date cannot be constructed; ObservabilityReader returns unreadable.",
                 missing.reason,
-                "brain_store writes · not measured yet"
+                "brain_store calls by agents, last 24 h"
             ),
             (
                 "null",
                 null.result,
                 "The non-optional Date cannot decode null; ObservabilityReader returns unreadable.",
                 null.reason,
-                "brain_store writes · not measured yet"
+                "brain_store calls by agents, last 24 h"
             ),
             (
                 "unparseable",
                 unparseable.result,
                 "The custom ISO-8601 decoder rejects invalid text before a document exists.",
                 unparseable.reason,
-                "brain_store writes · not measured yet"
+                "brain_store calls by agents, last 24 h"
             ),
             (
                 "epoch-sentinel",
                 try BrainBarOnePageTestFixture.result(generatedAt: Date(timeIntervalSince1970: 0)),
                 "A syntactically valid epoch sentinel can decode but is not trustworthy evidence.",
                 "observability generated_at is zero or epoch sentinel",
-                "brain_store writes · not measured yet"
+                "brain_store calls by agents, last 24 h"
             ),
             (
                 "pre-midnight-today-scope",
                 try BrainBarOnePageTestFixture.result(generatedAt: now.addingTimeInterval(-300)),
                 "Fresh evidence from 23:58 is outside the 00:03 today window but valid for rolling 24 h.",
                 "not measured yet today",
-                "175 writes via brain_store in 24 h"
+                "brain_store calls by agents, last 24 h"
             ),
         ]
 
@@ -180,7 +177,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
                 context
             )
             XCTAssertEqual(presentation.agentWritesText, item.agentWritesText, context)
-            if item.name == "stale" { XCTAssertEqual(presentation.agentWritesCount, 175, context) }
+            // #965: agent writes are live from the DB, so no observability state changes them.
+            XCTAssertEqual(presentation.agentWritesCount, 175, context)
         }
     }
 

@@ -87,6 +87,43 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    /// "Agent writes (24 h)" (#965, Etan's ruling A): BrainLayer AGENT `brain_store` writes only.
+    /// Measured, or unknown with the reason, never a silent 0.
+    enum BrainStoreWriteCount: Sendable, Equatable {
+        case measured(Int)
+        case unknown(String)
+    }
+
+    /// Every BrainBar `brain_store` path writes `source = 'mcp'`: the direct store, the busy-DB
+    /// queue, the backup-snapshot deferral and the pending-queue drain (MCPRouter.handleBrainStore).
+    /// Watcher-ingested transcripts, hooks (`precompact-hook`), `digest`, the `brainlayer store` CLI
+    /// (`manual`) and Python replays (`pending`, `fallback-replay`) write other sources and are
+    /// not counted. Enrichment updates existing rows and never creates one.
+    static let brainStoreWriteWhereClause = "COALESCE(LOWER(TRIM(source)), '') = 'mcp'"
+    static let brainStoreWriteWindowHours = 24
+
+    /// New chunks agents stored with `brain_store` in the rolling 24 h ending at `now`, by
+    /// `created_at` (any stored timestamp format, normalised to UTC epoch seconds).
+    func brainStoreWriteCount(now: Date = Date()) -> BrainStoreWriteCount {
+        guard let db else { return .unknown("database not open") }
+        do {
+            let columns = try tableColumns(name: "chunks", on: db)
+            for column in ["source", "created_at"] where !columns.contains(column) {
+                return .unknown("chunks.\(column) column missing")
+            }
+            let cutoff = now.addingTimeInterval(-Double(Self.brainStoreWriteWindowHours) * 3_600)
+            let nowEpoch = Int64(now.timeIntervalSince1970)
+            let epochs = try indexedTimestampEpochs(
+                column: "created_at",
+                whereClause: Self.brainStoreWriteWhereClause,
+                since: cutoff
+            )
+            return .measured(epochs.filter { $0 <= nowEpoch }.count)
+        } catch {
+            return .unknown("brain_store count query failed: \(error)")
+        }
+    }
+
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
         let enrichedChunkCount: Int
@@ -125,6 +162,7 @@ final class BrainDatabase: @unchecked Sendable {
         let watcherProcessProbeResult: WatcherProcessProbeResult?
         let watcherRecentDistinctChunkCount: Int
         let watcherFlowReadability: MetricEvidenceReadability
+        let brainStoreWrites: BrainStoreWriteCount
 
         init(
             chunkCount: Int,
@@ -161,8 +199,10 @@ final class BrainDatabase: @unchecked Sendable {
             replayDebtBreakdown: ReplayDebtBreakdown? = nil,
             watcherProcessProbeResult: WatcherProcessProbeResult? = nil,
             watcherRecentDistinctChunkCount: Int? = nil,
-            watcherFlowReadability: MetricEvidenceReadability? = nil
+            watcherFlowReadability: MetricEvidenceReadability? = nil,
+            brainStoreWrites: BrainStoreWriteCount = .unknown("not measured")
         ) {
+            self.brainStoreWrites = brainStoreWrites
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
             self.failedEnrichmentCount = failedEnrichmentCount
@@ -327,7 +367,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: buckets.watcherFlowReadability
+                watcherFlowReadability: buckets.watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -367,7 +408,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -407,7 +449,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: result,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -447,7 +490,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -487,7 +531,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -2147,6 +2192,7 @@ final class BrainDatabase: @unchecked Sendable {
                 now: now
             )
             let recentWriteFiveMinuteCount = try recentActivityCount(windowSeconds: 300, now: now)
+            let brainStoreWrites = brainStoreWriteCount(now: now)
             let recentEnrichmentFiveMinuteCount = try recentEnrichmentCount(windowSeconds: 300, now: now)
 
             return DashboardStats(
@@ -2181,7 +2227,8 @@ final class BrainDatabase: @unchecked Sendable {
                 watcherHealth: watcherHealth,
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherRecentDistinctChunkCount: recentWatcherTruth.total,
-                watcherFlowReadability: recentWatcherTruth.readability
+                watcherFlowReadability: recentWatcherTruth.readability,
+                brainStoreWrites: brainStoreWrites
             )
         }
     }

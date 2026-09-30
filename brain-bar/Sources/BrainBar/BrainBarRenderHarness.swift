@@ -659,6 +659,24 @@ enum BrainBarRenderHarness {
             try writeBitmap(of: frameView, name: "window-dashboard-\(breakpoint.name)", in: outputDirectory)
         }
 
+        // #965: an agent brain_store count that cannot be measured says why, never 0.
+        let unknownRuntime = BrainBarRuntime()
+        unknownRuntime.install(
+            collector: BrainBarDashboardFixture.makeCollector(
+                stats: BrainBarDashboardFixture.makeStats(brainStoreWrites: .unknown("database not open"))
+            ),
+            database: nil
+        )
+        let unknownController = BrainBarDashboardPanelController(
+            runtime: unknownRuntime,
+            frameStore: BrainBarWindowFrameStore(defaults: RenderDefaults(), key: "render")
+        )
+        unknownController.windowForTesting.setFrame(NSRect(x: 0, y: 0, width: 960, height: 640), display: false)
+        if let frameView = unknownController.windowForTesting.contentView?.superview {
+            settle(frameView)
+            try writeBitmap(of: frameView, name: "window-dashboard-agent-writes-unknown-default", in: outputDirectory)
+        }
+
         let stats = BrainBarDashboardFixture.makeCollector().stats
         for badgeOn in [false, true] {
             let icon = SparklineRenderer.renderStatusBarIcon(

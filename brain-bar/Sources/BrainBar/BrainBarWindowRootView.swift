@@ -373,17 +373,23 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
     let totalIndexedChunks: Int?
     let indexedToday: Int?
     let indexedTodayUnavailableText: String?
+    /// Agent `brain_store` writes in the last 24 h (#965), or nil when unknown.
     let agentWritesCount: Int?
-    let agentWritesWindowHours: Int?
+    /// The one-line definition under a measured count, or "… unknown — reason".
     let agentWritesText: String
 
+    /// The line under the tile's number (#965): what exactly is counted.
+    static let agentWritesDefinition = "brain_store calls by agents, last 24 h"
+    /// The same definition in full, for the tooltip.
+    static let agentWritesDefinitionDetail =
+        "New chunks agents stored with the brain_store tool (chunks.source = 'mcp'), rolling 24 h by created_at. "
+        + "Excludes watcher-ingested transcripts, hooks, enrichment, digest and replays."
+
     func agentWritesDetailText(locale: Locale) -> String {
-        guard let agentWritesCount else { return agentWritesText }
-        let count = DashboardMetricFormatter.integerString(agentWritesCount, locale: locale)
-        guard agentWritesWindowHours == nil else { return count }
-        let freshness = agentWritesText.split(separator: "·", maxSplits: 1).last?
-            .trimmingCharacters(in: .whitespaces) ?? agentWritesText
-        return "\(count) · \(freshness)"
+        guard let agentWritesCount else {
+            return agentWritesText.components(separatedBy: " unknown — ").last.map { "unknown — \($0)" } ?? agentWritesText
+        }
+        return DashboardMetricFormatter.integerString(agentWritesCount, locale: locale)
     }
 
     static func derive(
@@ -550,52 +556,17 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             }
         }
 
+        // Live from BrainBar's own DB (#965), never from the periodic observability document,
+        // so it cannot go stale and a failed query says why instead of showing 0.
         let agentWritesCount: Int?
-        let agentWritesWindowHours: Int?
         let agentWritesText: String
-        if case let .readable(document) = observability {
-            let trust = generatedAtTrust(
-                document,
-                now: now,
-                cadence: observabilityCadence,
-                sameDayBoundary: nil,
-                calendar: calendar,
-                locale: locale
-            )
-            if case let .untrustworthy(reason) = trust {
-                if reason.hasPrefix("observability as of "), document.emitters.state == "measured",
-                   let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
-                    agentWritesCount = mcp.countInWindow
-                    agentWritesWindowHours = nil
-                    agentWritesText = "brain_store writes (\(document.windowHours) h) · as of \(staleMoment(document.generatedAt, now: now, calendar: calendar, locale: locale)) (stale)"
-                } else {
-                    agentWritesCount = nil
-                    agentWritesWindowHours = nil
-                    agentWritesText = "brain_store writes · not measured yet"
-                }
-            } else if document.emitters.state == "measured" {
-                if let mcp = document.emitters.byEmitter?.first(where: { $0.emitter == "mcp" }) {
-                    agentWritesCount = mcp.countInWindow
-                    agentWritesWindowHours = document.windowHours
-                    agentWritesText = "\(DashboardMetricFormatter.integerString(mcp.countInWindow, locale: locale)) writes via brain_store in \(document.windowHours) h"
-                } else {
-                    agentWritesCount = nil
-                    agentWritesWindowHours = nil
-                    agentWritesText = "brain_store writes · not measured yet"
-                }
-            } else {
-                agentWritesCount = nil
-                agentWritesWindowHours = nil
-                agentWritesText = "brain_store writes · not measured yet"
-            }
-        } else if case .unreadable = observability {
+        switch stats.brainStoreWrites {
+        case let .measured(count):
+            agentWritesCount = count
+            agentWritesText = Self.agentWritesDefinition
+        case let .unknown(reason):
             agentWritesCount = nil
-            agentWritesWindowHours = nil
-            agentWritesText = "brain_store writes · not measured yet"
-        } else {
-            agentWritesCount = nil
-            agentWritesWindowHours = nil
-            agentWritesText = "brain_store writes · not measured yet"
+            agentWritesText = "brain_store writes (24 h) unknown — \(reason)"
         }
 
         return Self(
@@ -606,7 +577,6 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             indexedToday: indexedToday,
             indexedTodayUnavailableText: indexedTodayUnavailableText,
             agentWritesCount: agentWritesCount,
-            agentWritesWindowHours: agentWritesWindowHours,
             agentWritesText: agentWritesText
         )
     }
@@ -1284,20 +1254,22 @@ private struct BrainBarDashboardView: View {
                 // MEASURED brain_store count. One unknown never erases a known.
                 Group {
                     if let writes = counts.agentWritesCount {
-                        HStack(alignment: .firstTextBaseline, spacing: 7) {
-                            Text(DashboardMetricFormatter.integerString(writes, locale: locale))
-                                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
-                            if counts.agentWritesWindowHours == nil {
-                                Circle().fill(Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown))
-                                    .frame(width: 6, height: 6)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                                Text(DashboardMetricFormatter.integerString(writes, locale: locale))
+                                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                                    .monospacedDigit()
+                                Text("brain_store writes (24 h)")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Color.brainBarTextPrimary)
                             }
-                            Text(counts.agentWritesWindowHours == nil
-                                 ? counts.agentWritesText : "brain_store writes (\(counts.agentWritesWindowHours ?? 24) h)")
-                                .font(.system(size: 13))
-                                .foregroundStyle(counts.agentWritesWindowHours == nil
-                                    ? Color.brainBarTextSecondary : Color.brainBarTextPrimary)
+                            Text(counts.agentWritesText)
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.brainBarTextSecondary)
+                                .lineLimit(1)
                         }
+                        .help(BrainBarOnePagePresentation.agentWritesDefinitionDetail)
+                        .accessibilityElement(children: .combine)
                     } else {
                         HStack(spacing: 6) {
                             Circle()
@@ -1306,11 +1278,12 @@ private struct BrainBarDashboardView: View {
                             Text(counts.agentWritesText)
                                 .font(.system(size: 11))
                                 .foregroundStyle(Color.brainBarTextSecondary)
-                                .lineLimit(1)
+                                .lineLimit(2)
                         }
+                        .help(BrainBarOnePagePresentation.agentWritesDefinitionDetail)
                     }
                 }
-                .frame(height: 26, alignment: .topLeading)
+                .frame(height: 42, alignment: .topLeading)
             }
             if let total = counts.totalIndexedChunks {
                 Text("\(DashboardMetricFormatter.integerString(total, locale: locale)) total")
