@@ -124,6 +124,41 @@ final class BrainBarDriveAuthTests: XCTestCase {
         XCTAssertFalse(runner.ranOnMainThread, "the CLI never runs on the main thread")
     }
 
+    /// Macroscope on #1028: the first status read is held until reconnect has finished and read
+    /// its own, newer status; then it completes with an older answer.
+    private final class GatedStatusRunner: BrainLayerCLIRunning, @unchecked Sendable {
+        let firstStatusStarted = DispatchSemaphore(value: 0)
+        let releaseFirstStatus = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var statusCalls = 0
+        /// Blocks a background thread (never the main actor) until the first read is in flight.
+        func waitUntilFirstStatusStarted() { firstStatusStarted.wait() }
+        func run(_ arguments: [String], timeout: TimeInterval) -> BrainLayerCLIResult? {
+            guard arguments.contains("--status") else { return .init(terminationStatus: 0, stdout: #"{"status":"ok"}"#) }
+            let call = lock.withLock { () -> Int in
+                statusCalls += 1
+                return statusCalls
+            }
+            guard call == 1 else { return .init(terminationStatus: 0, stdout: #"{"state":"valid"}"#) }
+            firstStatusStarted.signal()
+            releaseFirstStatus.wait()
+            return .init(terminationStatus: 0, stdout: #"{"state":"missing"}"#)
+        }
+    }
+
+    @MainActor
+    func test_a_stale_status_read_never_overwrites_a_newer_one() async {
+        let runner = GatedStatusRunner()
+        let model = BrainBarDriveAuthModel(runner: runner, now: { [now] in now })
+        let stale = Task { await model.refreshStatus() }
+        await Task.detached { runner.waitUntilFirstStatusStarted() }.value
+        await model.reconnect()
+        XCTAssertEqual(model.status.state, .valid)
+        runner.releaseFirstStatus.signal()
+        await stale.value
+        XCTAssertEqual(model.status.state, .valid, "the read that finished last started first; it is older")
+    }
+
     @MainActor
     func test_every_failed_reconnect_outcome_keeps_the_state() async {
         for json in [#"{"status":"cancelled","reason":"denied"}"#, #"{"status":"timeout","reason":"t"}"#, #"{"status":"error","reason":"e"}"#] {
