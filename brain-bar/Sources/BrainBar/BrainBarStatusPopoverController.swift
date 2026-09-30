@@ -2,10 +2,11 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// The small menu-bar status item (#963, vNext D5), like VoiceBar's: its icon draws the live
+/// sparkline and badge, and every click opens a short menu. Dashboard and Settings open in the
+/// one real BrainBar window.
 @MainActor
-final class BrainBarStatusPopoverController: NSObject {
-    static let statusItemEventMask: NSEvent.EventTypeMask = [.leftMouseUp, .rightMouseUp]
-
+final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     let statusItemForTesting: NSStatusItem
     let contextMenuForTesting: NSMenu
 
@@ -18,6 +19,7 @@ final class BrainBarStatusPopoverController: NSObject {
     private var badgePresentation = BadgeStatePresentation.failVisible("Badge state has not been read yet.")
     private var latestStats: BrainDatabase.DashboardStats?
     private var latestState: PipelineState?
+    private let statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
     init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
         self.runtime = runtime
@@ -30,6 +32,11 @@ final class BrainBarStatusPopoverController: NSObject {
         configureStatusItem()
         bindRuntime()
         dashboardPanelController.statusItemButton = statusItemForTesting.button
+    }
+
+    /// The menu's first, informational row.
+    static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
+        badge.badgeOn ? "Needs attention: \(badge.reason)" : "Nothing needs attention"
     }
 
     func toggle(_ sender: Any?) {
@@ -52,11 +59,9 @@ final class BrainBarStatusPopoverController: NSObject {
     }
 
     private func configureStatusItem() {
+        statusItemForTesting.menu = contextMenuForTesting
         guard let button = statusItemForTesting.button else { return }
         button.image = NSImage(systemSymbolName: "brain", accessibilityDescription: "BrainBar")
-        button.target = self
-        button.action = #selector(toggleFromStatusItem(_:))
-        button.sendAction(on: Self.statusItemEventMask)
         button.toolTip = "BrainBar"
     }
 
@@ -134,27 +139,27 @@ final class BrainBarStatusPopoverController: NSObject {
             : "BrainBar"
     }
 
-    @objc private func toggleFromStatusItem(_ sender: Any?) {
-        if let event = NSApp.currentEvent, event.type == .rightMouseUp,
-           let button = statusItemForTesting.button {
-            NSMenu.popUpContextMenu(contextMenuForTesting, with: event, for: button)
-            return
-        }
-
-        toggle(sender)
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
     }
 
     private func configureContextMenu() {
+        contextMenuForTesting.delegate = self
+        contextMenuForTesting.autoenablesItems = false
+        statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
+        statusLineItem.isEnabled = false
+        contextMenuForTesting.addItem(statusLineItem)
+        contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(
-                title: "Toggle BrainBar",
-                action: #selector(toggleFromContextMenu(_:)),
+                title: "Open Dashboard",
+                action: #selector(openDashboard(_:)),
                 keyEquivalent: ""
             )
         )
         contextMenuForTesting.addItem(
             NSMenuItem(
-                title: "Settings...",
+                title: "Settings…",
                 action: #selector(openSettings(_:)),
                 keyEquivalent: ""
             )
@@ -181,8 +186,8 @@ final class BrainBarStatusPopoverController: NSObject {
         }
     }
 
-    @objc private func toggleFromContextMenu(_ sender: Any?) {
-        toggle(sender)
+    @objc private func openDashboard(_ sender: Any?) {
+        dashboardPanelController.showDashboard()
     }
 
     @objc private func restartBrainBar(_ sender: Any?) {

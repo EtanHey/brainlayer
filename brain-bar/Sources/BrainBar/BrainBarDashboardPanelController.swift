@@ -72,11 +72,6 @@ enum BrainBarDisclosureAnimation {
     }
 }
 
-final class BrainBarDashboardPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
-
 @MainActor
 final class BrainBarDashboardPanelState: ObservableObject {
     @Published var attentionExpanded = false
@@ -107,31 +102,64 @@ final class BrainBarDashboardPanelState: ObservableObject {
     func disclosureAnimationDidComplete() {}
 }
 
+/// The one BrainBar window (#963, vNext D5): a real, titled window that stays open until it is
+/// closed, like VoiceBar's Settings window. The old menu-bar panel floated above everything and
+/// dismissed itself on any click away, which broke click-through testing.
+final class BrainBarMainWindow: NSWindow {
+    /// Cmd-, from inside the window. The window handles its own key equivalents because an
+    /// accessory app shows no menu bar to route them.
+    var onSettingsShortcut: (() -> Void)?
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+            switch event.charactersIgnoringModifiers {
+            case "w":
+                performClose(nil)
+                return true
+            case ",":
+                onSettingsShortcut?()
+                return true
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 @MainActor
 final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     static let defaultSize = NSSize(
         width: BrainBarWindowPlacement.defaultSize.width,
         height: BrainBarWindowPlacement.defaultSize.height
     )
-    static let minSize = NSSize(width: BrainBarWindowPlacement.minimumSize.width, height: 300)
-    static let maxSize = NSSize(width: 1_600, height: 1_200)
+    static let minSize = NSSize(
+        width: BrainBarWindowPlacement.minimumSize.width,
+        height: BrainBarWindowPlacement.minimumSize.height
+    )
+    /// Where the window's last position and size are kept between launches.
+    static let frameDefaultsKey = "brainbar.window.main-frame"
 
-    let panelForTesting: NSPanel
+    let windowForTesting: NSWindow
     let contentViewControllerForTesting: NSViewController
-    var isShownForTesting: Bool { panel.isVisible }
+    var isShownForTesting: Bool { window.isVisible }
     var naturalDashboardHeightForTesting: CGFloat { panelState.dashboardHeight }
 
-    private let panel: NSPanel
+    private let window: BrainBarMainWindow
     private let panelState = BrainBarDashboardPanelState()
-    private weak var lastShownAnchor: NSView?
-    private var lastAnchorScreenRect: NSRect?
-    private weak var lastAnchorScreen: NSScreen?
-    private var clickOutsideMonitor: Any?
-    private var localClickMonitor: Any?
-    private var shownAt: Date = .distantPast
+    private let frameStore: BrainBarWindowFrameStore
+    private var hasPlacedWindow = false
+    /// Only used to place the very first window below the menu-bar icon.
     weak var statusItemButton: NSView?
 
-    init(runtime: BrainBarRuntime) {
+    init(
+        runtime: BrainBarRuntime,
+        frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey)
+    ) {
         let hostingController = NSHostingController(
             rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false, panelState: panelState)
                 .frame(minWidth: Self.minSize.width)
@@ -142,17 +170,20 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         hostingController.view.autoresizingMask = [.width, .height]
 
         contentViewControllerForTesting = hostingController
-        panel = Self.makePanel(contentViewController: hostingController)
-        panelForTesting = panel
+        self.frameStore = frameStore
+        window = Self.makeWindow(contentViewController: hostingController)
+        windowForTesting = window
         super.init()
-        panel.delegate = self
+        window.delegate = self
+        window.onSettingsShortcut = { [weak self] in self?.showSettings() }
         BrainBarSettingsActions.installOpenHandler { [weak self] in
             self?.showSettings()
         }
     }
 
+    /// The hotkey and `brainbar://toggle`: open the window, or close it when it is open.
     func toggle(anchoredTo anchorView: NSView? = nil) {
-        if panel.isVisible {
+        if window.isVisible {
             dismiss()
         } else {
             show(anchoredTo: anchorView)
@@ -160,37 +191,29 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func show(anchoredTo anchorView: NSView? = nil) {
-        guard let anchorView else { return }
         if panelState.selectedTab == .settings { panelState.settingsActivationRevision += 1 }
-        let anchorWindow = anchorView.window
-        let anchorRect = anchorWindow?.convertToScreen(anchorView.convert(anchorView.bounds, to: nil))
-        let anchorScreen = anchorWindow?.screen
-        if lastShownAnchor !== anchorView || lastAnchorScreenRect != anchorRect || lastAnchorScreen !== anchorScreen {
-            positionPanel(below: anchorView)
-            lastShownAnchor = anchorView
-            lastAnchorScreenRect = anchorRect
-            lastAnchorScreen = anchorScreen
+        if !hasPlacedWindow {
+            placeWindow(near: anchorView ?? statusItemButton)
+            hasPlacedWindow = true
         }
         NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        panel.orderFrontRegardless()
-        shownAt = Date()
-        installClickOutsideMonitor()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     func dismiss() {
-        removeClickOutsideMonitor()
-        panel.orderOut(nil)
+        persistFrame()
+        window.orderOut(nil)
     }
 
     func showDashboard() {
         panelState.selectedTab = .dashboard
-        showCurrentTab()
+        show()
     }
 
     func showSettings() {
         panelState.selectedTab = .settings
-        showCurrentTab()
+        show()
     }
 
 #if BRAINBAR_UI
@@ -203,69 +226,45 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         switch action {
         case .dashboard: showDashboard()
         case .settings(let section): showSettings(section: section)
-        case .toggle: break
+        case .toggle: toggle()
         }
     }
 #endif
 
-    private func showCurrentTab() {
-        if panel.isVisible {
-            if let statusItemButton {
-                show(anchoredTo: statusItemButton)
-            } else {
-                NSApp.activate(ignoringOtherApps: true)
-                panel.makeKeyAndOrderFront(nil)
-            }
+    /// The first time: the last saved frame when it is still on a screen, else below the menu-bar
+    /// icon, else centred. Afterwards the window keeps wherever the user left it.
+    private func placeWindow(near anchorView: NSView?) {
+        let screenFrames = NSScreen.screens.map(\.visibleFrame)
+        if let saved = frameStore.persistedFrame(),
+           saved.width >= Self.minSize.width, saved.height >= Self.minSize.height,
+           BrainBarWindowPlacement.isRestorable(frame: saved, screenFrames: screenFrames) {
+            window.setFrame(saved, display: false)
+            return
+        }
+        window.setContentSize(Self.defaultSize)
+        if let anchorView, let anchorWindow = anchorView.window,
+           let screen = anchorWindow.screen ?? NSScreen.screens.first {
+            let anchorRect = anchorWindow.convertToScreen(anchorView.convert(anchorView.bounds, to: nil))
+            window.setFrameOrigin(Self.anchorOrigin(
+                anchorRect: anchorRect, panelSize: window.frame.size, visibleFrame: screen.visibleFrame
+            ))
         } else {
-            show(anchoredTo: statusItemButton)
+            window.center()
         }
     }
 
-    private func installClickOutsideMonitor() {
-        removeClickOutsideMonitor()
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-            Task { @MainActor in self?.dismissIfClickOutside() }
-        }
-        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            Task { @MainActor in self?.dismissIfLocalClickOutside(event) }
-            return event
-        }
+    private func persistFrame() {
+        guard hasPlacedWindow else { return }
+        frameStore.persist(frame: window.frame)
     }
 
-    private func removeClickOutsideMonitor() {
-        if let clickOutsideMonitor { NSEvent.removeMonitor(clickOutsideMonitor) }
-        if let localClickMonitor { NSEvent.removeMonitor(localClickMonitor) }
-        clickOutsideMonitor = nil
-        localClickMonitor = nil
-    }
+    func windowDidEndLiveResize(_ notification: Notification) { persistFrame() }
+    func windowDidMove(_ notification: Notification) { persistFrame() }
+    func windowWillClose(_ notification: Notification) { persistFrame() }
 
-    private func dismissIfClickOutside() {
-        guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
-        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
-        dismiss()
-    }
-
-    private func dismissIfLocalClickOutside(_ event: NSEvent) {
-        guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
-        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
-        if event.window === panel { return }
-        if let button = statusItemButton, event.window === button.window { return }   // let toggle() own the menubar click
-        dismiss()
-    }
-
-    func windowDidResignKey(_ notification: Notification) {
-        guard panel.isVisible, Date().timeIntervalSince(shownAt) > 0.20 else { return }
-        guard NSApp.modalWindow == nil, panel.attachedSheet == nil else { return }
-        dismiss()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        removeClickOutsideMonitor()
-    }
-
+    /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        NSSize(width: max(frameSize.width, Self.minSize.width), height: sender.frame.height)
+        NSSize(width: max(frameSize.width, Self.minSize.width), height: max(frameSize.height, Self.minSize.height))
     }
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
@@ -278,39 +277,26 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     var selectedSettingsSectionForTesting: BrainBarSettingsSection { panelState.settingsNavigation.selected }
 #endif
 
-    private static func makePanel(contentViewController: NSViewController) -> NSPanel {
-        let panel = BrainBarDashboardPanel(
+    private static func makeWindow(contentViewController: NSViewController) -> BrainBarMainWindow {
+        let window = BrainBarMainWindow(
             contentRect: NSRect(origin: .zero, size: defaultSize),
-            styleMask: [.titled, .fullSizeContentView, .closable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        panel.title = "BrainBar"
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isReleasedWhenClosed = false
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.level = .statusBar
-        panel.becomesKeyOnlyIfNeeded = false
-        panel.minSize = minSize
-        panel.maxSize = maxSize
-        panel.contentViewController = contentViewController
-        panel.contentMinSize = minSize
-        panel.setContentSize(defaultSize)
-        return panel
-    }
-
-    private func positionPanel(below anchorView: NSView) {
-        guard let anchorWindow = anchorView.window,
-              let screen = anchorWindow.screen ?? NSScreen.screens.first else {
-            panel.setFrame(NSRect(origin: .zero, size: panel.frame.size), display: false)
-            return
-        }
-
-        let anchorRectInWindow = anchorView.convert(anchorView.bounds, to: nil)
-        let anchorRect = anchorWindow.convertToScreen(anchorRectInWindow)
-        panel.setFrameOrigin(Self.anchorOrigin(anchorRect: anchorRect, panelSize: panel.frame.size, visibleFrame: screen.visibleFrame))
+        window.title = "BrainBar"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.hidesOnDeactivate = false
+        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace]
+        window.minSize = minSize
+        window.contentViewController = contentViewController
+        window.contentMinSize = minSize
+        window.setContentSize(defaultSize)
+        return window
     }
 
     static func anchorOrigin(anchorRect: NSRect, panelSize: NSSize, visibleFrame: NSRect) -> NSPoint {
