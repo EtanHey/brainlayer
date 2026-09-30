@@ -250,6 +250,83 @@ enum WatcherHealthReader {
         return URL(fileURLWithPath: dbPath).deletingLastPathComponent().appendingPathComponent("watcher-health.json")
     }
 
+    /// The watcher's OWN health path, resolved the way the watcher resolves it (#1014). `environment`
+    /// is the watcher's LaunchAgent environment, overlaid by the env file `brainlayer-env-run.sh`
+    /// exports over it. Precedence (#1014 R1 B2): an explicit `BRAINLAYER_WATCHER_HEALTH_PATH`, from
+    /// the watcher's environment and then BrainBar's; else beside the watcher's `BRAINLAYER_DB`, then
+    /// BrainBar's; else beside the canonical DB. BrainBar's own `BRAINBAR_DB_PATH` names BrainBar's
+    /// database, not the watcher's, so it never steers this.
+    static func watcherURL(
+        environment: [String: String],
+        envFile: String?,
+        brainBarEnvironment: [String: String] = [:],
+        home: URL
+    ) -> URL {
+        var watcher = environment
+        for (key, value) in envFileValues(envFile) { watcher[key] = value }
+        func expand(_ path: String) -> String {
+            path == "~" ? home.path : path.hasPrefix("~/") ? home.path + path.dropFirst() : path
+        }
+        func value(_ key: String) -> String? {
+            [watcher[key], brainBarEnvironment[key]].lazy.compactMap { $0 }.first { !$0.isEmpty }.map(expand)
+        }
+        let dbPath = value("BRAINLAYER_DB") ?? home.appendingPathComponent(".local/share/brainlayer/brainlayer.db").path
+        return url(dbPath: dbPath, environment: value(pathOverrideKey).map { [pathOverrideKey: $0] } ?? [:])
+    }
+
+    static let watcherLaunchAgentLabel = "com.brainlayer.watch"
+    /// Where BrainBar looks for the watcher's installed LaunchAgent, when not the standard
+    /// `~/Library/LaunchAgents/com.brainlayer.watch.plist`. Unit tests point it at a path that does
+    /// not exist, so they never read the real ~/Library.
+    static let watcherPlistOverrideKey = "BRAINBAR_WATCHER_PLIST"
+
+    /// The live path (#1014 R1 B2): the installed watcher LaunchAgent's `EnvironmentVariables`, then
+    /// the env file that agent names (else BrainBar's `BRAINLAYER_ENV_FILE`, else the default), then
+    /// this process's environment.
+    static func resolvedURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        readFile: (String) -> Data? = { FileManager.default.contents(atPath: $0) }
+    ) -> URL {
+        func nonEmpty(_ value: String?) -> String? { value.flatMap { $0.isEmpty ? nil : $0 } }
+        let plistPath = nonEmpty(environment[watcherPlistOverrideKey])
+            ?? home.appendingPathComponent("Library/LaunchAgents/\(watcherLaunchAgentLabel).plist").path
+        let launchAgent = readFile(plistPath)
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        let launchAgentEnvironment = (launchAgent?["EnvironmentVariables"] as? [String: Any])?
+            .compactMapValues { $0 as? String } ?? [:]
+        let envFilePath = nonEmpty(launchAgentEnvironment["BRAINLAYER_ENV_FILE"])
+            ?? nonEmpty(environment["BRAINLAYER_ENV_FILE"])
+            ?? home.appendingPathComponent(".config/brainlayer/brainlayer.env").path
+        return watcherURL(
+            environment: launchAgentEnvironment,
+            envFile: readFile(envFilePath).flatMap { String(data: $0, encoding: .utf8) },
+            brainBarEnvironment: environment,
+            home: home
+        )
+    }
+
+    /// The same simple `KEY=value` / `export KEY="value"` lines `brainlayer-env-run.sh` exports.
+    /// Command substitutions are skipped there too.
+    private static func envFileValues(_ text: String?) -> [String: String] {
+        guard let text else { return [:] }
+        var values: [String: String] = [:]
+        for raw in text.split(whereSeparator: \.isNewline) {
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            if line.hasPrefix("export ") { line = String(line.dropFirst("export ".count)) }
+            guard let equals = line.firstIndex(of: "=") else { continue }
+            let key = line[..<equals].trimmingCharacters(in: .whitespaces)
+            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, !value.contains("$("), !value.contains("`") else { continue }
+            if value.count >= 2, let first = value.first, first == value.last, first == "\"" || first == "'" {
+                value = String(value.dropFirst().dropLast())
+            }
+            values[key] = value
+        }
+        return values
+    }
+
     static func read(url: URL) -> WatcherHealthFileRead {
         guard FileManager.default.fileExists(atPath: url.path) else { return .missing(path: url.path) }
         do {

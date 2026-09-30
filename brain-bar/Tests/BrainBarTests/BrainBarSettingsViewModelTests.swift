@@ -8,8 +8,10 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         var config = BrainLayerConfig.defaultConfig
         config.enrichmentMode = .local
         config.enrichmentBackend = "mlx"
-        let cloud = BrainBarSettingsFooterPresentation(config: config, watcher: .running)
-        XCTAssertEqual(cloud.state, .watcherRunning)
+        let cloud = BrainBarSettingsFooterPresentation(config: config, watcher: .running(heartbeatAt: fixedNow), now: fixedNow)
+        XCTAssertEqual(cloud.state, .watcher(.running(heartbeatAt: fixedNow)))
+        XCTAssertEqual(cloud.state.title, "Watcher running")
+        XCTAssertNil(cloud.detail)
         XCTAssertTrue(cloud.locality.contains("Memory on this Mac"))
         XCTAssertTrue(cloud.locality.contains("Enrichment → Gemini"))
         XCTAssertFalse(cloud.locality.contains("Local enrichment"))
@@ -18,20 +20,23 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
         config.launchdJobs[.backupDaily]?.enabled = false
         config.launchdJobs[.jsonlBackup]?.enabled = false
-        let weeklyOnly = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        let unknown = WatcherHealthStatus.unknown(reason: "Watcher is running, but its health file is missing at /x.")
+        let weeklyOnly = BrainBarSettingsFooterPresentation(config: config, watcher: unknown, now: fixedNow)
         XCTAssertTrue(weeklyOnly.locality.contains("Backups → Drive"))
         XCTAssertFalse(weeklyOnly.showsLock)
 
         config.enrichmentEnabled = false
         config.launchdJobs[.enrichment]?.enabled = false
         config.launchdJobs[.maintenanceWeekly]?.enabled = false
-        let local = BrainBarSettingsFooterPresentation(config: config, watcher: .unknown)
+        let local = BrainBarSettingsFooterPresentation(config: config, watcher: unknown, now: fixedNow)
         XCTAssertTrue(local.locality.contains("Memory on this Mac"))
         XCTAssertTrue(local.locality.contains("Enrichment off"))
         XCTAssertTrue(local.locality.contains("Backups off"))
         XCTAssertTrue(local.showsLock)
         XCTAssertEqual(local.symbol, "lock")
-        XCTAssertEqual(local.state, .unavailable)
+        XCTAssertEqual(local.state, .watcher(unknown))
+        XCTAssertEqual(local.state.title, "Watcher status unknown")
+        XCTAssertEqual(local.detail, "Watcher is running, but its health file is missing at /x.")
 
         let unreadable = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
         XCTAssertTrue(unreadable.locality.contains("Enrichment unknown"))

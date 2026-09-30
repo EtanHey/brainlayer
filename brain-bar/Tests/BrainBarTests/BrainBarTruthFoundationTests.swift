@@ -24,8 +24,7 @@ final class BrainBarTruthFoundationTests: XCTestCase {
             WatcherFlowState.derive(
                 process: .running(pid: 42),
                 recentDistinctChunkCount: 1,
-                recentFlowReadable: true,
-                pendingWorkCount: 0
+                recentFlowReadable: true
             ),
             .flowing
         )
@@ -33,17 +32,16 @@ final class BrainBarTruthFoundationTests: XCTestCase {
             WatcherFlowState.derive(
                 process: .running(pid: 42),
                 recentDistinctChunkCount: 0,
-                recentFlowReadable: true,
-                pendingWorkCount: 2
+                recentFlowReadable: true
             ),
-            .stalled
+            .runningNoRecentFlow,
+            "#966: replay debt is BrainBar's deferred-store queue, not watcher work, so it no longer makes the watcher STALLED"
         )
         XCTAssertEqual(
             WatcherFlowState.derive(
                 process: .running(pid: 42),
                 recentDistinctChunkCount: 0,
-                recentFlowReadable: true,
-                pendingWorkCount: 0
+                recentFlowReadable: true
             ),
             .runningNoRecentFlow
         )
@@ -51,8 +49,7 @@ final class BrainBarTruthFoundationTests: XCTestCase {
             WatcherFlowState.derive(
                 process: .absent,
                 recentDistinctChunkCount: 10,
-                recentFlowReadable: true,
-                pendingWorkCount: 10
+                recentFlowReadable: true
             ),
             .offline
         )
@@ -60,8 +57,7 @@ final class BrainBarTruthFoundationTests: XCTestCase {
             WatcherFlowState.derive(
                 process: .running(pid: 42),
                 recentDistinctChunkCount: 0,
-                recentFlowReadable: false,
-                pendingWorkCount: 0
+                recentFlowReadable: false
             ),
             .runningFlowUnverified
         )
@@ -69,8 +65,7 @@ final class BrainBarTruthFoundationTests: XCTestCase {
             WatcherFlowState.derive(
                 process: .failure("launchctl timed out"),
                 recentDistinctChunkCount: 0,
-                recentFlowReadable: false,
-                pendingWorkCount: 0
+                recentFlowReadable: false
             ),
             .unknown
         )

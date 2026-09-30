@@ -41,9 +41,11 @@ enum WatcherProcessProbeResult: Sendable, Equatable {
     case failure(String)
 }
 
+/// Whether watcher-ingested chunks are landing. Flow only: whether the watcher is healthy is
+/// `WatcherHealthStatus` (#966). BrainBar's replay debt is not watcher work and no longer
+/// feeds this (it was the source of the false "Watcher flow needs attention").
 enum WatcherFlowState: Sendable, Equatable {
     case flowing
-    case stalled
     case runningNoRecentFlow
     case offline
     case runningFlowUnverified
@@ -52,8 +54,7 @@ enum WatcherFlowState: Sendable, Equatable {
     static func derive(
         process: WatcherProcessProbeResult,
         recentDistinctChunkCount: Int,
-        recentFlowReadable: Bool,
-        pendingWorkCount: Int
+        recentFlowReadable: Bool
     ) -> WatcherFlowState {
         switch process {
         case .failure:
@@ -63,7 +64,6 @@ enum WatcherFlowState: Sendable, Equatable {
         case .running:
             guard recentFlowReadable else { return .runningFlowUnverified }
             if recentDistinctChunkCount > 0 { return .flowing }
-            if pendingWorkCount > 0 { return .stalled }
             return .runningNoRecentFlow
         }
     }
@@ -71,7 +71,6 @@ enum WatcherFlowState: Sendable, Equatable {
     var label: String {
         switch self {
         case .flowing: return "FLOWING"
-        case .stalled: return "STALLED"
         case .runningNoRecentFlow: return "RUNNING · NO RECENT FLOW"
         case .offline: return "OFFLINE"
         case .runningFlowUnverified: return "RUNNING · FLOW UNVERIFIED"
@@ -246,11 +245,25 @@ enum DashboardFlowLaneStatus: String, Sendable, Equatable {
     case queued
     case idle
     case unavailable
+    /// Watcher-lane pills (#1014 R1 B1), one per non-running `WatcherHealthStatus` state, plus
+    /// a running watcher whose flow evidence is unverified.
+    case running
+    case attention
+    case stopped
+    case unknown
 
     var label: String {
         switch self {
         case .live:
             return "live"
+        case .running:
+            return "running"
+        case .attention:
+            return "needs attention"
+        case .stopped:
+            return "stopped"
+        case .unknown:
+            return "unknown"
         case .recent:
             return "recent"
         case .draining:
@@ -268,10 +281,14 @@ enum DashboardFlowLaneStatus: String, Sendable, Equatable {
 extension DashboardFlowLaneStatus {
     var stateTheme: BrainBarStateTheme {
         switch self {
-        case .live:
+        case .live, .running:
             return .active
-        case .recent, .idle:
+        case .recent, .idle, .unknown:
             return .idle
+        case .attention:
+            return .degraded
+        case .stopped:
+            return .error
         case .draining:
             return .active
         case .queued:
@@ -361,6 +378,13 @@ struct DashboardFlowLane: Sendable, Equatable {
     let tertiaryValues: [Int]
     let tertiarySeriesLabel: String?
     let tertiaryAccentColor: NSColor?
+    /// Whether the chart's flow evidence is readable, when it differs from the pill. The watcher
+    /// lane's pill follows `WatcherHealthStatus` (#1014 R1 B1) while its chart still follows the
+    /// process-and-flow evidence; every other lane has one status for both.
+    var flowEvidence: DashboardFlowLaneStatus? = nil
+
+    /// The status the chart uses to decide whether its evidence is available.
+    var evidenceStatus: DashboardFlowLaneStatus { flowEvidence ?? status }
 }
 
 struct DashboardQueueSummary: Sendable, Equatable {
@@ -390,8 +414,10 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let queue: DashboardQueueSummary
     let enrichment: DashboardFlowLane
     let watcherFlowState: WatcherFlowState
-    let watcherHealth: DashboardStats.WatcherHealth?
-    let watcherHealthIsFresh: Bool
+    /// The one watcher-health truth every surface renders (#966).
+    let watcherStatus: WatcherHealthStatus
+    /// `watcherStatus.reasonText(now:)` at derive time, so every surface shows the same line.
+    let watcherStatusReason: String?
 
     var isUnavailable: Bool {
         ingress.status == .unavailable || enrichment.status == .unavailable || queue.status == .unavailable
@@ -414,8 +440,12 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let watcherFlowState = WatcherFlowState.derive(
             process: watcherProcess,
             recentDistinctChunkCount: stats.watcherRecentDistinctChunkCount,
-            recentFlowReadable: stats.watcherFlowReadability.isReadable,
-            pendingWorkCount: stats.replayDebtBreakdown.deduplicatedTotal
+            recentFlowReadable: stats.watcherFlowReadability.isReadable
+        )
+        let watcherStatus = WatcherHealthStatus.derive(
+            launchd: WatcherLaunchdEvidence(process: stats.watcherProcessProbeResult),
+            file: stats.watcherHealth,
+            now: now
         )
 
         let ingressStatus: DashboardFlowLaneStatus
@@ -624,8 +654,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 tertiaryAccentColor: nil
             ),
             watcherFlowState: watcherFlowState,
-            watcherHealth: stats.watcherHealth,
-            watcherHealthIsFresh: stats.watcherHealth?.isFresh(now: now) ?? false
+            watcherStatus: watcherStatus,
+            watcherStatusReason: watcherStatus.reasonText(now: now)
         )
     }
 
@@ -651,6 +681,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "No recent enrichments"
         case .unavailable:
             return "Unavailable"
+        case .running, .attention, .stopped, .unknown:
+            // Watcher-lane states; the enrichment lane never takes them.
+            return status.label.capitalized
         }
     }
 
@@ -672,6 +705,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "Chunk rows draining"
         case .unavailable:
             return "Chunk rows unavailable"
+        case .running, .attention, .stopped, .unknown:
+            return "Chunk rows \(status.label)"
         }
     }
 
@@ -887,11 +922,10 @@ extension DashboardFlowSummary {
         case .jsonlWatcher:
             let watcherValues = ingress.secondaryValues
             let watcherTotal = watcherValues.reduce(0, +)
-            let watcherStatus = jsonlWatcherStatus(flowState: watcherFlowState)
             return DashboardFlowLane(
                 name: "Watcher-ingested chunks",
-                status: watcherStatus,
-                statusText: watcherFlowState.label,
+                status: jsonlWatcherPill,
+                statusText: jsonlWatcherStatusText,
                 windowLabel: ingress.windowLabel,
                 activityWindowMinutes: ingress.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
@@ -902,7 +936,7 @@ extension DashboardFlowSummary {
                     totalEvents: watcherTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
-                lastEventText: jsonlWatcherLastEventText(
+                lastEventText: watcherStatusReason ?? jsonlWatcherLastEventText(
                     totalEvents: watcherTotal,
                     latestBucketCount: watcherValues.last ?? 0,
                     windowLabel: ingress.windowLabel
@@ -917,7 +951,8 @@ extension DashboardFlowSummary {
                 secondaryAccentColor: nil,
                 tertiaryValues: [],
                 tertiarySeriesLabel: nil,
-                tertiaryAccentColor: nil
+                tertiaryAccentColor: nil,
+                flowEvidence: jsonlWatcherStatus(flowState: watcherFlowState)
             )
         }
     }
@@ -951,6 +986,8 @@ extension DashboardFlowSummary {
             return "Agent-origin chunks draining"
         case .unavailable:
             return "Agent-origin chunks unavailable"
+        case .running, .attention, .stopped, .unknown:
+            return "Agent-origin chunks \(status.label)"
         }
     }
 
@@ -972,16 +1009,41 @@ extension DashboardFlowSummary {
         return "\(DashboardMetricFormatter.integerString(totalEvents)) agent-origin chunks in \(windowLabel)"
     }
 
+    /// The watcher lane's pill is a function of the one `WatcherHealthStatus` (#1014 R1 B1): flow
+    /// only refines a Running watcher, so a degraded, stopped or unknown watcher can never show
+    /// a healthy flow pill beside its NEEDS ATTENTION headline.
+    private var jsonlWatcherPill: DashboardFlowLaneStatus {
+        switch watcherStatus {
+        case .running:
+            switch watcherFlowState {
+            case .flowing: .live
+            case .runningNoRecentFlow: .idle
+            case .offline, .runningFlowUnverified, .unknown: .running
+            }
+        case .degraded: .attention
+        case .stopped: .stopped
+        case .unknown: .unknown
+        }
+    }
+
     private func jsonlWatcherStatus(flowState: WatcherFlowState) -> DashboardFlowLaneStatus {
         switch flowState {
         case .flowing:
             return .live
-        case .stalled:
-            return .queued
         case .runningNoRecentFlow:
             return .idle
         case .offline, .runningFlowUnverified, .unknown:
             return .unavailable
+        }
+    }
+
+    /// Health first (from `WatcherHealthStatus`), then flow when the watcher is healthy.
+    private var jsonlWatcherStatusText: String {
+        switch watcherStatus {
+        case .running: watcherFlowState.label
+        case .degraded: "NEEDS ATTENTION"
+        case .stopped: "STOPPED"
+        case .unknown: "UNKNOWN"
         }
     }
 

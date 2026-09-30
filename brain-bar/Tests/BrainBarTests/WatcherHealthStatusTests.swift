@@ -407,6 +407,128 @@ final class WatcherHealthStatusTests: XCTestCase {
         )
     }
 
+    /// #1014: BrainBar must read the health file the WATCHER writes. The watcher resolves
+    /// BRAINLAYER_DB (from its launchd env, overlaid by brainlayer.env) or the canonical DB, and writes
+    /// watcher-health.json beside it unless BRAINLAYER_WATCHER_HEALTH_PATH overrides it. BrainBar's own
+    /// BRAINBAR_DB_PATH is not the watcher's DB and must never steer this.
+    func testWatcherHealthPathFollowsTheWatchersResolvedDatabase() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        func path(_ env: [String: String], file: String? = nil) -> String {
+            WatcherHealthReader.watcherURL(environment: env, envFile: file, home: home).path
+        }
+        let canonical = "/Users/me/.local/share/brainlayer/watcher-health.json"
+        XCTAssertEqual(path([:]), canonical, "neither set: the canonical DB's directory")
+        XCTAssertEqual(path(["BRAINLAYER_DB": "/data/bl/brainlayer.db"]), "/data/bl/watcher-health.json", "BRAINLAYER_DB set")
+        XCTAssertEqual(path(["BRAINBAR_DB_PATH": "/tmp/fixture/brainbar.db"]), canonical, "BRAINBAR_DB_PATH is BrainBar's, not the watcher's")
+        XCTAssertEqual(
+            path(["BRAINLAYER_DB": "/data/bl/brainlayer.db", "BRAINBAR_DB_PATH": "/tmp/fixture/brainbar.db"]),
+            "/data/bl/watcher-health.json",
+            "both set: the watcher's BRAINLAYER_DB wins"
+        )
+        XCTAssertEqual(
+            path(["BRAINLAYER_DB": "/data/bl/brainlayer.db", "BRAINLAYER_WATCHER_HEALTH_PATH": "/elsewhere/h.json"]),
+            "/elsewhere/h.json",
+            "the explicit health override wins, as in the watcher"
+        )
+    }
+
+    func testWatcherHealthPathHonoursTheEnvFileTheWatcherLoads() {
+        let home = URL(fileURLWithPath: "/Users/me")
+        let file = """
+        # BrainLayer launchd env
+        export BRAINLAYER_DB="~/vaults/brainlayer.db"
+        GOOGLE_API_KEY=redacted
+        """
+        // brainlayer-env-run.sh exports the file over launchd's env, so the file wins.
+        XCTAssertEqual(
+            WatcherHealthReader.watcherURL(environment: ["BRAINLAYER_DB": "/data/bl/brainlayer.db"], envFile: file, home: home).path,
+            "/Users/me/vaults/watcher-health.json"
+        )
+        XCTAssertEqual(
+            WatcherHealthReader.watcherURL(
+                environment: [:],
+                envFile: "BRAINLAYER_WATCHER_HEALTH_PATH='/x/h.json'\nBRAINLAYER_DB=/data/bl/brainlayer.db",
+                home: home
+            ).path,
+            "/x/h.json"
+        )
+    }
+
+    // MARK: #1014 review round 1, B2
+
+    /// Writes an isolated home: the watcher's LaunchAgent plist with `launchAgentEnv` as its
+    /// EnvironmentVariables (when given), and an env file with `envFile` lines (when given).
+    private func watcherHome(launchAgentEnv: [String: String]?, envFile: String?) throws -> URL {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let agents = home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        var env = launchAgentEnv
+        if env != nil { env?["BRAINLAYER_ENV_FILE"] = home.appendingPathComponent("watcher.env").path }
+        if let env {
+            let plist: [String: Any] = ["Label": "com.brainlayer.watch", "EnvironmentVariables": env]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: agents.appendingPathComponent("com.brainlayer.watch.plist"))
+        }
+        if let envFile { try Data(envFile.utf8).write(to: home.appendingPathComponent("watcher.env")) }
+        return home
+    }
+
+    /// The reviewer's exact case: BRAINLAYER_DB set ONLY in the watcher's LaunchAgent. The watcher
+    /// writes beside that DB, so the production resolver must read the installed plist.
+    func testLiveResolutionReadsTheWatchersLaunchdDatabaseOverride() throws {
+        let home = try watcherHome(launchAgentEnv: ["BRAINLAYER_DB": "/watcher-only/brainlayer.db"], envFile: nil)
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertEqual(WatcherHealthReader.resolvedURL(environment: [:], home: home).path, "/watcher-only/watcher-health.json")
+    }
+
+    /// B2 precedence, through the production resolver: the explicit health-path override (from the
+    /// watcher's env, then BrainBar's) > the watcher's BRAINLAYER_DB (its env file over its plist)
+    /// > BrainBar's own BRAINLAYER_DB > the canonical DB.
+    func testLiveResolutionPrecedenceForEveryCombination() throws {
+        let canonicalSuffix = "/.local/share/brainlayer/watcher-health.json"
+        struct Case {
+            let plist: [String: String]?
+            let file: String?
+            let brainBar: [String: String]
+            let expected: String?  // nil = canonical under the temp home
+        }
+        let cases: [Case] = [
+            Case(plist: nil, file: nil, brainBar: [:], expected: nil),
+            Case(plist: [:], file: nil, brainBar: [:], expected: nil),
+            Case(plist: nil, file: nil, brainBar: ["BRAINLAYER_DB": "/bb/brainlayer.db"], expected: "/bb/watcher-health.json"),
+            Case(plist: ["BRAINLAYER_DB": "/agent/brainlayer.db"], file: nil, brainBar: [:], expected: "/agent/watcher-health.json"),
+            Case(plist: ["BRAINLAYER_DB": "/agent/brainlayer.db"], file: nil, brainBar: ["BRAINLAYER_DB": "/bb/brainlayer.db"], expected: "/agent/watcher-health.json"),
+            Case(plist: [:], file: "BRAINLAYER_DB=/file/brainlayer.db", brainBar: ["BRAINLAYER_DB": "/bb/brainlayer.db"], expected: "/file/watcher-health.json"),
+            Case(plist: ["BRAINLAYER_DB": "/agent/brainlayer.db"], file: "export BRAINLAYER_DB=/file/brainlayer.db", brainBar: [:], expected: "/file/watcher-health.json"),
+            Case(plist: ["BRAINLAYER_DB": "/agent/brainlayer.db"], file: nil, brainBar: ["BRAINBAR_DB_PATH": "/tmp/brainbar.db"], expected: "/agent/watcher-health.json"),
+            Case(plist: ["BRAINLAYER_WATCHER_HEALTH_PATH": "/agent/h.json", "BRAINLAYER_DB": "/agent/brainlayer.db"], file: nil,
+                 brainBar: ["BRAINLAYER_WATCHER_HEALTH_PATH": "/bb/h.json"], expected: "/agent/h.json"),
+            Case(plist: ["BRAINLAYER_DB": "/agent/brainlayer.db"], file: "BRAINLAYER_WATCHER_HEALTH_PATH=/file/h.json", brainBar: [:], expected: "/file/h.json"),
+            Case(plist: ["BRAINLAYER_DB": "/agent/brainlayer.db"], file: nil, brainBar: ["BRAINLAYER_WATCHER_HEALTH_PATH": "/bb/h.json"], expected: "/bb/h.json"),
+            Case(plist: nil, file: nil, brainBar: ["BRAINLAYER_WATCHER_HEALTH_PATH": "/bb/h.json", "BRAINLAYER_DB": "/bb/brainlayer.db"], expected: "/bb/h.json"),
+        ]
+        for (index, test) in cases.enumerated() {
+            let home = try watcherHome(launchAgentEnv: test.plist, envFile: test.file)
+            defer { try? FileManager.default.removeItem(at: home) }
+            XCTAssertEqual(
+                WatcherHealthReader.resolvedURL(environment: test.brainBar, home: home).path,
+                test.expected ?? home.path + canonicalSuffix,
+                "case \(index)"
+            )
+        }
+    }
+
+    /// Unit tests point the resolver at a synthetic LaunchAgent, never the real ~/Library one.
+    func testTheWatcherPlistLocationCanBeRedirected() throws {
+        let home = try watcherHome(launchAgentEnv: ["BRAINLAYER_DB": "/agent/brainlayer.db"], envFile: nil)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let elsewhere = home.appendingPathComponent("no-such.plist").path
+        XCTAssertEqual(
+            WatcherHealthReader.resolvedURL(environment: ["BRAINBAR_WATCHER_PLIST": elsewhere], home: home).path,
+            home.path + "/.local/share/brainlayer/watcher-health.json"
+        )
+    }
+
     func testReaderDistinguishesMissingUnreadableAndReadable() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
