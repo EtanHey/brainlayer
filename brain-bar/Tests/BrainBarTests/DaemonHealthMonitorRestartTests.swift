@@ -8,8 +8,9 @@ import XCTest
 /// any daemon restart, because the monitor watched a PID captured once at app launch.
 ///
 /// The daemon is identified as the PRODUCTION service only: the process listening on
-/// the BrainBar socket whose executable is the installed `/Applications/BrainBar.app`
-/// copy. A basename match, a DEV/scratch build, or a reused PID is never proof. Every
+/// the BrainBar socket whose executable is inside the running UI's own `BrainBar.app` (#980),
+/// else the installed `/Applications/BrainBar.app` copy. A basename match, a DEV/scratch build,
+/// another bundle's daemon, or a reused PID is never proof. Every
 /// process fact and the clock are injected, so no test spawns or signals a process.
 final class DaemonHealthMonitorRestartTests: XCTestCase {
     private static let socket = "/tmp/brainbar.sock"
@@ -17,6 +18,7 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
     fileprivate static let installedPath = installed
     private static let devBuild = "/Users/dev/Gits/brainlayer/brain-bar/.build/debug/BrainBarDaemon"
     private static let scratchBuild = "/tmp/build/BrainBarDaemon"
+    private static let selfBuilt = "/Users/u/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon"
     private static let now = Date(timeIntervalSince1970: 1_000_000)
 
     private func monitor(_ table: FakeProcessTable) -> DaemonHealthMonitor {
@@ -334,11 +336,58 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
     }
 
     func test_installed_executable_check_is_the_app_bundle_not_the_basename() {
-        XCTAssertTrue(DaemonIdentity.isInstalledExecutable(Self.installed))
-        XCTAssertFalse(DaemonIdentity.isInstalledExecutable(Self.devBuild))
-        XCTAssertFalse(DaemonIdentity.isInstalledExecutable(Self.scratchBuild))
-        XCTAssertFalse(DaemonIdentity.isInstalledExecutable("/Applications/BrainBar.app/Contents/MacOS/BrainBar"))
-        XCTAssertFalse(DaemonIdentity.isInstalledExecutable("/Applications/BrainBar Dev.app/Contents/MacOS/BrainBarDaemon"))
+        let identity = DaemonIdentity(socketPath: Self.socket, expectedExecutablePath: Self.installed)
+        XCTAssertTrue(identity.isExpectedExecutable(Self.installed))
+        XCTAssertFalse(identity.isExpectedExecutable(Self.devBuild))
+        XCTAssertFalse(identity.isExpectedExecutable(Self.scratchBuild))
+        XCTAssertFalse(identity.isExpectedExecutable(Self.selfBuilt))
+        XCTAssertFalse(identity.isExpectedExecutable("/Applications/BrainBar.app/Contents/MacOS/BrainBar"))
+        XCTAssertFalse(identity.isExpectedExecutable("/Applications/BrainBar Dev.app/Contents/MacOS/BrainBarDaemon"))
+    }
+
+    // MARK: #980: the daemon inside the running UI's own bundle
+
+    /// `build-app.sh` installs a self-built app at ~/Applications/BrainBar.app. That UI's own
+    /// daemon is production; the one in /Applications is then foreign. DEV bundles
+    /// (`BrainBar-DEV-<branch>.app`) and non-bundle runs still accept only /Applications.
+    func test_the_expected_daemon_is_the_one_in_the_running_uis_own_bundle() {
+        func expected(_ bundle: String) -> String {
+            DaemonIdentity.expectedExecutablePath(forAppAt: URL(fileURLWithPath: bundle))
+        }
+        XCTAssertEqual(expected("/Applications/BrainBar.app"), Self.installed)
+        XCTAssertEqual(expected("/Users/u/Applications/BrainBar.app"), Self.selfBuilt)
+        XCTAssertEqual(expected("/Users/u/Applications/BrainBar-DEV-wt-foo.app"), Self.installed, "a DEV bundle is never production")
+        XCTAssertEqual(expected("/Users/u/Gits/brainlayer/brain-bar/.build/debug"), Self.installed, "a non-bundle run")
+        XCTAssertEqual(expected("/Applications/Xcode.app/Contents/Developer/usr/bin"), Self.installed)
+    }
+
+    func test_a_symlinked_ui_bundle_resolves_to_its_real_daemon_path() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let real = root.appendingPathComponent("real/BrainBar.app")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let link = root.appendingPathComponent("link.app")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        // proc_pidpath reports the real path, so the expectation must be the real path too.
+        XCTAssertEqual(
+            DaemonIdentity.expectedExecutablePath(forAppAt: link),
+            real.resolvingSymlinksInPath().appendingPathComponent("Contents/MacOS/BrainBarDaemon").path
+        )
+    }
+
+    func test_a_self_built_ui_accepts_its_own_daemon_and_rejects_the_applications_one() throws {
+        let own = FakeProcessTable([
+            101: .daemon(path: Self.selfBuilt, listening: Self.socket, startedAt: Self.now.addingTimeInterval(-60)),
+        ])
+        let selfBuiltUI = DaemonHealthMonitor(inspector: own, socketPath: Self.socket, expectedDaemonPath: Self.selfBuilt, now: { Self.now })
+        XCTAssertEqual(try XCTUnwrap(selfBuiltUI.read().snapshot).pid, 101)
+
+        let foreign = FakeProcessTable([
+            202: .daemon(path: Self.installed, listening: Self.socket, startedAt: Self.now.addingTimeInterval(-60)),
+        ])
+        let reading = DaemonHealthMonitor(inspector: foreign, socketPath: Self.socket, expectedDaemonPath: Self.selfBuilt, now: { Self.now }).read()
+        XCTAssertNil(reading.snapshot, "another bundle's daemon is not this UI's production daemon")
+        XCTAssertEqual(reading.unavailability, .down("\(Self.socket) is served by a non-installed BrainBarDaemon (\(Self.installed))"))
     }
 
     func test_socket_paths_match_through_the_tmp_symlink() {

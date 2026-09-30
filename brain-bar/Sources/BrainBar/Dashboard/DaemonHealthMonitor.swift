@@ -45,27 +45,46 @@ struct DaemonHealthReading: Sendable, Equatable {
 }
 
 /// Which process IS the production daemon (#972, #976 R1): the one listening on the
-/// BrainBar socket whose executable is the installed app's `BrainBarDaemon`. A
-/// basename match, a pidfile, a DEV/scratch build or a reused PID is never proof.
+/// BrainBar socket whose executable is the `BrainBarDaemon` inside the running UI's own
+/// `BrainBar.app` (#980), else the installed /Applications copy. A basename match, a
+/// pidfile, a DEV/scratch build, another bundle's daemon or a reused PID is never proof.
 struct DaemonIdentity: Sendable {
     static let executableName = "BrainBarDaemon"
     static let installedExecutablePath = "/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon"
 
     let socketPath: String
+    /// The daemon executable this UI accepts as production (#980).
+    let expectedExecutablePath: String
+
+    init(socketPath: String, expectedExecutablePath: String = DaemonIdentity.expectedExecutablePath(forAppAt: Bundle.main.bundleURL)) {
+        self.socketPath = socketPath
+        self.expectedExecutablePath = expectedExecutablePath
+    }
+
+    /// The running UI's own daemon when it runs from a `BrainBar.app` bundle, wherever that
+    /// lives (`build-app.sh` defaults to ~/Applications). A DEV bundle
+    /// (`BrainBar-DEV-<branch>.app`) or a non-bundle run is never production, so it accepts
+    /// only the installed /Applications daemon. Symlinks are resolved because `proc_pidpath`
+    /// reports the real path.
+    static func expectedExecutablePath(forAppAt bundleURL: URL) -> String {
+        let bundle = bundleURL.resolvingSymlinksInPath().standardizedFileURL
+        guard bundle.lastPathComponent == "BrainBar.app" else { return installedExecutablePath }
+        return bundle.appendingPathComponent("Contents/MacOS/\(executableName)").path
+    }
 
     enum Resolution: Equatable {
         case found(pid_t)
         case unavailable(DaemonUnavailability)
     }
 
-    static func isInstalledExecutable(_ path: String) -> Bool {
-        path == installedExecutablePath
+    func isExpectedExecutable(_ path: String) -> Bool {
+        path == expectedExecutablePath
     }
 
     func isProductionDaemon(_ pid: pid_t, inspector: any DaemonProcessInspecting) -> Bool {
         guard pid > 0,
               let path = inspector.executablePath(of: pid),
-              Self.isInstalledExecutable(path) else { return false }
+              isExpectedExecutable(path) else { return false }
         return inspector.isListening(pid, onUnixSocket: socketPath) == true
     }
 
@@ -91,7 +110,7 @@ struct DaemonIdentity: Sendable {
         }
 
         if let daemon = candidates.first(where: {
-            $0.path.map(Self.isInstalledExecutable) == true && $0.listening == .some(true)
+            $0.path.map(isExpectedExecutable) == true && $0.listening == .some(true)
         }) {
             return .found(daemon.pid)
         }
@@ -101,7 +120,7 @@ struct DaemonIdentity: Sendable {
         if let unread = candidates.first(where: { $0.path == nil }) {
             return .unavailable(.unknown("executable path of BrainBarDaemon PID \(unread.pid) unreadable"))
         }
-        let installed = candidates.filter { $0.path.map(Self.isInstalledExecutable) == true }
+        let installed = candidates.filter { $0.path.map(isExpectedExecutable) == true }
         if let unread = installed.first(where: { $0.listening == nil }) {
             return .unavailable(.unknown("sockets of BrainBarDaemon PID \(unread.pid) unreadable"))
         }
@@ -135,9 +154,12 @@ final class DaemonHealthMonitor: @unchecked Sendable {
     init(
         inspector: any DaemonProcessInspecting = LiveDaemonProcessInspector(),
         socketPath: String = BrainBarServer.defaultSocketPath(),
+        expectedDaemonPath: String? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
-        self.source = .production(DaemonIdentity(socketPath: socketPath))
+        self.source = .production(expectedDaemonPath.map {
+            DaemonIdentity(socketPath: socketPath, expectedExecutablePath: $0)
+        } ?? DaemonIdentity(socketPath: socketPath))
         self.inspector = inspector
         self.now = now
     }
