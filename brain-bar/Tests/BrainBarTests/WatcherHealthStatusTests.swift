@@ -294,6 +294,7 @@ final class WatcherHealthStatusTests: XCTestCase {
             (#"{"updated_at": "\#(fresh)", "poll_count": "7", "alert_reasons": []}"#, "poll_count must be an integer"),
             (#"{"updated_at": "\#(fresh)", "poll_count": true, "alert_reasons": []}"#, "poll_count must be an integer"),
             (#"{"updated_at": "\#(fresh)", "poll_count": 7.5, "alert_reasons": []}"#, "poll_count must be an integer"),
+            (#"{"updated_at": "\#(fresh)", "poll_count": 7.0, "alert_reasons": []}"#, "poll_count must be an integer"),
             (#"{\#(base), "db_probe_failed": "yes"}"#, "db_probe_failed must be a boolean"),
             (#"{\#(base), "db_probe_failed": 1}"#, "db_probe_failed must be a boolean"),
             (#"{\#(base), "max_offset_lag_bytes": "big"}"#, "max_offset_lag_bytes must be an integer"),
@@ -301,6 +302,8 @@ final class WatcherHealthStatusTests: XCTestCase {
             (#"{\#(base), "quarantined_record_count_total": true}"#, "quarantined_record_count_total must be an integer"),
             (#"{\#(base), "file_ingestion_failures": {}}"#, "file_ingestion_failures must be a list"),
             (#"{\#(base), "quarantined_records": "none"}"#, "quarantined_records must be a list"),
+            (#"{\#(base), "file_ingestion_failures": [17]}"#, "file_ingestion_failures must be a list of objects"),
+            (#"{\#(base), "quarantined_records": ["bad"]}"#, "quarantined_records must be a list of objects"),
         ]
         for (json, expected) in cases {
             let read = WatcherHealthReader.parse(Data(json.utf8), path: "/x/watcher-health.json")
