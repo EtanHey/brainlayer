@@ -64,23 +64,19 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         })
     }
 
-    func testDashboardPanelUsesResizableMenuBarWindowContract() {
+    func testDashboardWindowUsesTheResizableWindowContract() {
         let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
-        let panel = controller.panelForTesting
+        let window = controller.windowForTesting
 
-        XCTAssertEqual(BrainBarDashboardPanelController.defaultSize.width, 900)
-        XCTAssertEqual(BrainBarDashboardPanelController.minSize.width, 760)
-        XCTAssertLessThan(BrainBarDashboardPanelController.minSize.height, 560)
-        XCTAssertGreaterThan(panel.maxSize.width, BrainBarDashboardPanelController.defaultSize.width)
-        XCTAssertGreaterThan(panel.maxSize.height, BrainBarDashboardPanelController.defaultSize.height)
-        XCTAssertEqual(panel.minSize, BrainBarDashboardPanelController.minSize)
-        XCTAssertTrue(panel.styleMask.contains(.resizable))
-        XCTAssertFalse(panel.hidesOnDeactivate)
-        XCTAssertEqual(panel.contentViewController, controller.contentViewControllerForTesting)
+        XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
+        XCTAssertEqual(BrainBarDashboardPanelController.minSize, NSSize(width: 760, height: 560))
+        XCTAssertEqual(window.minSize, BrainBarDashboardPanelController.minSize)
+        XCTAssertTrue(window.styleMask.contains(.resizable))
+        XCTAssertFalse(window.hidesOnDeactivate)
+        XCTAssertEqual(window.contentViewController, controller.contentViewControllerForTesting)
         XCTAssertEqual(controller.contentViewControllerForTesting.view.frame.size, BrainBarDashboardPanelController.defaultSize)
-        XCTAssertTrue(panel.canBecomeKey)
-        XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
+        XCTAssertTrue(window.canBecomeKey)
+        XCTAssertTrue(window.canBecomeMain, "#963: a real window, not a panel that never becomes main")
     }
 
     func testOpeningSettingsTwiceSelectsTheSameVisiblePanel() {
@@ -92,10 +88,10 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         controller.showSettings()
         XCTAssertEqual(controller.selectedTabForTesting, .settings)
         XCTAssertTrue(controller.isShownForTesting)
-        let panel = controller.panelForTesting
+        let panel = controller.windowForTesting
         controller.showSettings()
         XCTAssertTrue(controller.isShownForTesting)
-        XCTAssertTrue(controller.panelForTesting === panel)
+        XCTAssertTrue(controller.windowForTesting === panel)
         XCTAssertFalse(NSApp.windows.contains { $0.title == "BrainLayer Settings" })
     }
 
@@ -107,13 +103,13 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
             controller.dismiss()
             BrainBarSettingsActions.installOpenHandler {}
         }
-        let panel = controller.panelForTesting
+        let panel = controller.windowForTesting
 
         for section in BrainBarSettingsSection.allCases {
             let action = BrainBarURLAction.parse(url: URL(string: "brainbar://settings/\(section.rawValue)")!)!
             controller.showURLDestination(action)
             XCTAssertTrue(controller.isShownForTesting)
-            XCTAssertTrue(controller.panelForTesting === panel)
+            XCTAssertTrue(controller.windowForTesting === panel)
             XCTAssertEqual(controller.selectedTabForTesting, .settings)
             XCTAssertEqual(controller.selectedSettingsSectionForTesting, section)
         }
@@ -123,7 +119,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         controller.showURLDestination(.dashboard)
         controller.showURLDestination(.dashboard)
         XCTAssertTrue(controller.isShownForTesting)
-        XCTAssertTrue(controller.panelForTesting === panel)
+        XCTAssertTrue(controller.windowForTesting === panel)
         XCTAssertEqual(controller.selectedTabForTesting, .dashboard)
         controller.showURLDestination(BrainBarURLAction.parse(url: URL(string: "brainbar://settings/unknown")!)!)
         controller.showURLDestination(BrainBarURLAction.parse(url: URL(string: "brainbar://settings")!)!)
@@ -138,12 +134,12 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
-        let restingHeight = controller.panelForTesting.contentLayoutRect.height
-        XCTAssertLessThanOrEqual(restingHeight, controller.panelForTesting.maxSize.height)
+        let restingHeight = controller.windowForTesting.contentLayoutRect.height
+        XCTAssertLessThanOrEqual(restingHeight, controller.windowForTesting.maxSize.height)
 
         controller.setDetailsExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        let expandedHeight = controller.panelForTesting.contentLayoutRect.height
+        let expandedHeight = controller.windowForTesting.contentLayoutRect.height
         XCTAssertEqual(expandedHeight, restingHeight)
     }
 
@@ -154,16 +150,16 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         _ = controller.contentViewControllerForTesting.view
         controller.setDetailsExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        let collapsedSignalHeight = controller.panelForTesting.contentLayoutRect.height
+        let collapsedSignalHeight = controller.windowForTesting.contentLayoutRect.height
 
         controller.setSignalCoverageExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        let expandedSignalHeight = controller.panelForTesting.contentLayoutRect.height
+        let expandedSignalHeight = controller.windowForTesting.contentLayoutRect.height
         XCTAssertEqual(expandedSignalHeight, collapsedSignalHeight)
 
         controller.setSignalCoverageExpandedForTesting(false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        XCTAssertEqual(controller.panelForTesting.contentLayoutRect.height, collapsedSignalHeight, accuracy: 1)
+        XCTAssertEqual(controller.windowForTesting.contentLayoutRect.height, collapsedSignalHeight, accuracy: 1)
     }
 
 
@@ -173,7 +169,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         for width: CGFloat in [760, 960, 1_280] {
             let controller = BrainBarDashboardPanelController(runtime: runtime)
-            let panel = controller.panelForTesting
+            let panel = controller.windowForTesting
             panel.setFrame(NSRect(x: -2_000, y: -2_000, width: width, height: 640), display: false)
             controller.setDetailsExpandedForTesting(true)
             let scroll = try dashboardScroll(in: controller)
@@ -239,7 +235,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         for width: CGFloat in [760, 960, 1_280] {
             for (name, runtime, setExpanded) in disclosures {
                 let controller = BrainBarDashboardPanelController(runtime: runtime)
-                let panel = controller.panelForTesting
+                let panel = controller.windowForTesting
                 panel.setFrame(NSRect(x: -2_000, y: -2_000, width: width, height: 640), display: false)
                 setExpanded(controller, true)
                 let scroll = try dashboardScroll(in: controller)
@@ -269,11 +265,11 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         }
     }
 
-    func testHideAndShowPreserveFrameAndScrollAgainstSameAnchor() throws {
+    func testHideAndShowPreserveFrameAndScrollWhereverTheIconMoves() throws {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         let controller = BrainBarDashboardPanelController(runtime: runtime)
-        let panel = controller.panelForTesting
+        let window = controller.windowForTesting
         let visible = NSScreen.screens.first?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_024, height: 768)
         let anchorWindow = NSWindow(
             contentRect: NSRect(x: visible.maxX - 48, y: visible.maxY - 32, width: 32, height: 24),
@@ -286,79 +282,46 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         controller.show(anchoredTo: anchor)
         controller.setDetailsExpandedForTesting(true)
         let scroll = try dashboardScroll(in: controller)
-        pumpLayout(panel)
+        pumpLayout(window)
         let clip = scroll.contentView
         clip.scroll(to: NSPoint(x: 0, y: 80))
         scroll.reflectScrolledClipView(clip)
-        panel.setFrameOrigin(NSPoint(x: panel.frame.minX - 10, y: panel.frame.minY + 10))
-        let frame = panel.frame
+        window.setFrameOrigin(NSPoint(x: window.frame.minX - 10, y: window.frame.minY + 10))
+        let frame = window.frame
         let origin = clip.bounds.origin
         XCTAssertGreaterThan(origin.y, 0)
         controller.dismiss()
         controller.show(anchoredTo: anchor)
-        pumpLayout(panel)
-        XCTAssertEqual(panel.frame, frame)
+        pumpLayout(window)
+        XCTAssertEqual(window.frame, frame)
         XCTAssertEqual(clip.bounds.origin, origin)
+        // #963: a real window stays where the user left it; the menu-bar icon moving does not
+        // drag it back under the icon.
         anchorWindow.setFrameOrigin(NSPoint(x: visible.minX + 80, y: visible.maxY - 32))
         controller.dismiss()
         controller.show(anchoredTo: anchor)
-        XCTAssertNotEqual(panel.frame.origin, frame.origin)
-        XCTAssertGreaterThanOrEqual(panel.frame.minX, visible.minX)
-        XCTAssertLessThanOrEqual(panel.frame.maxX, visible.maxX)
+        XCTAssertEqual(window.frame, frame)
+        // The first placement below the icon still stays on the icon's screen.
         let second = NSRect(x: 1_440, y: -200, width: 1_280, height: 800)
         let anchorRect = NSRect(x: second.maxX - 24, y: second.maxY - 30, width: 20, height: 20)
         let target = BrainBarDashboardPanelController.anchorOrigin(anchorRect: anchorRect, panelSize: .init(width: 900, height: 640), visibleFrame: second)
         XCTAssertTrue(second.contains(NSRect(origin: target, size: .init(width: 900, height: 640))))
     }
 
-    func testResizeDelegatePreservesFittedHeightAndMinimumWidthAcrossRestingTransitions() {
+    func testResizeDelegateOnlyClampsToTheMinimumAcrossRestingTransitions() {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         let controller = BrainBarDashboardPanelController(runtime: runtime)
-        let panel = controller.panelForTesting
+        let window = controller.windowForTesting
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
-        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
-
+        assertResizeDelegateAllowsBothAxesDownToTheMinimum(controller, window: window)
         controller.setDetailsExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         controller.setDetailsExpandedForTesting(false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
-
-        let widerSize = controller.windowWillResize(
-            panel,
-            to: NSSize(width: panel.frame.width + 80, height: panel.frame.height + 300)
-        )
-        panel.setFrame(NSRect(origin: panel.frame.origin, size: widerSize), display: false)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
-
-        let anchorWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 32, height: 24),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        let anchorView = NSView(frame: NSRect(x: 0, y: 0, width: 32, height: 24))
-        anchorWindow.contentView = anchorView
-        anchorWindow.orderFront(nil)
-        defer {
-            controller.dismiss()
-            anchorWindow.orderOut(nil)
-        }
-
-        controller.show(anchoredTo: anchorView)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(controller, panel: panel)
-    }
-
-    func testDashboardPanelDoesNotOpenWithoutStatusItemAnchor() {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
-
-        controller.toggle()
-        XCTAssertFalse(controller.isShownForTesting)
+        assertResizeDelegateAllowsBothAxesDownToTheMinimum(controller, window: window)
     }
 
     func testDashboardLayoutReflowsAtMinFloorAndLargeWindowSizes() {
@@ -379,7 +342,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
-    private func pumpLayout(_ panel: NSPanel) {
+    private func pumpLayout(_ panel: NSWindow) {
         for _ in 0..<5 {
             panel.contentView?.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
@@ -388,7 +351,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
 
     private func dashboardScroll(in controller: BrainBarDashboardPanelController) throws -> NSScrollView {
         _ = controller.contentViewControllerForTesting.view
-        pumpLayout(controller.panelForTesting)
+        pumpLayout(controller.windowForTesting)
         return try XCTUnwrap(findSubview(ofType: NSScrollView.self, in: controller.contentViewControllerForTesting.view))
     }
 
@@ -399,25 +362,16 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
             .deletingLastPathComponent()
     }
 
-    private func assertResizeDelegateKeepsCurrentHeightAndMinimumWidth(
+    private func assertResizeDelegateAllowsBothAxesDownToTheMinimum(
         _ controller: BrainBarDashboardPanelController,
-        panel: NSPanel,
+        window: NSWindow,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let fittedFrameHeight = panel.frame.height
-        let taller = controller.windowWillResize(
-            panel,
-            to: NSSize(width: panel.frame.width + 40, height: fittedFrameHeight + 300)
-        )
-        XCTAssertEqual(taller.height, fittedFrameHeight, accuracy: 1, file: file, line: line)
-
-        let shorter = controller.windowWillResize(
-            panel,
-            to: NSSize(width: 100, height: max(fittedFrameHeight - 200, 1))
-        )
-        XCTAssertEqual(shorter.height, fittedFrameHeight, accuracy: 1, file: file, line: line)
-        XCTAssertEqual(shorter.width, BrainBarDashboardPanelController.minSize.width, file: file, line: line)
+        let taller = NSSize(width: window.frame.width + 40, height: window.frame.height + 300)
+        XCTAssertEqual(controller.windowWillResize(window, to: taller), taller, file: file, line: line)
+        let tiny = controller.windowWillResize(window, to: NSSize(width: 100, height: 100))
+        XCTAssertEqual(tiny, BrainBarDashboardPanelController.minSize, file: file, line: line)
     }
 
     private func findSubview<T: NSView>(ofType type: T.Type, in root: NSView) -> T? {

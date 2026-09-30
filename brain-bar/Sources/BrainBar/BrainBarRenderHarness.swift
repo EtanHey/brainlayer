@@ -107,6 +107,7 @@ enum BrainBarRenderHarness {
             try verifyReadableChartMarkerContract()
             try renderUnifiedSettings(in: outputDirectory)
             try renderWatcherTruth(in: outputDirectory)
+            try renderMainWindowShell(in: outputDirectory)
             sampleReceipts.record(BrainBarOperationReceipt(
                 kind: .search, durationMillis: 142, count: 10, recordedAt: BrainBarDashboardFixture.fetchedAt
             ))
@@ -630,6 +631,76 @@ enum BrainBarRenderHarness {
                 )
             }
         }
+    }
+
+    private final class RenderDefaults: BrainBarKeyValueStoring {
+        var values: [String: String] = [:]
+        func string(forKey defaultName: String) -> String? { values[defaultName] }
+        func setString(_ value: String?, forKey defaultName: String) { values[defaultName] = value }
+    }
+
+    /// #963 PR 1: the real `BrainBarMainWindow`, captured with its title bar, at each width,
+    /// and the status item's icon. The window is built by the production controller from a
+    /// fixture runtime; nothing is shown on screen and no frame is saved to user defaults.
+    private static func renderMainWindowShell(in outputDirectory: URL) throws {
+        for breakpoint in breakpoints {
+            let runtime = BrainBarRuntime()
+            runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+            let controller = BrainBarDashboardPanelController(
+                runtime: runtime,
+                frameStore: BrainBarWindowFrameStore(defaults: RenderDefaults(), key: "render")
+            )
+            let window = controller.windowForTesting
+            window.setFrame(NSRect(x: 0, y: 0, width: breakpoint.width, height: 640), display: false)
+            guard let frameView = window.contentView?.superview else {
+                throw Failure("window-\(breakpoint.name): the window has no frame view")
+            }
+            settle(frameView)
+            try writeBitmap(of: frameView, name: "window-dashboard-\(breakpoint.name)", in: outputDirectory)
+        }
+
+        let stats = BrainBarDashboardFixture.makeCollector().stats
+        for badgeOn in [false, true] {
+            let icon = SparklineRenderer.renderStatusBarIcon(
+                agent: stats.recentAgentWriteBuckets,
+                watcher: stats.recentWatcherWriteBuckets,
+                enrichment: stats.recentEnrichmentBuckets,
+                badgeOn: badgeOn,
+                size: NSSize(width: 26, height: 14)
+            )
+            // Shown 8x on a menu-bar-dark strip so the 26x14 pt icon is inspectable.
+            let strip = NSImage(size: NSSize(width: 26 * 8 + 32, height: 14 * 8 + 32), flipped: false) { rect in
+                NSColor(calibratedWhite: 0.13, alpha: 1).setFill()
+                rect.fill()
+                icon.draw(in: NSRect(x: 16, y: 16, width: 26 * 8, height: 14 * 8))
+                return true
+            }
+            guard let tiff = strip.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                  let png = bitmap.representation(using: .png, properties: [:]) else {
+                throw Failure("status-item icon: AppKit could not encode PNG data")
+            }
+            let name = "status-item-icon\(badgeOn ? "-attention" : "")"
+            let url = outputDirectory.appendingPathComponent("\(name).png")
+            try png.write(to: url, options: .atomic)
+            print("[brainbar-render] \(name); wrote \(url.path)")
+        }
+    }
+
+    private static func writeBitmap(of view: NSView, name: String, in outputDirectory: URL) throws {
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            throw Failure("\(name): AppKit could not allocate an off-screen bitmap")
+        }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw Failure("\(name): AppKit could not encode PNG data")
+        }
+        let colors = distinctSampledColorCount(in: bitmap)
+        guard png.count > 5_000, colors > 16 else {
+            throw Failure("\(name): refusing blank render (\(png.count) bytes, \(colors) colors)")
+        }
+        let url = outputDirectory.appendingPathComponent("\(name).png")
+        try png.write(to: url, options: .atomic)
+        print("[brainbar-render] \(name) \(Int(view.bounds.width))×\(Int(view.bounds.height)); wrote \(url.path)")
     }
 
     private static func settle(_ host: NSView) {
