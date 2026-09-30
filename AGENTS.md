@@ -151,6 +151,9 @@ not a copy here. Two contracts an agent must know:
 
 ## Checkouts and worktrees — never work at the repo root
 
+- An old editable-install console script can shadow the keg CLI on PATH and run root code.
+  `brainlayer doctor` detects this from the keg; dev runs explicitly skip the check.
+
 - **`~/Gits/brainlayer` is a real checkout kept at `origin/main`**, and ~22 worktrees hang off it.
   It was repaired on 2026-09-06 (`core.bare` true→false, HEAD `5bd8d818`→`da325b8d`) after its
   working tree sat frozen at the 09-02 snapshot for days. It is not self-stabilising.

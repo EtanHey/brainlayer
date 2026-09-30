@@ -60,6 +60,13 @@ else:
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_doctor_install_prefix(request, monkeypatch):
+    """Doctor fixtures never infer their running install from the test launcher."""
+    if request.node.path.name in {"test_doctor.py", "test_doctor_cli_path.py", "test_retire_python_mcp.py"}:
+        monkeypatch.setattr(sys, "prefix", str(request.getfixturevalue("tmp_path") / "doctor-dev-venv"))
+
+
 def _git_probe(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],

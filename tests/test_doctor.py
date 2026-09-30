@@ -368,11 +368,29 @@ def _doctor_config(tmp_path: Path, db_path: Path):
     )
 
 
-def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
+@pytest.mark.parametrize("mode", ["dev", "shadow", "missing", "empty", "unexpected"])
+def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path, monkeypatch, mode):
     from brainlayer.doctor import run_doctor
 
     db_path = tmp_path / "healthy.db"
     _build_db(db_path)
+    shadow = mode == "shadow"
+    if mode != "dev":
+        from brainlayer import doctor
+
+        script = tmp_path / "brainlayer"
+        script.write_text("#!/bin/sh\n")
+        script.chmod(0o755 if shadow else 0o644)
+        if mode == "empty":
+            script.unlink()
+        monkeypatch.setenv("PATH", str(tmp_path))
+        monkeypatch.setattr(doctor.sys, "prefix", str(tmp_path / "Cellar/brainlayer/1.5.45/libexec/venv"))
+        if mode == "unexpected":
+
+            def fail_probe(_result):
+                raise RuntimeError("probe surprise")
+
+            monkeypatch.setattr(doctor, "_probe_cli_path_shadow", fail_probe)
 
     result = run_doctor(
         _doctor_config(tmp_path, db_path),
@@ -381,9 +399,16 @@ def test_run_doctor_exits_zero_on_healthy_fixture(tmp_path):
         now_fn=lambda: NOW,
     )
 
-    assert result.exit_code == 0
-    assert result.ok is True
-    assert not [issue for issue in result.issues if issue.severity == "fatal"]
+    assert result.chunk_count > 0
+    if mode == "dev":
+        assert result.cli_path_shadow["state"] == "skipped"
+    if mode == "unexpected":
+        assert result.cli_path_shadow["reason"] == "RuntimeError: probe surprise"
+    if mode in {"missing", "empty", "unexpected"}:
+        assert any(i.severity == "warning" and i.code.startswith("cli_path_shadow") for i in result.issues)
+    assert result.exit_code == int(shadow)
+    assert result.ok is (not shadow)
+    assert bool([i for i in result.issues if i.code == "cli_path_shadow" and i.severity == "fatal"]) is shadow
 
 
 def test_spotlight_exclusion_issue_warns_for_unmarked_db_directory(tmp_path):
