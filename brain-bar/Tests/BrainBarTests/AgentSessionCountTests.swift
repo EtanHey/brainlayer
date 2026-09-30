@@ -421,6 +421,42 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 4)
     }
 
+    // MARK: #1019 review round 1: executable paths with spaces
+
+    /// B1: argv[0] ends where the kernel's executable path ends, not at the first space. A CLI
+    /// installed under "AI Tools" keeps its binary name, its role and its session count.
+    func test_a_cli_path_with_spaces_keeps_its_binary_and_role() {
+        let tools = "/Users/u/AI Tools"
+        let activity = Self.parse([
+            Self.row(1100, 1, "2.1.281", "\(tools)/claude remote-control"),
+            Self.row(1101, 1, "codex", "\(tools)/codex exec review"),
+            Self.row(1102, 1, "codex", "\(tools)/codex --profile work app-server"),
+            Self.row(1103, 1, "2.1.281", "\(tools)/claude --model x"),
+        ], paths: [
+            1100: "\(tools)/claude",
+            1101: "\(tools)/codex",
+            1102: "\(tools)/codex",
+            1103: "\(tools)/claude",
+        ])
+
+        XCTAssertEqual(activity.count(for: .claude), 1, "remote-control is a role, not a session; --model x is a session")
+        XCTAssertEqual(activity.count(for: .codex), 1, "exec review is a session; app-server is the daemon")
+    }
+
+    /// B2: noise words are matched against the executable and argv[0] only, so a prompt that says
+    /// "grep" never drops a real CLI, whatever its path looks like.
+    func test_noise_words_in_the_arguments_of_a_spaced_path_cli_do_not_hide_it() {
+        let activity = Self.parse([
+            Self.row(1110, 1, "2.1.281", "/Users/u/AI Tools/claude -p why does grep miss this"),
+            Self.row(1111, 1, "2.1.281", "/Users/u/AI Tools/claude -p is the crashpad handler a claude helper"),
+        ], paths: [
+            1110: "/Users/u/AI Tools/claude",
+            1111: "/Users/u/AI Tools/claude",
+        ])
+
+        XCTAssertEqual(activity.count(for: .claude), 2)
+    }
+
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {
         let activity = Self.parseBusyMachine()
 
