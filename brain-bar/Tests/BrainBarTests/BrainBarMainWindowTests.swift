@@ -13,10 +13,17 @@ final class BrainBarMainWindowTests: XCTestCase {
         func setString(_ value: String?, forKey defaultName: String) { values[defaultName] = value }
     }
 
-    private func controller(defaults: MemoryDefaults = MemoryDefaults()) -> BrainBarDashboardPanelController {
+    /// A large display, so nothing here depends on the machine running the tests.
+    private static let bigScreen = [NSRect(x: 0, y: 0, width: 2_560, height: 1_400)]
+
+    private func controller(
+        defaults: MemoryDefaults = MemoryDefaults(),
+        screens: [NSRect] = BrainBarMainWindowTests.bigScreen
+    ) -> BrainBarDashboardPanelController {
         BrainBarDashboardPanelController(
             runtime: BrainBarRuntime(),
-            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey)
+            frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey),
+            screenFrames: { screens }
         )
     }
 
@@ -96,21 +103,49 @@ final class BrainBarMainWindowTests: XCTestCase {
         XCTAssertEqual(tiny, NSSize(width: 760, height: 560))
     }
 
-    func test_position_and_size_are_restored_on_the_next_launch() throws {
+    /// Position and size are saved and restored against injected screens. The window is placed
+    /// without being ordered front, so the real display (a small one on the CI runner) plays no
+    /// part (#1020 CI).
+    func test_position_and_size_are_restored_on_the_next_launch() {
         let defaults = MemoryDefaults()
         let first = controller(defaults: defaults)
-        first.showDashboard()
-        let visible = try XCTUnwrap(NSScreen.screens.first?.visibleFrame)
-        let placed = NSRect(x: visible.minX + 40, y: visible.minY + 40, width: 1_000, height: 700)
+        first.placeWindowForTesting()
+        let placed = NSRect(x: 40, y: 102, width: 1_000, height: 700)
         first.windowForTesting.setFrame(placed, display: false)
         first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: first.windowForTesting))
-        first.dismiss()
         XCTAssertNotNil(defaults.values[BrainBarDashboardPanelController.frameDefaultsKey])
 
         let relaunched = controller(defaults: defaults)
-        defer { relaunched.dismiss() }
-        relaunched.showDashboard()
+        relaunched.placeWindowForTesting()
         XCTAssertEqual(relaunched.windowForTesting.frame, placed)
+
+        // The CI runner's display: the saved window is clamped into it, not left partly off-screen.
+        let small = NSRect(x: 0, y: 0, width: 1_024, height: 680)
+        let onSmallScreen = controller(defaults: defaults, screens: [small])
+        onSmallScreen.placeWindowForTesting()
+        XCTAssertEqual(onSmallScreen.windowForTesting.frame, NSRect(x: 24, y: 0, width: 1_000, height: 680))
+    }
+
+    func test_a_saved_frame_is_kept_clamped_or_dropped_for_the_current_screens() {
+        let minimum = BrainBarDashboardPanelController.minSize
+        let screen = NSRect(x: 0, y: 0, width: 1_440, height: 875)
+        func restore(_ frame: NSRect, _ screens: [NSRect] = [screen]) -> NSRect? {
+            BrainBarDashboardPanelController.restoredFrame(frame, minSize: minimum, visibleFrames: screens)
+        }
+        // Fits: unchanged.
+        XCTAssertEqual(restore(NSRect(x: 100, y: 50, width: 900, height: 640)), NSRect(x: 100, y: 50, width: 900, height: 640))
+        // Hangs off the right and top: moved inside, size kept.
+        XCTAssertEqual(restore(NSRect(x: 1_000, y: 600, width: 900, height: 640)), NSRect(x: 540, y: 235, width: 900, height: 640))
+        // Taller and wider than the screen: shrunk to it, never below the minimum.
+        XCTAssertEqual(restore(NSRect(x: 0, y: 0, width: 2_000, height: 1_200)), NSRect(x: 0, y: 0, width: 1_440, height: 875))
+        let tiny = NSRect(x: 0, y: 0, width: 700, height: 500)
+        XCTAssertEqual(restore(NSRect(x: 0, y: 0, width: 900, height: 640), [tiny])?.size, minimum)
+        // On the second display it overlaps most.
+        let second = NSRect(x: 1_440, y: 0, width: 1_920, height: 1_055)
+        XCTAssertEqual(restore(NSRect(x: 1_500, y: 100, width: 900, height: 640), [screen, second]), NSRect(x: 1_500, y: 100, width: 900, height: 640))
+        // No longer on any screen, or smaller than the minimum: not restored.
+        XCTAssertNil(restore(NSRect(x: 5_000, y: 5_000, width: 900, height: 640)))
+        XCTAssertNil(restore(NSRect(x: 100, y: 100, width: 300, height: 200)))
     }
 
     // MARK: status item

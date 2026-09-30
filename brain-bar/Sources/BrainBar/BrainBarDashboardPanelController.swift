@@ -152,13 +152,15 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     private let window: BrainBarMainWindow
     private let panelState = BrainBarDashboardPanelState()
     private let frameStore: BrainBarWindowFrameStore
+    private let screenFrames: () -> [NSRect]
     private var hasPlacedWindow = false
     /// Only used to place the very first window below the menu-bar icon.
     weak var statusItemButton: NSView?
 
     init(
         runtime: BrainBarRuntime,
-        frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey)
+        frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey),
+        screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) }
     ) {
         let hostingController = NSHostingController(
             rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false, panelState: panelState)
@@ -171,6 +173,7 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
         contentViewControllerForTesting = hostingController
         self.frameStore = frameStore
+        self.screenFrames = screenFrames
         window = Self.makeWindow(contentViewController: hostingController)
         windowForTesting = window
         super.init()
@@ -231,14 +234,12 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     }
 #endif
 
-    /// The first time: the last saved frame when it is still on a screen, else below the menu-bar
-    /// icon, else centred. Afterwards the window keeps wherever the user left it.
+    /// The first time: the last saved frame, fitted to the current screens, else below the
+    /// menu-bar icon, else centred. Afterwards the window keeps wherever the user left it.
     private func placeWindow(near anchorView: NSView?) {
-        let screenFrames = NSScreen.screens.map(\.visibleFrame)
         if let saved = frameStore.persistedFrame(),
-           saved.width >= Self.minSize.width, saved.height >= Self.minSize.height,
-           BrainBarWindowPlacement.isRestorable(frame: saved, screenFrames: screenFrames) {
-            window.setFrame(saved, display: false)
+           let restored = Self.restoredFrame(saved, minSize: Self.minSize, visibleFrames: screenFrames()) {
+            window.setFrame(restored, display: false)
             return
         }
         window.setContentSize(Self.defaultSize)
@@ -265,6 +266,14 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     /// A real window resizes on both axes, down to the size the dashboard needs.
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(width: max(frameSize.width, Self.minSize.width), height: max(frameSize.height, Self.minSize.height))
+    }
+
+    /// Places the window as the first show would, without ordering it front (where AppKit would
+    /// also constrain it to the real display).
+    func placeWindowForTesting() {
+        guard !hasPlacedWindow else { return }
+        placeWindow(near: nil)
+        hasPlacedWindow = true
     }
 
     func setDetailsExpandedForTesting(_ expanded: Bool) { panelState.detailsExpanded = expanded }
@@ -297,6 +306,28 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
         window.contentMinSize = minSize
         window.setContentSize(defaultSize)
         return window
+    }
+
+    /// Where a saved frame goes on the current screens: unchanged when it fits the visible frame
+    /// it overlaps most; otherwise shrunk to fit (never below `minSize`) and moved inside it. Nil
+    /// when it is smaller than `minSize` or no longer on any screen, so the default placement is
+    /// used. Doing this ourselves keeps the result the same on every display, instead of leaving
+    /// AppKit to nudge a partly off-screen window when it is ordered front.
+    static func restoredFrame(_ saved: NSRect, minSize: NSSize, visibleFrames: [NSRect]) -> NSRect? {
+        guard saved.width >= minSize.width, saved.height >= minSize.height else { return nil }
+        func overlap(_ screen: NSRect) -> CGFloat {
+            let shared = screen.intersection(saved)
+            return shared.isNull ? 0 : shared.width * shared.height
+        }
+        guard let screen = visibleFrames.max(by: { overlap($0) < overlap($1) }), overlap(screen) > 0 else { return nil }
+        let width = min(saved.width, max(screen.width, minSize.width))
+        let height = min(saved.height, max(screen.height, minSize.height))
+        return NSRect(
+            x: min(max(saved.minX, screen.minX), max(screen.maxX - width, screen.minX)),
+            y: min(max(saved.minY, screen.minY), max(screen.maxY - height, screen.minY)),
+            width: width,
+            height: height
+        )
     }
 
     static func anchorOrigin(anchorRect: NSRect, panelSize: NSSize, visibleFrame: NSRect) -> NSPoint {
