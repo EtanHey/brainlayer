@@ -1,9 +1,10 @@
 import XCTest
 @testable import BrainBar
 
-/// Jobs → Maintenance: a deliberate gate deferral (exit 75) renders neutral, not "Needs attention";
-/// exit 76 (weekly VACUUM skipped because the fresh backup failed) stays attention with human text;
-/// and skips never hide a weekly pass that has stopped completing.
+/// Jobs → Maintenance: only a POSITIVELY VERIFIED deliberate gate deferral (exit 75) renders neutral
+/// "Skipped". Missing, unreadable, incomplete, uncorrelated or unrecognised evidence is Status
+/// unknown or attention, never neutral. Exit 76 stays attention with human text, and skips never
+/// hide a weekly pass that has stopped completing.
 final class BrainBarMaintenanceSkipTests: XCTestCase {
     private let now = ISO8601DateFormatter().date(from: "2026-09-30T12:00:00Z")!
     private let lastRun = ISO8601DateFormatter().date(from: "2026-09-29T21:07:23Z")!
@@ -16,59 +17,143 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         .init(loadState: .loaded, runs: runs, lastExitCode: exit, lastRunAt: lastRun, nextRunAt: nil, isContinuous: false)
     }
 
+    /// The abort record this run wrote, a second after it started.
+    private func aborted(_ reason: String) -> BrainLayerMaintenanceEvidence.RunRecord {
+        .aborted(reason: reason, writtenAt: lastRun.addingTimeInterval(1))
+    }
+
     private func maintenance(
         nightly: Int32? = 0,
         weekly: Int32? = 0,
         completion: BrainLayerMaintenanceEvidence.WeeklyCompletion,
-        reasons: [BrainLayerLaunchdJob: String] = [:]
+        records: [BrainLayerLaunchdJob: BrainLayerMaintenanceEvidence.RunRecord] = [:]
     ) -> BrainLayerLaunchdGroupStatus {
         BrainLayerLaunchdJobGroup.maintenance.status(
             settings: BrainLayerConfig.defaultConfig.launchdJobs,
             observations: [.maintenanceNightly: observation(exit: nightly), .maintenanceWeekly: observation(exit: weekly)],
             formatDate: show,
-            maintenance: .init(weeklyCompletion: completion, abortReasons: reasons),
+            maintenance: .init(weeklyCompletion: completion, runRecords: records),
             now: now
         )
     }
 
-    // MARK: exit 75 is a skip, not a failure
+    // MARK: exit 75 is Skipped only for a verified, allowlisted gate deferral
 
-    func testWeeklyGateDeferralIsSkippedWithItsOwnReason() {
-        let status = maintenance(weekly: 75, completion: .completed(daysAgo(2)), reasons: [.maintenanceWeekly: quietWindow])
+    func testWeeklyQuietWindowDeferralIsSkippedWithItsOwnReason() {
+        let status = maintenance(weekly: 75, completion: .completed(daysAgo(2)), records: [.maintenanceWeekly: aborted(quietWindow)])
         XCTAssertEqual(status.health, .skipped)
         XCTAssertEqual(status.health.title, "Skipped")
         XCTAssertEqual(status.attentionReason, "Weekly skipped at \(show(lastRun)): outside the 04:00–06:00 quiet window.")
     }
 
-    func testOtherGateDeferralsKeepTheirReasonVerbatim() {
-        let status = maintenance(
-            nightly: 75, completion: .completed(daysAgo(2)),
-            reasons: [.maintenanceNightly: "recent queue write activity: 5 file(s) modified recently"]
-        )
-        XCTAssertEqual(status.health, .skipped)
-        XCTAssertEqual(status.attentionReason,
-                       "Nightly skipped at \(show(lastRun)): recent queue write activity: 5 file(s) modified recently.")
+    /// One case per deliberate deferral `maintenance.py` raises with exit 75 before any service is
+    /// quiesced (`_check_quiet_window`, `_check_idle` ×2, `_check_lsof_clean`), matched case-insensitively.
+    func testEveryAllowlistedGateDeferralIsSkipped() {
+        let deferrals = [
+            (quietWindow, "outside the 04:00–06:00 quiet window"),
+            ("OUTSIDE QUIET WINDOW: now=2026-09-30T00:07:23+03:00 start_hour=4 duration_minutes=120", "outside the 04:00–06:00 quiet window"),
+            ("recent queue write activity: 5 file(s) modified recently", "recent queue write activity: 5 file(s) modified recently"),
+            ("queue depth growing: before=0 after=1", "queue depth growing: before=0 after=1"),
+            ("unexpected writer holds BrainLayer DB: pid=812 command='python3 -m brainlayer.enrich' fd=7u",
+             "unexpected writer holds BrainLayer DB: pid=812 command='python3 -m brainlayer.enrich' fd=7u"),
+        ]
+        for (reason, shown) in deferrals {
+            let status = maintenance(nightly: 75, completion: .completed(daysAgo(2)), records: [.maintenanceNightly: aborted(reason)])
+            XCTAssertEqual(status.health, .skipped, reason)
+            XCTAssertEqual(status.attentionReason, "Nightly skipped at \(show(lastRun)): \(shown).", reason)
+        }
     }
 
-    func testUnreadableSkipReasonNeverClaimsAGateItCannotSee() {
-        let status = maintenance(weekly: 75, completion: .completed(daysAgo(2)))
-        XCTAssertEqual(status.health, .skipped)
-        XCTAssertEqual(status.attentionReason, "Weekly skipped at \(show(lastRun)): a maintenance safety gate deferred it.")
-    }
-
-    /// MaintenanceAbort defaults to 75 for real failures too: 21 nightly aborts in the live
-    /// maintenance-nightly.out.log were `failed to resume N launchd services`.
-    func testAnExit75ThatIsARealFailureStaysAttention() {
+    /// `MaintenanceAbort` defaults to 75 for real failures too (21 live nightly aborts were
+    /// `failed to resume N launchd services`). Anything not on the allowlist is attention.
+    func testAnyExit75ReasonOffTheAllowlistIsAttention() {
         for reason in [
             "failed to resume 1 launchd service: watch: Command '[launchctl]' returned non-zero exit status 5.",
-            "outside quiet window: now=x start_hour=4 duration_minutes=120; failed to resume 2 launchd services: watch: boom",
-            "burn drain failed; queue files preserved",
-            "post-maintenance search latency too high: 912.0ms > 500.0ms",
+            "FAILED TO RESUME 2 launchd services: watch: boom",
+            "failed to quiesce launchd service com.brainlayer.watch; it remains loaded",
+            "Burn drain failed; queue files preserved",
+            "Post-maintenance search latency too high: 912.0ms > 500.0ms",
+            "lsof failed: permission denied",
+            "cannot determine whether launchd service com.brainlayer.watch is loaded",
+            "maintenance aborted: refusing to run STALE code. working tree HEAD=a but merged origin/main=b.",
+            "outside quiet window: now=x start_hour=4 duration_minutes=120; failed to resume 1 launchd service: watch: boom",
+            "outside quiet window",
+            "a reason no one has written yet",
         ] {
-            let status = maintenance(nightly: 75, completion: .completed(daysAgo(2)), reasons: [.maintenanceNightly: reason])
+            let status = maintenance(nightly: 75, completion: .completed(daysAgo(2)), records: [.maintenanceNightly: aborted(reason)])
             XCTAssertEqual(status.health, .unhealthy, reason)
             XCTAssertEqual(status.attentionReason, "Nightly last run exited 75 at \(show(lastRun)): \(reason)", reason)
         }
+    }
+
+    // MARK: B1/B2: no verified record for this run → Status unknown, never Skipped
+
+    func testExit75WithNoRecordIsUnknownNotSkipped() {
+        let status = maintenance(weekly: 75, completion: .completed(daysAgo(2)))
+        XCTAssertEqual(status.health, .unknown)
+        XCTAssertEqual(status.attentionReason,
+                       "Weekly exited 75 at \(show(lastRun)); reason unavailable (its stdout log was not read).")
+    }
+
+    func testExit75WithAnUnreadableRecordIsUnknown() {
+        let status = maintenance(
+            nightly: 75, completion: .completed(daysAgo(2)),
+            records: [.maintenanceNightly: .unavailable("the newest record in nightly.out.log is incomplete")]
+        )
+        XCTAssertEqual(status.health, .unknown)
+        XCTAssertEqual(status.attentionReason,
+                       "Nightly exited 75 at \(show(lastRun)); reason unavailable (the newest record in nightly.out.log is incomplete).")
+    }
+
+    func testExit75WhoseNewestRecordIsNotAnAbortIsUnknown() {
+        let status = maintenance(
+            nightly: 75, completion: .completed(daysAgo(2)),
+            records: [.maintenanceNightly: .notAnAbort(writtenAt: lastRun.addingTimeInterval(60))]
+        )
+        XCTAssertEqual(status.health, .unknown)
+        XCTAssertEqual(status.attentionReason,
+                       "Nightly exited 75 at \(show(lastRun)); reason unavailable (the newest stdout record is not an abort).")
+    }
+
+    /// Stale stdout: the newest abort was written before this run started, so it is another run's.
+    func testAnAbortRecordThatPredatesThisRunIsUnknown() {
+        let status = maintenance(
+            weekly: 75, completion: .completed(daysAgo(2)),
+            records: [.maintenanceWeekly: .aborted(reason: quietWindow, writtenAt: lastRun.addingTimeInterval(-7 * 86_400))]
+        )
+        XCTAssertEqual(status.health, .unknown)
+        XCTAssertEqual(status.attentionReason,
+                       "Weekly exited 75 at \(show(lastRun)); reason unavailable (the newest stdout record is not from this run).")
+    }
+
+    /// A record written after the lock wait could have ended belongs to a later run, not this one.
+    func testAnAbortRecordFarAfterThisRunStartedIsUnknown() {
+        let status = maintenance(
+            weekly: 75, completion: .completed(daysAgo(2)),
+            records: [.maintenanceWeekly: .aborted(reason: quietWindow, writtenAt: lastRun.addingTimeInterval(5 * 3_600))]
+        )
+        XCTAssertEqual(status.health, .unknown)
+        // Within the 4 h maintenance-lock wait, the record still belongs to this run.
+        let waited = maintenance(
+            weekly: 75, completion: .completed(daysAgo(2)),
+            records: [.maintenanceWeekly: .aborted(reason: quietWindow, writtenAt: lastRun.addingTimeInterval(3 * 3_600))]
+        )
+        XCTAssertEqual(waited.health, .skipped)
+    }
+
+    func testExit75WithNoRunStartOnRecordIsUnknown() {
+        let status = BrainLayerLaunchdJobGroup.maintenance.status(
+            settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: [
+                .maintenanceNightly: observation(exit: 0),
+                .maintenanceWeekly: .init(loadState: .loaded, runs: 3, lastExitCode: 75, lastRunAt: nil, nextRunAt: nil, isContinuous: false),
+            ],
+            formatDate: show,
+            maintenance: .init(weeklyCompletion: .completed(daysAgo(2)), runRecords: [.maintenanceWeekly: aborted(quietWindow)]),
+            now: now
+        )
+        XCTAssertEqual(status.health, .unknown)
+        XCTAssertEqual(status.attentionReason, "Weekly exited 75; reason unavailable (no run start is on record).")
     }
 
     // MARK: exit 76 stays attention, in words
@@ -76,33 +161,54 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
     func testWeeklyExit76IsAttentionWithHumanText() {
         let status = maintenance(
             weekly: 76, completion: .completed(daysAgo(2)),
-            reasons: [.maintenanceWeekly: "fresh weekly backup timed out; VACUUM skipped"]
+            records: [.maintenanceWeekly: aborted("fresh weekly backup timed out; VACUUM skipped")]
         )
         XCTAssertEqual(status.health, .unhealthy)
         XCTAssertEqual(status.attentionReason,
                        "Weekly VACUUM skipped at \(show(lastRun)): the fresh backup failed (fresh weekly backup timed out).")
-        XCTAssertFalse(status.attentionReason?.contains("exited 76") == true)
 
         let bare = maintenance(weekly: 76, completion: .completed(daysAgo(2)))
         XCTAssertEqual(bare.health, .unhealthy)
         XCTAssertEqual(bare.attentionReason, "Weekly VACUUM skipped at \(show(lastRun)): the fresh backup failed.")
+
+        // Another run's detail is never quoted as this run's.
+        let stale = maintenance(
+            weekly: 76, completion: .completed(daysAgo(2)),
+            records: [.maintenanceWeekly: .aborted(reason: "weekly backup was not verified; VACUUM skipped",
+                                                   writtenAt: lastRun.addingTimeInterval(-86_400))]
+        )
+        XCTAssertEqual(stale.attentionReason, "Weekly VACUUM skipped at \(show(lastRun)): the fresh backup failed.")
     }
 
     // MARK: skips cannot hide a weekly pass that never completes
 
     func testSkippedWeeklyWithStaleCompletionIsAttention() {
         let completed = daysAgo(8.5)
-        let status = maintenance(weekly: 75, completion: .completed(completed), reasons: [.maintenanceWeekly: quietWindow])
+        let status = maintenance(weekly: 75, completion: .completed(completed), records: [.maintenanceWeekly: aborted(quietWindow)])
         XCTAssertEqual(status.health, .unhealthy)
         XCTAssertEqual(
             status.attentionReason,
             "Weekly maintenance hasn't completed since \(show(completed)); last run skipped: outside the 04:00–06:00 quiet window."
         )
-        XCTAssertEqual(maintenance(weekly: 75, completion: .completed(daysAgo(7.9))).health, .skipped)
+        XCTAssertEqual(
+            maintenance(weekly: 75, completion: .completed(daysAgo(7.9)), records: [.maintenanceWeekly: aborted(quietWindow)]).health,
+            .skipped
+        )
+    }
+
+    /// Stale history outranks a missing reason: the pass that stopped completing is the finding.
+    func testUnexplainedWeekly75WithStaleCompletionIsAttention() {
+        let completed = daysAgo(31)
+        let status = maintenance(weekly: 75, completion: .completed(completed))
+        XCTAssertEqual(status.health, .unhealthy)
+        XCTAssertEqual(
+            status.attentionReason,
+            "Weekly maintenance hasn't completed since \(show(completed)); last run exited 75, reason unavailable (its stdout log was not read)."
+        )
     }
 
     func testSkippedWeeklyWithNoCompletedPassOnRecordIsAttention() {
-        let status = maintenance(weekly: 75, completion: .noneRecorded, reasons: [.maintenanceWeekly: quietWindow])
+        let status = maintenance(weekly: 75, completion: .noneRecorded, records: [.maintenanceWeekly: aborted(quietWindow)])
         XCTAssertEqual(status.health, .unhealthy)
         XCTAssertEqual(
             status.attentionReason,
@@ -111,7 +217,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
     }
 
     func testSkippedWeeklyWithUnreadableCompletionIsUnknownNotHealthy() {
-        let status = maintenance(weekly: 75, completion: .unread, reasons: [.maintenanceWeekly: quietWindow])
+        let status = maintenance(weekly: 75, completion: .unread, records: [.maintenanceWeekly: aborted(quietWindow)])
         XCTAssertEqual(status.health, .unknown)
         XCTAssertEqual(
             status.attentionReason,
@@ -141,7 +247,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
                 .index: observation(exit: 75),
             ],
             formatDate: show,
-            maintenance: .init(weeklyCompletion: .completed(daysAgo(1)), abortReasons: [.index: quietWindow]),
+            maintenance: .init(weeklyCompletion: .completed(daysAgo(1)), runRecords: [.index: aborted(quietWindow)]),
             now: now
         )
         XCTAssertEqual(status.health, .unhealthy)
@@ -149,7 +255,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
     }
 
     func testAnAttentionJobOutranksASkipInTheSameGroup() {
-        let status = maintenance(nightly: 1, weekly: 75, completion: .completed(daysAgo(2)))
+        let status = maintenance(nightly: 1, weekly: 75, completion: .completed(daysAgo(2)), records: [.maintenanceWeekly: aborted(quietWindow)])
         XCTAssertEqual(status.health, .unhealthy)
         XCTAssertEqual(status.attentionReason, "Nightly last run exited 1 at \(show(lastRun)).")
     }
@@ -164,7 +270,10 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         """.utf8)
     }
 
-    private func sources(_ files: [String: Data]) -> BrainBarBackupSources {
+    private let weeklyPlist = "<key>StandardOutPath</key><string>/logs/weekly.out.log</string>"
+    private let nightlyPlist = "<key>StandardOutPath</key><string>/logs/nightly.out.log</string>"
+
+    private func sources(_ files: [String: Data], modified: [String: Date] = [:]) -> BrainBarBackupSources {
         BrainBarBackupSources(
             paths: .init(
                 launchAgents: URL(fileURLWithPath: "/LA"),
@@ -176,42 +285,90 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
             ),
             readFile: { files[$0.path] },
             listDirectory: { _ in [] },
-            isRegularFile: { _ in true }
+            isRegularFile: { _ in true },
+            modificationDate: { modified[$0.path] }
         )
     }
 
-    func testEvidenceReadsTheCompletedPassAndEachJobsLastAbortFromItsStdout() {
+    func testEvidenceReadsTheCompletedPassAndOnlyTheNewestStdoutRecord() {
+        let written = lastRun.addingTimeInterval(1)
         let files: [String: Data] = [
-            "/LA/com.brainlayer.maintenance-weekly.plist": plist("<key>StandardOutPath</key><string>/logs/weekly.out.log</string>"),
-            "/LA/com.brainlayer.maintenance-nightly.plist": plist("<key>StandardOutPath</key><string>/logs/nightly.out.log</string>"),
+            "/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist),
+            "/LA/com.brainlayer.maintenance-nightly.plist": plist(nightlyPlist),
             "/d/maintenance.log": Data("""
             {"ts": "2026-08-30T02:23:03+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 15926001664}
             {"ts": "2026-09-27T01:40:00+00:00", "mode": "full", "dry_run": false, "backup_status": "unavailable", "vacuum_after_bytes": null}
             """.utf8),
             "/logs/weekly.out.log": Data("""
             {"reason": "recent queue write activity: 5 file(s) modified recently", "status": "aborted"}
-            not json
             {"reason": "\(quietWindow)", "status": "aborted"}
 
             """.utf8),
-            // The nightly's last run succeeded: an older abort is not its reason.
             "/logs/nightly.out.log": Data("""
             {"reason": "burn drain failed; queue files preserved", "status": "aborted"}
             {"mode": "light", "status": "ok"}
             """.utf8),
         ]
-        let evidence = sources(files).maintenanceEvidence()
+        let evidence = sources(files, modified: ["/logs/weekly.out.log": written, "/logs/nightly.out.log": written]).maintenanceEvidence()
         XCTAssertEqual(evidence.weeklyCompletion, .completed(ISO8601DateFormatter().date(from: "2026-08-30T02:23:03Z")!))
-        XCTAssertEqual(evidence.abortReasons, [.maintenanceWeekly: quietWindow])
+        XCTAssertEqual(evidence.runRecords[.maintenanceWeekly], .aborted(reason: quietWindow, writtenAt: written))
+        XCTAssertEqual(evidence.runRecords[.maintenanceNightly], .notAnAbort(writtenAt: written))
     }
 
-    func testEvidenceDistinguishesNoCompletedPassFromAnUnreadableLog() {
+    /// B2: an older benign abort is never reused when the newest record is partial or malformed.
+    func testAPartialNewestRecordNeverFallsBackToAnOlderGateAbort() {
+        let files: [String: Data] = [
+            "/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist),
+            "/d/maintenance.log": Data(#"{"ts": "2026-09-27T02:23:03+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 1}"#.utf8),
+            "/logs/weekly.out.log": Data("""
+            {"reason": "\(quietWindow)", "status": "aborted"}
+            {"reason": "failed to resume 1 launchd service: watch: bo
+            """.utf8),
+        ]
+        let evidence = sources(files, modified: ["/logs/weekly.out.log": lastRun.addingTimeInterval(1)]).maintenanceEvidence()
+        XCTAssertEqual(evidence.runRecords[.maintenanceWeekly], .unavailable("the newest record in weekly.out.log is incomplete"))
+        let status = BrainLayerLaunchdJobGroup.maintenance.status(
+            settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: [.maintenanceNightly: observation(exit: 0), .maintenanceWeekly: observation(exit: 75)],
+            formatDate: show, maintenance: evidence, now: now
+        )
+        XCTAssertEqual(status.health, .unknown)
+    }
+
+    func testAnAbortWithoutAReasonIsIncomplete() {
+        let files: [String: Data] = [
+            "/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist),
+            "/logs/weekly.out.log": Data(#"{"status": "aborted"}"#.utf8),
+        ]
+        let evidence = sources(files, modified: ["/logs/weekly.out.log": lastRun]).maintenanceEvidence()
+        XCTAssertEqual(evidence.runRecords[.maintenanceWeekly], .unavailable("the newest record in weekly.out.log is incomplete"))
+    }
+
+    func testMissingStdoutEvidenceIsNamed() {
+        let noStdoutPath = sources(["/LA/com.brainlayer.maintenance-weekly.plist": plist("")]).maintenanceEvidence()
+        XCTAssertEqual(noStdoutPath.runRecords[.maintenanceWeekly], .unavailable("its LaunchAgent names no StandardOutPath"))
+        XCTAssertEqual(noStdoutPath.runRecords[.maintenanceNightly], .unavailable("its LaunchAgent could not be read"))
+
+        let unreadable = sources(["/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist)]).maintenanceEvidence()
+        XCTAssertEqual(unreadable.runRecords[.maintenanceWeekly], .unavailable("weekly.out.log could not be read"))
+
+        let noDate = sources([
+            "/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist),
+            "/logs/weekly.out.log": Data(#"{"reason": "\#(quietWindow)", "status": "aborted"}"#.utf8),
+        ]).maintenanceEvidence()
+        XCTAssertEqual(noDate.runRecords[.maintenanceWeekly], .unavailable("weekly.out.log has no modification time"))
+    }
+
+    /// N1: an unreadable or wholly malformed history is not "no completed pass".
+    func testEvidenceKeepsUnreadableHistoryApartFromHistoryWithNoCompletion() {
         let neverCompleted = sources([
             "/d/maintenance.log": Data(#"{"ts": "2026-09-27T01:40:00+00:00", "mode": "light", "dry_run": false}"#.utf8),
         ]).maintenanceEvidence()
         XCTAssertEqual(neverCompleted.weeklyCompletion, .noneRecorded)
-        XCTAssertEqual(neverCompleted.abortReasons, [:])
-        XCTAssertEqual(sources([:]).maintenanceEvidence(), .unread)
+        XCTAssertEqual(sources([:]).maintenanceEvidence().weeklyCompletion, .unread)
+        XCTAssertEqual(sources(["/d/maintenance.log": Data([0x7B, 0xFF, 0xFE, 0x7D])]).maintenanceEvidence().weeklyCompletion, .unread)
+        XCTAssertEqual(sources(["/d/maintenance.log": Data("not json\n{broken\n".utf8)]).maintenanceEvidence().weeklyCompletion, .unread)
+        XCTAssertEqual(sources(["/d/maintenance.log": Data()]).maintenanceEvidence().weeklyCompletion, .unread)
     }
 
     // MARK: the Settings view model publishes the evidence beside the schedules
@@ -219,7 +376,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
     @MainActor
     func testRefreshPublishesMaintenanceEvidenceIntoTheMaintenanceCard() async throws {
         let files: [String: Data] = [
-            "/LA/com.brainlayer.maintenance-weekly.plist": plist("<key>StandardOutPath</key><string>/logs/weekly.out.log</string>"),
+            "/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist),
             "/d/maintenance.log": Data(#"{"ts": "2026-09-27T02:23:03+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 1}"#.utf8),
             "/logs/weekly.out.log": Data(#"{"reason": "\#(quietWindow)", "status": "aborted"}"#.utf8),
         ]
@@ -229,7 +386,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
             initialLaunchdObservations: [.maintenanceNightly: observation(exit: 0), .maintenanceWeekly: observation(exit: 75)],
             refreshStatusOnLoad: false,
             now: { [now] in now },
-            backupSources: sources(files)
+            backupSources: sources(files, modified: ["/logs/weekly.out.log": lastRun.addingTimeInterval(1)])
         )
         XCTAssertEqual(viewModel.groupStatus(.maintenance).health, .unknown, "evidence not read yet")
         viewModel.refreshBackupSchedules()

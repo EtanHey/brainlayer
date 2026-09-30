@@ -399,10 +399,14 @@ enum BrainBarRenderHarness {
         // pass completed 3 days earlier (neutral "Skipped") and once with the last completed pass on
         // Aug 30 (attention: skips must not hide a pass that stopped completing).
         let maintenanceNow = at(30, 12, 0)
-        let quietWindowSkip = "outside quiet window: now=2026-09-30T00:07:23.566976+03:00 start_hour=4 duration_minutes=120"
+        // The weekly's own abort line, written a second after the 00:07 run started.
+        let quietWindowRecord = BrainLayerMaintenanceEvidence.RunRecord.aborted(
+            reason: "outside quiet window: now=2026-09-30T00:07:23.566976+03:00 start_hour=4 duration_minutes=120",
+            writtenAt: at(30, 0, 7).addingTimeInterval(1)
+        )
         let maintenanceEvidence: [String: BrainLayerMaintenanceEvidence] = [
-            "-maintenance-skipped": .init(weeklyCompletion: .completed(at(27, 4, 31)), abortReasons: [.maintenanceWeekly: quietWindowSkip]),
-            "-maintenance-stale": .init(weeklyCompletion: .completed(at(30, 5, 23, month: 8)), abortReasons: [.maintenanceWeekly: quietWindowSkip]),
+            "-maintenance-skipped": .init(weeklyCompletion: .completed(at(27, 4, 31)), runRecords: [.maintenanceWeekly: quietWindowRecord]),
+            "-maintenance-stale": .init(weeklyCompletion: .completed(at(30, 5, 23, month: 8)), runRecords: [.maintenanceWeekly: quietWindowRecord]),
         ]
         for scenario in settingsScenarios {
           for breakpoint in breakpoints where scenario.widths.contains(breakpoint.name) {

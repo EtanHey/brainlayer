@@ -87,6 +87,10 @@ struct BrainBarBackupSources: Sendable {
     let readFile: @Sendable (URL) -> Data?
     let listDirectory: @Sendable (URL) -> [String]
     let isRegularFile: @Sendable (URL) -> Bool
+    /// A file's modification time; stamps a maintenance job's newest stdout record.
+    var modificationDate: @Sendable (URL) -> Date? = {
+        (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date
+    }
 
     /// A regular file, read without following a symlink (`attributesOfItem` is lstat), so a link
     /// that could point outside the backups directory never gets Reveal or Copy (#1016 R1 B2).
@@ -124,30 +128,53 @@ struct BrainBarBackupSources: Sendable {
     }
 
     /// The Maintenance card's evidence: the weekly's last completed pass (the same #1015 reader the
-    /// Weekly maintenance row uses) and, per maintenance job, the `MaintenanceAbort` reason its last
-    /// run printed to the LaunchAgent's StandardOutPath. A last line that is not an abort names no reason.
+    /// Weekly maintenance row uses) and, per maintenance job, ONLY the newest record its last run
+    /// printed to the LaunchAgent's StandardOutPath, stamped with the log's modification time so the
+    /// card can check it belongs to the observed run. An incomplete newest record is never replaced
+    /// by an older one.
     func maintenanceEvidence() -> BrainLayerMaintenanceEvidence {
-        let completion: BrainLayerMaintenanceEvidence.WeeklyCompletion = switch readFile(paths.maintenanceLog) {
-        case nil: .unread
-        case let data?: BackupLogReader.lastRun(.weeklyMaintenance, log: data).map { .completed($0.at) } ?? .noneRecorded
-        }
-        var reasons: [BrainLayerLaunchdJob: String] = [:]
+        var records: [BrainLayerLaunchdJob: BrainLayerMaintenanceEvidence.RunRecord] = [:]
         for job in BrainLayerLaunchdJobGroup.maintenance.jobs {
-            let plist = readFile(paths.launchAgents.appendingPathComponent("\(job.launchdLabel).plist"))
-                .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
-            guard let stdoutPath = plist?["StandardOutPath"] as? String, !stdoutPath.isEmpty,
-                  let data = readFile(URL(fileURLWithPath: stdoutPath))
-            else { continue }
-            // The log only grows; its tail holds the last run. A cut first line simply fails to parse.
-            let text = String(decoding: data.suffix(64 * 1024), as: UTF8.self)
-            let last = text.split(whereSeparator: \.isNewline).reversed().lazy
-                .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
-                .first
-            if last?["status"] as? String == "aborted", let reason = last?["reason"] as? String, !reason.isEmpty {
-                reasons[job] = reason
-            }
+            records[job] = newestRunRecord(job)
         }
-        return BrainLayerMaintenanceEvidence(weeklyCompletion: completion, abortReasons: reasons)
+        return BrainLayerMaintenanceEvidence(weeklyCompletion: weeklyCompletion(), runRecords: records)
+    }
+
+    private func weeklyCompletion() -> BrainLayerMaintenanceEvidence.WeeklyCompletion {
+        // Unreadable, not UTF-8, or no parseable row: that is not "no completed pass" (N1).
+        guard let data = readFile(paths.maintenanceLog), let text = String(data: data, encoding: .utf8),
+              text.split(whereSeparator: \.isNewline).contains(where: {
+                  (try? JSONSerialization.jsonObject(with: Data($0.utf8))) is [String: Any]
+              })
+        else { return .unread }
+        return BackupLogReader.lastRun(.weeklyMaintenance, log: data).map { .completed($0.at) } ?? .noneRecorded
+    }
+
+    private func newestRunRecord(_ job: BrainLayerLaunchdJob) -> BrainLayerMaintenanceEvidence.RunRecord {
+        guard let plist = readFile(paths.launchAgents.appendingPathComponent("\(job.launchdLabel).plist"))
+            .flatMap({ try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] })
+        else { return .unavailable("its LaunchAgent could not be read") }
+        guard let stdoutPath = plist["StandardOutPath"] as? String, !stdoutPath.isEmpty else {
+            return .unavailable("its LaunchAgent names no StandardOutPath")
+        }
+        let log = URL(fileURLWithPath: stdoutPath)
+        guard let data = readFile(log) else { return .unavailable("\(log.lastPathComponent) could not be read") }
+        guard let writtenAt = modificationDate(log) else {
+            return .unavailable("\(log.lastPathComponent) has no modification time")
+        }
+        // The log only grows; its tail holds the last run. Only the newest non-blank line counts.
+        let text = String(decoding: data.suffix(64 * 1024), as: UTF8.self)
+        guard let newest = text.split(whereSeparator: \.isNewline).last(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }),
+            let row = (try? JSONSerialization.jsonObject(with: Data(newest.utf8))) as? [String: Any],
+            let status = row["status"] as? String
+        else { return .unavailable("the newest record in \(log.lastPathComponent) is incomplete") }
+        guard status == "aborted" else { return .notAnAbort(writtenAt: writtenAt) }
+        guard let reason = row["reason"] as? String, !reason.isEmpty else {
+            return .unavailable("the newest record in \(log.lastPathComponent) is incomplete")
+        }
+        return .aborted(reason: reason, writtenAt: writtenAt)
     }
 
     private func row(
