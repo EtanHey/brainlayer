@@ -705,6 +705,7 @@ final class BrainBarSettingsNavigation: ObservableObject {
 struct BrainBarSettingsView: View {
     @StateObject var viewModel: BrainBarSettingsViewModel
     @StateObject private var navigation = BrainBarSettingsNavigation()
+    @Environment(\.brainBarDriveAuth) private var driveAuth
     private let activationRevision: Int
     /// False inside the one BrainBar window, whose own sidebar lists these pages (#963).
     private let showsSidebar: Bool
@@ -883,6 +884,10 @@ struct BrainBarSettingsView: View {
             }
         case .backups:
             VStack(alignment: .leading, spacing: 16) {
+                if let driveAuth {
+                    BrainBarDriveAuthCard(model: driveAuth)
+                    Divider()
+                }
                 BrainBarJobGroupCard(group: .backups, viewModel: viewModel)
                 Divider()
                 backupSchedule

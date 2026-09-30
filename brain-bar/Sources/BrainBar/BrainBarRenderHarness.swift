@@ -372,11 +372,28 @@ enum BrainBarRenderHarness {
             cadence: "Schedule unknown — no LaunchAgent installed at ~/Library/LaunchAgents/com.brainlayer.jsonl-backup.plist",
             lastRun: "No run recorded in jsonl-backup.log", nextRun: "Next run unknown", localCopy: nil
         )
-        let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool, backups: [BrainBarBackupScheduleRow], suffix: String)] =
-            BrainBarSettingsSection.allCases.map { ($0, false, $0 == .backups ? backupRows : [], "") }
-            + [(.advanced, true, [], ""), (.backups, false, unknownRows, "-unknown")]
+        // Google Drive access (Reconnect Google Drive): each state the Backups page can show.
+        let driveNow = Date()
+        let drive: [String: (BrainBarDriveAuthModel) -> Void] = [
+            "connected": { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: driveNow.addingTimeInterval(5 * 86_400))) },
+            "expiring": { $0.setForPreview(status: .init(state: .expiring, reason: nil, expiresAt: driveNow.addingTimeInterval(5.5 * 3_600))) },
+            "missing": { $0.setForPreview(status: .init(state: .missing, reason: "no BrainLayer Drive token yet", expiresAt: nil)) },
+            "invalid-cancelled": {
+                $0.setForPreview(status: .init(state: .invalid, reason: "invalid_grant", expiresAt: nil),
+                                 lastOutcome: .cancelled("consent was denied in the browser"))
+            },
+            "reconnecting": { $0.setForPreview(status: .init(state: .missing, reason: nil, expiresAt: nil), isReconnecting: true) },
+        ]
+        let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool, backups: [BrainBarBackupScheduleRow], suffix: String, drive: String, widths: Set<String>)] =
+            BrainBarSettingsSection.allCases.map { ($0, false, $0 == .backups ? backupRows : [], "", "connected", ["compact", "default", "wide"]) }
+            + [(.advanced, true, [], "", "connected", ["compact", "default", "wide"]),
+               (.backups, false, unknownRows, "-unknown", "connected", ["compact", "default", "wide"]),
+               (.backups, false, backupRows, "-drive-expiring", "expiring", ["compact", "default", "wide"]),
+               (.backups, false, backupRows, "-drive-missing", "missing", ["default"]),
+               (.backups, false, backupRows, "-drive-invalid-cancelled", "invalid-cancelled", ["default"]),
+               (.backups, false, backupRows, "-drive-reconnecting", "reconnecting", ["default"])]
         for scenario in settingsScenarios {
-          for breakpoint in breakpoints {
+          for breakpoint in breakpoints where scenario.widths.contains(breakpoint.name) {
             if scenario.receipt { try store.save(.defaultConfig) }
             let viewModel = BrainBarSettingsViewModel(
                 store: store,
@@ -419,7 +436,8 @@ enum BrainBarRenderHarness {
                 collector: BrainBarDashboardFixture.makeCollector(),
                 settingsViewModel: viewModel,
                 panelState: panelState,
-                section: scenario.section
+                section: scenario.section,
+                driveAuth: drive[scenario.drive]
             )
             let size = NSSize(width: breakpoint.width, height: panelState.fittingHeight)
             let name = "unified-settings-\(scenario.receipt ? "receipt" : scenario.section.rawValue)\(scenario.suffix)-\(breakpoint.name)"
@@ -677,6 +695,21 @@ enum BrainBarRenderHarness {
         }
         settle(unknownFrameView)
         try writeBitmap(of: unknownFrameView, name: "window-dashboard-agent-writes-unknown-default", in: outputDirectory)
+
+        // Reconnect Google Drive: the Dashboard banner when Drive access expires within a day.
+        let driveRuntime = BrainBarRuntime()
+        driveRuntime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
+        driveRuntime.driveAuth.setForPreview(status: .init(state: .expiring, reason: nil, expiresAt: Date().addingTimeInterval(5.5 * 3_600)))
+        let driveController = BrainBarDashboardPanelController(
+            runtime: driveRuntime,
+            frameStore: BrainBarWindowFrameStore(defaults: RenderDefaults(), key: "render")
+        )
+        driveController.windowForTesting.setFrame(NSRect(x: 0, y: 0, width: 960, height: 640), display: false)
+        guard let driveFrameView = driveController.windowForTesting.contentView?.superview else {
+            throw Failure("window-dashboard-drive-expiring-default: the window has no frame view")
+        }
+        settle(driveFrameView)
+        try writeBitmap(of: driveFrameView, name: "window-dashboard-drive-expiring-default", in: outputDirectory)
 
         let stats = BrainBarDashboardFixture.makeCollector().stats
         for badgeOn in [false, true] {

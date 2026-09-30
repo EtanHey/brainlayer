@@ -77,6 +77,7 @@ struct BrainBarWindowRootView: View {
         .opacity(managesWindowFrame ? (windowObserver.isContentReady ? 1 : 0) : 1)
         .background(BrainBarAppBackground())
         .environment(\.colorScheme, .dark)
+        .environment(\.brainBarDriveAuth, runtime.driveAuth)
         .background(windowAttachment)
         .onPreferenceChange(BrainBarHeaderHeightKey.self) { panelState.headerHeight = $0 }
         .onAppear {
@@ -849,6 +850,7 @@ private struct BrainBarDashboardView: View {
     var enrichmentPausedOverride: Bool? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.brainBarDriveAuth) private var driveAuth
     @State private var previousAllCommitBuckets: [Int] = []
     @State private var previousWriteBuckets: [Int] = []
     @State private var previousWatcherBuckets: [Int] = []
@@ -956,6 +958,9 @@ private struct BrainBarDashboardView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: layout.sectionSpacing) {
                         statusStrip
+                        if let driveAuth {
+                            BrainBarDriveAuthBanner(model: driveAuth)
+                        }
                         summaryTiles(layout: layout)
                         ingestBand(layout: layout)
                         diagnostics(layout: layout)
@@ -3261,7 +3266,8 @@ enum BrainBarUnifiedWindowPreview {
         collector: StatsCollector,
         settingsViewModel: BrainBarSettingsViewModel,
         panelState: BrainBarDashboardPanelState,
-        section: BrainBarSettingsSection = .jobs
+        section: BrainBarSettingsSection = .jobs,
+        driveAuth: ((BrainBarDriveAuthModel) -> Void)? = nil
     ) -> AnyView {
         let runtime = BrainBarRuntime()
         runtime.install(
@@ -3269,6 +3275,7 @@ enum BrainBarUnifiedWindowPreview {
             database: nil,
             databasePath: "/tmp/brainbar-render-fixture.db"
         )
+        driveAuth?(runtime.driveAuth)
         panelState.select(BrainBarSidebarItem(section: section))
         let navigation = panelState.settingsNavigation
         return AnyView(
