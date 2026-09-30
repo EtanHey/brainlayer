@@ -38,6 +38,19 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.45] - 2026-09-30
+
+- #1011: Collapsing Dashboard Details reflows the visible content without leaving unused space.
+- #1013, #1014, #1024: One watcher-health model drives the Dashboard and Settings states, with malformed health details rejected instead of presented as truth.
+- #1015, #1016: Backups show each installed schedule, last and next run, and the latest local database snapshot or transcript archive, with Reveal and Copy actions.
+- #1018: BrainBar accepts the daemon inside its own running app bundle.
+- #1019, #1025, #1026: Agent counts use the executable's kernel path and original argv[0] to exclude app helpers and non-session roles. Dashboard adds “Agent writes (24 h)” for agent `brain_store` writes only.
+- #1020, #1021: BrainBar uses one window with a status item and a Dashboard-first sidebar; General settings are folded into that navigation.
+- #1027, #1030: Database and transcript backups use a BrainLayer-owned Drive token; migration copies the legacy token without deleting it. `brainlayer backup auth` adds browser reconnect and JSON status for the seven-day consent, including a day-6 expiry warning.
+- #1031: Backup and maintenance failures raise durable alerts with recovery notices; stale transcript-backup temporary bundles are cleaned only after the backup lock is free.
+- #1028: BrainBar gains a bounded Google Drive access model over the backup-auth CLI, including consent timeout and stale-read guards.
+- #1029: BrainBar shows Reconnect Google Drive on the Backups page and in the Dashboard attention banner.
+
 ## [1.5.44] - 2026-09-29
 
 - #993: BrainBar diagnostics now use unified logging, while lifecycle events go to an owner-only `~/Library/Logs/BrainBar/lifecycle.log`. A rotating mode-0600 debug file is enabled only by `BRAINBAR_DEBUG_LOG=1`; request payloads are never logged.
