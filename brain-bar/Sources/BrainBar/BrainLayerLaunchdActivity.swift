@@ -207,12 +207,25 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         status: ObservabilityBackupStatus?,
         statusUnavailableReason: String
     ) -> Self {
-        let badge: Badge = switch job.health {
-        case .healthy: .healthy
-        case .awaitingRun: .awaitingRun
-        case .unhealthy: .attention
-        case .unknown: .unknown
+        // Every red line the page shows, most severe first: the failed job's own alert, Drive
+        // access, the launchd job, then the other backup diagnostics.
+        let red = [
+            status.flatMap { $0.errorIsJobAlert ? $0.attentionLine?.text : nil },
+            drive?.tone == .attention ? drive?.line : nil,
+            job.health == .unhealthy ? job.attentionReason : nil,
+            status.map { $0.attentionLine?.text } ?? statusUnavailableReason,
+        ].compactMap { $0 }
+        if let reason = red.first { return .init(badge: .attention, reason: reason) }
+        switch drive?.tone {
+        case .expiring: return .init(badge: .expiring, reason: drive?.line)
+        case .unknown: return .init(badge: .unknown, reason: drive?.line)
+        case .attention, .connected, nil: break
         }
-        return .init(badge: badge, reason: job.attentionReason)
+        return switch job.health {
+        case .healthy: .init(badge: .healthy, reason: nil)
+        case .awaitingRun: .init(badge: .awaitingRun, reason: nil)
+        case .unknown: .init(badge: .unknown, reason: job.attentionReason)
+        case .unhealthy: .init(badge: .attention, reason: job.attentionReason)
+        }
     }
 }

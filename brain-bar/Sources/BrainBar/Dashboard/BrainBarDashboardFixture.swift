@@ -129,6 +129,8 @@ enum BrainBarDashboardFixture {
         lastWriteAt: fetchedAt
     )
     static let emptyObservabilityResult = makeObservabilityResult(stats: emptyStats)
+    /// Verified, fresh backups: the Backups page's Drive renders isolate the Drive state with it.
+    static let healthyObservabilityResult = makeObservabilityResult(stats: stats)
 
     private static func makeObservabilityResult(
         stats: DashboardStats, generatedAt: Date = fetchedAt

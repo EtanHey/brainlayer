@@ -7,12 +7,14 @@ DEVELOPER_DIR=/Applications/Devtools/Xcode.app/Contents/Developer swift build --
 BRAINBAR_DB_PATH=<scratch>/brainlayer.db BRAINBAR_RENDER_ONLY=<scratch>/out .build/debug/BrainBar
 ```
 
-| State (`brainlayer backup auth --status --json`) | Backups page | Button |
-|---|---|---|
-| `valid` | [Connected: renews by <date>](backups-connected-default.png) | none |
-| `expiring` (under 24 h left, day 6 of the 7-day Testing-mode consent) | "Drive access expires in 6 h. Reconnect", amber, at [760](backups-expiring-compact.png), [960](backups-expiring-default.png) and [1280](backups-expiring-wide.png) | Reconnect Google Drive |
-| `missing` | ["Google Drive is not connected. Backups can't upload."](backups-missing-default.png) plus the CLI's reason | Reconnect Google Drive |
-| `invalid`, after a cancelled reconnect | ["Drive access expired or was revoked…"](backups-invalid-cancelled-default.png) plus "Reconnect was cancelled: <reason>" | still shown |
-| reconnect running | ["Waiting for Google consent in your browser…"](backups-reconnecting-default.png) | disabled, with a spinner |
+| State (`brainlayer backup auth --status --json`) | Backups page | Backups badge (#1029 review B1) | Button |
+|---|---|---|---|
+| `valid` | [Connected: renews by <date>](backups-connected-default.png) | green **Healthy** | none |
+| `expiring` (under 24 h left, day 6 of the 7-day Testing-mode consent) | "Drive access expires in 6 h. Reconnect", amber, at [760](backups-expiring-compact.png), [960](backups-expiring-default.png) and [1280](backups-expiring-wide.png) | amber **Drive access expiring**, with the same line | Reconnect Google Drive |
+| `missing` | ["Google Drive is not connected. Backups can't upload."](backups-missing-default.png) plus the CLI's reason | red **Needs attention**, with the same line | Reconnect Google Drive |
+| `invalid`, after a cancelled reconnect | ["Drive access expired or was revoked…"](backups-invalid-cancelled-default.png) plus "Reconnect was cancelled: <reason>" | red **Needs attention**, with the same line | still shown |
+| reconnect running | ["Waiting for Google consent in your browser…"](backups-reconnecting-default.png) | red **Needs attention** until consent completes | disabled, with a spinner |
+
+The Drive renders use the fixture's verified, fresh backups (every status line green), so each badge shows only its Drive state. The badge, its reason, the Drive card and the status lines all come from one derivation, `BrainBarBackupsHealth`: a red line anywhere on the page means a red badge, and Healthy means Drive `valid`, a healthy job and no red line.
 
 **Dashboard banner:** [expiring, in the real window](dashboard-banner-expiring-default.png). It sits under the status strip and shows only when Drive needs a click. The button is grey in this capture only because an off-screen window is never the key window.

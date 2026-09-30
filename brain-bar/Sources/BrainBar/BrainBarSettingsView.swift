@@ -293,6 +293,17 @@ final class BrainBarSettingsViewModel: ObservableObject {
         return ObservabilityPresentation.backupStatus(for: document.backups)
     }
 
+    /// The Backups page's one verdict (#1029 review B1), from the same Drive presentation the card
+    /// shows, the Backups job group and the backup status lines.
+    func backupsHealth(drive: DriveAuthPresentation?) -> BrainBarBackupsHealth {
+        BrainBarBackupsHealth.derive(
+            job: groupStatus(.backups),
+            drive: drive,
+            status: backupStatus,
+            statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable."
+        )
+    }
+
     var backupStatusReason: String? {
         switch observabilityResult {
         case let .unreadable(value):
@@ -885,10 +896,10 @@ struct BrainBarSettingsView: View {
         case .backups:
             VStack(alignment: .leading, spacing: 16) {
                 if let driveAuth {
-                    BrainBarDriveAuthCard(model: driveAuth)
-                    Divider()
+                    BrainBarDriveAwareBackupsGroup(viewModel: viewModel, driveAuth: driveAuth)
+                } else {
+                    BrainBarJobGroupCard(group: .backups, viewModel: viewModel, backupsHealth: viewModel.backupsHealth(drive: nil))
                 }
-                BrainBarJobGroupCard(group: .backups, viewModel: viewModel)
                 Divider()
                 backupSchedule
                 backupStatus
@@ -1020,9 +1031,29 @@ struct BrainBarSettingsView: View {
 
 }
 
+/// The Drive card and the Backups group card, observing both models so the badge follows Drive.
+private struct BrainBarDriveAwareBackupsGroup: View {
+    @ObservedObject var viewModel: BrainBarSettingsViewModel
+    @ObservedObject var driveAuth: BrainBarDriveAuthModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            BrainBarDriveAuthCard(model: driveAuth)
+            Divider()
+            BrainBarJobGroupCard(
+                group: .backups,
+                viewModel: viewModel,
+                backupsHealth: viewModel.backupsHealth(drive: driveAuth.presentation(formatDate: BrainBarDriveAuthFormat.date))
+            )
+        }
+    }
+}
+
 private struct BrainBarJobGroupCard: View {
     let group: BrainLayerLaunchdJobGroup
     @ObservedObject var viewModel: BrainBarSettingsViewModel
+    /// The Backups page passes its combined verdict; other groups show launchd health alone.
+    var backupsHealth: BrainBarBackupsHealth?
 
     static func symbol(_ health: BrainLayerLaunchdGroupHealth) -> String {
         switch health {
@@ -1042,15 +1073,44 @@ private struct BrainBarJobGroupCard: View {
         }
     }
 
+    /// The badge and its reason: the Backups page's combined verdict, else launchd health.
+    private struct Badge {
+        let title: String, symbol: String, color: Color
+        let reason: String?, reasonColor: Color
+    }
+
+    private func badge(_ status: BrainLayerLaunchdGroupStatus) -> Badge {
+        guard let backupsHealth else {
+            return Badge(
+                title: status.health.title, symbol: Self.symbol(status.health), color: Self.color(status.health),
+                reason: status.attentionReason,
+                reasonColor: status.health == .unknown ? Color.brainBarTextMuted : BrainBarStateTheme.error.theme.swiftUIColor
+            )
+        }
+        let (symbol, color): (String, Color) = switch backupsHealth.badge {
+        case .healthy: (Self.symbol(.healthy), Self.color(.healthy))
+        case .awaitingRun: (Self.symbol(.awaitingRun), Self.color(.awaitingRun))
+        case .expiring: ("clock.badge.exclamationmark.fill", Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+        case .attention: (Self.symbol(.unhealthy), Self.color(.unhealthy))
+        case .unknown: (Self.symbol(.unknown), Self.color(.unknown))
+        }
+        return Badge(
+            title: backupsHealth.badge.title, symbol: symbol, color: color,
+            reason: backupsHealth.reason,
+            reasonColor: backupsHealth.badge == .unknown ? Color.brainBarTextMuted : color
+        )
+    }
+
     var body: some View {
         let status = viewModel.groupStatus(group)
+        let badge = badge(status)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(group.title).font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Label(status.health.title, systemImage: Self.symbol(status.health))
+                Label(badge.title, systemImage: badge.symbol)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Self.color(status.health))
+                    .foregroundStyle(badge.color)
                 Toggle(group.title, isOn: Binding(
                     get: { viewModel.isGroupEnabled(group) },
                     set: { viewModel.setGroup(group, enabled: $0) }
@@ -1059,10 +1119,10 @@ private struct BrainBarJobGroupCard: View {
             Text(group.summary)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)
-            if let reason = status.attentionReason {
+            if let reason = badge.reason {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(status.health == .unknown ? Color.brainBarTextMuted : BrainBarStateTheme.error.theme.swiftUIColor)
+                    .foregroundStyle(badge.reasonColor)
             }
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)

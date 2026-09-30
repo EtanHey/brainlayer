@@ -388,6 +388,7 @@ enum BrainBarRenderHarness {
             BrainBarSettingsSection.allCases.map { ($0, false, $0 == .backups ? backupRows : [], "", "connected", ["compact", "default", "wide"]) }
             + [(.advanced, true, [], "", "connected", ["compact", "default", "wide"]),
                (.backups, false, unknownRows, "-unknown", "connected", ["compact", "default", "wide"]),
+               (.backups, false, backupRows, "-drive-connected", "connected", ["default"]),
                (.backups, false, backupRows, "-drive-expiring", "expiring", ["compact", "default", "wide"]),
                (.backups, false, backupRows, "-drive-missing", "missing", ["default"]),
                (.backups, false, backupRows, "-drive-invalid-cancelled", "invalid-cancelled", ["default"]),
@@ -421,7 +422,10 @@ enum BrainBarRenderHarness {
                                         lastRunAt: at(29, 5, 1), nextRunAt: at(30, 5, 0), isContinuous: false),
                 ] : [:],
                 refreshStatusOnLoad: false,
-                initialObservabilityResult: .unreadable("Fixture backup status unavailable."),
+                // The Drive renders get verified, fresh backups, so each shows only its Drive state.
+                initialObservabilityResult: scenario.suffix.hasPrefix("-drive")
+                    ? BrainBarDashboardFixture.healthyObservabilityResult
+                    : .unreadable("Fixture backup status unavailable."),
                 initialBackupSchedules: scenario.backups
             )
             if scenario.receipt {

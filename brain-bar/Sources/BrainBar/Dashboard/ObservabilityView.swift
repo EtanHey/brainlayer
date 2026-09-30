@@ -348,9 +348,11 @@ struct ObservabilityBackupStatus: Equatable, Sendable {
         [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
     }
 
-    /// The one red line that speaks for the backups.
+    /// The one red line that speaks for the backups: a job alert, the failed job's own sentence,
+    /// leads whatever else is red (#1029 review B2); otherwise the first red line.
     var attentionLine: ObservabilityStatusLine? {
-        lines.first { $0.tone == .red }
+        if errorIsJobAlert, let error, error.tone == .red { return error }
+        return lines.first { $0.tone == .red }
     }
 }
 
