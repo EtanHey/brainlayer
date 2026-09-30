@@ -375,8 +375,12 @@ enum WatcherHealthReader {
             dbProbeFailed = flag
         }
         for key in ["file_ingestion_failures", "quarantined_records"] {
-            if let value = payload[key], !(value is [Any]) {
+            guard let value = payload[key] else { continue }
+            guard let entries = value as? [Any] else {
                 return .unreadable(path: path, reason: "\(key) must be a list")
+            }
+            guard entries.allSatisfy({ $0 is [String: Any] }) else {
+                return .unreadable(path: path, reason: "\(key) must be a list of objects")
             }
         }
         return .readable(WatcherHealthFile(
@@ -394,10 +398,11 @@ enum WatcherHealthReader {
         ))
     }
 
-    /// JSON numbers arrive as NSNumber, which bridges `true` to 1 and `1` to true. Only a
-    /// non-boolean whole number is an integer here.
+    /// JSON numbers arrive as NSNumber. Swift can bridge both booleans and whole-valued
+    /// floating-point numbers to Int, so inspect the original JSON number type first.
     private static func strictInteger(_ value: Any) -> Int? {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        guard ["c", "C", "s", "S", "i", "I", "l", "L", "q", "Q"].contains(String(cString: number.objCType)) else { return nil }
         return value as? Int
     }
 
