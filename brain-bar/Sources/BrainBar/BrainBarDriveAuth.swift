@@ -372,6 +372,8 @@ final class BrainBarDriveAuthModel: ObservableObject {
 
     private var runner: (any BrainLayerCLIRunning)?
     private let now: @Sendable () -> Date
+    /// Bumped by every status read; a read that a newer one has overtaken is dropped.
+    private var statusGeneration = 0
 
     nonisolated static let statusArguments = ["backup", "auth", "--status", "--json"]
     nonisolated static let reconnectArguments = ["backup", "auth", "--json"]
@@ -394,9 +396,13 @@ final class BrainBarDriveAuthModel: ObservableObject {
             status = .unknown("Drive status is not checked in this process")
             return
         }
+        statusGeneration += 1
+        let generation = statusGeneration
         let result = await Task.detached(priority: .utility) {
             runner.run(Self.statusArguments, timeout: Self.statusTimeout)
         }.value
+        // An older read (say, one begun before a reconnect) never overwrites a newer one.
+        guard generation == statusGeneration else { return }
         status = DriveAuthStatus.parse(result)
         lastCheckedAt = now()
     }
