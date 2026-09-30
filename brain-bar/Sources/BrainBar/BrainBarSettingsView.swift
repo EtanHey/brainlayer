@@ -29,6 +29,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
             now: now()
         )
     }
+    /// Each backup's schedule (installed LaunchAgent), last run (its own log), next run and latest
+    /// local copy (#968).
+    @Published private(set) var backupSchedules: [BrainBarBackupScheduleRow]
 
     var footerPresentation: BrainBarSettingsFooterPresentation {
         BrainBarSettingsFooterPresentation(
@@ -55,6 +58,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let watcherHealthURL: URL?
     private let watcherHealthRead: @Sendable (URL) -> WatcherHealthFileRead
     private var watcherHealthGeneration: UInt64 = 0
+    private let backupSources: BrainBarBackupSources?
+    private let workspace: any BrainBarWorkspaceActing
+    private var backupScheduleGeneration: UInt64 = 0
     private let confirmAPIKeyOverwrite: (() -> Bool)?
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
@@ -78,7 +84,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         },
         watcherHealthURL: URL? = nil,
         initialWatcherHealth: WatcherHealthFileRead? = nil,
-        watcherHealthRead: @escaping @Sendable (URL) -> WatcherHealthFileRead = { WatcherHealthReader.read(url: $0) }
+        watcherHealthRead: @escaping @Sendable (URL) -> WatcherHealthFileRead = { WatcherHealthReader.read(url: $0) },
+        backupSources: BrainBarBackupSources? = nil,
+        initialBackupSchedules: [BrainBarBackupScheduleRow] = [],
+        workspace: any BrainBarWorkspaceActing = BrainBarWorkspace()
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
@@ -92,6 +101,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.watcherHealthURL = watcherHealthURL
         self.watcherHealthRead = watcherHealthRead
         watcherHealth = initialWatcherHealth
+        self.backupSources = backupSources
+        self.workspace = workspace
+        backupSchedules = initialBackupSchedules
         observabilityResult = initialObservabilityResult
         launchdObservations = initialLaunchdObservations.isEmpty
             ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
@@ -132,6 +144,26 @@ final class BrainBarSettingsViewModel: ObservableObject {
             watcherHealth = result
         }
     }
+
+    /// Re-reads the installed plists, the backup logs and the local copies off the main actor;
+    /// only the newest request publishes.
+    func refreshBackupSchedules() {
+        guard let backupSources else { return }
+        backupScheduleGeneration &+= 1
+        let generation = backupScheduleGeneration
+        let now = now()
+        let rows = Task.detached {
+            backupSources.rows(now: now, calendar: .current, formatDate: DashboardMetricFormatter.jobDateTimeString)
+        }
+        Task {
+            let result = await rows.value
+            guard generation == backupScheduleGeneration else { return }
+            backupSchedules = result
+        }
+    }
+
+    func revealBackup(_ row: BrainBarBackupScheduleRow) { row.reveal(using: workspace) }
+    func copyBackupPath(_ row: BrainBarBackupScheduleRow) { row.copyPath(using: workspace) }
 
     func setEnrichmentEnabled(_ enabled: Bool) {
         updateConfig { $0.enrichmentEnabled = enabled }
@@ -241,6 +273,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         isRefreshingLaunchdStatus = true
         refreshEmbeddingResidency()
         refreshWatcherHealth()
+        refreshBackupSchedules()
         let provider = launchdStatusProvider
         Task {
             let observations = await Task.detached {
@@ -659,7 +692,8 @@ struct BrainBarSettingsView: View {
         _navigation = StateObject(wrappedValue: navigation)
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
             observabilityURL: Self.observabilityURL(databasePath: databasePath),
-            watcherHealthURL: WatcherHealthReader.resolvedURL()
+            watcherHealthURL: WatcherHealthReader.resolvedURL(),
+            backupSources: .live(databasePath: databasePath)
         ))
     }
 
@@ -816,6 +850,7 @@ struct BrainBarSettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 BrainBarJobGroupCard(group: .backups, viewModel: viewModel)
                 Divider()
+                backupSchedule
                 backupStatus
             }
         case .advanced:
@@ -870,6 +905,47 @@ struct BrainBarSettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(navigation.selected.groups) { group in
                 BrainBarJobGroupCard(group: group, viewModel: viewModel)
+                Divider()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var backupSchedule: some View {
+        if !viewModel.backupSchedules.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeading("Schedule")
+                ForEach(viewModel.backupSchedules) { row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(row.title).font(.system(size: 12, weight: .semibold))
+                            Spacer(minLength: 12)
+                            Text(row.cadence)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.brainBarTextSecondary)
+                                .multilineTextAlignment(.trailing)
+                        }
+                        Text("\(row.lastRun) · \(row.nextRun)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.brainBarTextMuted)
+                        if let localCopy = row.localCopy {
+                            HStack(spacing: 8) {
+                                Text(localCopy.lastPathComponent)
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(Color.brainBarTextMuted)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(localCopy.path)
+                                Spacer(minLength: 8)
+                                Button("Reveal in Finder") { viewModel.revealBackup(row) }
+                                Button("Copy path") { viewModel.copyBackupPath(row) }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("brainbar.settings.backup-schedule.\(row.title)")
+                }
                 Divider()
             }
         }

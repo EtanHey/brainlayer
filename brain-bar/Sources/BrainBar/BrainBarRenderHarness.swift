@@ -348,8 +348,32 @@ enum BrainBarRenderHarness {
         let store = BrainLayerConfigStore(configURL: configURL)
         try store.save(.defaultConfig)
 
-        let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool)] =
-            BrainBarSettingsSection.allCases.map { ($0, false) } + [(.general, true)]
+        // #968: the Backups section with every schedule known, and with the transcript archive's
+        // LaunchAgent missing (honest unknown, no local copy, so no Reveal/Copy).
+        // Fixture times are built in the local calendar, like the LaunchAgent schedules they describe.
+        func at(_ day: Int, _ hour: Int, _ minute: Int, month: Int = 9) -> Date {
+            Calendar.current.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
+        }
+        let show = DashboardMetricFormatter.jobDateTimeString
+        let backupRows: [BrainBarBackupScheduleRow] = [
+            .init(title: "Database", cadence: "daily at 03:17",
+                  lastRun: "Last run \(show(at(29, 3, 17))) · verified", nextRun: "Next run \(show(at(30, 3, 17)))",
+                  localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/backups/2026-09-29.db.gz")),
+            .init(title: "Transcripts", cadence: "daily at 05:00",
+                  lastRun: "Last run \(show(at(29, 5, 1))) · verified", nextRun: "Next run \(show(at(30, 5, 0)))",
+                  localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/jsonl-backups/claude-jsonl-2026-09-29.tar.gz")),
+            .init(title: "Weekly maintenance", cadence: "weekly on Sunday at 04:00",
+                  lastRun: "Last run \(show(at(27, 4, 31)))", nextRun: "Next run \(show(at(4, 4, 0, month: 10)))", localCopy: nil),
+        ]
+        var unknownRows = backupRows
+        unknownRows[1] = .init(
+            title: "Transcripts",
+            cadence: "Schedule unknown — no LaunchAgent installed at ~/Library/LaunchAgents/com.brainlayer.jsonl-backup.plist",
+            lastRun: "No run recorded in jsonl-backup.log", nextRun: "Next run unknown", localCopy: nil
+        )
+        let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool, backups: [BrainBarBackupScheduleRow], suffix: String)] =
+            BrainBarSettingsSection.allCases.map { ($0, false, $0 == .backups ? backupRows : [], "") }
+            + [(.general, true, [], ""), (.backups, false, unknownRows, "-unknown")]
         for scenario in settingsScenarios {
           for breakpoint in breakpoints {
             if scenario.receipt { try store.save(.defaultConfig) }
@@ -372,9 +396,15 @@ enum BrainBarRenderHarness {
                     .maintenanceWeekly: .init(loadState: .loaded, runs: 2, lastExitCode: 0,
                                               lastRunAt: Date(timeIntervalSince1970: 1_789_866_900),
                                               nextRunAt: Date(timeIntervalSince1970: 1_790_471_700), isContinuous: false),
+                ] : scenario.section == .backups ? [
+                    .backupDaily: .init(loadState: .loaded, runs: 3, lastExitCode: 0,
+                                        lastRunAt: at(29, 3, 17), nextRunAt: at(30, 3, 17), isContinuous: false),
+                    .jsonlBackup: .init(loadState: .loaded, runs: 3, lastExitCode: 0,
+                                        lastRunAt: at(29, 5, 1), nextRunAt: at(30, 5, 0), isContinuous: false),
                 ] : [:],
                 refreshStatusOnLoad: false,
-                initialObservabilityResult: .unreadable("Fixture backup status unavailable.")
+                initialObservabilityResult: .unreadable("Fixture backup status unavailable."),
+                initialBackupSchedules: scenario.backups
             )
             if scenario.receipt {
                 viewModel.backendDraft = "mlx"
@@ -391,7 +421,7 @@ enum BrainBarRenderHarness {
                 section: scenario.section
             )
             let size = NSSize(width: breakpoint.width, height: panelState.fittingHeight)
-            let name = "unified-settings-\(scenario.receipt ? "receipt" : scenario.section.rawValue)-\(breakpoint.name)"
+            let name = "unified-settings-\(scenario.receipt ? "receipt" : scenario.section.rawValue)\(scenario.suffix)-\(breakpoint.name)"
             let host = NSHostingView(rootView: view)
             host.frame = NSRect(origin: .zero, size: size)
             settle(host)
