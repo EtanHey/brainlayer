@@ -123,6 +123,33 @@ struct BrainBarBackupSources: Sendable {
         ]
     }
 
+    /// The Maintenance card's evidence: the weekly's last completed pass (the same #1015 reader the
+    /// Weekly maintenance row uses) and, per maintenance job, the `MaintenanceAbort` reason its last
+    /// run printed to the LaunchAgent's StandardOutPath. A last line that is not an abort names no reason.
+    func maintenanceEvidence() -> BrainLayerMaintenanceEvidence {
+        let completion: BrainLayerMaintenanceEvidence.WeeklyCompletion = switch readFile(paths.maintenanceLog) {
+        case nil: .unread
+        case let data?: BackupLogReader.lastRun(.weeklyMaintenance, log: data).map { .completed($0.at) } ?? .noneRecorded
+        }
+        var reasons: [BrainLayerLaunchdJob: String] = [:]
+        for job in BrainLayerLaunchdJobGroup.maintenance.jobs {
+            let plist = readFile(paths.launchAgents.appendingPathComponent("\(job.launchdLabel).plist"))
+                .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+            guard let stdoutPath = plist?["StandardOutPath"] as? String, !stdoutPath.isEmpty,
+                  let data = readFile(URL(fileURLWithPath: stdoutPath))
+            else { continue }
+            // The log only grows; its tail holds the last run. A cut first line simply fails to parse.
+            let text = String(decoding: data.suffix(64 * 1024), as: UTF8.self)
+            let last = text.split(whereSeparator: \.isNewline).reversed().lazy
+                .compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+                .first
+            if last?["status"] as? String == "aborted", let reason = last?["reason"] as? String, !reason.isEmpty {
+                reasons[job] = reason
+            }
+        }
+        return BrainLayerMaintenanceEvidence(weeklyCompletion: completion, abortReasons: reasons)
+    }
+
     private func row(
         _ title: String,
         job: BrainLayerLaunchdJob,
