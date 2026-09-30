@@ -100,6 +100,22 @@ final class BrainBarDashboardPanelState: ObservableObject {
     }
 
     func disclosureAnimationDidComplete() {}
+
+#if BRAINBAR_UI
+    /// The sidebar row that is selected: Dashboard, or the settings page on show (#963).
+    var sidebarSelection: BrainBarSidebarItem {
+        selectedTab == .dashboard ? .dashboard : BrainBarSidebarItem(section: settingsNavigation.selected)
+    }
+
+    func select(_ item: BrainBarSidebarItem) {
+        if let section = item.settingsSection {
+            settingsNavigation.select(section)
+            selectedTab = .settings
+        } else {
+            selectedTab = .dashboard
+        }
+    }
+#endif
 }
 
 /// The one BrainBar window (#963, vNext D5): a real, titled window that stays open until it is
@@ -284,6 +300,8 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
 
 #if BRAINBAR_UI
     var selectedSettingsSectionForTesting: BrainBarSettingsSection { panelState.settingsNavigation.selected }
+    var sidebarSelectionForTesting: BrainBarSidebarItem { panelState.sidebarSelection }
+    func selectSidebarItemForTesting(_ item: BrainBarSidebarItem) { panelState.select(item) }
 #endif
 
     private static func makeWindow(contentViewController: NSViewController) -> BrainBarMainWindow {

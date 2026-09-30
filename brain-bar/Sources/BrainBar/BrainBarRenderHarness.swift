@@ -374,7 +374,7 @@ enum BrainBarRenderHarness {
         )
         let settingsScenarios: [(section: BrainBarSettingsSection, receipt: Bool, backups: [BrainBarBackupScheduleRow], suffix: String)] =
             BrainBarSettingsSection.allCases.map { ($0, false, $0 == .backups ? backupRows : [], "") }
-            + [(.general, true, [], ""), (.backups, false, unknownRows, "-unknown")]
+            + [(.advanced, true, [], ""), (.backups, false, unknownRows, "-unknown")]
         for scenario in settingsScenarios {
           for breakpoint in breakpoints {
             if scenario.receipt { try store.save(.defaultConfig) }

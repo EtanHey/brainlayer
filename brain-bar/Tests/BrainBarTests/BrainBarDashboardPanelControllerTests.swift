@@ -124,7 +124,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         controller.showURLDestination(BrainBarURLAction.parse(url: URL(string: "brainbar://settings/unknown")!)!)
         controller.showURLDestination(BrainBarURLAction.parse(url: URL(string: "brainbar://settings")!)!)
         XCTAssertTrue(controller.isShownForTesting)
-        XCTAssertEqual(controller.selectedSettingsSectionForTesting, .general)
+        XCTAssertEqual(controller.selectedSettingsSectionForTesting, .jobs, "a bare or unknown settings route opens the first settings page (#963)")
     }
 
     func testDashboardPanelKeepsRestingHeightWhenDetailsExpands() {

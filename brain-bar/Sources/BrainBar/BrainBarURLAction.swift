@@ -22,7 +22,9 @@ enum BrainBarURLAction: Equatable {
         case "dashboard" where remainder.isEmpty:
             return .dashboard
         case "settings" where remainder.count <= 1:
-            return .settings(remainder.first.flatMap { BrainBarSettingsSection(rawValue: $0) } ?? .general)
+            // General was absorbed into Dashboard (#963); an old link to it opens Dashboard.
+            if remainder.first == "general" { return .dashboard }
+            return .settings(remainder.first.flatMap { BrainBarSettingsSection(rawValue: $0) } ?? .jobs)
 #endif
         default:
             return nil
