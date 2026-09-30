@@ -59,13 +59,14 @@ def test_scrub_secrets_redacts_every_shape_seen_in_enrichment_leak():
 
 
 @pytest.mark.parametrize("provider", ["google_oauth_access", "google_oauth_refresh", "google_client_secret"])
-def test_oauth_tokens_are_scrubbed_at_rest_and_in_nested_llm_output(provider, tmp_path):
+@pytest.mark.parametrize("leading", ["", "abc"])
+def test_oauth_tokens_are_scrubbed_at_rest_and_in_nested_llm_output(provider, leading, tmp_path):
     from brainlayer.drain import _apply_store
     from brainlayer.pipeline.cloud_scrub import normalize_json_strings, scrub_llm_output
     from brainlayer.vector_store import VectorStore
 
-    token = FAKE_TOKENS[provider]
-    placeholder = f"[REDACTED:{provider}]"
+    token = leading + FAKE_TOKENS[provider]
+    placeholder = f"{leading}[REDACTED:{provider}]"
     store = VectorStore(tmp_path / "oauth.db")
     try:
         stored = _apply_store(

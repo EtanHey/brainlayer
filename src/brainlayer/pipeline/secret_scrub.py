@@ -60,13 +60,9 @@ _PROVIDER_PATTERNS = (
     ),
     _ProviderPattern("slack", re.compile(r"\bxox[baprs]-(?:[A-Za-z0-9]+-){1,}[A-Za-z0-9]{16,}\b")),
     _ProviderPattern("google", re.compile(r"\bAIza[A-Za-z0-9_-]{32,}\b")),
-    _ProviderPattern(
-        "google_oauth_access", re.compile(r"(?<![A-Za-z0-9_-])ya29\.[A-Za-z0-9_.-]{20,}(?![A-Za-z0-9_-])")
-    ),
-    _ProviderPattern("google_oauth_refresh", re.compile(r"(?<![A-Za-z0-9_-])1//[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
-    _ProviderPattern(
-        "google_client_secret", re.compile(r"(?<![A-Za-z0-9_-])GOCSPX-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")
-    ),
+    _ProviderPattern("google_oauth_access", re.compile(r"ya29\.[A-Za-z0-9_.-]{20,}(?![A-Za-z0-9_-])")),
+    _ProviderPattern("google_oauth_refresh", re.compile(r"1//[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
+    _ProviderPattern("google_client_secret", re.compile(r"GOCSPX-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
     _ProviderPattern("gitlab", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
     _ProviderPattern("supabase", re.compile(r"\b(?:sbp_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]{20,})\b")),
     _ProviderPattern("sendgrid", re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{32,}\b")),

@@ -861,84 +861,158 @@
     {
       "name": "google_oauth_access-ascii-prepended-abc",
       "input": "abcya29.{{0*40}}",
-      "expected_text": "abcya29.{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "abc[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_access-ascii-prepended-_",
       "input": "_ya29.{{0*40}}",
-      "expected_text": "_ya29.{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "_[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_access-ascii-prepended--",
       "input": "-ya29.{{0*40}}",
-      "expected_text": "-ya29.{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "-[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_access-ascii-prepended-9",
       "input": "9ya29.{{0*40}}",
-      "expected_text": "9ya29.{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "9[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_refresh-ascii-prepended-abc",
       "input": "abc1//{{0*40}}",
-      "expected_text": "abc1//{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "abc[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_refresh-ascii-prepended-_",
       "input": "_1//{{0*40}}",
-      "expected_text": "_1//{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "_[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_refresh-ascii-prepended--",
       "input": "-1//{{0*40}}",
-      "expected_text": "-1//{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "-[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_oauth_refresh-ascii-prepended-9",
       "input": "91//{{0*40}}",
-      "expected_text": "91//{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "9[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_client_secret-ascii-prepended-abc",
       "input": "abcGOCSPX-{{0*40}}",
-      "expected_text": "abcGOCSPX-{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "abc[REDACTED:google_client_secret]",
+      "expected_providers": [
+        "google_client_secret"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_client_secret-ascii-prepended-_",
       "input": "_GOCSPX-{{0*40}}",
-      "expected_text": "_GOCSPX-{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "_[REDACTED:google_client_secret]",
+      "expected_providers": [
+        "google_client_secret"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_client_secret-ascii-prepended--",
       "input": "-GOCSPX-{{0*40}}",
-      "expected_text": "-GOCSPX-{{0*40}}",
-      "expected_providers": [],
+      "expected_text": "-[REDACTED:google_client_secret]",
+      "expected_providers": [
+        "google_client_secret"
+      ],
       "expected_quarantine_count": 0
     },
     {
       "name": "google_client_secret-ascii-prepended-9",
       "input": "9GOCSPX-{{0*40}}",
-      "expected_text": "9GOCSPX-{{0*40}}",
+      "expected_text": "9[REDACTED:google_client_secret]",
+      "expected_providers": [
+        "google_client_secret"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_access-lead-correction",
+      "input": "xya29.{{0*20}}",
+      "expected_text": "x[REDACTED:google_oauth_access]",
+      "expected_providers": [
+        "google_oauth_access"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_oauth_refresh-lead-correction",
+      "input": "abc1//0{{0*20}}",
+      "expected_text": "abc[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google_client_secret-lead-correction",
+      "input": "fooGOCSPX-{{0*20}}",
+      "expected_text": "foo[REDACTED:google_client_secret]",
+      "expected_providers": [
+        "google_client_secret"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google-refresh-nonzero-prefix",
+      "input": "1//a{{0*40}}",
+      "expected_text": "[REDACTED:google_oauth_refresh]",
+      "expected_providers": [
+        "google_oauth_refresh"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google-access-prose-prefix",
+      "input": "xya29 in prose",
+      "expected_text": "xya29 in prose",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "google-client-prefixed-short",
+      "input": "fooGOCSPX-short",
+      "expected_text": "fooGOCSPX-short",
       "expected_providers": [],
       "expected_quarantine_count": 0
     }
