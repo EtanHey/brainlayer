@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import sqlite3
 import sys
@@ -259,6 +260,16 @@ class DoctorResult:
 
 
 def _check_cli_path_shadow(result: DoctorResult) -> None:
+    """Keep an advisory PATH probe from aborting the other doctor checks."""
+    try:
+        _probe_cli_path_shadow(result)
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        result.cli_path_shadow = {"state": "warning", "reason": reason}
+        result.issues.append(DoctorIssue("cli_path_shadow_check_failed", "warning", reason))
+
+
+def _probe_cli_path_shadow(result: DoctorResult) -> None:
     prefix = Path(sys.prefix).resolve()
     keg = next(
         (p for p in (prefix, *prefix.parents) if p.parent.name == "brainlayer" and p.parent.parent.name == "Cellar"),
@@ -269,35 +280,49 @@ def _check_cli_path_shadow(result: DoctorResult) -> None:
         return
     paths: list[Path] = []
     seen: set[Path] = set()
+    probe_failed = False
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         candidate = Path(directory) / "brainlayer"
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            resolved = candidate.resolve()
-            if resolved not in seen:
-                paths.append(candidate.absolute())
-                seen.add(resolved)
-    severity = "fatal" if not paths or not paths[0].resolve().is_relative_to(keg) else "warning"
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                resolved = candidate.resolve()
+                if resolved not in seen:
+                    paths.append(candidate.absolute())
+                    seen.add(resolved)
+        except OSError as exc:
+            probe_failed = True
+            result.issues.append(DoctorIssue("cli_path_shadow_probe_failed", "warning", f"Skipped {candidate}: {exc}"))
+    severity = "fatal" if paths and not paths[0].resolve().is_relative_to(keg) else "warning"
     duplicates = [p for p in paths if not p.resolve().is_relative_to(keg)]
     result.cli_path_shadow = {
-        "state": severity if duplicates or not paths else "pass",
+        "state": severity if duplicates or not paths or probe_failed else "pass",
         "paths": [str(p) for p in paths],
         "prefix": str(keg),
     }
     if not paths:
-        result.issues.append(DoctorIssue("cli_path_shadow", "fatal", "No brainlayer executable on PATH"))
+        result.issues.append(DoctorIssue("cli_path_shadow", "warning", "No brainlayer executable on PATH"))
     for path in duplicates:
+        severity = "fatal" if path == paths[0] else "warning"
         kind, remedy = "plain script", "put the running BrainLayer keg bin directory first on PATH"
         try:
             with path.open() as stream:
                 shebang = stream.readline(4096).strip()
-            interpreter = Path(shebang[2:]) if shebang.startswith("#!/") else None
+            interpreter = Path(shebang[2:].split()[0]) if shebang.startswith("#!/") else None
             if interpreter and interpreter.name.startswith("python"):
                 install = interpreter.parent.parent
                 metadata = list(install.glob("lib/python*/site-packages/brainlayer-*.dist-info/direct_url.json"))
-                user_metadata = list(
-                    (Path.home() / "Library/Python").glob("*/lib/python/site-packages/brainlayer-*.dist-info")
-                )
-                user_metadata += list((Path.home() / ".local/lib").glob("python*/site-packages/brainlayer-*.dist-info"))
+                version_match = re.search(r"python(\d+\.\d+)$", interpreter.resolve().name)
+                version = version_match.group(1) if version_match else None
+                user_metadata = []
+                if version:
+                    user_metadata = list(
+                        (Path.home() / "Library/Python" / version / "lib/python/site-packages").glob(
+                            "brainlayer-*.dist-info"
+                        )
+                    )
+                    user_metadata += list(
+                        (Path.home() / ".local/lib" / f"python{version}/site-packages").glob("brainlayer-*.dist-info")
+                    )
                 if any(json.loads(p.read_text()).get("dir_info", {}).get("editable") is True for p in metadata):
                     kind = "editable install"
                 env = "PYTHONNOUSERSITE=1 " if user_metadata else ""
