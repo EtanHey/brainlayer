@@ -644,14 +644,15 @@ struct BrainBarSettingsFooterPresentation {
     }
 }
 
+/// The settings pages. The old General page only pointed at Dashboard, Jobs and Backups; it is
+/// absorbed into Dashboard, which is now the window's first sidebar item (#963).
 enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
-    case general, jobs, backups, advanced
+    case jobs, backups, advanced
 
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var symbol: String {
         switch self {
-        case .general: "slider.horizontal.3"
         case .jobs: "clock.arrow.circlepath"
         case .backups: "externaldrive"
         case .advanced: "gearshape.2"
@@ -661,16 +662,43 @@ enum BrainBarSettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .jobs: [.ingest, .maintenance]
         case .backups: [.backups]
-        case .general, .advanced: []
+        case .advanced: []
         }
     }
     var advancedJobs: [BrainLayerLaunchdJob] { self == .advanced ? BrainLayerLaunchdJobGroup.advancedJobs : [] }
 }
 
+/// The one window's sidebar (#963): Dashboard first, then each settings page.
+enum BrainBarSidebarItem: String, CaseIterable, Identifiable {
+    case dashboard, jobs, backups, advanced
+
+    init(section: BrainBarSettingsSection) {
+        switch section {
+        case .jobs: self = .jobs
+        case .backups: self = .backups
+        case .advanced: self = .advanced
+        }
+    }
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String { settingsSection?.symbol ?? "gauge" }
+
+    /// The settings page this item shows, or nil for Dashboard.
+    var settingsSection: BrainBarSettingsSection? {
+        switch self {
+        case .dashboard: nil
+        case .jobs: .jobs
+        case .backups: .backups
+        case .advanced: .advanced
+        }
+    }
+}
+
 @MainActor
 final class BrainBarSettingsNavigation: ObservableObject {
-    @Published private(set) var selected: BrainBarSettingsSection = .general
-    init(selected: BrainBarSettingsSection = .general) { self.selected = selected }
+    @Published private(set) var selected: BrainBarSettingsSection = .jobs
+    init(selected: BrainBarSettingsSection = .jobs) { self.selected = selected }
     func select(_ section: BrainBarSettingsSection) { selected = section }
 }
 
@@ -678,6 +706,8 @@ struct BrainBarSettingsView: View {
     @StateObject var viewModel: BrainBarSettingsViewModel
     @StateObject private var navigation = BrainBarSettingsNavigation()
     private let activationRevision: Int
+    /// False inside the one BrainBar window, whose own sidebar lists these pages (#963).
+    private let showsSidebar: Bool
 
     static func observabilityURL(
         databasePath: String,
@@ -687,8 +717,9 @@ struct BrainBarSettingsView: View {
     }
 
     init(databasePath: String, activationRevision: Int = 0,
-         navigation: BrainBarSettingsNavigation = BrainBarSettingsNavigation()) {
+         navigation: BrainBarSettingsNavigation = BrainBarSettingsNavigation(), showsSidebar: Bool = true) {
         self.activationRevision = activationRevision
+        self.showsSidebar = showsSidebar
         _navigation = StateObject(wrappedValue: navigation)
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
             observabilityURL: Self.observabilityURL(databasePath: databasePath),
@@ -697,20 +728,30 @@ struct BrainBarSettingsView: View {
         ))
     }
 
-    init(viewModel: BrainBarSettingsViewModel, initialSection: BrainBarSettingsSection = .general) {
+    init(viewModel: BrainBarSettingsViewModel, initialSection: BrainBarSettingsSection = .jobs) {
         activationRevision = 0
+        showsSidebar = true
         _viewModel = StateObject(wrappedValue: viewModel)
         _navigation = StateObject(wrappedValue: BrainBarSettingsNavigation(selected: initialSection))
+    }
+
+    init(viewModel: BrainBarSettingsViewModel, navigation: BrainBarSettingsNavigation, showsSidebar: Bool) {
+        activationRevision = 0
+        self.showsSidebar = showsSidebar
+        _viewModel = StateObject(wrappedValue: viewModel)
+        _navigation = StateObject(wrappedValue: navigation)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                sidebar
-                    .frame(width: 214)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .background(Color.brainBarGlassSecondary)
-                Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
+                if showsSidebar {
+                    sidebar
+                        .frame(width: 214)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .background(Color.brainBarGlassSecondary)
+                    Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
+                }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         header
@@ -836,12 +877,6 @@ struct BrainBarSettingsView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch navigation.selected {
-        case .general:
-            VStack(alignment: .leading, spacing: 12) {
-                sectionHeading("BrainBar")
-                Text("Monitor memory activity on Dashboard. Manage services in Jobs and Backups.")
-                    .foregroundStyle(Color.brainBarTextMuted)
-            }
         case .jobs:
             VStack(alignment: .leading, spacing: 16) {
                 jobsGrid

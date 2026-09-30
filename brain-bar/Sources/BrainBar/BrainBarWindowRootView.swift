@@ -12,7 +12,7 @@ struct BrainBarWindowRootView: View {
     @StateObject private var windowObserver: BrainBarWindowObserver
 #if BRAINBAR_UI
     private var settingsViewFactory: (String, Int, BrainBarSettingsNavigation) -> AnyView = {
-        AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1, navigation: $2))
+        AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1, navigation: $2, showsSidebar: false))
     }
 #endif
 
@@ -41,22 +41,31 @@ struct BrainBarWindowRootView: View {
                 collector: runtime.collector,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
                 databasePath: runtime.databasePath,
-                selectedTab: $panelState.selectedTab
+                showsRefresh: panelState.selectedTab == .dashboard
             )
             .background(GeometryReader { proxy in
                 Color.clear.preference(key: BrainBarHeaderHeightKey.self, value: proxy.size.height)
             })
 
-            ZStack {
-                dashboardContent
-                    .brainBarTabVisibility(panelState.selectedTab == .dashboard)
+            HStack(spacing: 0) {
+#if BRAINBAR_UI
+                // #963: one window, one sidebar. Dashboard is its first item, replacing the old
+                // Dashboard/Settings tabs.
+                BrainBarWindowSidebar(panelState: panelState)
+                Rectangle().fill(Color.brainBarBorderSoft).frame(width: 1)
+#endif
+                ZStack {
+                    dashboardContent
+                        .brainBarTabVisibility(panelState.selectedTab == .dashboard)
 
 #if BRAINBAR_UI
-                if panelState.selectedTab == .settings {
-                    settingsContent
-                        .brainBarTabVisibility(panelState.selectedTab == .settings)
-                }
+                    if panelState.selectedTab == .settings {
+                        settingsContent
+                            .brainBarTabVisibility(panelState.selectedTab == .settings)
+                    }
 #endif
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -684,24 +693,14 @@ private struct BrainBarWindowHeader: View {
     let collector: StatsCollector?
     let hotkeyStatus: String
     let databasePath: String?
-    @Binding var selectedTab: BrainBarTab
+    let showsRefresh: Bool
 
     var body: some View {
         VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
                 brand
                 Spacer(minLength: 12)
-                if selectedTab == .dashboard { refreshControls }
-                Picker("Section", selection: $selectedTab) {
-                    ForEach(BrainBarTab.allCases) { tab in
-                        Label(tab.title, systemImage: tab.systemImage)
-                            .tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 190)
-                .accessibilityIdentifier("brainbar.shell.destination")
+                if showsRefresh { refreshControls }
                 BrainBarAppControlMenu(databasePath: databasePath)
             }
 
@@ -729,6 +728,66 @@ private struct BrainBarWindowHeader: View {
     }
 
 }
+
+#if BRAINBAR_UI
+/// The window's navigation (#963): Dashboard, then the settings pages. Every
+/// `brainbar://dashboard|settings/<section>` route selects one of these rows.
+private struct BrainBarWindowSidebar: View {
+    @ObservedObject var panelState: BrainBarDashboardPanelState
+    @ObservedObject private var navigation: BrainBarSettingsNavigation
+
+    static let width: CGFloat = 176
+
+    init(panelState: BrainBarDashboardPanelState) {
+        self.panelState = panelState
+        navigation = panelState.settingsNavigation
+    }
+
+    var body: some View {
+        let selection = panelState.sidebarSelection
+        VStack(alignment: .leading, spacing: 5) {
+            row(.dashboard, selection: selection)
+            Text("Settings")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .textCase(.uppercase)
+                .foregroundStyle(Color.brainBarTextMuted)
+                .padding(.horizontal, 11)
+                .padding(.top, 14)
+                .padding(.bottom, 2)
+            ForEach(BrainBarSidebarItem.allCases.filter { $0 != .dashboard }) { item in
+                row(item, selection: selection)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(width: Self.width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color.brainBarGlassSecondary)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("brainbar.shell.destination")
+    }
+
+    private func row(_ item: BrainBarSidebarItem, selection: BrainBarSidebarItem) -> some View {
+        Button {
+            panelState.select(item)
+        } label: {
+            Label(item.title, systemImage: item.symbol)
+                .font(.system(size: 13, weight: selection == item ? .semibold : .medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .foregroundStyle(selection == item ? Color.brainBarTextPrimary : Color.brainBarTextSecondary)
+                .background(selection == item ? Color.brainBarAccent.opacity(0.22) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selection == item ? .isSelected : [])
+        .accessibilityIdentifier("brainbar.sidebar.\(item.rawValue)")
+    }
+}
+#endif
 
 private struct BrainBarHeaderRefreshControls: View {
     @ObservedObject private var collector: StatsCollector
@@ -3229,7 +3288,7 @@ enum BrainBarUnifiedWindowPreview {
         collector: StatsCollector,
         settingsViewModel: BrainBarSettingsViewModel,
         panelState: BrainBarDashboardPanelState,
-        section: BrainBarSettingsSection = .general
+        section: BrainBarSettingsSection = .jobs
     ) -> AnyView {
         let runtime = BrainBarRuntime()
         runtime.install(
@@ -3237,14 +3296,15 @@ enum BrainBarUnifiedWindowPreview {
             database: nil,
             databasePath: "/tmp/brainbar-render-fixture.db"
         )
-        panelState.selectedTab = .settings
+        panelState.select(BrainBarSidebarItem(section: section))
+        let navigation = panelState.settingsNavigation
         return AnyView(
             BrainBarWindowRootView(
                 runtime: runtime,
                 managesWindowFrame: false,
                 panelState: panelState,
                 settingsViewFactory: { _, _, _ in
-                    AnyView(BrainBarSettingsView(viewModel: settingsViewModel, initialSection: section))
+                    AnyView(BrainBarSettingsView(viewModel: settingsViewModel, navigation: navigation, showsSidebar: false))
                 }
             )
             .environment(\.colorScheme, .dark)

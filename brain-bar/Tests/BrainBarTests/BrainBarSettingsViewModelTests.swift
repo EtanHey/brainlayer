@@ -150,7 +150,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let before = try Data(contentsOf: store.configURL)
         let navigation = BrainBarSettingsNavigation()
-        XCTAssertEqual(navigation.selected, .general)
+        XCTAssertEqual(navigation.selected, .jobs, "General was absorbed into Dashboard (#963)")
         for section in BrainBarSettingsSection.allCases {
             navigation.select(section)
             XCTAssertEqual(navigation.selected, section)
