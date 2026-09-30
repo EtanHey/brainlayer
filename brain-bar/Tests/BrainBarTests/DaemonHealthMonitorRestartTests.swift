@@ -323,6 +323,7 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: "/nonexistent/brainbar-976-r3.db",
             daemonMonitor: monitor(table),
+            agentActivityMonitor: .synthetic,
             autoRefreshInterval: 3600,
             nowProvider: { Self.now },
             dashboardStatsProvider: { throw StubStatsUnavailable() }
@@ -387,6 +388,7 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: "/nonexistent/brainbar-972.db",
             daemonMonitor: monitor(table),
+            agentActivityMonitor: .synthetic,
             autoRefreshInterval: 3600,
             nowProvider: { Self.now },
             brainBusEvents: bus,
@@ -417,6 +419,7 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
         ])
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: "/nonexistent/brainbar-972-ui.db",
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil,
             daemonMonitor: monitor(table)
         )

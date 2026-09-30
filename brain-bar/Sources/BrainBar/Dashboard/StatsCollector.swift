@@ -255,7 +255,7 @@ final class StatsCollector: ObservableObject {
         watcherProcessProbe: any WatcherProcessProbing = StaticWatcherProcessProbe(
             result: .failure("watcher process probe not configured")
         ),
-        agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
+        agentActivityMonitor: AgentActivityMonitor,
         agentActivitySampleInterval: TimeInterval = 5,
         statsRefreshCoalesceInterval: TimeInterval = 5,
         liveStatsRefreshDelay: TimeInterval = 0.2,
@@ -1030,7 +1030,8 @@ extension StatsCollector {
         // because start()/requestRefresh() are not called on a fixture.
         let collector = StatsCollector(
             dbPath: "/nonexistent/brainbar-fixture.db",
-            daemonMonitor: DaemonHealthMonitor(targetPID: 0)
+            daemonMonitor: DaemonHealthMonitor(targetPID: 0),
+            agentActivityMonitor: AgentActivityMonitor(snapshotProvider: { nil }, executablePathResolver: { _ in nil })
         )
         collector.stats = stats
         collector.daemon = daemon

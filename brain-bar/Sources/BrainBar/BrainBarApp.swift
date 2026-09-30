@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[BrainBar] Starting UI shell; database at %@", dbPath)
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: dbPath,
+            agentActivityMonitor: .live,
             brainBusEvents: BrainBusClient()
         )
         self.collector = collector

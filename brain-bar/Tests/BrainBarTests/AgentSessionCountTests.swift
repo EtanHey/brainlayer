@@ -66,8 +66,26 @@ final class AgentSessionCountTests: XCTestCase {
         row(802, 1, "socat", "socat STDIO EXEC:/Users/dev/.local/bin/claude mcp serve"),
     ])).joined(separator: "\n")
 
+    /// The kernel's executable path for the busy machine's app-bundled rows, as
+    /// `proc_pidpath` answers live. Only the path decides bundling (#990); every other row's
+    /// path is outside any bundle, so it resolves to nil here.
+    static let busyMachinePaths: [Int32: String] = [
+        403: "/Users/dev/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseClient",
+        500: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+        501: "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+        502: "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+        503: "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+        504: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        505: "/Applications/ChatGPT.app/Contents/Resources/codex-code-mode-host",
+        506: "/Applications/ChatGPT.app/Contents/Resources/codex",
+    ]
+
+    static func parseBusyMachine(_ snapshot: String = busyMachine) -> AgentActivitySnapshot {
+        AgentActivityMonitor.parse(snapshot, executablePath: { busyMachinePaths[$0] })
+    }
+
     func test_counts_one_per_top_level_session_on_a_busy_machine() {
-        let activity = AgentActivityMonitor.parse(Self.busyMachine)
+        let activity = Self.parseBusyMachine()
 
         XCTAssertEqual(activity.count(for: .claude), 2)
         XCTAssertEqual(activity.count(for: .codex), 2)
@@ -80,7 +98,7 @@ final class AgentSessionCountTests: XCTestCase {
         let rows = Self.busyMachine.split(separator: "\n").filter { $0.contains("/Applications/ChatGPT.app") }
         XCTAssertEqual(rows.count, 7)
 
-        let activity = AgentActivityMonitor.parse(rows.joined(separator: "\n"))
+        let activity = Self.parseBusyMachine(rows.joined(separator: "\n"))
 
         XCTAssertEqual(activity.totalActiveAgents, 0)
     }
@@ -109,7 +127,8 @@ final class AgentSessionCountTests: XCTestCase {
 
     func test_ucomm_with_spaces_does_not_shift_the_args_column() {
         let activity = AgentActivityMonitor.parse(
-            Self.row(30, 1, "Claude Helper", "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process")
+            Self.row(30, 1, "Claude Helper", "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process"),
+            executablePath: { _ in "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper" }
         )
 
         XCTAssertEqual(activity.totalActiveAgents, 0)
@@ -311,8 +330,99 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.totalActiveAgents, 6)
     }
 
+    // MARK: #990: the bundle decision is the kernel path's alone
+
+    /// #990: `/Applications/…` plus any later `.app/` argument used to mark the row app-bundled
+    /// from args text, before the kernel path was consulted. A CLI installed under
+    /// /Applications (outside any bundle) whose arguments name a bundle is a session.
+    func test_a_cli_under_applications_with_a_later_app_argument_is_a_session() {
+        let activity = Self.parse([
+            Self.row(960, 1, "codex", "/Applications/Tools/codex --add-dir /Users/u/Foo.app/Contents"),
+        ], paths: [960: "/Applications/Tools/codex"])
+
+        XCTAssertEqual(activity.count(for: .codex), 1)
+    }
+
+    /// #990: a noise word in a real CLI's ARGUMENTS never drops it. The row is recognised by
+    /// its argv[0] binary name, so "/Applications/Claude.app", "crashpad" or "grep " in its
+    /// args are just arguments.
+    func test_noise_words_in_a_real_clis_arguments_do_not_hide_it() {
+        let activity = Self.parse([
+            Self.row(970, 1, "2.1.281", "/opt/homebrew/bin/claude --add-dir /Applications/Claude.app/Contents/Resources"),
+            Self.row(971, 1, "2.1.281", "/Users/u/.local/bin/claude -p why does crashpad restart"),
+            Self.row(972, 1, "codex", "/opt/homebrew/bin/codex exec grep the logs for claude helper"),
+        ], paths: [
+            970: "/opt/homebrew/bin/claude",
+            971: "/Users/u/.local/share/claude/versions/2.1.281",
+            972: "/opt/homebrew/bin/codex",
+        ])
+
+        XCTAssertEqual(activity.count(for: .claude), 2)
+        XCTAssertEqual(activity.count(for: .codex), 1)
+    }
+
+    /// #990: the genuine non-session filters still hold, now decided by the kernel path or
+    /// the row's own executable, never by a later argument.
+    func test_genuine_non_session_filters_still_hold() {
+        let activity = Self.parse([
+            Self.row(980, 1, "rg", "rg -n /Applications/Claude.app /claude /Users/u"),
+            Self.row(981, 1, "grep", "grep -r codex exec /Users/u"),
+            Self.row(982, 1, "Claude Helper", "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process"),
+            Self.row(983, 1, "codex", "/Applications/ChatGPT.app/Contents/Resources/codex --orphaned-helper"),
+            Self.row(984, 1, "2.1.281", "/System/Library/Private/claude --model x"),
+            Self.row(985, 1, "ps", "ps -axo pid=,ppid=,ucomm=,args= claude codex"),
+        ], paths: [
+            980: "/opt/homebrew/bin/rg",
+            981: "/usr/bin/grep",
+            982: "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+            983: "/Applications/ChatGPT.app/Contents/Resources/codex",
+            984: "/System/Library/Private/claude",
+            985: "/bin/ps",
+        ])
+
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    // MARK: #982: two more non-session roles
+
+    /// #982: Codex global flags, value-taking or boolean, may precede the role. The role is the
+    /// first positional after every flag, so `codex --profile work app-server` is the daemon.
+    func test_codex_global_flags_before_the_role_are_skipped() {
+        let activity = Self.parse([
+            Self.row(1000, 1, "codex", "codex --profile work app-server"),
+            Self.row(1001, 1, "codex", "codex -m gpt-5 --search mcp-server"),
+            Self.row(1002, 1, "codex", "codex --enable code_mode --disable web_search app-server --listen unix://"),
+            Self.row(1003, 1, "codex", "/opt/homebrew/bin/codex -s workspace-write -a never app-server"),
+            Self.row(1004, 1, "codex", "codex -C /Users/u/repo --add-dir /Users/u/other --oss --local-provider ollama mcp-server"),
+            Self.row(1005, 1, "codex", "codex --model=gpt-5 --remote ws://127.0.0.1:1 --remote-auth-token-env TOKEN -i shot.png app-server"),
+        ], paths: [:])
+
+        XCTAssertEqual(activity.totalActiveAgents, 0)
+    }
+
+    /// #982: `remote-control` manages the app-server daemon (Codex) or bridges sessions to
+    /// claude.ai (Claude); it is not itself a session. Claude's `--remote-control` FLAG starts
+    /// an interactive session and still counts, as does the word for another CLI.
+    func test_remote_control_roles_are_not_sessions() {
+        let activity = Self.parse([
+            Self.row(1010, 1, "codex", "codex remote-control start"),
+            Self.row(1011, 1, "codex", "codex --profile work remote-control"),
+            Self.row(1012, 1, "2.1.281", "claude remote-control"),
+            Self.row(1013, 1, "2.1.281", "/Users/u/.local/bin/claude remote-control --name laptop"),
+            Self.row(1020, 1, "2.1.281", "claude --remote-control laptop"),
+            Self.row(1021, 1, "codex", "codex --profile work exec review the diff"),
+            Self.row(1022, 1, "codex", "codex --profile work"),
+            Self.row(1023, 1, "gemini", "gemini remote-control"),
+        ], paths: [:])
+
+        XCTAssertEqual(activity.count(for: .claude), 1)
+        XCTAssertEqual(activity.count(for: .codex), 2)
+        XCTAssertEqual(activity.count(for: .gemini), 1)
+        XCTAssertEqual(activity.totalActiveAgents, 4)
+    }
+
     func test_runtime_row_shows_sessions_with_the_per_cli_breakdown_and_a_definition() {
-        let activity = AgentActivityMonitor.parse(Self.busyMachine)
+        let activity = Self.parseBusyMachine()
 
         XCTAssertEqual(activity.summaryText, "6 agent sessions live")
         XCTAssertEqual(activity.breakdownText, "2 Claude · 2 Codex · 1 Gemini · 1 Cursor")

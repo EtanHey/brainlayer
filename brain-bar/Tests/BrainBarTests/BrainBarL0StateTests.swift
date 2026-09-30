@@ -50,6 +50,7 @@ final class BrainBarL0StateTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: "/nonexistent/brainbar-l0-state.db",
             daemonMonitor: DaemonHealthMonitor(targetPID: 0),
+            agentActivityMonitor: .synthetic,
             dashboardStatsProvider: { hotStats },
             signalCoverageProvider: provider.fetch,
             signalCoverageStartDelay: 0,
