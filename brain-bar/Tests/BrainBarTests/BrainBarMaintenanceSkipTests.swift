@@ -273,8 +273,13 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
     private let weeklyPlist = "<key>StandardOutPath</key><string>/logs/weekly.out.log</string>"
     private let nightlyPlist = "<key>StandardOutPath</key><string>/logs/nightly.out.log</string>"
 
-    private func sources(_ files: [String: Data], modified: [String: Date] = [:]) -> BrainBarBackupSources {
-        BrainBarBackupSources(
+    private func sources(
+        _ files: [String: Data],
+        modified: [String: Date] = [:],
+        changing: Set<String> = []
+    ) -> BrainBarBackupSources {
+        let stamp = lastRun
+        return BrainBarBackupSources(
             paths: .init(
                 launchAgents: URL(fileURLWithPath: "/LA"),
                 databaseLog: URL(fileURLWithPath: "/d/backup-daily.log"),
@@ -286,7 +291,11 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
             readFile: { files[$0.path] },
             listDirectory: { _ in [] },
             isRegularFile: { _ in true },
-            modificationDate: { modified[$0.path] }
+            readStdoutTail: { url in
+                if changing.contains(url.path) { return .changedWhileReading }
+                guard let data = files[url.path] else { return .unreadable }
+                return .read(data, modifiedAt: modified[url.path] ?? stamp)
+            }
         )
     }
 
@@ -352,11 +361,91 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         let unreadable = sources(["/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist)]).maintenanceEvidence()
         XCTAssertEqual(unreadable.runRecords[.maintenanceWeekly], .unavailable("weekly.out.log could not be read"))
 
-        let noDate = sources([
+        let changed = sources([
             "/LA/com.brainlayer.maintenance-weekly.plist": plist(weeklyPlist),
             "/logs/weekly.out.log": Data(#"{"reason": "\#(quietWindow)", "status": "aborted"}"#.utf8),
-        ]).maintenanceEvidence()
-        XCTAssertEqual(noDate.runRecords[.maintenanceWeekly], .unavailable("weekly.out.log has no modification time"))
+        ], changing: ["/logs/weekly.out.log"]).maintenanceEvidence()
+        XCTAssertEqual(changed.runRecords[.maintenanceWeekly], .unavailable("weekly.out.log changed while reading"))
+    }
+
+    // MARK: #1039 R2 B1: the bytes and their mtime come from one stable snapshot
+
+    private func tempLog(_ text: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("maint-race-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("weekly.out.log")
+        try Data(text.utf8).write(to: url)
+        return url
+    }
+
+    private static func append(_ text: String, to url: URL) {
+        let handle = try! FileHandle(forWritingTo: url)
+        handle.seekToEndOfFile()
+        handle.write(Data(text.utf8))
+        try! handle.close()
+    }
+
+    private func mtime(_ url: URL) -> timespec {
+        var info = stat()
+        XCTAssertEqual(stat(url.path, &info), 0)
+        return info.st_mtimespec
+    }
+
+    func testAStableLogReadsItsBytesWithThePreReadMtime() throws {
+        let text = #"{"reason": "\#(quietWindow)", "status": "aborted"}"# + "\n"
+        let url = try tempLog(text)
+        let stamp = mtime(url)
+        let expected = Date(timeIntervalSince1970: TimeInterval(stamp.tv_sec) + TimeInterval(stamp.tv_nsec) / 1_000_000_000)
+        XCTAssertEqual(BrainBarStableFileReader.readTail(url, maxBytes: 64 * 1024), .read(Data(text.utf8), modifiedAt: expected))
+        // Only the tail is read, but the snapshot still carries the whole file's mtime.
+        XCTAssertEqual(BrainBarStableFileReader.readTail(url, maxBytes: 9), .read(Data(text.utf8.suffix(9)), modifiedAt: expected))
+        XCTAssertEqual(
+            BrainBarStableFileReader.readTail(url.deletingLastPathComponent().appendingPathComponent("missing.log"), maxBytes: 64),
+            .unreadable
+        )
+    }
+
+    /// The reviewer's interleaving: yesterday's benign abort is read, then this run appends its
+    /// failed-quiesce abort before the mtime is sampled. That snapshot is unstable, never Skipped.
+    func testAnAppendBetweenTheReadAndTheSecondStatIsUnknownNeverSkipped() throws {
+        let url = try tempLog(#"{"reason": "\#(quietWindow)", "status": "aborted"}"# + "\n")
+        let failure = #"{"reason": "failed to quiesce launchd service com.brainlayer.watch; it remains loaded", "status": "aborted"}"# + "\n"
+        let read = BrainBarStableFileReader.readTail(url, maxBytes: 64 * 1024, afterRead: { Self.append(failure, to: url) })
+        XCTAssertEqual(read, .changedWhileReading)
+
+        let raced = try tempLog(#"{"reason": "\#(quietWindow)", "status": "aborted"}"# + "\n")
+        let files = ["/LA/com.brainlayer.maintenance-weekly.plist": plist("<key>StandardOutPath</key><string>\(raced.path)</string>")]
+        var evidenceSources = sources(files)
+        evidenceSources.readStdoutTail = { url in
+            BrainBarStableFileReader.readTail(url, maxBytes: 64 * 1024, afterRead: { Self.append(failure, to: url) })
+        }
+        let evidence = evidenceSources.maintenanceEvidence()
+        XCTAssertEqual(evidence.runRecords[.maintenanceWeekly], .unavailable("weekly.out.log changed while reading"))
+        let status = BrainLayerLaunchdJobGroup.maintenance.status(
+            settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: [.maintenanceNightly: observation(exit: 0), .maintenanceWeekly: observation(exit: 75)],
+            formatDate: show,
+            maintenance: .init(weeklyCompletion: .completed(daysAgo(2)), runRecords: evidence.runRecords),
+            now: now
+        )
+        XCTAssertEqual(status.health, .unknown)
+        XCTAssertEqual(status.attentionReason,
+                       "Weekly exited 75 at \(show(lastRun)); reason unavailable (weekly.out.log changed while reading).")
+    }
+
+    /// A size change with the mtime restored to its pre-read value is still an unstable snapshot.
+    func testASizeChangeWithTheSameMtimeIsUnstable() throws {
+        let url = try tempLog(#"{"reason": "\#(quietWindow)", "status": "aborted"}"# + "\n")
+        let before = mtime(url)
+        let read = BrainBarStableFileReader.readTail(url, maxBytes: 64 * 1024, afterRead: {
+            Self.append("{\"status\": \"aborted\", \"reason\": \"x\"}\n", to: url)
+            var times = [before, before]
+            XCTAssertEqual(utimensat(AT_FDCWD, url.path, &times, 0), 0)
+        })
+        XCTAssertEqual(mtime(url).tv_sec, before.tv_sec)
+        XCTAssertEqual(mtime(url).tv_nsec, before.tv_nsec)
+        XCTAssertEqual(read, .changedWhileReading)
     }
 
     /// N1: an unreadable or wholly malformed history is not "no completed pass".
