@@ -2,9 +2,9 @@
 
 Two directions, both fail closed:
 
-- ``scrub_for_cloud`` runs on every text sent to a cloud model. If scrubbing
-  raises or leaves quarantined tokens, it raises ``CloudScrubError`` and the
-  caller must not send.
+- ``scrub_for_cloud`` runs on every text sent to a cloud model. It
+  redacts provider secrets and quarantine spans. If scrubbing raises, it
+  raises ``CloudScrubError`` and the caller must not send.
 - ``scrub_llm_output`` runs on every LLM output value before it is persisted.
   A cloud model copies tokens from its prompt into summaries and key facts,
   so output is scrubbed even when the input already was. If scrubbing raises,
@@ -31,29 +31,38 @@ class CloudScrubError(RuntimeError):
     """Secret scrubbing failed; the text must not be sent or persisted."""
 
 
-def _scrub_text(text: str, *, reject_quarantine: bool = False) -> str:
+def _scrub_text(text: str) -> str:
     try:
         result = scrub_secrets(text)
         scrubbed = result.text
-        quarantined = reject_quarantine and bool(result.quarantine)
     except Exception as exc:
         raise CloudScrubError(f"secret scrub failed ({type(exc).__name__}); refusing to pass text on") from None
     if not isinstance(scrubbed, str):
         raise CloudScrubError("secret scrub returned non-text; refusing to pass text on")
-    if quarantined:
-        raise CloudScrubError("secret scrub found quarantined tokens; refusing to send text")
     return scrubbed
 
 
 def scrub_for_cloud(text: str) -> str:
-    """Redact known secrets and refuse text containing unresolved quarantine.
+    """Redact provider secrets and quarantine spans before a remote send.
 
-    Storage keeps quarantine for local review; a remote send must not expose it.
-    Refusal avoids translating original-text offsets after provider redactions.
+    A second pass finds quarantine offsets in the already-redacted text, so
+    provider replacements cannot shift them. Storage retains its local-review
+    quarantine policy; cloud prompts redact even identifier-like false positives.
     """
     if not isinstance(text, str):
         raise CloudScrubError(f"remote LLM payload must be text, got {type(text).__name__}")
-    return _scrub_text(text, reject_quarantine=True)
+    scrubbed = _scrub_text(text)
+    try:
+        quarantine = scrub_secrets(scrubbed).quarantine
+        parts: list[str] = []
+        cursor = 0
+        for token in quarantine:
+            parts.extend((scrubbed[cursor : token.start], "[REDACTED:quarantine]"))
+            cursor = token.end
+        parts.append(scrubbed[cursor:])
+        return "".join(parts)
+    except Exception as exc:
+        raise CloudScrubError(f"secret scrub failed ({type(exc).__name__}); refusing to pass text on") from None
 
 
 def scrub_llm_output(value: T) -> T:

@@ -93,9 +93,8 @@ def test_oauth_tokens_are_scrubbed_at_rest_and_in_nested_llm_output(provider, tm
 
 
 @pytest.mark.parametrize("position", ["alone", "before_provider", "after_provider"])
-def test_quarantine_fails_closed_before_gemini_send(position, monkeypatch):
+def test_quarantine_is_redacted_before_gemini_send(position, monkeypatch):
     from brainlayer import enrichment_controller as controller
-    from brainlayer.pipeline.cloud_scrub import CloudScrubError
     from brainlayer.pipeline.secret_scrub import scrub_secrets
 
     # Fixed alphabet filler exercises entropy without a real credential.
@@ -109,46 +108,127 @@ def test_quarantine_fails_closed_before_gemini_send(position, monkeypatch):
     _neutralize_gemini_cost_accounting(monkeypatch, controller)
     client = _FakeGeminiClient()
 
-    with pytest.raises(CloudScrubError) as error:
-        controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+    controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
 
-    assert token not in str(error.value)
-    assert client.models.sent == []
+    # The long provider placeholder itself is quarantined on the second pass.
+    expected = prompt.replace(provider, "[[REDACTED:quarantine]]").replace(token, "[REDACTED:quarantine]")
+    assert client.models.sent == [expected]
 
 
 @pytest.mark.parametrize("sender", ["call_groq", "call_glm", "call_mlx"])
-def test_quarantine_never_reaches_http_transport(sender, monkeypatch):
+def test_quarantine_is_redacted_in_http_transport(sender, monkeypatch):
     from brainlayer.pipeline import enrichment
-    from brainlayer.pipeline.cloud_scrub import CloudScrubError
 
     monkeypatch.setattr(enrichment, "GROQ_API_KEY", "test-not-a-key")
     sent = _capture_requests_post(monkeypatch, enrichment.requests)
     token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-    with pytest.raises(CloudScrubError):
-        getattr(enrichment, sender)(token)
+    getattr(enrichment, sender)(token)
 
-    assert sent == []
+    assert len(sent) == 1
+    assert token not in sent[0]
+    assert "[REDACTED:quarantine]" in sent[0]
 
 
-def test_quarantine_blocks_batch_upload_without_rewriting_export(monkeypatch, tmp_path):
+def test_quarantine_is_redacted_in_batch_upload_and_export(monkeypatch, tmp_path):
     from brainlayer import cloud_backfill
-    from brainlayer.pipeline.cloud_scrub import CloudScrubError
 
     token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     export = tmp_path / "quarantined.jsonl"
     lines = [{"request": {"contents": [{"parts": [{"text": text}]}]}} for text in (_payload_with_every_token(), token)]
     original = "\n".join(json.dumps(line) for line in lines) + "\n"
     export.write_text(original, encoding="utf-8")
-    clients = []
+    uploaded = []
+    client = types.SimpleNamespace(
+        files=types.SimpleNamespace(
+            upload=lambda **kw: (
+                uploaded.append(Path(kw["file"]).read_text()) or types.SimpleNamespace(name="files/fake")
+            )
+        ),
+        batches=types.SimpleNamespace(
+            create=lambda **kw: types.SimpleNamespace(name="batches/fake", state="JOB_STATE_PENDING")
+        ),
+    )
     monkeypatch.setattr(cloud_backfill, "_raise_if_enrich_daily_cap_reached", lambda: None)
-    monkeypatch.setattr(cloud_backfill, "_get_genai_client", lambda: clients.append(1))
+    monkeypatch.setattr(cloud_backfill, "_get_genai_client", lambda: client)
 
-    with pytest.raises(CloudScrubError):
-        cloud_backfill.submit_gemini_batch(export, store=None)
+    assert cloud_backfill.submit_gemini_batch(export, store=None) == "batches/fake"
+    assert len(uploaded) == 1
+    assert token not in uploaded[0]
+    assert "[REDACTED:quarantine]" in uploaded[0]
+    _assert_no_token(uploaded[0], where="quarantined batch upload")
+    assert export.read_text(encoding="utf-8") == uploaded[0]
 
-    assert clients == []
-    assert export.read_text(encoding="utf-8") == original
+
+def test_second_cloud_scrub_pass_failure_prevents_send(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline import cloud_scrub
+
+    real_scrub = cloud_scrub.scrub_secrets
+    calls = []
+
+    def scrub(text):
+        calls.append(text)
+        if len(calls) == 2:
+            raise RuntimeError("synthetic failure")
+        return real_scrub(text)
+
+    monkeypatch.setattr(cloud_scrub, "scrub_secrets", scrub)
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    client = _FakeGeminiClient()
+    with pytest.raises(cloud_scrub.CloudScrubError):
+        controller._generate_content_with_rate_limit(client, "gemini-test", "ordinary prose", {}, None)
+    assert client.models.sent == []
+
+
+def test_cloud_quarantine_offsets_follow_provider_redaction():
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    prompt = f"😀 {FAKE_TOKENS['google_oauth_access']} {token}; {token}. done"
+    assert scrub_for_cloud(prompt) == "😀 [[REDACTED:quarantine]] [REDACTED:quarantine]; [REDACTED:quarantine]. done"
+
+
+def test_realtime_loop_marks_quarantined_chunk_and_advances(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.vector_store import VectorStore
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    client = _FakeGeminiClient()
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "cost"))
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: client)
+    monkeypatch.setattr(controller, "Sanitizer", types.SimpleNamespace(from_env=lambda: object()))
+    monkeypatch.setattr(controller, "build_external_prompt", lambda chunk, sanitizer: (chunk["content"], None))
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda *args: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *args, **kwargs: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *args, **kwargs: False)
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    store = VectorStore(tmp_path / "loop.db")
+    try:
+        for chunk_id, content in [
+            ("next", "The next ordinary chunk must also be enriched after the first chunk completes."),
+            ("quarantined", f"Implement {token} in the deployment helper."),
+        ]:
+            store.conn.cursor().execute(
+                "INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'claude_code')",
+                (chunk_id, content, len(content)),
+            )
+        assert controller.enrich_realtime(store, limit=1, since_hours=None).enriched == 1
+        row = (
+            store.conn.cursor()
+            .execute("SELECT enriched_at, enrich_status FROM chunks WHERE id = 'quarantined'")
+            .fetchone()
+        )
+        assert row[0] is not None and row[1] == "success"
+        assert [chunk["id"] for chunk in store.get_enrichment_candidates()] == ["next"]
+        assert controller.enrich_realtime(store, limit=1, since_hours=None).enriched == 1
+        assert store.get_enrichment_candidates() == []
+        assert len(client.models.sent) == 2
+        assert token not in client.models.sent[0]
+        assert "[REDACTED:quarantine]" in client.models.sent[0]
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize(

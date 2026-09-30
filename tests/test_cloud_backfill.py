@@ -779,3 +779,25 @@ def test_import_results_keeps_chunk_retryable_when_parse_fails(tmp_path, monkeyp
         assert row == (None, None, "1.0", None)
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("exporter", ["export_unenriched_chunks", "export_backlog_drain_chunks"])
+def test_export_advances_past_quarantined_chunk(exporter, tmp_path, monkeypatch):
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(cloud_backfill, "build_prompt", lambda chunk: chunk["content"])
+    store = VectorStore(tmp_path / "backfill.db")
+    try:
+        _insert_unenriched_chunk(store, "quarantined", f"Implement {token} in the deployment helper.")
+        _insert_unenriched_chunk(
+            store, "next", "This ordinary chunk must export after the chunk containing a quarantined identifier."
+        )
+        files = getattr(cloud_backfill, exporter)(store, max_chunks=2, no_sanitize=True)
+        lines = [json.loads(line) for path in files for line in path.read_text().splitlines()]
+        assert {line["key"] for line in lines} == {"quarantined", "next"}
+        prompt = next(line for line in lines if line["key"] == "quarantined")["request"]["contents"][0]["parts"][0][
+            "text"
+        ]
+        assert prompt == "Implement [REDACTED:quarantine] in the deployment helper."
+    finally:
+        store.close()
