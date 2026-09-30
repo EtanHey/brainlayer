@@ -178,7 +178,42 @@ def test_status_json_stays_safe_on_refresh_transport_failure(tmp_path):
             raise TransportError("private-payload")
 
     status = drive_credentials.credential_status(token_path=token, client_path=client, credentials_class=Offline)
-    assert status["state"] == "invalid" and "private-payload" not in json.dumps(status)
+    assert status["state"] == "valid" and "private-payload" not in json.dumps(status)
+
+
+@pytest.mark.parametrize("elapsed_days, expected", [(2, "valid"), (6.5, "expiring")])
+def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expected):
+    from google.auth.exceptions import TransportError
+
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    consented = datetime(2026, 9, 30, tzinfo=UTC)
+    data = json.loads(token.read_text())
+    data["consented_at"] = consented.isoformat()
+    token.write_text(json.dumps(data))
+
+    class Offline(FakeCredentials):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.expired = True
+
+        def refresh(self, request):
+            raise TransportError("private-payload")
+
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        credentials_class=Offline,
+        now=consented + timedelta(days=elapsed_days),
+    )
+    assert status["state"] == expected
+    assert status["expires_at"] == (consented + timedelta(days=7)).isoformat()
+    assert status["days_left"] == pytest.approx(7 - elapsed_days)
+    assert "offline" in status["reason"]
+    assert "private-payload" not in json.dumps(status)
 
 
 def test_authorize_writes_only_owned_token_with_drive_scope(tmp_path):
@@ -213,6 +248,27 @@ def test_authorize_writes_only_owned_token_with_drive_scope(tmp_path):
     assert json.loads(token.read_text())["consented_at"] == consented.isoformat()
     assert token.stat().st_mode & 0o777 == 0o600
     assert json.loads(legacy.read_text())["access_token"] == "old"
+
+
+def test_browser_denial_reports_cancelled_without_writing_token(tmp_path):
+    from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
+
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _client(client)
+
+    class Flow:
+        @classmethod
+        def from_client_secrets_file(cls, path, *, scopes):
+            return cls()
+
+        def run_local_server(self, **kwargs):
+            raise AccessDeniedError()
+
+    result = drive_credentials.authorize(token_path=token, client_path=client, flow_class=Flow)
+    assert result == {"status": "cancelled", "reason": "Google authorization cancelled"}
+    assert not token.exists()
 
 
 def test_testing_mode_consent_expires_after_seven_days(tmp_path):

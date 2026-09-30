@@ -247,10 +247,9 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
     except TransportError:
         return {
-            "state": "invalid",
-            "reason": "Drive authorization check temporarily unavailable; retry",
-            "expires_at": None,
-            "days_left": None,
+            "state": "expiring" if days_left is not None and days_left < 1 else "valid",
+            "reason": "status checked offline; last known state",
+            **timing,
         }
     except DriveCredentialError as exc:
         return {"state": "invalid", "reason": str(exc), "expires_at": None, "days_left": None}
@@ -272,6 +271,8 @@ def authorize(
     alert_reporter: Any = job_alerts.report,
 ) -> dict[str, str]:
     """Open Google consent in the system browser and save only BrainLayer's token."""
+    from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
+
     token, client, _ = _paths(token_path, client_path, None)
     if flow_class is None:
         from google_auth_oauthlib.flow import InstalledAppFlow
@@ -304,7 +305,7 @@ def authorize(
             _atomic_write(token, payload)
         _report_consent(alert_reporter, None)
         return {"status": "ok", "reason": "BrainLayer Drive authorization saved"}
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, AccessDeniedError):
         return {"status": "cancelled", "reason": "Google authorization cancelled"}
     except Exception as exc:
         if isinstance(exc, (socket.timeout, TimeoutError)) or type(exc).__name__ == "WSGITimeoutError":
