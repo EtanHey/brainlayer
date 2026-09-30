@@ -58,6 +58,45 @@ final class BrainBarAgentStoreWritesTests: XCTestCase {
         XCTAssertEqual(db.brainStoreWriteCount(now: now), .measured(4))
     }
 
+    /// #1026 review B1: the hot-currentness benchmark enqueues synthetic chunks through the same
+    /// queue. It now writes `source = 'benchmark'`, and rows it wrote earlier as `mcp` carry its
+    /// `benchmark_label` metadata key, which brain_store never sets. Neither is an agent write.
+    func test_benchmark_writes_are_not_agent_brain_store_writes() throws {
+        let now = ISO8601DateFormatter().date(from: "2026-09-30T12:00:00Z")!
+        try insert("store", source: "mcp", createdAt: "2026-09-30T11:00:00Z")
+        try insert("store-empty-meta", source: "mcp", createdAt: "2026-09-30T11:00:00Z")
+        db.exec("UPDATE chunks SET metadata = '' WHERE id = 'store-empty-meta'")
+        try insert("store-bad-meta", source: "mcp", createdAt: "2026-09-30T11:00:00Z")
+        db.exec("UPDATE chunks SET metadata = 'not json' WHERE id = 'store-bad-meta'")
+        try insert("store-other-meta", source: "mcp", createdAt: "2026-09-30T11:00:00Z")
+        db.exec("UPDATE chunks SET metadata = '{\"entity_id\":\"e1\"}' WHERE id = 'store-other-meta'")
+        try insert("benchmark-new", source: "benchmark", createdAt: "2026-09-30T11:00:00Z")
+        db.exec("UPDATE chunks SET metadata = '{\"benchmark_label\":\"queue-drain\"}' WHERE id = 'benchmark-new'")
+        try insert("benchmark-legacy", source: "mcp", createdAt: "2026-09-30T11:00:00Z")
+        db.exec("UPDATE chunks SET metadata = '{\"benchmark_label\":\"queue-drain\"}' WHERE id = 'benchmark-legacy'")
+
+        XCTAssertEqual(db.brainStoreWriteCount(now: now), .measured(4))
+    }
+
+    /// #1026 review B2: the rolling 24 h compares at the stored precision, not whole seconds.
+    func test_the_24_hour_boundary_keeps_fractional_seconds() throws {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let now = formatter.date(from: "2026-09-30T12:00:00.500Z")!
+        // 24 h + 0.4 s ago, in three stored formats: outside.
+        try insert("old-z", source: "mcp", createdAt: "2026-09-29T12:00:00.100Z")
+        try insert("old-offset", source: "mcp", createdAt: "2026-09-29T12:00:00.100000+00:00")
+        try insert("old-space", source: "mcp", createdAt: "2026-09-29 12:00:00.100")
+        // 24 h - 0.4 s ago: inside.
+        try insert("edge-z", source: "mcp", createdAt: "2026-09-29T12:00:00.900Z")
+        try insert("edge-space", source: "mcp", createdAt: "2026-09-29 12:00:00.900")
+        // 0.2 s before now: inside. 0.2 s after now, in the same whole second: the future.
+        try insert("just-before", source: "mcp", createdAt: "2026-09-30T12:00:00.300Z")
+        try insert("just-after", source: "mcp", createdAt: "2026-09-30T12:00:00.700Z")
+
+        XCTAssertEqual(db.brainStoreWriteCount(now: now), .measured(3))
+    }
+
     func test_dashboard_stats_carry_the_measured_count() throws {
         try insert("store-now", source: "mcp", createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60)))
         try insert("watcher-now", source: "realtime_watcher", createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60)))
