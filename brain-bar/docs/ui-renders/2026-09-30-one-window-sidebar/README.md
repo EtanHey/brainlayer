@@ -19,3 +19,5 @@ BRAINBAR_DB_PATH=<scratch>/brainlayer.db BRAINBAR_RENDER_ONLY=<scratch>/out .bui
 - **Contact sheets** covering all three widths: [Dashboard](contact-sheet-dashboard-760-960-1280.png), and [Settings](contact-sheet-settings-760-960-1280.png) (Jobs, Backups, Advanced, and the save-receipt state).
 
 The "unavailable" rows come from the fixture runtime, which has no DB path or backup status.
+
+These renders are re-generated on `main` after #1014 and #1016 merged. The Backups page shows #1016's Schedule block with Reveal in Finder / Copy path, and the Jobs page and footer show #1014's watcher-health line, all inside the one sidebar.
