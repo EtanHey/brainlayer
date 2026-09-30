@@ -50,6 +50,25 @@ sandbox_app = typer.Typer(help="Manage isolated sandbox BrainLayer databases")
 app.add_typer(sandbox_app, name="sandbox")
 jobs_app = typer.Typer(help="Inspect and restart installed BrainLayer LaunchAgents")
 app.add_typer(jobs_app, name="jobs")
+backup_app = typer.Typer(help="Manage BrainLayer backup authorization")
+app.add_typer(backup_app, name="backup")
+
+
+@backup_app.command("auth")
+def backup_auth_command(
+    status: bool = typer.Option(False, "--status", help="Check authorization without changing the token."),
+    json_output: bool = typer.Option(False, "--json", help="Print one JSON result for BrainBar."),
+) -> None:
+    """Authorize the BrainLayer-owned Google Drive token in the system browser."""
+    from .. import drive_credentials
+
+    result = drive_credentials.credential_status() if status else drive_credentials.authorize()
+    if json_output:
+        typer.echo(json.dumps(result, sort_keys=True))
+    else:
+        typer.echo(result["reason"])
+    if not status and result["status"] != "ok":
+        raise typer.Exit(1)
 
 
 @jobs_app.command("restart")

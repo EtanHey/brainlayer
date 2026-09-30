@@ -293,6 +293,12 @@ BRAINLAYER_ENRICH_BACKEND=groq brainlayer enrich   # Force Groq
 
 ## CLI Reference
 
+### Backups
+
+Run `brainlayer backup auth` once to authorize BrainLayer's Drive backups in your browser.
+The private token lives at `~/.config/brainlayer/drive-tokens.json`; `BRAINLAYER_DRIVE_TOKEN_PATH` overrides it.
+BrainBar uses `brainlayer backup auth --status --json` to check and `brainlayer backup auth --json` to authorize.
+
 ```bash
 brainlayer setup              # Create ~/.config/brainlayer/brainlayer.env
 brainlayer setup --launchd    # Create config and install launchd agents
