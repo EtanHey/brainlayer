@@ -184,8 +184,12 @@ def test_queue_drain_scenario_uses_isolated_queue_when_parent_has_backlog(tmp_pa
     assert (queue_dir / "aaa-backlog.jsonl").exists()
     assert Path(result["benchmark_queue_dir"]).parent == queue_dir
     with sqlite3.connect(db_path) as conn:
-        source = conn.execute("SELECT source FROM chunks WHERE id = ?", (result["queued_ids"][0],)).fetchone()
-    assert source == ("mcp",)
+        source, metadata = conn.execute(
+            "SELECT source, metadata FROM chunks WHERE id = ?", (result["queued_ids"][0],)
+        ).fetchone()
+    # #1026 review B1: synthetic benchmark rows are not agent brain_store writes (source 'mcp').
+    assert source == "benchmark"
+    assert json.loads(metadata)["benchmark_label"] == "queue-drain"
 
 
 def test_queue_drain_scenario_can_disable_real_drain_embeddings(tmp_path, monkeypatch):

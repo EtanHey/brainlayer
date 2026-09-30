@@ -304,7 +304,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertFalse(dashboardView.localizedCaseInsensitiveContains("memories total"))
         XCTAssertTrue(dashboardView.contains("totalIndexedChunks"))
         XCTAssertTrue(dashboardView.contains("indexed today"))
-        XCTAssertTrue(onePageSource.contains("writes via brain_store"))
+        XCTAssertTrue(onePageSource.contains("brain_store calls by agents"), "#965: the tile names what it counts")
         XCTAssertTrue(dashboardView.contains("get: { displayedTimeframe }"))
         XCTAssertTrue(dashboardView.contains("selectedTimeframe = $0"))
         XCTAssertTrue(dashboardView.contains("if selectedTimeframe == $0"))

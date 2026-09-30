@@ -332,10 +332,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             presentation.indexedTodayUnavailableText,
             "not measured yet today"
         )
-        XCTAssertEqual(
-            presentation.agentWritesText,
-            "brain_store writes (24 h) · as of 2026-09-13 20:50 (stale)"
-        )
+        XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h", "#965: agent writes are live, not from the stale document")
         XCTAssertTrue(presentation.backupLines[0].text.hasSuffix("18:50"))
         XCTAssertTrue(presentation.backupLines[1].text.hasSuffix("19:50"))
         XCTAssertGreaterThan(png.count, 5_000, "stale-observability PNG looks empty")

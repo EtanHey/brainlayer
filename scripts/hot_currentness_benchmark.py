@@ -134,7 +134,7 @@ def embedding_backlog_metrics(*, db_path: Path) -> dict[str, Any]:
             FROM chunks c
             LEFT JOIN chunk_vectors v ON c.id = v.chunk_id
             WHERE v.chunk_id IS NULL
-              AND c.source IN ('manual', 'mcp')
+              AND c.source IN ('manual', 'mcp', 'benchmark')
             """
             )
             .fetchone()
@@ -405,7 +405,7 @@ def run_queue_drain_scenario(
             importance=5,
             chunk_id=chunk_id,
             benchmark_label=label,
-            source="mcp",
+            source="benchmark",  # not an agent brain_store write (#1026); benchmark_label marks older rows
             queue_dir=benchmark_queue_dir,
         )
     queued = queue_metrics(queue_dir=benchmark_queue_dir)

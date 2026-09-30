@@ -269,6 +269,11 @@ enum BrainBarDashboardFixture {
         )
     }
 
+    /// The live fixture with a given agent brain_store count (#965), e.g. an unknown one.
+    static func makeStats(brainStoreWrites: BrainDatabase.BrainStoreWriteCount) -> DashboardStats {
+        makeStats(replayDebtBreakdown: readableReplayDebt, brainStoreWrites: brainStoreWrites)
+    }
+
     private static func makeStats(
         replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
         coverageAvailable: Bool = true,
@@ -282,7 +287,8 @@ enum BrainBarDashboardFixture {
         zeroFlow: Bool = false,
         agentWriteReadability: MetricEvidenceReadability = .readable,
         watcherFlowReadability: MetricEvidenceReadability = .readable,
-        watcherHealth: WatcherHealthFileRead = healthyWatcherHealth
+        watcherHealth: WatcherHealthFileRead = healthyWatcherHealth,
+        brainStoreWrites: BrainDatabase.BrainStoreWriteCount? = nil
     ) -> DashboardStats {
         let windowScale = max(activityWindowMinutes / 60, 1)
         let watcherBuckets = watcherRecentDistinctChunkCount == 0
@@ -322,7 +328,8 @@ enum BrainBarDashboardFixture {
             replayDebtBreakdown: replayDebtBreakdown,
             watcherProcessProbeResult: watcherProcessProbeResult,
             watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-            watcherFlowReadability: watcherFlowReadability
+            watcherFlowReadability: watcherFlowReadability,
+            brainStoreWrites: brainStoreWrites ?? .measured(zeroFlow ? 0 : 175)
         )
     }
 

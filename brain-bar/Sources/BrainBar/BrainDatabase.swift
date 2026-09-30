@@ -87,6 +87,51 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    /// "Agent writes (24 h)" (#965, Etan's ruling A): BrainLayer AGENT `brain_store` writes only.
+    /// Measured, or unknown with the reason, never a silent 0.
+    enum BrainStoreWriteCount: Sendable, Equatable {
+        case measured(Int)
+        case unknown(String)
+    }
+
+    /// Every BrainBar `brain_store` path writes `source = 'mcp'`: the direct store, the busy-DB
+    /// queue, the backup-snapshot deferral and the pending-queue drain (MCPRouter.handleBrainStore).
+    /// Watcher-ingested transcripts, hooks (`precompact-hook`), `digest`, the `brainlayer store` CLI
+    /// (`manual`) and Python replays (`pending`, `fallback-replay`) write other sources and are
+    /// not counted. Enrichment updates existing rows and never creates one.
+    /// The hot-currentness benchmark enqueues synthetic chunks through the same queue: it writes
+    /// `source = 'benchmark'`, and the rows it wrote earlier as `mcp` carry its `benchmark_label`
+    /// metadata key, which brain_store never sets (#1026 review B1). Malformed metadata is not
+    /// a benchmark marker, so it cannot fail the query.
+    static let brainStoreWriteWhereClause = """
+        COALESCE(LOWER(TRIM(source)), '') = 'mcp' \
+        AND (CASE WHEN json_valid(metadata) THEN json_type(metadata, '$.benchmark_label') END) IS NULL
+        """
+    static let brainStoreWriteWindowHours = 24
+
+    /// New chunks agents stored with `brain_store` in the rolling 24 h ending at `now`, by
+    /// `created_at` (any stored timestamp format, normalised to UTC epoch seconds).
+    func brainStoreWriteCount(now: Date = Date()) -> BrainStoreWriteCount {
+        guard let db else { return .unknown("database not open") }
+        do {
+            let columns = try tableColumns(name: "chunks", on: db)
+            for column in ["source", "created_at", "metadata"] where !columns.contains(column) {
+                return .unknown("chunks.\(column) column missing")
+            }
+            let cutoff = now.addingTimeInterval(-Double(Self.brainStoreWriteWindowHours) * 3_600)
+            // Both window edges at the stored precision, not whole seconds (#1026 review B2).
+            let nowSeconds = now.timeIntervalSince1970
+            let seconds = try indexedTimestampSeconds(
+                column: "created_at",
+                whereClause: Self.brainStoreWriteWhereClause,
+                since: cutoff
+            )
+            return .measured(seconds.filter { $0 <= nowSeconds }.count)
+        } catch {
+            return .unknown("brain_store count query failed: \(error)")
+        }
+    }
+
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
         let enrichedChunkCount: Int
@@ -125,6 +170,7 @@ final class BrainDatabase: @unchecked Sendable {
         let watcherProcessProbeResult: WatcherProcessProbeResult?
         let watcherRecentDistinctChunkCount: Int
         let watcherFlowReadability: MetricEvidenceReadability
+        let brainStoreWrites: BrainStoreWriteCount
 
         init(
             chunkCount: Int,
@@ -161,8 +207,10 @@ final class BrainDatabase: @unchecked Sendable {
             replayDebtBreakdown: ReplayDebtBreakdown? = nil,
             watcherProcessProbeResult: WatcherProcessProbeResult? = nil,
             watcherRecentDistinctChunkCount: Int? = nil,
-            watcherFlowReadability: MetricEvidenceReadability? = nil
+            watcherFlowReadability: MetricEvidenceReadability? = nil,
+            brainStoreWrites: BrainStoreWriteCount = .unknown("not measured")
         ) {
+            self.brainStoreWrites = brainStoreWrites
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
             self.failedEnrichmentCount = failedEnrichmentCount
@@ -327,7 +375,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: buckets.watcherFlowReadability
+                watcherFlowReadability: buckets.watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -367,7 +416,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -407,7 +457,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: result,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -447,7 +498,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -487,7 +539,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -2147,6 +2200,7 @@ final class BrainDatabase: @unchecked Sendable {
                 now: now
             )
             let recentWriteFiveMinuteCount = try recentActivityCount(windowSeconds: 300, now: now)
+            let brainStoreWrites = brainStoreWriteCount(now: now)
             let recentEnrichmentFiveMinuteCount = try recentEnrichmentCount(windowSeconds: 300, now: now)
 
             return DashboardStats(
@@ -2181,7 +2235,8 @@ final class BrainDatabase: @unchecked Sendable {
                 watcherHealth: watcherHealth,
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherRecentDistinctChunkCount: recentWatcherTruth.total,
-                watcherFlowReadability: recentWatcherTruth.readability
+                watcherFlowReadability: recentWatcherTruth.readability,
+                brainStoreWrites: brainStoreWrites
             )
         }
     }
@@ -2604,8 +2659,34 @@ final class BrainDatabase: @unchecked Sendable {
         whereClause: String?,
         since cutoffDate: Date
     ) throws -> [Int64] {
+        let cutoffEpoch = Int64(cutoffDate.timeIntervalSince1970)
+        return try indexedTimestampValues(column: column, whereClause: whereClause, since: cutoffDate, subsecond: false) {
+            sqlite3_column_int64($0, 0)
+        }.filter { $0 >= cutoffEpoch }
+    }
+
+    /// `indexedTimestampEpochs` at sub-second precision, for a window whose edges are not whole
+    /// seconds. `unixepoch(..., 'subsec')` needs SQLite 3.42; macOS 14, BrainBar's floor, ships 3.43.
+    private func indexedTimestampSeconds(
+        column: String,
+        whereClause: String?,
+        since cutoffDate: Date
+    ) throws -> [Double] {
+        let cutoff = cutoffDate.timeIntervalSince1970
+        return try indexedTimestampValues(column: column, whereClause: whereClause, since: cutoffDate, subsecond: true) {
+            sqlite3_column_double($0, 0)
+        }.filter { $0 >= cutoff }
+    }
+
+    private func indexedTimestampValues<Value>(
+        column: String,
+        whereClause: String?,
+        since cutoffDate: Date,
+        subsecond: Bool,
+        read: (OpaquePointer?) -> Value
+    ) throws -> [Value] {
         guard let db else { throw DBError.notOpen }
-        let epochSQL = Self.normalizedUnixEpochSQL(for: column)
+        let epochSQL = Self.normalizedUnixEpochSQL(for: column, subsecond: subsecond)
         let indexLowerBound = cutoffDate.addingTimeInterval(-Self.dashboardTimestampIndexLookbackPaddingSeconds)
         let cutoffText = Self.dashboardTimestampIndexCutoffFormatter.string(from: indexLowerBound)
         var predicates = ["\(column) IS NOT NULL", "\(column) >= ?"]
@@ -2625,15 +2706,12 @@ final class BrainDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(stmt) }
         bindText(cutoffText, to: stmt, index: 1)
 
-        let cutoffEpoch = Int64(cutoffDate.timeIntervalSince1970)
-        var epochs: [Int64] = []
+        var values: [Value] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { continue }
-            let epoch = sqlite3_column_int64(stmt, 0)
-            guard epoch >= cutoffEpoch else { continue }
-            epochs.append(epoch)
+            values.append(read(stmt))
         }
-        return epochs
+        return values
     }
 
     private func latestIndexedTimestampEpoch(
@@ -2712,14 +2790,15 @@ final class BrainDatabase: @unchecked Sendable {
         return epoch >= cutoffEpoch ? epoch : nil
     }
 
-    private static func normalizedUnixEpochSQL(for column: String) -> String {
-        """
+    private static func normalizedUnixEpochSQL(for column: String, subsecond: Bool = false) -> String {
+        let subsec = subsecond ? ", 'subsec'" : ""
+        return """
         CASE
             WHEN \(column) IS NULL OR TRIM(\(column)) = '' THEN NULL
-            WHEN substr(\(column), -1) = 'Z' THEN unixepoch(\(column))
-            WHEN substr(\(column), -6, 1) IN ('+', '-') THEN unixepoch(\(column))
-            WHEN instr(\(column), 'T') > 0 THEN unixepoch(\(column), 'utc')
-            ELSE unixepoch(\(column))
+            WHEN substr(\(column), -1) = 'Z' THEN unixepoch(\(column)\(subsec))
+            WHEN substr(\(column), -6, 1) IN ('+', '-') THEN unixepoch(\(column)\(subsec))
+            WHEN instr(\(column), 'T') > 0 THEN unixepoch(\(column), 'utc'\(subsec))
+            ELSE unixepoch(\(column)\(subsec))
         END
         """
     }
