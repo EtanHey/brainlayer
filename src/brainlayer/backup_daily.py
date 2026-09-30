@@ -36,13 +36,14 @@ from typing import Any
 
 import requests
 
+from . import drive_credentials
 from .paths import get_db_path
 from .socket_hygiene import refuse_production_brainbar_socket
 
 _sleep = time.sleep
 
-DEFAULT_TOKEN_PATH = Path.home() / ".config" / "google-drive-mcp" / "tokens.json"
-DEFAULT_CLIENT_PATH = Path.home() / ".config" / "google-drive-mcp" / "gcp-oauth.keys.json"
+DEFAULT_TOKEN_PATH = drive_credentials.DEFAULT_TOKEN_PATH
+DEFAULT_CLIENT_PATH = drive_credentials.DEFAULT_CLIENT_PATH
 CANONICAL_MACHINE_ID = "MacBook-Pro"
 CANONICAL_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db"]
 # Compatibility alias for callers that explicitly target the legacy M4 folder.
@@ -69,7 +70,7 @@ DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECOND
 DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV = "BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND"
 DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV = "BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+DRIVE_SCOPES = drive_credentials.DRIVE_SCOPES
 DEFAULT_LOCAL_COMPRESSED_KEEP = 3
 DEFAULT_LOCAL_UNCOMPRESSED_KEEP = 1
 DEFAULT_DRIVE_KEEP = 7
@@ -986,65 +987,12 @@ def _send_brainbar_json_request(
     return json.loads(data.decode("utf-8"))
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        temp_path.write_text(content)
-        os.replace(temp_path, path)
-    finally:
-        temp_path.unlink(missing_ok=True)
+def get_drive_credentials(token_path: Path | None = None, client_path: Path | None = None):
+    """Use BrainLayer-owned credentials for both database and JSONL backups."""
+    return drive_credentials.load_credentials(token_path=token_path, client_path=client_path)
 
 
-def get_drive_credentials(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Path = DEFAULT_CLIENT_PATH):
-    """Load and refresh Google Drive OAuth credentials from the existing MCP auth files."""
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials
-
-    token_path = Path(token_path).expanduser()
-    client_path = Path(client_path).expanduser()
-    if not token_path.exists():
-        raise FileNotFoundError(f"Google Drive token file not found: {token_path}")
-    if not client_path.exists():
-        raise FileNotFoundError(f"Google OAuth client file not found: {client_path}")
-
-    lock_path = token_path.with_suffix(token_path.suffix + ".lock")
-    with lock_path.open("w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        token_data = json.loads(token_path.read_text())
-        client_data = json.loads(client_path.read_text())["installed"]
-
-        expiry = token_data.get("expiry")
-        if not expiry and token_data.get("expiry_date"):
-            expiry = dt.datetime.fromtimestamp(int(token_data["expiry_date"]) / 1000, tz=dt.UTC).isoformat()
-
-        parsed_expiry = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00")) if expiry else None
-        if parsed_expiry and parsed_expiry.tzinfo:
-            parsed_expiry = parsed_expiry.astimezone(dt.UTC).replace(tzinfo=None)
-        elif parsed_expiry:
-            parsed_expiry = parsed_expiry.replace(tzinfo=None)
-
-        creds = Credentials(
-            token=token_data.get("access_token"),
-            refresh_token=token_data.get("refresh_token"),
-            token_uri=client_data["token_uri"],
-            client_id=client_data["client_id"],
-            client_secret=client_data["client_secret"],
-            scopes=token_data.get("scope", " ".join(DRIVE_SCOPES)).split(),
-            expiry=parsed_expiry,
-        )
-
-        # google-auth Credentials.expired compares against a naive UTC helper, so keep expiry comparisons naive UTC.
-        refresh_before = dt.datetime.now(dt.UTC).replace(tzinfo=None) + dt.timedelta(hours=2)
-        if creds.expired or not creds.valid or (creds.expiry and creds.expiry < refresh_before):
-            creds.refresh(Request())
-            token_data["access_token"] = creds.token
-            token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
-            _atomic_write_text(token_path, json.dumps(token_data, indent=2, sort_keys=True) + "\n")
-
-    return creds
-
-
-def build_drive_service(token_path: Path = DEFAULT_TOKEN_PATH, client_path: Path = DEFAULT_CLIENT_PATH):
+def build_drive_service(token_path: Path | None = None, client_path: Path | None = None):
     from googleapiclient.discovery import build
 
     return build("drive", "v3", credentials=get_drive_credentials(token_path, client_path))
