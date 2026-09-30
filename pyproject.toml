@@ -34,6 +34,7 @@ dependencies = [
     "idna>=2.5,<4",  # Imported through requests by backup and hook entrypoints
     "google-api-python-client>=2.0.0",  # Daily DB backup upload to Google Drive
     "google-auth>=2.0.0",  # OAuth refresh for Google Drive backups
+    "google-auth-oauthlib>=1.1.0",  # Installed-app Drive consent for BrainLayer-owned backup tokens
     "ranx>=0.3.20",  # IR evaluation metrics + significance testing
     "abydos>=0.5.0",  # Beider-Morse phonetic matching for cross-script entity aliases
     "deprecation>=2.1.0",  # Imported by abydos phonetic modules used by prompt hooks

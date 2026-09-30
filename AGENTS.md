@@ -410,6 +410,9 @@ brainlayer enrich
 
 <!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
+- Backups use the BrainLayer-owned `~/.config/brainlayer/drive-tokens.json` (0600); the Google Drive MCP token is a one-time copy source only.
+- Run `brainlayer backup auth` to authorize in the browser; BrainBar uses `brainlayer backup auth --status --json` and `brainlayer backup auth --json`.
+- `BRAINLAYER_DRIVE_TOKEN_PATH` and `BRAINLAYER_DRIVE_CLIENT_PATH` override the token and read-only OAuth client paths; never delete a token after refresh failure.
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
   `backup_log_provenance=real`; pytest sets `BRAINLAYER_BACKUP_LOG_PATH` and
   `BRAINLAYER_BACKUP_LOG_PROVENANCE=pytest` so tests cannot refresh the production heartbeat log.

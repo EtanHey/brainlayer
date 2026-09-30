@@ -12,10 +12,13 @@ import fcntl
 import json
 import logging
 import os
+import socket
 import stat
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from . import job_alerts
 
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 TOKEN_ENV = "BRAINLAYER_DRIVE_TOKEN_PATH"
@@ -24,6 +27,13 @@ DEFAULT_TOKEN_PATH = Path.home() / ".config/brainlayer/drive-tokens.json"
 DEFAULT_CLIENT_PATH = Path.home() / ".config/google-drive-mcp/gcp-oauth.keys.json"
 LEGACY_TOKEN_PATH = Path.home() / ".config/google-drive-mcp/tokens.json"
 LOGGER = logging.getLogger(__name__)
+
+
+def _report_consent(reporter: Any, reason: str | None) -> None:
+    try:
+        reporter("drive-consent", reason)
+    except OSError:
+        LOGGER.warning("Drive consent alert could not be recorded")
 
 
 class DriveCredentialError(RuntimeError):
@@ -134,6 +144,8 @@ def load_credentials(
     request_factory: Any = None,
     migrate: bool = True,
     persist_refresh: bool = True,
+    now: dt.datetime | None = None,
+    alert_reporter: Any = job_alerts.report,
 ):
     """Read/refresh under one lock; never erase the prior token on any failure."""
     if credentials_class is None:
@@ -149,6 +161,21 @@ def load_credentials(
         if migrate:
             _migrate_if_missing(token, legacy)
         token_data = _read_object(token, private=True)
+        consented = token_data.get("consented_at")
+        if consented:
+            try:
+                consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")).astimezone(dt.UTC)
+            except ValueError:
+                raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+            remaining = consent_time + dt.timedelta(days=7) - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
+            if remaining <= dt.timedelta(0):
+                _report_consent(alert_reporter, "Drive access expired: Reconnect in BrainBar")
+                raise DriveCredentialError("Drive access expired: Reconnect in BrainBar")
+            if remaining < dt.timedelta(days=1):
+                _report_consent(
+                    alert_reporter,
+                    "Google Drive access for BrainLayer backups expires tomorrow: click Reconnect in BrainBar",
+                )
         if not token_data.get("refresh_token"):
             raise DriveCredentialError("BrainLayer Drive token lacks refresh authorization; run brainlayer backup auth")
         try:
@@ -174,6 +201,7 @@ def load_credentials(
                 if isinstance(exc, TransportError):
                     raise TransportError("Drive token refresh network failure") from None
                 if "invalid_grant" in str(exc).lower():
+                    _report_consent(alert_reporter, "Drive access expired: Reconnect in BrainBar")
                     raise DriveCredentialError("Drive access expired: Reconnect in BrainBar") from None
                 raise DriveCredentialError("Drive token refresh failed; run brainlayer backup auth") from None
             if persist_refresh:
@@ -181,3 +209,105 @@ def load_credentials(
                 token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
                 _atomic_write(token, token_data)
         return creds
+
+
+def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Check the owned token only; do not migrate or write a refreshed token."""
+    from google.auth.exceptions import TransportError
+
+    token, _, _ = _paths(kwargs.get("token_path"), kwargs.get("client_path"), None)
+    if not token.exists():
+        return {
+            "state": "missing",
+            "reason": "BrainLayer Drive authorization is missing",
+            "expires_at": None,
+            "days_left": None,
+        }
+    try:
+        data = _read_object(token, private=True)
+        consented = data.get("consented_at")
+        try:
+            expires = (
+                dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")) + dt.timedelta(days=7)
+                if consented
+                else None
+            )
+            if expires and expires.tzinfo is None:
+                raise ValueError("consent time has no timezone")
+        except ValueError:
+            raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
+        current = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
+        days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
+        timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}
+        if expires and current >= expires:
+            _report_consent(
+                kwargs.get("alert_reporter", job_alerts.report), "Drive access expired: Reconnect in BrainBar"
+            )
+            return {"state": "invalid", "reason": "Drive access expired: Reconnect in BrainBar", **timing}
+        load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
+    except TransportError:
+        return {
+            "state": "expiring" if days_left is not None and days_left < 1 else "valid",
+            "reason": "status checked offline; last known state",
+            **timing,
+        }
+    except DriveCredentialError as exc:
+        return {"state": "invalid", "reason": str(exc), "expires_at": None, "days_left": None}
+    if days_left is not None and days_left < 1:
+        return {
+            "state": "expiring",
+            "reason": "Google Drive access for BrainLayer backups expires tomorrow: click Reconnect in BrainBar",
+            **timing,
+        }
+    return {"state": "valid", "reason": "BrainLayer Drive authorization is ready", **timing}
+
+
+def authorize(
+    *,
+    token_path: Path | None = None,
+    client_path: Path | None = None,
+    flow_class: Any = None,
+    now: dt.datetime | None = None,
+    alert_reporter: Any = job_alerts.report,
+) -> dict[str, str]:
+    """Open Google consent in the system browser and save only BrainLayer's token."""
+    from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
+
+    token, client, _ = _paths(token_path, client_path, None)
+    if flow_class is None:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+
+        flow_class = InstalledAppFlow
+    try:
+        _read_object(client, private=False)
+        flow = flow_class.from_client_secrets_file(str(client), scopes=DRIVE_SCOPES)
+        # Suppress the consent URL on stdout; BrainBar expects one JSON result.
+        creds = flow.run_local_server(
+            host="localhost",
+            bind_addr="127.0.0.1",
+            port=0,
+            timeout_seconds=180,
+            open_browser=True,
+            authorization_prompt_message=None,
+            access_type="offline",
+            prompt="consent",
+        )
+        if not creds.refresh_token:
+            raise DriveCredentialError("Google did not grant refresh authorization")
+        payload = {
+            "access_token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "expiry": creds.expiry.isoformat() if creds.expiry else None,
+            "scope": " ".join(DRIVE_SCOPES),
+            "consented_at": (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC).isoformat(),
+        }
+        with _token_lock(token):
+            _atomic_write(token, payload)
+        _report_consent(alert_reporter, None)
+        return {"status": "ok", "reason": "BrainLayer Drive authorization saved"}
+    except (KeyboardInterrupt, AccessDeniedError):
+        return {"status": "cancelled", "reason": "Google authorization cancelled"}
+    except Exception as exc:
+        if isinstance(exc, (socket.timeout, TimeoutError)) or type(exc).__name__ == "WSGITimeoutError":
+            return {"status": "timeout", "reason": "Google authorization timed out"}
+        return {"status": "error", "reason": "Google authorization failed; retry brainlayer backup auth"}
