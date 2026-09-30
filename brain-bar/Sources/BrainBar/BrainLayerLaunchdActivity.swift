@@ -145,3 +145,25 @@ private extension BrainLayerLaunchdJob {
         }
     }
 }
+
+extension WatcherLaunchdEvidence {
+    /// Settings' view of `com.brainlayer.watch`: the configured setting plus the launchd observation.
+    init(setting: BrainLayerLaunchdJobSetting?, loadState: BrainLayerLaunchdLoadState?) {
+        if setting?.enabled == false {
+            self = .notRunning("the Watcher job is disabled in Settings")
+            return
+        }
+        switch loadState {
+        case .running:
+            self = .running
+        case .loaded:
+            self = .notRunning("com.brainlayer.watch is loaded but not running")
+        case .unloaded:
+            self = .notRunning("com.brainlayer.watch is not loaded")
+        case let .probeError(detail):
+            self = .unavailable(detail)
+        case .unknown, nil:
+            self = .unavailable("launchd status for com.brainlayer.watch is unknown")
+        }
+    }
+}
