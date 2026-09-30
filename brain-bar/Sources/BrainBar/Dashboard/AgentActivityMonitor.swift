@@ -120,27 +120,30 @@ struct AgentActivitySnapshot: Sendable, Equatable {
 final class AgentActivityMonitor: Sendable {
     private let snapshotProvider: @Sendable () -> String?
     private let executablePathResolver: @Sendable (Int32) -> String?
+    private let argv0Resolver: @Sendable (Int32) -> String?
 
-    /// Both seams are required (#990 N1): the live pair runs `ps` and `proc_pidpath`, so it is
-    /// named explicitly (`.live`) where production builds a monitor, and never a default a
-    /// test could inherit.
+    /// The live process probes are named explicitly (`.live`) where production builds a
+    /// monitor; tests inject synthetic process rows and path/argv resolvers.
     init(
         snapshotProvider: @escaping @Sendable () -> String?,
-        executablePathResolver: @escaping @Sendable (Int32) -> String?
+        executablePathResolver: @escaping @Sendable (Int32) -> String?,
+        argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil }
     ) {
         self.snapshotProvider = snapshotProvider
         self.executablePathResolver = executablePathResolver
+        self.argv0Resolver = argv0Resolver
     }
 
     /// The live process table: `ps` rows, and the kernel's executable path per candidate PID.
     static let live = AgentActivityMonitor(
         snapshotProvider: AgentActivityMonitor.captureProcessSnapshot,
-        executablePathResolver: AgentActivityMonitor.kernelExecutablePath
+        executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
+        argv0Resolver: AgentActivityMonitor.kernelArgv0
     )
 
     func sample() -> AgentActivitySnapshot {
         guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
-        return Self.parse(snapshot, executablePath: executablePathResolver)
+        return Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
     }
 
     struct ProcessRow: Equatable {
@@ -168,7 +171,8 @@ final class AgentActivityMonitor: Sendable {
     /// argument may name any bundle.
     static func parse(
         _ snapshot: String,
-        executablePath: (Int32) -> String? = { _ in nil }
+        executablePath: (Int32) -> String? = { _ in nil },
+        argv0: (Int32) -> String? = { _ in nil }
     ) -> AgentActivitySnapshot {
         let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
         var parentByPID: [Int32: Int32] = [:]
@@ -179,7 +183,7 @@ final class AgentActivityMonitor: Sendable {
             // The kernel path is resolved BEFORE classification (#1019 R1): it marks where a
             // spaced argv[0] ends, so the binary, its role and its flags are read correctly.
             row.executablePath = executablePath(row.pid)
-            guard let family = candidateFamily(row, Invocation(command: row.command, kernelPath: row.executablePath)),
+            guard let family = candidateFamily(row, Invocation(command: row.command, kernelPath: row.executablePath, actualArgv0: argv0(row.pid))),
                   !isAppOrSystemExecutable(row.executablePath) else { continue }
             candidates[row.pid] = family
         }
@@ -195,17 +199,20 @@ final class AgentActivityMonitor: Sendable {
     }
 
     /// argv[0] and the arguments after it. ps prints argv joined by spaces, so a path with a space
-    /// ("AI Tools") would split into two tokens; when the args begin with the kernel's executable
-    /// path, that whole path is argv[0] (#1019 R1). Otherwise argv[0] is the first token, which is
-    /// the case for bare names and for symlinked launchers the kernel resolved elsewhere.
+    /// ("AI Tools") would split into two tokens. KERN_PROCARGS2 supplies the actual argv[0],
+    /// which can differ from proc_pidpath when launched through a symlink (#1022).
     struct Invocation: Equatable {
         let argv0: String
         let arguments: [String]
 
-        init(command: String, kernelPath: String?) {
+        init(command: String, kernelPath: String?, actualArgv0: String? = nil) {
             let path = kernelPath?.lowercased() ?? ""
+            let actual = actualArgv0?.lowercased() ?? ""
             let rest: Substring
-            if !path.isEmpty, command == path || command.hasPrefix(path + " ") {
+            if !actual.isEmpty, command == actual || command.hasPrefix(actual + " ") {
+                argv0 = actual
+                rest = command.dropFirst(actual.count)
+            } else if !path.isEmpty, command == path || command.hasPrefix(path + " ") {
                 argv0 = path
                 rest = command.dropFirst(path.count)
             } else {
@@ -318,6 +325,36 @@ final class AgentActivityMonitor: Sendable {
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
         guard length > 0 else { return nil }
         return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// KERN_PROCARGS2 stores argc, then the exec path, NUL padding, and the original
+    /// NUL-terminated argv strings. argv[0] preserves a symlink launcher path.
+    static func kernelArgv0(_ pid: Int32) -> String? {
+        var argmax: Int32 = 0
+        var argmaxSize = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.argmax", &argmax, &argmaxSize, nil, 0) == 0, argmax > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: Int(argmax))
+        var size = bytes.count
+        var mib: [Int32] = [CTL_KERN, 49, pid] // KERN_PROCARGS2 is hidden behind __APPLE_API_UNSTABLE.
+        let result = bytes.withUnsafeMutableBytes { buffer in
+            sysctl(&mib, u_int(mib.count), buffer.baseAddress, &size, nil, 0)
+        }
+        guard result == 0,
+              size > MemoryLayout<Int32>.size else { return nil }
+        return argv0(fromProcessArgs: Array(bytes.prefix(size)))
+    }
+
+    static func argv0(fromProcessArgs bytes: [UInt8]) -> String? {
+        let size = bytes.count
+        guard size > MemoryLayout<Int32>.size else { return nil }
+        let argc = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        guard argc > 0 else { return nil }
+        var offset = MemoryLayout<Int32>.size
+        guard let execEnd = bytes[offset..<size].firstIndex(of: 0) else { return nil }
+        offset = execEnd
+        while offset < size && bytes[offset] == 0 { offset += 1 }
+        guard offset < size, let argvEnd = bytes[offset..<size].firstIndex(of: 0), argvEnd > offset else { return nil }
+        return String(bytes: bytes[offset..<argvEnd], encoding: .utf8)
     }
 
     /// Shells, launch wrappers and text tools are never the session process: a real
