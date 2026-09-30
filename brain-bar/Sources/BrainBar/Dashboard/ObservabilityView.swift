@@ -341,9 +341,16 @@ struct ObservabilityBackupStatus: Equatable, Sendable {
     let upload, snapshot, job, freshness: ObservabilityStatusLine
     let retention, archives: ObservabilityStatusLine
     let error: ObservabilityStatusLine?
+    /// `error` is a job alert (#1031): the failed job's own sentence for Etan.
+    var errorIsJobAlert = false
 
     var lines: [ObservabilityStatusLine] {
         [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
+    }
+
+    /// The one red line that speaks for the backups.
+    var attentionLine: ObservabilityStatusLine? {
+        lines.first { $0.tone == .red }
     }
 }
 
@@ -520,7 +527,8 @@ enum ObservabilityPresentation {
         }
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
-            retention: retention, archives: archives, error: error
+            retention: retention, archives: archives, error: error,
+            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true
         )
     }
 

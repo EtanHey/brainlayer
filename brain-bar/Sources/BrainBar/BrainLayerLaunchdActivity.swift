@@ -178,3 +178,41 @@ extension WatcherLaunchdEvidence {
         }
     }
 }
+
+/// #1029 review B1: the Backups page's one verdict. The group badge, the Google Drive card and the
+/// backup status lines all come from it, so the page can never say "Backups can't upload" beside
+/// "Healthy".
+struct BrainBarBackupsHealth: Equatable, Sendable {
+    enum Badge: Equatable, Sendable {
+        case healthy, awaitingRun, expiring, attention, unknown
+
+        var title: String {
+            switch self {
+            case .healthy: "Healthy"
+            case .awaitingRun: "Awaiting next run"
+            case .expiring: "Drive access expiring"
+            case .attention: "Needs attention"
+            case .unknown: "Status unknown"
+            }
+        }
+    }
+
+    let badge: Badge
+    /// The most severe reason on the page, shown under the badge. Nil when there is none.
+    let reason: String?
+
+    static func derive(
+        job: BrainLayerLaunchdGroupStatus,
+        drive: DriveAuthPresentation?,
+        status: ObservabilityBackupStatus?,
+        statusUnavailableReason: String
+    ) -> Self {
+        let badge: Badge = switch job.health {
+        case .healthy: .healthy
+        case .awaitingRun: .awaitingRun
+        case .unhealthy: .attention
+        case .unknown: .unknown
+        }
+        return .init(badge: badge, reason: job.attentionReason)
+    }
+}

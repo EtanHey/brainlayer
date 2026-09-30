@@ -266,13 +266,13 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
         case let .measured(status):
             dbBackup = status.snapshot
             transcriptBackup = status.upload
-            backupFailure = status.lines.first(where: { $0.tone == .red })?.text
+            backupFailure = status.attentionLine?.text
             staleBackupAge = nil
             checkingReason = nil
         case let .stale(status, ageText):
             dbBackup = status.snapshot
             transcriptBackup = status.upload
-            backupFailure = status.lines.first(where: { $0.tone == .red })?.text
+            backupFailure = status.attentionLine?.text
             staleBackupAge = ageText
             checkingReason = nil
         case let .unavailable(reason):
