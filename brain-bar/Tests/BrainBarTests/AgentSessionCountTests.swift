@@ -443,6 +443,29 @@ final class AgentSessionCountTests: XCTestCase {
         XCTAssertEqual(activity.count(for: .codex), 1, "exec review is a session; app-server is the daemon")
     }
 
+    /// #1022: proc_pidpath resolves a symlink, so its path can differ from the spaced
+    /// launcher in ps args. That must not turn Claude's remote-control role into a session.
+    func test_spaced_symlink_launcher_does_not_count_remote_control() {
+        let activity = AgentActivityMonitor.parse([
+            Self.row(1104, 1, "2.1.281", "/Users/u/AI Tools/claude remote-control"),
+        ].joined(separator: "\n"), executablePath: { _ in
+            "/opt/homebrew/Cellar/claude/2.1.281/bin/claude"
+        }, argv0: { _ in
+            "/Users/u/AI Tools/claude"
+        })
+
+        XCTAssertEqual(activity.count(for: .claude), 0)
+    }
+
+    func test_procargs2_argv0_is_read_after_exec_path_and_padding() {
+        var bytes: [UInt8] = [1, 0, 0, 0]
+        bytes += Array("/opt/homebrew/bin/claude".utf8) + [0, 0, 0]
+        bytes += Array("/Users/u/AI Tools/claude".utf8) + [0]
+        bytes += Array("remote-control".utf8) + [0]
+        XCTAssertEqual(AgentActivityMonitor.argv0(fromProcessArgs: bytes), "/Users/u/AI Tools/claude")
+        XCTAssertNil(AgentActivityMonitor.argv0(fromProcessArgs: [1, 0, 0, 0, 65]))
+    }
+
     /// B2: noise words are matched against the executable and argv[0] only, so a prompt that says
     /// "grep" never drops a real CLI, whatever its path looks like.
     func test_noise_words_in_the_arguments_of_a_spaced_path_cli_do_not_hide_it() {
