@@ -1,0 +1,1808 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Persistent memory for AI agents — search, think, recall across every conversation">
+      
+      
+      
+        <link rel="canonical" href="https://etanhey.github.io/brainlayer/operations/wave3-3a-two-host-live-runbook/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Wave 3a two-host LIVE runbook - BrainLayer</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#wave-3a-two-host-live-runbook" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="BrainLayer" class="md-header__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BrainLayer
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Wave 3a two-host LIVE runbook
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="BrainLayer" class="md-nav__button md-logo" aria-label="BrainLayer" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    BrainLayer
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/EtanHey/brainlayer" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    EtanHey/brainlayer
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kg-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KG Specification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../data-locations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Locations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../enrichment-runbook/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enrichment Runbook
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../local-models-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local Models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../mcp-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0000-template/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR Template
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-sqlite-vec-over-dedicated-vector-db/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: sqlite-vec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-reciprocal-rank-fusion-for-hybrid-search/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: RRF Hybrid Search
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pinned-artifacts-and-rehearsal-measurements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pinned artifacts and rehearsal measurements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#host-receipt-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host receipt table
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#0-deploy-v156-first-and-prove-the-executing-binaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0. Deploy v1.5.6 first and prove the executing binaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-host-preflight-and-writer-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Host preflight and writer inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-checkpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Checkpoint
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-primary-live-backup-route-backup-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Primary LIVE backup route: backup pipeline
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Primary LIVE backup route: backup pipeline">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#contingency-only-rehearsal-proven-online-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contingency only: rehearsal-proven online backup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-migrate-in-one-supervised-sitting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Migrate in one supervised sitting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-reconcile-and-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Reconcile and verify
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-restart-exactly-the-prior-active-set-and-probe-the-real-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Restart exactly the prior active set and probe the real service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-rollback-re-copy-the-verified-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Rollback = re-copy the verified backup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rehearsal-receipt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rehearsal receipt
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="wave-3a-two-host-live-runbook">Wave 3a two-host LIVE runbook</h1>
+<p>Status: rehearsal-proven; LIVE execution scheduled for Tuesday 2026-08-11 at 20:00 IDT or later with Etan present.</p>
+<p>This runbook is the source-class segment of the Wave 3 maintenance sitting. Execute it on Main first, reconcile and probe Main, then repeat it on M1. Do not begin a host without Etan's explicit go. Keep enrichment off wherever the pause sentinel applies.</p>
+<h2 id="pinned-artifacts-and-rehearsal-measurements">Pinned artifacts and rehearsal measurements</h2>
+<ul>
+<li>Migration/source-class code commit: <code>3964412f8291a083150a424e38df08ece817783d</code>.</li>
+<li>Reviewed execution/verifier code commit: <code>588ef12bebd82219dd06cb13aaf41307979b39d2</code>.</li>
+<li>Required deployed release before either host migrates: BrainLayer + BrainBar <strong>exactly v1.5.6</strong>. v1.5.5 carries the backup-race fix; v1.5.6 adds the Swift default-search source-class gate.</li>
+<li>Command: <code>scripts/migrate_source_class.py</code> from a checkout containing that commit.</li>
+<li>Rehearsal source: online SQLite backup from canonical opened <code>mode=ro</code> into gitignored <code>.tmp-wave3-3a/</code> (contingency route, not the LIVE primary route).</li>
+<li>Timed contingency replay: <code>.tmp-wave3-3a/online-backup-timed.db</code>, completed 2026-08-10 13:39:47 IDT after 26.16 seconds while live drain writes continued; 744,396 rows, 4,251,874 pages, 17,415,675,904 bytes. This copy proved only the contingency mechanism.</li>
+<li>Final migration rehearsal source: the earlier APFS clone <code>.tmp-wave3-3a/canonical-pristine.db</code>, captured 2026-08-10 12:44:04 IDT with 744,335 rows and a clean <code>PRAGMA quick_check</code>. Its migrated copy retained exactly 744,335 rows. The 61-row difference from the later online-backup snapshot is therefore between two independently timestamped live snapshots, not a migration row-count discrepancy.</li>
+<li>Final-code rehearsal migration: 252.02 seconds wall-clock on commit <code>3964412f8291a083150a424e38df08ece817783d</code> (<code>duration_seconds=251.79996774997562</code>); exact-SHA idempotent rerun: 0.65 seconds.</li>
+<li>Rehearsal distribution: NULL 69,581; brain-worker 84; cli-agent 536,851; desktop 2,696; fleet-coordination 105,383; subagent 29,740.</li>
+<li>Shipped-search verifier rerun: code head <code>065d602651bc14b096f268482cc125eaca450354</code> against the already-migrated copy, 299.81 seconds under host load; all six visibility/expansion buckets green, 72 sampled desktop tokens with zero leaks, and zero brain-worker rows across all six search indexes.</li>
+<li>Earlier monitored rehearsal migration WAL: 0 bytes before, 29,181,992-byte observed peak, 0 bytes at close after checkpoints; the final-code rerun was not separately peak-sampled.</li>
+<li>Rehearsal rollback: restore by APFS re-copy in 0.00 seconds; restored row count 744,335 and <code>source_class</code> absent.</li>
+</ul>
+<h2 id="host-receipt-table">Host receipt table</h2>
+<p>Fill every blank on each host. Do not copy Main values into M1.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Main</th>
+<th>M1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Operator / Etan go time</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Hostname</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Canonical DB path</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Migration checkout / execution-verifier checkout</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Installed BrainLayer / BrainBar versions (must be exactly 1.5.6)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Installed CLI path + SHA-256</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Executing BrainBarDaemon PID / path + SHA-256</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Executing daemon <code>source_class</code> capability probe</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Free bytes</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Active labels receipt file</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Pause sentinel contents</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Rows before</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>WAL bytes before stop</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Checkpoint result / WAL bytes after</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Backup-pipeline JSON receipt</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Verified local raw backup ref</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Verified Drive file id / MD5</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Backup wall-clock</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>No-write observer before / after</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Migration wall-clock</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Rows after</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>NULL / cli / desktop / subagent / brain-worker / fleet</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Both ledger SHAs</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Migration WAL bytes after</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>SQL reconcile</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Real service probes</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Restarted labels</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Etan host acceptance</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="0-deploy-v156-first-and-prove-the-executing-binaries">0. Deploy v1.5.6 first and prove the executing binaries</h2>
+<p>The order is mandatory on <strong>each host</strong>: install v1.5.6, restart and probe the installed formula and BrainBarDaemon, then stop writers, back up, and migrate. The new Python watcher INSERT and Swift search clause both guard for an absent <code>source_class</code> column, so deploying v1.5.6 before the schema migration is safe. The reverse order is forbidden: migration must not make the contract live while an older BrainBar still exposes desktop rows.</p>
+<p>Run the supported release installers with Etan present. Do not substitute a worktree build:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_REQUIRED_VERSION</span><span class="o">=</span><span class="s2">"1.5.6"</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>brew<span class="w"> </span>update
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">if</span><span class="w"> </span>brew<span class="w"> </span>list<span class="w"> </span>--formula<span class="w"> </span>brainlayer<span class="w"> </span>&gt;/dev/null<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>brew<span class="w"> </span>upgrade<span class="w"> </span>etanhey/layers/brainlayer<span class="w"> </span><span class="o">||</span><span class="w"> </span>brew<span class="w"> </span>reinstall<span class="w"> </span>etanhey/layers/brainlayer
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="k">else</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>brew<span class="w"> </span>install<span class="w"> </span>etanhey/layers/brainlayer
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="k">fi</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>scripts/brainlayer-update-brainbar.sh
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_INSTALLED_CLI</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">command</span><span class="w"> </span>-v<span class="w"> </span>brainlayer<span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="nb">test</span><span class="w"> </span>-x<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_INSTALLED_CLI</span><span class="s2">"</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="s2">"</span><span class="nv">$WAVE3A_INSTALLED_CLI</span><span class="s2">"</span><span class="w"> </span>--version<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'{print $NF}'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-installed-cli-version.txt"</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>grep<span class="w"> </span>-Fx<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_REQUIRED_VERSION</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-installed-cli-version.txt"</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>/usr/libexec/PlistBuddy<span class="w"> </span>-c<span class="w"> </span><span class="s1">'Print:CFBundleShortVersionString'</span><span class="w"> </span>/Applications/BrainBar.app/Contents/Info.plist<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-brainbar-version.txt"</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>grep<span class="w"> </span>-Fx<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_REQUIRED_VERSION</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-brainbar-version.txt"</span>
+</code></pre></div>
+<p>Restart the daemon from the installed bundle, then bind the receipt to the process that is actually serving MCP:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>launchctl<span class="w"> </span>kickstart<span class="w"> </span>-k<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">/com.brainlayer.brainbar-daemon"</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>sleep<span class="w"> </span><span class="m">2</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_DAEMON_PID</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>launchctl<span class="w"> </span>print<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">/com.brainlayer.brainbar-daemon"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'/^[[:space:]]*pid = / {print $3; exit}'</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nb">test</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DAEMON_PID</span><span class="s2">"</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>ps<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DAEMON_PID</span><span class="s2">"</span><span class="w"> </span>-o<span class="w"> </span><span class="nv">command</span><span class="o">=</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-daemon-command.txt"</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>grep<span class="w"> </span>-F<span class="w"> </span><span class="s1">'/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-daemon-command.txt"</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>shasum<span class="w"> </span>-a<span class="w"> </span><span class="m">256</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_INSTALLED_CLI</span><span class="s2">"</span><span class="w"> </span>/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-installed-sha256.txt"</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>strings<span class="w"> </span>/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-F<span class="w"> </span><span class="s1">'source_class'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-daemon-source-class-capability.txt"</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="nv">QUERY</span><span class="o">=</span>agent-html<span class="w"> </span><span class="nv">DEADLINE_SECS</span><span class="o">=</span><span class="m">30</span><span class="w"> </span>scripts/smoke/firstturn-brainlayer-smoke.sh<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3a-pre-migration-real-mcp-smoke.out"</span>
+</code></pre></div>
+<p>Do not enter host preflight unless all commands pass. Re-run this section independently on M1; never copy Main's receipt.</p>
+<h2 id="1-host-preflight-and-writer-inventory">1. Host preflight and writer inventory</h2>
+<p>Prepare two clean detached checkouts. The migration checkout pins exactly the code recorded in the ledgers; the execution checkout pins the strengthened verifier/search code reviewed for the shipped release. Never overload one SHA for both purposes.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_MIGRATION_REPO</span><span class="o">=</span><span class="s2">"&lt;absolute clean checkout at 3964412f8291a083150a424e38df08ece817783d&gt;"</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_EXEC_REPO</span><span class="o">=</span><span class="s2">"&lt;absolute clean checkout at 588ef12bebd82219dd06cb13aaf41307979b39d2&gt;"</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_PYTHON</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/.venv/bin/python"</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_CLI</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">command</span><span class="w"> </span>-v<span class="w"> </span>brainlayer<span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/src"</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_DB</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nv">$WAVE3A_PYTHON</span><span class="w"> </span>-c<span class="w"> </span><span class="s1">'from brainlayer.paths import get_db_path; print(get_db_path())'</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_MIGRATION_SHA</span><span class="o">=</span><span class="s2">"3964412f8291a083150a424e38df08ece817783d"</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_EXEC_SHA</span><span class="o">=</span><span class="s2">"588ef12bebd82219dd06cb13aaf41307979b39d2"</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_ACTOR</span><span class="o">=</span><span class="s2">"etan+brainlayerCodex"</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_HOST</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>hostname<span class="w"> </span>-s<span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span>-cd<span class="w"> </span><span class="s1">'A-Za-z0-9_-'</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_RUN_DIR</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/wave3-live-2026-08-11/</span><span class="nv">$WAVE3A_HOST</span><span class="s2">"</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">"</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="nb">test</span><span class="w"> </span>-x<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="nb">test</span><span class="w"> </span>-x<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_CLI</span><span class="s2">"</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_REPO</span><span class="s2">"</span><span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_SHA</span><span class="s2">"</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="nb">test</span><span class="w"> </span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">"</span><span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_SHA</span><span class="s2">"</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="nb">test</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_REPO</span><span class="s2">"</span><span class="w"> </span>status<span class="w"> </span>--porcelain<span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="nb">test</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>git<span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">"</span><span class="w"> </span>status<span class="w"> </span>--porcelain<span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>/usr/libexec/PlistBuddy<span class="w"> </span>-c<span class="w"> </span><span class="s1">'Print:CFBundleShortVersionString'</span><span class="w"> </span>/Applications/BrainBar.app/Contents/Info.plist<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-Fx<span class="w"> </span><span class="s1">'1.5.6'</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>df<span class="w"> </span>-k<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>stat<span class="w"> </span>-f<span class="w"> </span><span class="s1">'%z'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>stat<span class="w"> </span>-f<span class="w"> </span><span class="s1">'%z'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-wal"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>cat<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/pause.sentinel"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>pgrep<span class="w"> </span>-af<span class="w"> </span><span class="s1">'[b]rain_digest|[b]rainlayer.*digest'</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a>pgrep<span class="w"> </span>-af<span class="w"> </span><span class="s1">'[b]rainlayer.backup_daily|[b]ackup-daily.sh'</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+</code></pre></div>
+<p>Require more than 40 GiB free, no digest, no concurrent backup, and both installed/executing v1.5.6 proofs from §0. Record the exact active set before changing launchd. The broader pattern is intentional: <code>com.mcplayer.brainlayer-proxy</code> is a write-capable bridge even though its label does not start with <code>com.brainlayer</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>launchctl<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'$3 ~ /^(com\.brainlayer\.|com\.mcplayer\.)/ {print $3}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.before"</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>:<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/stopped-labels"</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>cat<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.before"</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s1">'com.brainlayer.brainbar-daemon'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.before"</span>
+</code></pre></div>
+<p>Stop auto-restart/watchdog labels first, then all DB writers and scheduled maintenance. Do not start enrichment if it was absent or sentinel-paused.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">for</span><span class="w"> </span>label<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>com.brainlayer.tier0-watchdog<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>com.brainlayer.throughput-watchdog<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>com.brainlayer.health-check<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>com.brainlayer.backup-daily<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>com.brainlayer.jsonl-backup<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>com.brainlayer.maintenance-nightly<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>com.brainlayer.maintenance-weekly<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>com.brainlayer.wal-checkpoint<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>com.brainlayer.repair-fts<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">  </span>com.brainlayer.decay<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span>com.brainlayer.p0-counter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">  </span>com.brainlayer.index<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">  </span>com.brainlayer.watch<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span>com.brainlayer.drain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">  </span>com.brainlayer.hotlane-brainbar<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">  </span>com.brainlayer.enrichment<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">  </span>com.brainlayer.brainbar<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">  </span>com.brainlayer.gemini-loopback<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">  </span>com.mcplayer.brainlayer-proxy<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.before"</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">    </span>launchctl<span class="w"> </span>bootout<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">/</span><span class="nv">$label</span><span class="s2">"</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="w">    </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/stopped-labels"</span>
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="w">  </span><span class="k">fi</span>
+<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="k">done</span>
+</code></pre></div>
+<p><code>com.mcplayer.bus</code> may remain loaded: it is the event bus, not the BrainLayer MCP proxy and not a DB writer. Confirm no other DB-writing process or TCP bridge remains. Leave <code>com.brainlayer.brainbar-daemon</code> loaded only for the backup-pipeline request.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>launchctl<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'$3 ~ /^(com\.brainlayer\.|com\.mcplayer\.)/ {print $3}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.after-stop"</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">for</span><span class="w"> </span>label<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>com.brainlayer.gemini-loopback<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>com.brainlayer.p0-counter<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>com.brainlayer.jsonl-backup<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>com.brainlayer.watch<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>com.brainlayer.drain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>com.brainlayer.enrichment<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>com.mcplayer.brainlayer-proxy<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span>!<span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.after-stop"</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="k">done</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>!<span class="w"> </span>lsof<span class="w"> </span>-nP<span class="w"> </span>-iTCP:48123<span class="w"> </span>-sTCP:LISTEN
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>pgrep<span class="w"> </span>-af<span class="w"> </span><span class="s1">'[b]rainlayer.*(watch|drain|enrich|p0-counter|jsonl-backup)'</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+</code></pre></div>
+<h2 id="2-checkpoint">2. Checkpoint</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">set</span><span class="w"> </span>-o<span class="w"> </span>pipefail
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>/usr/bin/time<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/scripts/wal_checkpoint.py"</span><span class="w"> </span>--mode<span class="w"> </span>TRUNCATE<span class="w"> </span>--retry-busy<span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/checkpoint.json"</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>stat<span class="w"> </span>-f<span class="w"> </span><span class="s1">'%z'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-wal"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+</code></pre></div>
+<p>Stop if the checkpoint reports busy or returns nonzero.</p>
+<p>Only now, after the writer inventory is stopped and asserted absent and the checkpoint succeeds, capture the canonical row-count invariant. Use this same ordering independently on M1.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_ROWS_BEFORE</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="s">import sqlite3, sys</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="s">c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="s">print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="s">c.close()</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="s">PY</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s\n'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_ROWS_BEFORE</span><span class="s2">"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/rows-before.txt"</span>
+</code></pre></div>
+<p>Start one persistent read-only SQLite observer before either backup route. Its connection records <code>PRAGMA data_version</code> before the snapshot and again only after BrainBarDaemon is stopped. Any intervening commit makes the rollback snapshot non-authoritative, so the observer fails the gate and migration must not start.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_FENCE_READY</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/no-write-observer.ready.json"</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_FENCE_RELEASE</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/no-write-observer.release"</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_FENCE_RESULT</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/no-write-observer.result.json"</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>rm<span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_READY</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RELEASE</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RESULT</span><span class="s2">"</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_READY</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RELEASE</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RESULT</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY' &amp;</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="s">import json, os, sqlite3, sys, time</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="s">db, ready, release, result = sys.argv[1:]</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="s">conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="s">conn.execute("PRAGMA query_only = ON")</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="s">before = int(conn.execute("PRAGMA data_version").fetchone()[0])</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="s">payload = {"pid": os.getpid(), "data_version_before": before}</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="s">tmp = ready + ".tmp"</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="s">open(tmp, "w", encoding="utf-8").write(json.dumps(payload, sort_keys=True) + "\n")</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="s">os.replace(tmp, ready)</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="s">while not os.path.exists(release):</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="s">    time.sleep(0.05)</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="s">after = int(conn.execute("PRAGMA data_version").fetchone()[0])</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="s">conn.close()</span>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="s">payload["data_version_after"] = after</span>
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="s">payload["unchanged"] = before == after</span>
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="s">open(result, "w", encoding="utf-8").write(json.dumps(payload, sort_keys=True) + "\n")</span>
+<a id="__codelineno-8-23" name="__codelineno-8-23" href="#__codelineno-8-23"></a><span class="s">raise SystemExit(0 if before == after else 1)</span>
+<a id="__codelineno-8-24" name="__codelineno-8-24" href="#__codelineno-8-24"></a><span class="s">PY</span>
+<a id="__codelineno-8-25" name="__codelineno-8-25" href="#__codelineno-8-25"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_FENCE_PID</span><span class="o">=</span><span class="nv">$!</span>
+<a id="__codelineno-8-26" name="__codelineno-8-26" href="#__codelineno-8-26"></a>cleanup_wave3a_fence<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<a id="__codelineno-8-27" name="__codelineno-8-27" href="#__codelineno-8-27"></a><span class="w">  </span>:<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RELEASE</span><span class="s2">"</span>
+<a id="__codelineno-8-28" name="__codelineno-8-28" href="#__codelineno-8-28"></a><span class="w">  </span><span class="nb">wait</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_PID</span><span class="s2">"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-8-29" name="__codelineno-8-29" href="#__codelineno-8-29"></a><span class="o">}</span>
+<a id="__codelineno-8-30" name="__codelineno-8-30" href="#__codelineno-8-30"></a><span class="nb">trap</span><span class="w"> </span>cleanup_wave3a_fence<span class="w"> </span>EXIT
+<a id="__codelineno-8-31" name="__codelineno-8-31" href="#__codelineno-8-31"></a><span class="k">while</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>!<span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_READY</span><span class="s2">"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-8-32" name="__codelineno-8-32" href="#__codelineno-8-32"></a><span class="w">  </span><span class="nb">kill</span><span class="w"> </span>-0<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_PID</span><span class="s2">"</span>
+<a id="__codelineno-8-33" name="__codelineno-8-33" href="#__codelineno-8-33"></a><span class="w">  </span>sleep<span class="w"> </span><span class="m">0</span>.1
+<a id="__codelineno-8-34" name="__codelineno-8-34" href="#__codelineno-8-34"></a><span class="k">done</span>
+<a id="__codelineno-8-35" name="__codelineno-8-35" href="#__codelineno-8-35"></a>cat<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_READY</span><span class="s2">"</span>
+</code></pre></div>
+<h2 id="3-primary-live-backup-route-backup-pipeline">3. Primary LIVE backup route: backup pipeline</h2>
+<p>This is the required Tuesday route. Deployed v1.5.6 includes v1.5.5's backup-race fix and the v1.5.6 Swift source-class gate. The command enters through Python, but <code>create_sqlite_backup_artifact()</code> must send <code>brain_backup_vacuum_into</code> over the installed BrainBarDaemon socket; it does not perform SQLite backup locally. A successful terminal tool response plus the validated raw snapshot proves that daemon route executed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">set</span><span class="w"> </span>-o<span class="w"> </span>pipefail
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">BRAINLAYER_BACKUP_FULL_VERIFY</span><span class="o">=</span><span class="m">1</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS</span><span class="o">=</span><span class="m">3600</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>/usr/bin/time<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_HOST</span><span class="s2">"</span><span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="s">&lt;&lt;'PY' | tee "$WAVE3A_RUN_DIR/backup-pipeline.out"</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="s">import json, sys</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="s">from brainlayer.backup_daily import run_backup</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="s">result = run_backup(</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="s">    date_stamp=f"2026-08-11-wave3a-{sys.argv[1]}",</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="s">    remove_local_after_upload=False,</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="s">)</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="s">print(json.dumps(result, sort_keys=True))</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="s">if not result.get("verified") or not result.get("uploaded"):</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="s">    raise SystemExit(1)</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="s">PY</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>tail<span class="w"> </span>-n<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/brainlayer/logs/backup-daily.log"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/backup-pipeline.json"</span>
+</code></pre></div>
+<p>Before migration, require all of the following in the JSON receipt: <code>backup_log_provenance=real</code>, <code>verified=true</code>, <code>uploaded=true</code>, a Drive file id, matching verification checks, and a non-null <code>local_uncompressed_snapshot</code>. Assign that exact raw path and verify its row count read-only:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_BACKUP_RAW</span><span class="o">=</span><span class="s2">"&lt;local_uncompressed_snapshot from receipt&gt;"</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_BACKUP_RAW</span><span class="s2">"</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_BACKUP_RAW</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_ROWS_BEFORE</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="s">import sqlite3, sys</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="s">p, expected_rows = sys.argv[1], int(sys.argv[2])</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="s">c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="s">rows = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="s">quick_check = c.execute("PRAGMA quick_check").fetchone()[0]</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="s">print(rows)</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="s">print(quick_check)</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="s">c.close()</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="s">assert rows == expected_rows</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="s">assert quick_check == "ok"</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="s">PY</span>
+</code></pre></div>
+<h3 id="contingency-only-rehearsal-proven-online-backup">Contingency only: rehearsal-proven online backup</h3>
+<p>Do not choose this branch merely to save time. Use it only if the deployed v1.5.6 backup pipeline fails, after Etan explicitly authorizes the contingency. It was rehearsal-proven with canonical opened <code>mode=ro</code>; page retries while drain was writing only stretched wall-clock time.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">set</span><span class="w"> </span>-o<span class="w"> </span>pipefail
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_BACKUP_RAW</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/online-backup-contingency.db"</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_BACKUP_RAW</span><span class="s2">"</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>/usr/bin/time<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_BACKUP_RAW</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="s">import sqlite3, sys</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="s">source, destination = sys.argv[1:3]</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="s">src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="s">dst = sqlite3.connect(destination)</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="s">src.backup(dst, pages=4096, sleep=0.050)</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="s">dst.close()</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="s">src.close()</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="s">PY</span>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_BACKUP_RAW</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_ROWS_BEFORE</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="s">import sqlite3, sys</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="s">p, expected_rows = sys.argv[1], int(sys.argv[2])</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="s">c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)</span>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="s">rows = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="s">quick_check = c.execute("PRAGMA quick_check").fetchone()[0]</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="s">print(rows)</span>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a><span class="s">print(quick_check)</span>
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a><span class="s">c.close()</span>
+<a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a><span class="s">assert rows == expected_rows</span>
+<a id="__codelineno-11-23" name="__codelineno-11-23" href="#__codelineno-11-23"></a><span class="s">assert quick_check == "ok"</span>
+<a id="__codelineno-11-24" name="__codelineno-11-24" href="#__codelineno-11-24"></a><span class="s">PY</span>
+</code></pre></div>
+<p>After either backup route succeeds, stop the remaining daemon before migration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">if</span><span class="w"> </span>grep<span class="w"> </span>-Fxq<span class="w"> </span><span class="s1">'com.brainlayer.brainbar-daemon'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/active-labels.before"</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>launchctl<span class="w"> </span>bootout<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">/com.brainlayer.brainbar-daemon"</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nb">printf</span><span class="w"> </span><span class="s1">'%s\n'</span><span class="w"> </span><span class="s1">'com.brainlayer.brainbar-daemon'</span><span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/stopped-labels"</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">fi</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>:<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RELEASE</span><span class="s2">"</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="nb">wait</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_PID</span><span class="s2">"</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="nb">unset</span><span class="w"> </span>WAVE3A_FENCE_PID
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="nb">trap</span><span class="w"> </span>-<span class="w"> </span>EXIT
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>cat<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FENCE_RESULT</span><span class="s2">"</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/scripts/wal_checkpoint.py"</span><span class="w"> </span>--mode<span class="w"> </span>TRUNCATE<span class="w"> </span>--retry-busy<span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/checkpoint-after-backup.json"</span>
+</code></pre></div>
+<h2 id="4-migrate-in-one-supervised-sitting">4. Migrate in one supervised sitting</h2>
+<p>The environment gate is intentionally scoped to this command. Without it the script refuses the configured canonical path.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nb">set</span><span class="w"> </span>-o<span class="w"> </span>pipefail
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>/usr/bin/time<span class="w"> </span>-p<span class="w"> </span>env<span class="w"> </span><span class="nv">BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_REPO</span><span class="s2">/src"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_REPO</span><span class="s2">/scripts/migrate_source_class.py"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span>--db<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span>--git-sha<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_SHA</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span>--actor<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_ACTOR</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">  </span>--batch-size<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/source-class-migration.json"</span>
+</code></pre></div>
+<p>If additional approved Wave 3 migrations are scheduled for the same maintenance window, execute their pinned commands now, before reconcile and restart. Never invent or substitute an unpinned 3b/3c command.</p>
+<h2 id="5-reconcile-and-verify">5. Reconcile and verify</h2>
+<p>Run this read-only receipt query:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_MIGRATION_SHA</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_ROWS_BEFORE</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="s">import json, sqlite3, sys</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="s">import sqlite_vec</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="s">db, expected_sha, expected_rows = sys.argv[1], sys.argv[2], int(sys.argv[3])</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="s">c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="s">c.enable_load_extension(True)</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="s">c.load_extension(sqlite_vec.loadable_path())</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="s">c.enable_load_extension(False)</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="s">distribution = dict(("NULL" if k is None else k, v) for k, v in c.execute(</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="s">    "SELECT source_class, COUNT(*) FROM chunks GROUP BY source_class"</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="s">))</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="s">schema = json.loads(c.execute(</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="s">    "SELECT details FROM schema_migrations WHERE name='2026_08_10_source_class_v1'"</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="s">).fetchone()[0])</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="s">event = c.execute(</span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="s">    "SELECT commit_hash, actor, status FROM migration_events WHERE id='schema:2026_08_10_source_class_v1'"</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="s">).fetchone()</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="s">receipt = {</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="s">    "quick_check": c.execute("PRAGMA quick_check").fetchone()[0],</span>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="s">    "rows": c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],</span>
+<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="s">    "distribution": distribution,</span>
+<a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="s">    "invalid_classes": c.execute("SELECT COUNT(*) FROM chunks WHERE source_class IS NOT NULL AND source_class NOT IN ('cli-agent','desktop','subagent','brain-worker','fleet-coordination')").fetchone()[0],</span>
+<a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="s">    "brain_worker_fts_mapping_rows": c.execute("SELECT COUNT(*) FROM chunk_fts_rowids r JOIN chunks c ON c.id=r.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],</span>
+<a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="s">    "brain_worker_default_fts_rows": c.execute("SELECT COUNT(*) FROM chunks_fts i JOIN chunks c ON c.id=i.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],</span>
+<a id="__codelineno-14-25" name="__codelineno-14-25" href="#__codelineno-14-25"></a><span class="s">    "brain_worker_operational_fts_rows": c.execute("SELECT COUNT(*) FROM chunks_fts_operational i JOIN chunks c ON c.id=i.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],</span>
+<a id="__codelineno-14-26" name="__codelineno-14-26" href="#__codelineno-14-26"></a><span class="s">    "brain_worker_trigram_fts_rows": c.execute("SELECT COUNT(*) FROM chunks_fts_trigram i JOIN chunks c ON c.id=i.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],</span>
+<a id="__codelineno-14-27" name="__codelineno-14-27" href="#__codelineno-14-27"></a><span class="s">    "brain_worker_float_vector_rows": c.execute("SELECT COUNT(*) FROM chunk_vectors v JOIN chunks c ON c.id=v.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],</span>
+<a id="__codelineno-14-28" name="__codelineno-14-28" href="#__codelineno-14-28"></a><span class="s">    "brain_worker_binary_vector_rows": c.execute("SELECT COUNT(*) FROM chunk_vectors_binary v JOIN chunks c ON c.id=v.chunk_id WHERE c.source_class='brain-worker'").fetchone()[0],</span>
+<a id="__codelineno-14-29" name="__codelineno-14-29" href="#__codelineno-14-29"></a><span class="s">    "schema_sha": schema.get("git_sha"),</span>
+<a id="__codelineno-14-30" name="__codelineno-14-30" href="#__codelineno-14-30"></a><span class="s">    "event": event,</span>
+<a id="__codelineno-14-31" name="__codelineno-14-31" href="#__codelineno-14-31"></a><span class="s">}</span>
+<a id="__codelineno-14-32" name="__codelineno-14-32" href="#__codelineno-14-32"></a><span class="s">c.close()</span>
+<a id="__codelineno-14-33" name="__codelineno-14-33" href="#__codelineno-14-33"></a><span class="s">print(json.dumps(receipt, indent=2, sort_keys=True))</span>
+<a id="__codelineno-14-34" name="__codelineno-14-34" href="#__codelineno-14-34"></a><span class="s">assert receipt["quick_check"] == "ok"</span>
+<a id="__codelineno-14-35" name="__codelineno-14-35" href="#__codelineno-14-35"></a><span class="s">assert receipt["rows"] == expected_rows</span>
+<a id="__codelineno-14-36" name="__codelineno-14-36" href="#__codelineno-14-36"></a><span class="s">assert receipt["invalid_classes"] == 0</span>
+<a id="__codelineno-14-37" name="__codelineno-14-37" href="#__codelineno-14-37"></a><span class="s">assert receipt["brain_worker_fts_mapping_rows"] == 0</span>
+<a id="__codelineno-14-38" name="__codelineno-14-38" href="#__codelineno-14-38"></a><span class="s">assert receipt["brain_worker_default_fts_rows"] == 0</span>
+<a id="__codelineno-14-39" name="__codelineno-14-39" href="#__codelineno-14-39"></a><span class="s">assert receipt["brain_worker_operational_fts_rows"] == 0</span>
+<a id="__codelineno-14-40" name="__codelineno-14-40" href="#__codelineno-14-40"></a><span class="s">assert receipt["brain_worker_trigram_fts_rows"] == 0</span>
+<a id="__codelineno-14-41" name="__codelineno-14-41" href="#__codelineno-14-41"></a><span class="s">assert receipt["brain_worker_float_vector_rows"] == 0</span>
+<a id="__codelineno-14-42" name="__codelineno-14-42" href="#__codelineno-14-42"></a><span class="s">assert receipt["brain_worker_binary_vector_rows"] == 0</span>
+<a id="__codelineno-14-43" name="__codelineno-14-43" href="#__codelineno-14-43"></a><span class="s">assert receipt["schema_sha"] == expected_sha</span>
+<a id="__codelineno-14-44" name="__codelineno-14-44" href="#__codelineno-14-44"></a><span class="s">assert event[0] == expected_sha and event[2] == "success"</span>
+<a id="__codelineno-14-45" name="__codelineno-14-45" href="#__codelineno-14-45"></a><span class="s">PY</span>
+<a id="__codelineno-14-46" name="__codelineno-14-46" href="#__codelineno-14-46"></a>stat<span class="w"> </span>-f<span class="w"> </span><span class="s1">'%z'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-wal"</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+</code></pre></div>
+<p>Required visibility probes before restart: one exact stored id from each class plus one NULL row. Exact expansion must work for all six; default search must show cli-agent, subagent, fleet-coordination, and NULL, while hiding desktop and brain-worker. The internal desktop opt-in must reveal desktop but never brain-worker:</p>
+<p>The live distribution may differ from the rehearsal counts because classification reads current source JSONL attribution from disk. A distribution delta is a receipt to investigate, not by itself a failure; the taxonomy, row-count, zero-index, and visibility assertions above remain the stop gates.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">set</span><span class="w"> </span>-o<span class="w"> </span>pipefail
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/scripts/verify_source_class_visibility.py"</span><span class="w"> </span>--db<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/source-class-visibility.json"</span>
+</code></pre></div>
+<h2 id="6-restart-exactly-the-prior-active-set-and-probe-the-real-service">6. Restart exactly the prior active set and probe the real service</h2>
+<p>Restore labels from the saved inventory, except that enrichment remains skipped when absent before or named by the pause sentinel:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="k">while</span><span class="w"> </span><span class="nv">IFS</span><span class="o">=</span><span class="w"> </span><span class="nb">read</span><span class="w"> </span>-r<span class="w"> </span>label<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"com.brainlayer.enrichment"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$label</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="s">import sys</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="s">from datetime import UTC, datetime</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="s">from brainlayer.pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="s">label = sys.argv[1]</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="s">payload, active, _stale = pause_sentinel_state(DEFAULT_PAUSE_SENTINEL_PATH, datetime.now(UTC))</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="s">raise SystemExit(0 if active and pause_applies_to_label(payload, label) else 1)</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="s">PY</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">    </span><span class="k">then</span>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">      </span><span class="k">continue</span>
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="w">    </span><span class="k">fi</span>
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="w">  </span><span class="k">fi</span>
+<a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="w">  </span><span class="nv">plist</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/Library/LaunchAgents/</span><span class="nv">$label</span><span class="s2">.plist"</span>
+<a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="w">  </span><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$plist</span><span class="s2">"</span>
+<a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a><span class="w">  </span>launchctl<span class="w"> </span>bootstrap<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$plist</span><span class="s2">"</span>
+<a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="k">done</span><span class="w"> </span>&lt;<span class="w"> </span>&lt;<span class="o">(</span>tail<span class="w"> </span>-r<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/stopped-labels"</span><span class="o">)</span>
+</code></pre></div>
+<p>Then prove the executing binary serves a real request:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>launchctl<span class="w"> </span>print<span class="w"> </span><span class="s2">"gui/</span><span class="k">$(</span>id<span class="w"> </span>-u<span class="k">)</span><span class="s2">/com.brainlayer.brainbar-daemon"</span><span class="w"> </span>&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/brainbar-daemon.print"</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_DAEMON_PID</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>awk<span class="w"> </span><span class="s1">'/^[[:space:]]*pid = / {print $3; exit}'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/brainbar-daemon.print"</span><span class="k">)</span><span class="s2">"</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="nb">test</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DAEMON_PID</span><span class="s2">"</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>ps<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DAEMON_PID</span><span class="s2">"</span><span class="w"> </span>-o<span class="w"> </span><span class="nv">command</span><span class="o">=</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/brainbar-daemon.command"</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>grep<span class="w"> </span>-F<span class="w"> </span><span class="s1">'/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon'</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/brainbar-daemon.command"</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>shasum<span class="w"> </span>-a<span class="w"> </span><span class="m">256</span><span class="w"> </span>/Applications/BrainBar.app/Contents/MacOS/BrainBarDaemon<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/brainbar-daemon.sha256"</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/source-class-visibility.json"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/live-probes.env"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="s">import json, shlex, sys</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="s">receipt = json.load(open(sys.argv[1], encoding="utf-8"))</span>
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a><span class="s">values = {</span>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a><span class="s">    "WAVE3A_VISIBLE_ID": receipt["cli-agent"]["chunk_id"],</span>
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a><span class="s">    "WAVE3A_VISIBLE_TOKEN": receipt["cli-agent"]["token"],</span>
+<a id="__codelineno-17-15" name="__codelineno-17-15" href="#__codelineno-17-15"></a><span class="s">    "WAVE3A_DESKTOP_ID": receipt["desktop"]["chunk_id"],</span>
+<a id="__codelineno-17-16" name="__codelineno-17-16" href="#__codelineno-17-16"></a><span class="s">    "WAVE3A_DESKTOP_TOKEN": receipt["desktop"]["token"],</span>
+<a id="__codelineno-17-17" name="__codelineno-17-17" href="#__codelineno-17-17"></a><span class="s">}</span>
+<a id="__codelineno-17-18" name="__codelineno-17-18" href="#__codelineno-17-18"></a><span class="s">with open(sys.argv[2], "w", encoding="utf-8") as handle:</span>
+<a id="__codelineno-17-19" name="__codelineno-17-19" href="#__codelineno-17-19"></a><span class="s">    for key, value in values.items():</span>
+<a id="__codelineno-17-20" name="__codelineno-17-20" href="#__codelineno-17-20"></a><span class="s">        handle.write(f"export {key}={shlex.quote(str(value))}\n")</span>
+<a id="__codelineno-17-21" name="__codelineno-17-21" href="#__codelineno-17-21"></a><span class="s">PY</span>
+<a id="__codelineno-17-22" name="__codelineno-17-22" href="#__codelineno-17-22"></a><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/live-probes.env"</span>
+<a id="__codelineno-17-23" name="__codelineno-17-23" href="#__codelineno-17-23"></a><span class="nv">QUERY</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_VISIBLE_TOKEN</span><span class="s2">"</span><span class="w"> </span><span class="nv">NUM_RESULTS</span><span class="o">=</span><span class="m">100</span><span class="w"> </span><span class="nv">RAW_OUTPUT_PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-mcp-visible.raw.jsonl"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-24" name="__codelineno-17-24" href="#__codelineno-17-24"></a><span class="w">  </span><span class="nv">DEADLINE_SECS</span><span class="o">=</span><span class="m">30</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/scripts/smoke/firstturn-brainlayer-smoke.sh"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-25" name="__codelineno-17-25" href="#__codelineno-17-25"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-mcp-visible.out"</span>
+<a id="__codelineno-17-26" name="__codelineno-17-26" href="#__codelineno-17-26"></a>grep<span class="w"> </span>-F<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_VISIBLE_ID</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-mcp-visible.raw.jsonl"</span>
+<a id="__codelineno-17-27" name="__codelineno-17-27" href="#__codelineno-17-27"></a><span class="nv">QUERY</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_DESKTOP_TOKEN</span><span class="s2">"</span><span class="w"> </span><span class="nv">NUM_RESULTS</span><span class="o">=</span><span class="m">100</span><span class="w"> </span><span class="nv">RAW_OUTPUT_PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-mcp-desktop.raw.jsonl"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-28" name="__codelineno-17-28" href="#__codelineno-17-28"></a><span class="w">  </span><span class="nv">DEADLINE_SECS</span><span class="o">=</span><span class="m">30</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_EXEC_REPO</span><span class="s2">/scripts/smoke/firstturn-brainlayer-smoke.sh"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-29" name="__codelineno-17-29" href="#__codelineno-17-29"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-mcp-desktop.out"</span>
+<a id="__codelineno-17-30" name="__codelineno-17-30" href="#__codelineno-17-30"></a>!<span class="w"> </span>grep<span class="w"> </span>-F<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DESKTOP_ID</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-mcp-desktop.raw.jsonl"</span>
+<a id="__codelineno-17-31" name="__codelineno-17-31" href="#__codelineno-17-31"></a><span class="s2">"</span><span class="nv">$WAVE3A_CLI</span><span class="s2">"</span><span class="w"> </span>search<span class="w"> </span><span class="s2">"source class"</span><span class="w"> </span>-n<span class="w"> </span><span class="m">3</span><span class="w"> </span>--text<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-32" name="__codelineno-17-32" href="#__codelineno-17-32"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/real-cli-search.out"</span>
+</code></pre></div>
+<p>Stop and rollback if any SQL reconcile, visibility probe, or real-service probe fails.</p>
+<h2 id="7-rollback-re-copy-the-verified-backup">7. Rollback = re-copy the verified backup</h2>
+<p>Keep all writers stopped. If failure is detected after services were restarted, repeat the stop phase for the saved active set and confirm the database has no writer before continuing. Preserve the failed database rather than deleting it. Re-copy the verified raw backup on the same volume, quick-check the restore candidate, then atomically put it at the canonical path:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_FAILED_DB</span><span class="o">=</span><span class="s2">"</span><span class="nv">$WAVE3A_RUN_DIR</span><span class="s2">/failed-after-wave3a.db"</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">WAVE3A_RESTORE_DB</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="k">)</span><span class="s2">/.brainlayer-wave3a-restore.db"</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FAILED_DB</span><span class="s2">"</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FAILED_DB</span><span class="s2">-wal"</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FAILED_DB</span><span class="s2">-shm"</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RESTORE_DB</span><span class="s2">"</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>cp<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_BACKUP_RAW</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RESTORE_DB</span><span class="s2">"</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="s2">"</span><span class="nv">$WAVE3A_PYTHON</span><span class="s2">"</span><span class="w"> </span>-<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RESTORE_DB</span><span class="s2">"</span><span class="w"> </span><span class="s">&lt;&lt;'PY'</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="s">import sqlite3, sys</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="s">c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="s">print(c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])</span>
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="s">assert c.execute("PRAGMA quick_check").fetchone()[0] == "ok"</span>
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a><span class="s">c.close()</span>
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a><span class="s">PY</span>
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-wal"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span><span class="w"> </span>mv<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-wal"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FAILED_DB</span><span class="s2">-wal"</span><span class="p">;</span><span class="w"> </span><span class="k">fi</span>
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-shm"</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span><span class="w"> </span>mv<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-shm"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FAILED_DB</span><span class="s2">-shm"</span><span class="p">;</span><span class="w"> </span><span class="k">fi</span>
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>mv<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_FAILED_DB</span><span class="s2">"</span>
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>mv<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_RESTORE_DB</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">"</span>
+<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-wal"</span>
+<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a><span class="nb">test</span><span class="w"> </span>!<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$WAVE3A_DB</span><span class="s2">-shm"</span>
+</code></pre></div>
+<p>Checkpoint, restart only the prior active labels, and rerun the real-service probes. Record the rollback wall-clock and restored row count in the host table.</p>
+<h2 id="rehearsal-receipt">Rehearsal receipt</h2>
+<p>The PR handoff fills the final-code rerun values here and in the collab append:</p>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Measured result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Canonical source writes</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Tuesday LIVE primary route</td>
+<td>deployed v1.5.6 backup pipeline; verified local raw snapshot plus uploaded Drive receipt required</td>
+</tr>
+<tr>
+<td>Rehearsal-proven contingency</td>
+<td>SQLite online backup; source opened <code>mode=ro</code></td>
+</tr>
+<tr>
+<td>Contingency online-backup wall-clock</td>
+<td>26.16 seconds under live drain writes; source opened <code>mode=ro</code></td>
+</tr>
+<tr>
+<td>Rows before / after</td>
+<td>744,335 / 744,335</td>
+</tr>
+<tr>
+<td>Migration wall-clock</td>
+<td>252.02 seconds (<code>duration_seconds=251.79996774997562</code>); exact-SHA idempotent rerun 0.65 seconds</td>
+</tr>
+<tr>
+<td>WAL bytes before / observed peak / after</td>
+<td>0 / 29,181,992 / 0 in the earlier monitored rehearsal; final-code peak not separately sampled</td>
+</tr>
+<tr>
+<td>Distribution</td>
+<td>NULL 69,581; brain-worker 84; cli-agent 536,851; desktop 2,696; fleet-coordination 105,383; subagent 29,740</td>
+</tr>
+<tr>
+<td>Ledgers</td>
+<td>schema and event rows both pin <code>3964412f8291a083150a424e38df08ece817783d</code>; event status <code>success</code></td>
+</tr>
+<tr>
+<td>Quick check</td>
+<td><code>ok</code> in 712.79 seconds; zero invalid classes; zero brain-worker FTS, float-vector, and binary-vector rows</td>
+</tr>
+<tr>
+<td>Class visibility / expansion</td>
+<td>rerun with shipped search code at <code>065d602651bc14b096f268482cc125eaca450354</code>: six source buckets green against real copied rows; aggregate desktop audit sampled 72 tokens with zero leaked IDs; brain-worker zero across all six indexes</td>
+</tr>
+<tr>
+<td>Rollback</td>
+<td>APFS re-copy, 0.00 seconds; 744,335 rows; <code>source_class</code> absent</td>
+</tr>
+<tr>
+<td>Repository gates</td>
+<td>focused source-class 251 passed; final search/cache 42 passed; additional search scopes 92 passed / 1 xfailed with the protected production-DB latency probe refused by the test-path guard; Swift Database/KG 119 passed; full Swift reached 850 passed / 10 skipped with 7 unrelated timing failures while another lane held 24 deliberate CPU spinners</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+  <div class="ecosystem-links">
+    <a href="https://brainlayer.etanheyman.com">BrainLayer</a>
+    <span class="sep">/</span>
+    <a href="https://voicelayer.etanheyman.com">VoiceLayer</a>
+    <span class="sep">/</span>
+    <a href="https://cmuxlayer.etanheyman.com">cmuxLayer</a>
+    <span class="sep">/</span>
+    <a href="https://github.com/EtanHey">Golems</a>
+  </div>
+  
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  <script>
+    // Inject back-to-site link into the header, after the title
+    (function() {
+      var title = document.querySelector('.md-header__title');
+      if (!title) return;
+      var link = document.createElement('a');
+      link.href = 'https://brainlayer.etanheyman.com';
+      link.className = 'header-back';
+      link.innerHTML = '&larr; Site';
+      title.after(link);
+    })();
+  </script>
+
+  </body>
+</html>
