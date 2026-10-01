@@ -1871,13 +1871,21 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_recall",
-            "description": "Recall one session's context (requires session_id), injection events, or knowledge-base stats (default). For topic lookup use brain_search.",
+            "description": "Recall one session's context (requires session_id), injection events, "
+                + "or knowledge-base stats (default). For topic lookup use brain_search.",
             "annotations": MCPRouter.recallAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "enum": ["context", "stats", "injections"], "description": "Recall mode"],
-                    "session_id": ["type": "string", "description": "Session ID for context mode; optional filter for injections"],
+                    "mode": [
+                        "type": "string",
+                        "enum": ["context", "stats", "injections"],
+                        "description": "Recall mode"
+                    ],
+                    "session_id": [
+                        "type": "string",
+                        "description": "Session ID for context mode; optional filter for injections"
+                    ]
                 ] as [String: Any],
             ] as [String: Any])
         ],
