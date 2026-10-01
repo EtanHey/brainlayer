@@ -374,6 +374,31 @@ def test_live_apply_quiesces_all_writers_and_preserves_enrichment_pause(db, live
     assert "no-writers" in live_guard.events
 
 
+@pytest.mark.parametrize("fail_apply", [False, True])
+def test_guarded_restoration_preserves_real_fleet_pause(db, live_guard, monkeypatch, fail_apply):
+    from brainlayer import scrub_at_rest as scrub_module
+
+    live_guard.pause.write_text(
+        json.dumps({"labels": ["com.brainlayer.enrichment", "com.etanhey.brainlayer-fleet-watchdog"]})
+    )
+    if fail_apply:
+
+        def fail(*args, **kwargs):
+            raise scrub_module.ScrubAtRestError("fixture failure")
+
+        monkeypatch.setattr(scrub_module, "_apply", fail)
+        with pytest.raises(scrub_module.ScrubAtRestError):
+            scrub_module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    else:
+        scrub_module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+
+    stopped = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "stop"}
+    resumed = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "resume"}
+    assert stopped == set(scrub_module.LIVE_SERVICES)
+    assert resumed == stopped - {"enrichment", "fleet-watchdog"}
+    assert live_guard.loaded["fleet-watchdog"] is False
+
+
 def test_live_failure_resumes_services_and_quiesce_failure_never_writes(db, live_guard, monkeypatch):
     from brainlayer import maintenance
     from brainlayer.scrub_at_rest import ScrubAtRestError, scrub_at_rest

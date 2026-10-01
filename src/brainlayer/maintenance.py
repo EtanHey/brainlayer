@@ -590,7 +590,7 @@ def _service_is_deliberately_paused(service: str) -> bool:
     payload, active, _stale = pause_sentinel_state(PAUSE_SENTINEL_PATH, datetime.now(UTC))
     if not active:
         return False
-    return pause_applies_to_label(payload, f"com.brainlayer.{service}")
+    return pause_applies_to_label(payload, _launchd_label(service))
 
 
 def _maintenance_keep_down_services() -> set[str]:
