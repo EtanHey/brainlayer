@@ -96,20 +96,28 @@ _HEX_RE = re.compile(r"\b[0-9a-fA-F]{16,}\b")
 _UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 
 
-def scrub_secrets(text: str) -> SecretScrubResult:
-    """Redact labeled secrets before persistence while preserving join-key-like tokens."""
+def scrub_secrets(text: str, *, providers: frozenset[str] | None = None) -> SecretScrubResult:
+    """Redact secrets; an explicit provider set selects only those provider spans."""
+    if providers is not None and not providers <= {p.provider for p in _PROVIDER_PATTERNS}:
+        raise ValueError("unknown secret provider selector")
     if not text:
         return SecretScrubResult(text=text)
 
-    windows = list(_scan_windows(text))
+    # One-off provider selection must see real token boundaries, not window ends.
+    windows = [(0, len(text))] if providers is not None else list(_scan_windows(text))
     spans: list[SecretRedaction] = []
     for start, end in windows:
         spans.extend(_provider_redactions(text[start:end], offset=start))
-    for start, end in windows:
-        spans.extend(_assignment_redactions(text[start:end], spans, offset=start))
+    if providers is not None:
+        spans = [span for span in spans if span.provider in providers]
+    else:
+        for start, end in windows:
+            spans.extend(_assignment_redactions(text[start:end], spans, offset=start))
     spans = _without_overlaps(sorted(spans, key=lambda item: (item.start, item.end)))
 
     scrubbed = _apply_redactions(text, spans) if spans else text
+    if providers is not None:
+        return SecretScrubResult(text=scrubbed, redactions=spans)
     quarantine: list[QuarantinedToken] = []
     for start, end in windows:
         quarantine.extend(_quarantine_unlabeled_entropy(text[start:end], spans, offset=start))

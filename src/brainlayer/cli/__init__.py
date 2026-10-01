@@ -2867,6 +2867,45 @@ def wal_checkpoint(
     report_job_alert("wal-checkpoint", None)
 
 
+@app.command("scrub-at-rest")
+def scrub_at_rest_command(
+    db_path: Path = typer.Option(..., "--db", help="Explicit database path; live apply requires guarded opt-in."),
+    providers: str = typer.Option("google_oauth", "--providers", help="Only google_oauth is supported."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count matches without writing."),
+    batch_size: int = typer.Option(100, "--batch-size", min=1, max=1000),
+    allow_live_db: bool = typer.Option(
+        False, "--allow-live-db", help="Apply with maintenance safety gates and writer quiescence."
+    ),
+    expect_rows: int | None = typer.Option(
+        None, "--expect-rows", min=0, help="Required guarded apply total from the preceding dry run."
+    ),
+) -> None:
+    """Redact provider credentials on a copy or a guarded runtime DB; print counts only."""
+    from ..scrub_at_rest import scrub_at_rest
+
+    try:
+        result = scrub_at_rest(
+            db_path,
+            providers=providers,
+            dry_run=dry_run,
+            batch_size=batch_size,
+            allow_live_db=allow_live_db,
+            expect_rows=expect_rows,
+        )
+    except Exception as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "error": "at-rest scrub refused or failed",
+                    "error_type": type(exc).__name__,
+                    "reason": getattr(exc, "reason", "scrub-failed"),
+                }
+            )
+        )
+        raise typer.Exit(1) from None
+    typer.echo(json.dumps(result, sort_keys=True))
+
+
 @app.command("repair-fts")
 def repair_fts(
     db_path: Path | None = typer.Argument(None, help="Offline database copy; omitted means read-only FTS count check."),
