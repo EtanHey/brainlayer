@@ -21,6 +21,9 @@ FAMILIES = {
     "vercel-vck": ("vercel", "vck_" + "0" * 40),
     "vercel-vcp": ("vercel", "vcp_" + "0" * 40),
     "vercel-vci": ("vercel", "vci_" + "0" * 40),
+    "google-oauth-access": ("google_oauth_access", "ya29." + "0" * 40),
+    "google-oauth-refresh": ("google_oauth_refresh", "1//0" + "0" * 40),
+    "google-client-secret": ("google_client_secret", "GOCSPX-" + "0" * 28),
 }
 
 
@@ -41,6 +44,9 @@ def test_token_family_is_redacted_with_its_provider(family):
         "the tskey-auth-keys-are-rotated-weekly runbook",
         "gsk_ prefixes mark Groq keys",
         "vck_ is a Vercel prefix",
+        "the word ya29 describes a token prefix",
+        "ya29.short and GOCSPX-short are examples of prefixes",
+        "https://example.invalid/1//notes is a URL path fragment",
     ],
 )
 def test_family_prefixes_in_prose_are_not_redacted(prose):

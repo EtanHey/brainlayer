@@ -91,6 +91,40 @@ final class StoreSecretScrubTests: XCTestCase {
         )
     }
 
+    func testOAuthFamiliesAreScrubbedInRowsFTSAndDeferredQueue() throws {
+        let families = [
+            ("google_oauth_access", "ya29." + String(repeating: "0", count: 40)),
+            ("google_oauth_refresh", "1//0" + String(repeating: "0", count: 40)),
+            ("google_client_secret", "GOCSPX-" + String(repeating: "0", count: 28)),
+        ]
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        for (provider, token) in families {
+            let stored = try db.store(content: "note \(token)", tags: [token], importance: 5, source: "mcp")
+            let row = try XCTUnwrap(
+                try rows("SELECT content, tags, metadata FROM chunks WHERE id = '\(stored.chunkID)'").first
+            )
+            XCTAssertNil(Data(row.joined().utf8).range(of: Data(token.utf8)))
+            XCTAssertTrue(row[0].contains("[REDACTED:\(provider)]"))
+            XCTAssertTrue(row[1].contains("[REDACTED:\(provider)]"))
+            XCTAssertTrue(row[2].contains(provider))
+            for table in ["chunks_fts", "chunks_fts_trigram"] {
+                let blob = try rows("SELECT * FROM \(table)").flatMap { $0 }.joined()
+                XCTAssertNil(Data(blob.utf8).range(of: Data(token.utf8)), table)
+            }
+            _ = try db.queuePendingStore(
+                content: "queued \(token)", tags: [token], importance: 5, source: "mcp", chunkID: "oauth-\(provider)"
+            )
+            let queue = try Data(contentsOf: tempDir.appendingPathComponent("pending-stores.jsonl"))
+            XCTAssertNil(queue.range(of: Data(token.utf8)))
+        }
+        XCTAssertEqual(db.flushPendingStores().count, families.count)
+        let replayed = try rows("SELECT content, tags FROM chunks").flatMap { $0 }.joined()
+        for (_, token) in families {
+            XCTAssertNil(Data(replayed.utf8).range(of: Data(token.utf8)))
+        }
+    }
+
     func testDeferredQueueNeverWritesTheRawTokenAndReplayKeepsProviders() throws {
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }

@@ -176,3 +176,16 @@ def test_large_input_deduplicates_quarantine_from_window_overlap():
     result = scrub_secrets(text)
 
     assert [item.value for item in result.quarantine] == [token]
+
+
+@pytest.mark.parametrize("dots", [1, 8, 62, 70])
+def test_quarantine_span_matches_value_after_leading_punctuation(dots):
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    text = "é" + "." * dots + token + "."
+    result = scrub_secrets(text)
+    assert result.text == text
+    assert len(result.quarantine) == 1
+    item = result.quarantine[0]
+    assert item.value == token
+    assert item.start == 1 + dots and item.end == 1 + dots + len(token)
+    assert text[item.start : item.end] == item.value

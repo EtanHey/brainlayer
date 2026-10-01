@@ -60,6 +60,9 @@ _PROVIDER_PATTERNS = (
     ),
     _ProviderPattern("slack", re.compile(r"\bxox[baprs]-(?:[A-Za-z0-9]+-){1,}[A-Za-z0-9]{16,}\b")),
     _ProviderPattern("google", re.compile(r"\bAIza[A-Za-z0-9_-]{32,}\b")),
+    _ProviderPattern("google_oauth_access", re.compile(r"ya29\.[A-Za-z0-9_.-]{20,}(?![A-Za-z0-9_-])")),
+    _ProviderPattern("google_oauth_refresh", re.compile(r"1//[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
+    _ProviderPattern("google_client_secret", re.compile(r"GOCSPX-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
     _ProviderPattern("gitlab", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b")),
     _ProviderPattern("supabase", re.compile(r"\b(?:sbp_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]{20,})\b")),
     _ProviderPattern("sendgrid", re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{32,}\b")),
@@ -198,8 +201,10 @@ def _quarantine_unlabeled_entropy(
     quarantined: list[QuarantinedToken] = []
     redaction_index = _SpanIndex(redactions)
     for match in _TOKEN_RE.finditer(text):
-        value = match.group(0).strip(".,;)")
-        start = offset + match.start()
+        raw_value = match.group(0)
+        value = raw_value.strip(".,;)")
+        leading_trim = len(raw_value) - len(raw_value.lstrip(".,;)"))
+        start = offset + match.start() + leading_trim
         end = start + len(value)
         if redaction_index.overlaps(start, end):
             continue

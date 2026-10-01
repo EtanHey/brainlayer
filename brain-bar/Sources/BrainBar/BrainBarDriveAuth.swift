@@ -165,8 +165,8 @@ enum DriveAuthJSON {
         return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
     }
 
-    /// Google OAuth access tokens, refresh tokens and client secrets, which SecretScrubber does
-    /// not cover. A reason is shown to the user, so it must never carry one.
+    /// Additional Google OAuth display sanitization, including short credential fragments.
+    /// A reason is shown to the user, so it must never carry one.
     private static let googleCredentialPatterns = [
         #"ya29\.[A-Za-z0-9_\-\.]+"#,
         #"1//[A-Za-z0-9_\-]+"#,

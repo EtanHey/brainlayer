@@ -31,6 +31,9 @@ FAKE_TOKENS = {
     "google": "AIza" + "0" * 35,
     "github": "ghp_" + "0" * 36,
     "openai": "sk-" + "0" * 40,
+    "google_oauth_access": "ya29." + "0" * 40,
+    "google_oauth_refresh": "1//0" + "0" * 40,
+    "google_client_secret": "GOCSPX-" + "0" * 28,
 }
 
 
@@ -52,7 +55,256 @@ def test_scrub_secrets_redacts_every_shape_seen_in_enrichment_leak():
     result = scrub_secrets(_payload_with_every_token())
 
     _assert_no_token(result.text, where="scrub_secrets")
-    assert {redaction.provider for redaction in result.redactions} >= {"supabase", "google", "github", "openai"}
+    assert {redaction.provider for redaction in result.redactions} == set(FAKE_TOKENS)
+
+
+@pytest.mark.parametrize("provider", ["google_oauth_access", "google_oauth_refresh", "google_client_secret"])
+@pytest.mark.parametrize("leading", ["", "abc"])
+def test_oauth_tokens_are_scrubbed_at_rest_and_in_nested_llm_output(provider, leading, tmp_path):
+    from brainlayer.drain import _apply_store
+    from brainlayer.pipeline.cloud_scrub import normalize_json_strings, scrub_llm_output
+    from brainlayer.vector_store import VectorStore
+
+    token = leading + FAKE_TOKENS[provider]
+    placeholder = f"{leading}[REDACTED:{provider}]"
+    store = VectorStore(tmp_path / "oauth.db")
+    try:
+        stored = _apply_store(
+            store.conn,
+            {"content": f"note {token}", "tags": [token], "metadata": {"note": token}, "source": "manual"},
+        )
+        row = store.conn.cursor().execute("SELECT * FROM chunks WHERE id = ?", (stored.chunk_id,)).fetchone()
+        assert token not in str(row)
+        assert placeholder in str(row)
+        for table in ("chunks_fts", "chunks_fts_trigram"):
+            assert token not in str(list(store.conn.cursor().execute(f"SELECT * FROM {table}")))
+        store.update_enrichment(stored.chunk_id, summary=token, tags=[token], key_facts=[token])
+        row = store.conn.cursor().execute("SELECT * FROM chunks WHERE id = ?", (stored.chunk_id,)).fetchone()
+        assert token not in str(row)
+        assert placeholder in str(row)
+    finally:
+        store.close()
+
+    encoded = json.dumps({"nested": token}).replace(token[0], f"\\u{ord(token[0]):04x}")
+    output = scrub_llm_output(normalize_json_strings({token: [token, {"encoded": encoded}], "count": 3}))
+    assert token not in json.dumps(output)
+    assert output["count"] == 3
+    assert output[placeholder][0] == placeholder
+    assert json.loads(output[placeholder][1]["encoded"])["nested"] == placeholder
+
+
+@pytest.mark.parametrize("position", ["alone", "before_provider", "after_provider"])
+def test_quarantine_is_redacted_before_gemini_send(position, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline.secret_scrub import scrub_secrets
+
+    # Fixed alphabet filler exercises entropy without a real credential.
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    provider = FAKE_TOKENS["google_oauth_access"]
+    prompt = {"alone": token, "before_provider": f"{token} {provider}", "after_provider": f"{provider} {token}"}[
+        position
+    ]
+    result = scrub_secrets(prompt)
+    assert [item.value for item in result.quarantine] == [token]
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    client = _FakeGeminiClient()
+
+    controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+
+    # The long provider placeholder itself is quarantined on the second pass.
+    expected = prompt.replace(provider, "[[REDACTED:quarantine]]").replace(token, "[REDACTED:quarantine]")
+    assert client.models.sent == [expected]
+
+
+@pytest.mark.parametrize("sender", ["call_groq", "call_glm", "call_mlx"])
+def test_quarantine_is_redacted_in_http_transport(sender, monkeypatch):
+    from brainlayer.pipeline import enrichment
+
+    monkeypatch.setattr(enrichment, "GROQ_API_KEY", "test-not-a-key")
+    sent = _capture_requests_post(monkeypatch, enrichment.requests)
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    getattr(enrichment, sender)(token)
+
+    assert len(sent) == 1
+    assert token not in sent[0]
+    assert "[REDACTED:quarantine]" in sent[0]
+
+
+def test_quarantine_is_redacted_in_batch_upload_and_export(monkeypatch, tmp_path):
+    from brainlayer import cloud_backfill
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    export = tmp_path / "quarantined.jsonl"
+    lines = [{"request": {"contents": [{"parts": [{"text": text}]}]}} for text in (_payload_with_every_token(), token)]
+    original = "\n".join(json.dumps(line) for line in lines) + "\n"
+    export.write_text(original, encoding="utf-8")
+    uploaded = []
+    client = types.SimpleNamespace(
+        files=types.SimpleNamespace(
+            upload=lambda **kw: (
+                uploaded.append(Path(kw["file"]).read_text()) or types.SimpleNamespace(name="files/fake")
+            )
+        ),
+        batches=types.SimpleNamespace(
+            create=lambda **kw: types.SimpleNamespace(name="batches/fake", state="JOB_STATE_PENDING")
+        ),
+    )
+    monkeypatch.setattr(cloud_backfill, "_raise_if_enrich_daily_cap_reached", lambda: None)
+    monkeypatch.setattr(cloud_backfill, "_get_genai_client", lambda: client)
+
+    assert cloud_backfill.submit_gemini_batch(export, store=None) == "batches/fake"
+    assert len(uploaded) == 1
+    assert token not in uploaded[0]
+    assert "[REDACTED:quarantine]" in uploaded[0]
+    _assert_no_token(uploaded[0], where="quarantined batch upload")
+    assert export.read_text(encoding="utf-8") == uploaded[0]
+
+
+def test_second_cloud_scrub_pass_failure_prevents_send(monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline import cloud_scrub
+
+    real_scrub = cloud_scrub.scrub_secrets
+    calls = []
+
+    def scrub(text):
+        calls.append(text)
+        if len(calls) == 2:
+            raise RuntimeError("synthetic failure")
+        return real_scrub(text)
+
+    monkeypatch.setattr(cloud_scrub, "scrub_secrets", scrub)
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    client = _FakeGeminiClient()
+    with pytest.raises(cloud_scrub.CloudScrubError):
+        controller._generate_content_with_rate_limit(client, "gemini-test", "ordinary prose", {}, None)
+    assert client.models.sent == []
+
+
+def test_cloud_quarantine_offsets_follow_provider_redaction():
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    prompt = f"😀 {FAKE_TOKENS['google_oauth_access']} {token}; {token}. done"
+    assert scrub_for_cloud(prompt) == "😀 [[REDACTED:quarantine]] [REDACTED:quarantine]; [REDACTED:quarantine]. done"
+
+
+@pytest.mark.parametrize("dots", [1, 8, 62, 70])
+def test_cloud_redacts_quarantine_after_leading_punctuation(dots, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    prompt = "é" + "." * dots + token
+    client = _FakeGeminiClient()
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+    assert client.models.sent == ["é" + "." * dots + "[REDACTED:quarantine]"]
+    assert token not in client.models.sent[0]
+    assert scrub_for_cloud(client.models.sent[0]) == client.models.sent[0]
+
+
+@pytest.mark.parametrize("case", ["repeated", "overlapping", "negative", "missing", "empty"])
+def test_cloud_quarantine_mismatch_redacts_every_value_or_blocks(case, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline import cloud_scrub
+    from brainlayer.pipeline.secret_scrub import QuarantinedToken, SecretScrubResult
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    missing = case in {"missing", "empty"}
+    token = token * 2 if case == "overlapping" else token
+    prompt = "ordinary prose" if missing else f"é . {token} and {token}"
+    if case == "overlapping":
+        prompt = "é . " + token + token[:62]
+    value = "" if case == "empty" else token
+    real_scrub = cloud_scrub.scrub_secrets
+    calls = []
+
+    def scrub(text):
+        calls.append(text)
+        if len(calls) == 1:
+            return real_scrub(text)
+        return SecretScrubResult(
+            text=text,
+            quarantine=[
+                QuarantinedToken(value=value, start=4, end=4 + len(value)),
+                QuarantinedToken(
+                    value=value,
+                    start=-len(value) if case == "negative" else 0,
+                    end=len(text) if case == "negative" else len(value),
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(cloud_scrub, "scrub_secrets", scrub)
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    client = _FakeGeminiClient()
+    if missing:
+        with pytest.raises(cloud_scrub.CloudScrubError) as error:
+            controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+        assert token not in str(error.value)
+        assert client.models.sent == []
+    else:
+        controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+        expected = (
+            "é . [REDACTED:quarantine]" if case == "overlapping" else prompt.replace(token, "[REDACTED:quarantine]")
+        )
+        assert client.models.sent == [expected]
+        monkeypatch.setattr(cloud_scrub, "scrub_secrets", real_scrub)
+        assert cloud_scrub.scrub_for_cloud(client.models.sent[0]) == client.models.sent[0]
+
+
+def test_realtime_loop_marks_quarantined_chunk_and_advances(monkeypatch, tmp_path):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.vector_store import VectorStore
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    client = _FakeGeminiClient()
+    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "cost"))
+    monkeypatch.setattr(controller, "_get_gemini_client", lambda: client)
+    monkeypatch.setattr(controller, "Sanitizer", types.SimpleNamespace(from_env=lambda: object()))
+    monkeypatch.setattr(controller, "build_external_prompt", lambda chunk, sanitizer: (chunk["content"], None))
+    monkeypatch.setattr(controller, "_is_duplicate_content", lambda *args: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *args, **kwargs: False)
+    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *args, **kwargs: False)
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    store = VectorStore(tmp_path / "loop.db")
+    try:
+        for chunk_id, content in [
+            ("next", "The next ordinary chunk must also be enriched after the first chunk completes."),
+            ("quarantined", f"Implement {token} in the deployment helper."),
+        ]:
+            store.conn.cursor().execute(
+                "INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text', ?, 'claude_code')",
+                (chunk_id, content, len(content)),
+            )
+        assert controller.enrich_realtime(store, limit=1, since_hours=None).enriched == 1
+        row = (
+            store.conn.cursor()
+            .execute("SELECT enriched_at, enrich_status FROM chunks WHERE id = 'quarantined'")
+            .fetchone()
+        )
+        assert row[0] is not None and row[1] == "success"
+        assert [chunk["id"] for chunk in store.get_enrichment_candidates()] == ["next"]
+        assert controller.enrich_realtime(store, limit=1, since_hours=None).enriched == 1
+        assert store.get_enrichment_candidates() == []
+        assert len(client.models.sent) == 2
+        assert token not in client.models.sent[0]
+        assert "[REDACTED:quarantine]" in client.models.sent[0]
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["ordinary prose about ya29", "https://example.invalid/1//notes", "0" * 64, "12345678-1234-1234-1234-123456789abc"],
+)
+def test_cloud_scrub_preserves_prose_paths_and_join_keys(text):
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    assert scrub_for_cloud(text) == text
 
 
 # ── INPUT: every remote send is scrubbed ─────────────────────────────────
@@ -341,7 +593,7 @@ def _llm_response_echoing_tokens() -> str:
     t = FAKE_TOKENS
     return json.dumps(
         {
-            "summary": f"Configured the service with {t['supabase']} and {t['google']}",
+            "summary": _payload_with_every_token(),
             "tags": ["deploy", t["github"]],
             "importance": 6,
             "intent": "implementing",
