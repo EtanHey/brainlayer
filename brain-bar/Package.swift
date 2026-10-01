@@ -53,6 +53,7 @@ let package = Package(
             path: "Tests/BrainBarTests",
             exclude: [
                 "RENDER_VERIFICATION.md",
+                "Scripts",
             ],
             resources: [
                 .copy("Fixtures"),

@@ -790,6 +790,7 @@ final class MCPRouter: @unchecked Sendable {
         )
 
         func localKGSection() -> String {
+            guard args["include_kg"] as? Bool == true else { return "" }
             let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
             if hasActiveFilters {
                 return ""
@@ -851,9 +852,19 @@ final class MCPRouter: @unchecked Sendable {
                         metadata = fallback.metadata
                         kgSection = localKGSection()
                     } else {
-                        textSection = response.text
+                        if args["detail"] as? String != "full",
+                           let structured = response.metadata["structuredContent"] as? [String: Any],
+                           let results = structured["results"] as? [[String: Any]] {
+                            textSection = TextFormatter.formatSearchResults(
+                                query: query, results: results.map(SearchResult.init(payload:)),
+                                total: structured["total"] as? Int ?? results.count
+                            ) + hybridSearchNotices(structured)
+                            kgSection = localKGSection()
+                        } else {
+                            textSection = hybridFullText(response, includeKG: args["include_kg"] as? Bool == true)
+                            kgSection = ""
+                        }
                         metadata = sanitizedHybridMetadata(response.metadata)
-                        kgSection = ""
                     }
                 } else {
                     NSLog("[BrainBar] Hybrid search helper exceeded %.3fs budget, falling back to BrainBar database search", hybridSearchBudget)
@@ -880,7 +891,7 @@ final class MCPRouter: @unchecked Sendable {
         if kgSection.isEmpty {
             return ToolOutput(text: textSection, metadata: metadata)
         }
-        return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+        return ToolOutput(text: kgSection + "\n\n" + textSection, metadata: metadata)
     }
 
     private func hybridSearchResponseIsEmpty(_ response: HybridSearchResponse) -> Bool {
@@ -923,6 +934,33 @@ final class MCPRouter: @unchecked Sendable {
         }
 
         return try resultBox.get()?.get()
+    }
+
+    private func hybridFullText(_ response: HybridSearchResponse, includeKG: Bool) -> String {
+        guard !includeKG,
+              let structured = response.metadata["structuredContent"] as? [String: Any],
+              let entity = structured["entity"] as? String,
+              let facts = structured["facts"] as? [[String: Any]], !facts.isEmpty,
+              let preamble = response.text.range(of: "\n### KG Facts for \(entity)\n"),
+              let firstResult = response.text.range(of: "\n### 1.", range: preamble.upperBound..<response.text.endIndex)
+        else { return response.text }
+        // The helper's known KG framing precedes result 1. Preserve the complete
+        // result body, including any headings inside the retrieved document.
+        return String(response.text[..<preamble.lowerBound]) + String(response.text[firstResult.lowerBound...])
+    }
+
+    private func hybridSearchNotices(_ structured: [String: Any]) -> String {
+        var notices: [String] = []
+        if structured["search_mode"] as? String == "fts_fallback" {
+            notices.append("Search mode: FTS fallback (\(structured["fallback_reason"] as? String ?? "unknown")); vector embedding was skipped.")
+        }
+        if structured["kg_degraded"] as? Bool == true {
+            notices.append("KG search degraded: \(structured["kg_degrade_reason"] as? String ?? "unknown")")
+        }
+        if structured["order"] as? String == "origin" {
+            notices.append("Order: origin (\(structured["order_scope"] as? String ?? "unknown"))")
+        }
+        return notices.isEmpty ? "" : "\n" + notices.joined(separator: "\n")
     }
 
     private func sanitizedHybridMetadata(_ metadata: [String: Any]) -> [String: Any] {
@@ -1288,9 +1326,10 @@ final class MCPRouter: @unchecked Sendable {
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
         let db = try readDB()
         let mode = args["mode"] as? String ?? "stats"
+        let limit = min(100, max(1, args["limit"] as? Int ?? 8))
         if mode == "injections" {
             let sessionId = args["session_id"] as? String
-            let events = try db.listInjectionEvents(sessionID: sessionId, limit: 20)
+            let events = try db.listInjectionEvents(sessionID: sessionId, limit: limit)
             if events.isEmpty {
                 return ToolOutput(text: "│ No injection events found")
             }
@@ -1309,7 +1348,7 @@ final class MCPRouter: @unchecked Sendable {
         if mode == "context" {
             let sessionId = args["session_id"] as? String ?? ""
             if !sessionId.isEmpty {
-                let results = try db.recallSession(sessionId: sessionId, limit: 20)
+                let results = try db.recallSession(sessionId: sessionId, limit: limit)
                 let typedResults = results.map(SearchResult.init(payload:))
                 return ToolOutput(text: TextFormatter.formatRecalledContext(query: "session:\(sessionId)", results: typedResults))
             }
@@ -1885,7 +1924,9 @@ final class MCPRouter: @unchecked Sendable {
                     "session_id": [
                         "type": "string",
                         "description": "Session ID for context mode; optional filter for injections"
-                    ]
+                    ],
+                    "limit": ["type": "integer", "maximum": 100,
+                              "description": "Result cap (default: 8)"]
                 ] as [String: Any],
             ] as [String: Any])
         ],
