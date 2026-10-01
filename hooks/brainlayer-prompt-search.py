@@ -1136,6 +1136,16 @@ def record_injection_event(
     if not db_path or not session_id:
         return
 
+    try:
+        from brainlayer.pipeline.secret_scrub import scrub_secrets
+    except ImportError:
+        return
+    try:
+        # Scan the complete prompt before truncation can sever a token shape.
+        prompt = scrub_secrets(prompt).text
+    except Exception:
+        return  # Best-effort telemetry must fail closed without blocking a prompt.
+
     conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=2)

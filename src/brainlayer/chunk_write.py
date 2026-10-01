@@ -148,6 +148,62 @@ def _table_columns(conn: Any, table: str) -> set[str]:
     return {row[1] for row in rows}
 
 
+def scrub_chunk_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Scrub stored text before deriving hashes, previews or merge inputs.
+
+    JSON fields are decoded/normalized before scanning so escaped credentials
+    and mapping keys cannot bypass the at-rest policy. Quarantine remains
+    metadata only. Already-scrubbed callers retain their findings.
+    """
+    from .pipeline.cloud_scrub import normalize_json_strings
+    from .pipeline.secret_scrub import merge_scrub_metadata, scrub_for_storage
+
+    clean = dict(values)
+    identity_fields = {"id", "brick_id", "conversation_id", "superseded_by", "aggregated_into"}
+    findings: dict[str, Any] = {}
+    body_findings: dict[str, Any] = {}
+    for key, value in clean.items():
+        structured = isinstance(value, (dict, list, tuple))
+        if structured:
+            value = json.dumps(value, ensure_ascii=False)
+        if not isinstance(value, str):
+            continue
+        if key != "content" and key not in identity_fields:
+            value = normalize_json_strings(value)
+        text, found = scrub_for_storage(value)
+        if key in identity_fields and text != value:
+            raise ValueError("chunk identifier requires redaction; refusing to change identity")
+        clean[key] = json.loads(text) if structured else text
+        # Quarantine count describes the body, not keys/derived placeholders.
+        findings = merge_scrub_metadata(
+            findings, {k: v for k, v in found.items() if k != "secret_scrub_quarantine_count"}
+        )
+        if key == "content":
+            body_findings = found
+    if findings or body_findings:
+        metadata = clean.get("metadata")
+        if metadata is None:
+            metadata = {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                metadata = {"value": metadata}
+        if not isinstance(metadata, dict):
+            metadata = {"value": metadata}
+        if clean.get("content") == values.get("content") and (
+            "secret_scrub_quarantine_count" in metadata or "secret_scrub_redactions" in metadata
+        ):
+            body_findings.pop("secret_scrub_quarantine_count", None)
+        clean["metadata"] = merge_scrub_metadata(merge_scrub_metadata(metadata, findings), body_findings)
+    if clean.get("content") != values.get("content"):
+        clean["char_count"] = len(str(clean.get("content") or ""))
+        # Caller-supplied dedupe fields describe the pre-scrub text. Recompute.
+        for key in ("dedupe_hash", "simhash", *(f"simhash_band_{i}" for i in range(4))):
+            clean.pop(key, None)
+    return clean
+
+
 def prepare_canonical_insert(
     values: Mapping[str, Any],
     *,
@@ -158,6 +214,7 @@ def prepare_canonical_insert(
     """Fill required insert columns. Does not write."""
     from .timestamp_iso import normalize_timestamp
 
+    values = scrub_chunk_values(values)
     content = str(values.get("content") or "")
     if not content.strip():
         raise ValueError("content must be non-empty")
@@ -271,7 +328,12 @@ def insert_canonical_chunk(
     on_conflict: str = "ignore",
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Insert one chunk row using the canonical column set."""
+    """Insert a scrubbed chunk; hashes and dedupe fields describe stored text.
+
+    Tokens of the same provider collapse to the same placeholder, so dedupe
+    treats otherwise identical scrubbed memories as the same content. Existing
+    unsanitized rows are not rewritten by this go-forward boundary.
+    """
     columns = _table_columns(conn, "chunks")
     row = prepare_canonical_insert(values, now=now, columns=columns)
     names = [key for key in row if key in columns]
