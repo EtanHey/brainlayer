@@ -23,6 +23,7 @@ PROVIDERS = frozenset({"google_oauth_access", "google_oauth_refresh", "google_cl
 PREFIXES = ("ya29.", "1//", "GOCSPX-")
 LIVE_SERVICES = (
     "fleet-watchdog",
+    "throughput-watchdog",
     "tier0-watchdog",
     "health-check",
     "brainbar",
@@ -32,6 +33,7 @@ LIVE_SERVICES = (
     "drain",
     "index",
     "t3-ingest",
+    "decay",
     "enrichment",
 )
 

@@ -360,6 +360,8 @@ def test_live_apply_quiesces_all_writers_and_preserves_enrichment_pause(db, live
     resumed = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "resume"}
     assert {
         "fleet-watchdog",
+        "throughput-watchdog",
+        "decay",
         "tier0-watchdog",
         "health-check",
         "brainbar",
