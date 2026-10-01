@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import apsw
 import pytest
@@ -205,7 +206,7 @@ def test_busy_retry_batches_and_checkpoints_use_writer_connection(db, monkeypatc
 
     monkeypatch.setattr(module, "_batch", batch)
     monkeypatch.setattr(module, "_checkpoint", checkpoint)
-    monkeypatch.setattr(module.time, "sleep", delays.append)
+    monkeypatch.setattr(module, "time", SimpleNamespace(sleep=delays.append))
     assert run(db)["tables"]["chunks"]["rows"] == 5
     assert delays == [module._busy_retry_delay(0)] and checkpoints == [5, 0]
 
@@ -266,3 +267,34 @@ def test_preview_regeneration_trigger_does_not_replace_independent_preview(db):
     )
     db.conn.execute("UPDATE chunks SET summary='later summary'")
     assert db.conn.execute("SELECT preview_text FROM chunks").fetchone()[0] == "later summary"
+
+
+@pytest.mark.parametrize("provider", TOKENS)
+def test_provider_span_longer_than_scan_window_is_removed_completely(db, provider):
+    from brainlayer.pipeline.secret_scrub import MAX_SCAN_BYTES
+
+    token = TOKENS[provider] + "0" * (MAX_SCAN_BYTES + 600)
+    context = "ordinary " * (MAX_SCAN_BYTES // 9)
+    db.conn.execute(
+        "INSERT INTO chunks(id,content,metadata,source_file) VALUES('c',?,'{}','fixture')",
+        (context + token + " suffix prose",),
+    )
+    run(db)
+    assert db.conn.execute("SELECT content FROM chunks").fetchone()[0] == (
+        context + f"[REDACTED:{provider}] suffix prose"
+    )
+    assert run(db)["tables"]["chunks"]["rows"] == 0
+
+
+def test_schema_identifiers_and_content_cannot_inject_sql(db):
+    db.conn.execute("INSERT INTO chunks(id,content,metadata,source_file) VALUES('c','ordinary','{}','fixture')")
+    table = 'saved"; DROP TABLE chunks; --'
+    ddl_name = '"saved""; DROP TABLE chunks; --"'
+    column = '"payload""; DROP TABLE chunks; --"'
+    db.conn.execute(f"CREATE TABLE {ddl_name} ({column} TEXT)")
+    db.conn.execute(f"INSERT INTO {ddl_name} VALUES(?)", ("'; DROP TABLE chunks; -- " + TOKENS["google_oauth_access"],))
+    assert run(db)["tables"][table]["rows"] == 1
+    assert db.conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == 1
+    assert db.conn.execute(f"SELECT {column} FROM {ddl_name}").fetchone()[0] == (
+        "'; DROP TABLE chunks; -- [REDACTED:google_oauth_access]"
+    )

@@ -103,7 +103,8 @@ def scrub_secrets(text: str, *, providers: frozenset[str] | None = None) -> Secr
     if not text:
         return SecretScrubResult(text=text)
 
-    windows = list(_scan_windows(text))
+    # One-off provider selection must see real token boundaries, not window ends.
+    windows = [(0, len(text))] if providers is not None else list(_scan_windows(text))
     spans: list[SecretRedaction] = []
     for start, end in windows:
         spans.extend(_provider_redactions(text[start:end], offset=start))

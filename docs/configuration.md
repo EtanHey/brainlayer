@@ -180,8 +180,9 @@ This command is manual maintenance; it never stops services or edits the live DB
 
 The schema survey includes logical tables, FTS and repair/history copies, including
 text stored in numeric-affinity columns. Only the selected provider spans change;
-assignment/quarantine and other providers stay intact. Changed chunk content gets
-canonical hashes, SimHash bands and character counts; summaries/previews retain
+assignment/quarantine and other providers stay intact. Selected provider regexes
+see full values so window boundaries cannot truncate spans. Changed chunk content
+gets canonical hashes, SimHash bands and character counts; summaries/previews retain
 all unmatched text. Existing chunk/KG/git FTS triggers run, and session FTS refreshes
 explicitly. Bitemporal preimage capture and preview regeneration are transactionally
 suppressed during chunk redaction and restored verbatim; independent previews keep
