@@ -161,29 +161,9 @@ enum Formatters {
         total: Int,
         useColor: Bool = true
     ) -> String {
-        let q = truncate(query, maxLen: 50)
-
-        if total == 0 {
-            return "## Search results for \"\(q)\" - 0 of 0 shown\n\nNo results found."
-        }
-
-        var lines: [String] = []
-        lines.append("## Search results for \"\(q)\" - \(results.count) of \(total) shown")
-
-        for (i, r) in results.enumerated() {
-            let summary = r["summary"] as? String ?? ""
-            let snippet = (r["snippet"] as? String) ?? (r["content"] as? String) ?? ""
-            let title = truncate(summary.isEmpty ? snippet : summary, maxLen: 100)
-            let source = basename(r["source_file"] ?? r["project"])
-            let date = dateOnly(r["date"] ?? r["created_at"])
-            let preview = truncate(snippet.isEmpty ? summary : snippet, maxLen: 200)
-            lines.append("")
-            lines.append("### \(i + 1). \(title.isEmpty ? "Untitled result" : title)")
-            lines.append("- Source: \(source)")
-            lines.append("- Date: \(date)")
-            lines.append("- Preview: \(preview)")
-        }
-        return lines.joined(separator: "\n")
+        TextFormatter.formatSearchResults(
+            query: query, results: results.map(SearchResult.init(payload:)), total: total
+        )
     }
 
     // MARK: - Store Result
@@ -295,9 +275,9 @@ enum Formatters {
         appendKeyValueSection("Preferences", values: entity["preferences"] as? [String: Any], to: &lines)
         appendKeyValueSection("Contact", values: entity["contact_info"] as? [String: Any], to: &lines)
 
-        lines.append("")
-        lines.append("### KG Facts")
         if let relations = entity["relations"] as? [[String: Any]], !relations.isEmpty {
+            lines.append("")
+            lines.append("### KG Facts")
             for rel in relations.prefix(8) {
                 let rtype = rel["relation_type"] as? String ?? ""
                 var line = "- \(rtype): \(relationTarget(rel))"
@@ -306,13 +286,11 @@ enum Formatters {
                 }
                 lines.append(line)
             }
-        } else {
-            lines.append("- None")
         }
 
-        lines.append("")
-        lines.append("### Recent context")
         if let memories = entity["memories"] as? [[String: Any]], !memories.isEmpty {
+            lines.append("")
+            lines.append("### Recent context")
             for mem in memories.prefix(5) {
                 let mcontent = truncate(
                     (mem["content"] as? String) ?? (mem["summary"] as? String),
@@ -320,17 +298,13 @@ enum Formatters {
                 )
                 lines.append("- \(mcontent)")
             }
-        } else {
-            lines.append("- None")
         }
 
-        lines.append("")
-        lines.append("### Likely follow-ups")
         let relations = entity["relations"] as? [[String: Any]] ?? []
         let followUps = relations.map { relationTarget($0) }.filter { !$0.isEmpty }
-        if followUps.isEmpty {
-            lines.append("- None")
-        } else {
+        if !followUps.isEmpty {
+            lines.append("")
+            lines.append("### Likely follow-ups")
             for target in followUps.prefix(5) {
                 lines.append("- \(target)")
             }
@@ -348,9 +322,9 @@ enum Formatters {
         var lines: [String] = ["## Entity: \(name)"]
 
         // Relations
-        lines.append("")
-        lines.append("### KG Facts")
         if let relations = entity["relations"] as? [[String: Any]], !relations.isEmpty {
+            lines.append("")
+            lines.append("### KG Facts")
             for rel in relations.prefix(8) {
                 let rtype = rel["relation_type"] as? String ?? "related_to"
                 var line = "- \(rtype): \(relationTarget(rel))"
@@ -359,29 +333,23 @@ enum Formatters {
                 }
                 lines.append(line)
             }
-        } else {
-            lines.append("- None")
         }
 
         // Chunks
-        lines.append("")
-        lines.append("### Recent context")
         if let chunks = entity["chunks"] as? [[String: Any]], !chunks.isEmpty {
+            lines.append("")
+            lines.append("### Recent context")
             for c in chunks.prefix(5) {
                 let snippet = truncate(c["content"] as? String, maxLen: 150)
                 lines.append("- \(snippet)")
             }
-        } else {
-            lines.append("- None")
         }
 
-        lines.append("")
-        lines.append("### Likely follow-ups")
         let relations = entity["relations"] as? [[String: Any]] ?? []
         let followUps = relations.map { relationTarget($0) }.filter { !$0.isEmpty }
-        if followUps.isEmpty {
-            lines.append("- None")
-        } else {
+        if !followUps.isEmpty {
+            lines.append("")
+            lines.append("### Likely follow-ups")
             for target in followUps.prefix(5) {
                 lines.append("- \(target)")
             }

@@ -30,8 +30,8 @@ final class FormattersTests: XCTestCase {
         ]
         let out = Formatters.formatSearchResults(query: "brainbar", results: [result], total: 1, useColor: false)
         XCTAssertTrue(out.contains("1 of 1 shown"))
-        XCTAssertFalse(out.contains("rt-abc123de"))
-        XCTAssertFalse(out.contains("0.87"))
+        XCTAssertTrue(out.contains("rt-abc123def4"))
+        XCTAssertTrue(out.contains("0.87"))
         XCTAssertTrue(out.contains("Source: brainlayer"))
         XCTAssertTrue(out.contains("2026-03-29"))
         XCTAssertTrue(out.contains("BrainBar is a native macOS daemon"))
@@ -45,8 +45,8 @@ final class FormattersTests: XCTestCase {
         ]
         let out = Formatters.formatSearchResults(query: "test", results: results, total: 2, useColor: false)
         XCTAssertTrue(out.contains("2 of 2 shown"))
-        XCTAssertTrue(out.contains("### 1."))
-        XCTAssertTrue(out.contains("### 2."))
+        XCTAssertTrue(out.contains("- ID: a1"))
+        XCTAssertTrue(out.contains("- ID: b2"))
     }
 
     func testFormatSearchResultsWithTags() {
@@ -159,8 +159,8 @@ final class FormattersTests: XCTestCase {
         let entity: [String: Any] = ["name": "Unknown Entity"]
         let out = Formatters.formatEntityCard(entity: entity, useColor: false)
         XCTAssertTrue(out.contains("## Entity: Unknown Entity"))
-        XCTAssertTrue(out.contains("### KG Facts"))
-        XCTAssertTrue(out.contains("- None"))
+        XCTAssertFalse(out.contains("### KG Facts"))
+        XCTAssertFalse(out.contains("- None"))
     }
 
     func testFormatSearchResultsBasenameHandlesWindowsPaths() {
@@ -174,7 +174,7 @@ final class FormattersTests: XCTestCase {
 
         let out = Formatters.formatSearchResults(query: "path privacy", results: results, total: 1, useColor: false)
 
-        XCTAssertTrue(out.contains("- Source: auth.py"))
+        XCTAssertTrue(out.contains("Source: auth.py"))
         XCTAssertFalse(out.contains(#"C:\Users"#))
     }
 
@@ -344,13 +344,13 @@ final class FormattersTests: XCTestCase {
         let searchOut = Formatters.formatSearchResults(query: "q", results: [
             ["chunk_id": "x", "score": 0.1, "project": "p", "created_at": "d", "summary": "s", "importance": 1]
         ], total: 1, useColor: false)
-        XCTAssertTrue(searchOut.contains("## Search results"))
-        XCTAssertTrue(searchOut.contains("### 1."))
-        XCTAssertFalse(searchOut.contains("score:"))
+        XCTAssertTrue(searchOut.contains("Search "))
+        XCTAssertTrue(searchOut.contains("- ID: x"))
+        XCTAssertTrue(searchOut.contains("score:"))
 
         let entityOut = Formatters.formatEntityCard(entity: ["name": "X"], useColor: false)
         XCTAssertTrue(entityOut.contains("## Entity: X"))
-        XCTAssertTrue(entityOut.contains("### KG Facts"))
+        XCTAssertFalse(entityOut.contains("### KG Facts"))
     }
 
     // MARK: - Layout: No trailing empty │ lines

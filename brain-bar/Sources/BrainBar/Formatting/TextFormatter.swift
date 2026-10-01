@@ -18,26 +18,16 @@ enum TextFormatter {
             ].joined(separator: "\n")
         }
 
-        // Only the explicit "full" detail level exposes chunk IDs, so they can be
-        // chained into brain_update/brain_expand/brain_supersede/brain_archive.
-        // Compact (the default) intentionally hides them.
-        let includeChunkID = detail == "full"
-
         var lines = ["## Search results for \"\(truncatedQuery)\" - \(results.count) of \(total) shown"]
-
-        for (index, result) in results.enumerated() {
-            let title = titleLine(for: result)
-            let preview = truncate(result.displayText, maxLen: 200)
+        for result in results {
             let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
-            let datePart = formattedDate(result.date)
-            lines.append("")
-            lines.append("### \(index + 1). \(title)")
-            if includeChunkID && !result.chunkID.isEmpty {
-                lines.append("- ID: \(result.chunkID)")
+            let date = formattedDate(result.date)
+            lines.append("- ID: \(result.chunkID) | score: \(result.score) | project: \(result.project.isEmpty ? "unknown" : result.project) | date: \(date.isEmpty ? "unknown" : date)")
+            // Keep source provenance unless the canonical ID already contains it.
+            if !source.isEmpty && !result.chunkID.contains(source) {
+                lines.append("  Source: \(source)")
             }
-            lines.append("- Source: \(source.isEmpty ? "unknown" : source)")
-            lines.append("- Date: \(datePart.isEmpty ? "unknown" : datePart)")
-            lines.append("- Preview: \(preview)")
+            lines.append("  Preview: \(truncate(result.displayText, maxLen: 200))")
         }
         return lines.joined(separator: "\n")
     }
@@ -92,14 +82,14 @@ enum TextFormatter {
             let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
             lines.append("")
             lines.append("### Chunk \(index + 1) - \(source.isEmpty ? "unknown" : source)")
+            lines.append("- ID: \(result.chunkID)")
             let content = result.snippet.isEmpty ? result.displayText : result.snippet
             let fullText = content.trimmingCharacters(in: .whitespacesAndNewlines)
             if fullText.count <= 1500 {
                 lines.append(fullText)
             } else {
                 lines.append(String(fullText.prefix(1500)) + "...")
-                lines.append("")
-                lines.append("Reference: \(result.chunkID)")
+
             }
         }
         return lines.joined(separator: "\n")
@@ -251,33 +241,25 @@ enum TextFormatter {
         appendKeyValueSection("Preferences", values: entity.preferences, to: &lines)
         appendKeyValueSection("Contact", values: entity.contactInfo, to: &lines)
 
-        lines.append("")
-        lines.append("### KG Facts")
-        if entity.relations.isEmpty {
-            lines.append("- None")
-        } else {
+        if !entity.relations.isEmpty {
+            lines.append("")
+            lines.append("### KG Facts")
             for relation in entity.relations.prefix(20) {
                 lines.append(relationLine(relation, now: now))
             }
         }
-
-        lines.append("")
-        lines.append("### Recent context")
         let memoryLines = entity.memories.map(\.content) + entity.chunks
-        if memoryLines.isEmpty {
-            lines.append("- None")
-        } else {
+        if !memoryLines.isEmpty {
+            lines.append("")
+            lines.append("### Recent context")
             for memory in memoryLines.prefix(5) {
                 lines.append("- \(truncate(memory, maxLen: 150))")
             }
         }
-
-        lines.append("")
-        lines.append("### Likely follow-ups")
         let followUps = entity.relations.map(\.targetName).filter { !$0.isEmpty }
-        if followUps.isEmpty {
-            lines.append("- None")
-        } else {
+        if !followUps.isEmpty {
+            lines.append("")
+            lines.append("### Likely follow-ups")
             for target in followUps.prefix(5) {
                 lines.append("- \(target)")
             }

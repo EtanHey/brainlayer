@@ -28,15 +28,13 @@ final class TextFormatterParityTests: XCTestCase {
             output,
             """
             ## Search results for "brainbar native swift renderer parity should trun…" - 1 of 1 shown
-
-            ### 1. BrainBar is a native macOS daemon for BrainLayer MCP routing.
-            - Source: MCPRouter.swift
-            - Date: 2026-03-29
-            - Preview: BrainBar is a native macOS daemon for BrainLayer MCP routing.
+            - ID: rt-abc123def4567890 | score: 0.87 | project: brainlayer | date: 2026-03-29
+              Source: MCPRouter.swift
+              Preview: BrainBar is a native macOS daemon for BrainLayer MCP routing.
             """
         )
-        XCTAssertFalse(output.contains("score:"))
-        XCTAssertFalse(output.contains("rt-abc123def"))
+        XCTAssertTrue(output.contains("score:"))
+        XCTAssertTrue(output.contains("rt-abc123def4567890"))
     }
 
     func testSearchResultsFullDetailExposesChunkID() {
@@ -62,14 +60,11 @@ final class TextFormatterParityTests: XCTestCase {
         )
 
         XCTAssertTrue(output.contains("- ID: rt-abc123def4567890"), "full detail must expose chunk_id for chaining")
-        // Sanity: the ID line should sit under the result header, before Source.
-        XCTAssertTrue(
-            output.contains("### 1. BrainBar is a native macOS daemon for BrainLayer MCP routing.\n- ID: rt-abc123def4567890\n- Source:"),
-            "ID line must precede Source line"
-        )
+        XCTAssertFalse(output.contains("### 1."))
+        XCTAssertTrue(output.contains("Source: MCPRouter.swift"))
     }
 
-    func testSearchResultsCompactDetailHidesChunkID() {
+    func testSearchResultsCompactDetailExposesCanonicalChunkID() {
         let results = [
             SearchResult(
                 chunkID: "rt-abc123def4567890",
@@ -83,16 +78,16 @@ final class TextFormatterParityTests: XCTestCase {
             )
         ]
 
-        // Explicit compact and the default must both hide the chunk_id.
+        // Explicit compact and the default both expose the canonical chunk_id.
         let explicitCompact = TextFormatter.formatSearchResults(
             query: "brainbar", results: results, total: 1, detail: "compact"
         )
         let defaultDetail = TextFormatter.formatSearchResults(query: "brainbar", results: results, total: 1)
 
-        XCTAssertFalse(explicitCompact.contains("rt-abc123def"), "compact must not expose chunk_id")
-        XCTAssertFalse(explicitCompact.contains("- ID:"))
-        XCTAssertFalse(defaultDetail.contains("rt-abc123def"), "default detail must not expose chunk_id")
-        XCTAssertFalse(defaultDetail.contains("- ID:"))
+        XCTAssertTrue(explicitCompact.contains("rt-abc123def"), "compact must expose chunk_id")
+        XCTAssertTrue(explicitCompact.contains("- ID:"))
+        XCTAssertTrue(defaultDetail.contains("rt-abc123def"), "default detail must expose chunk_id")
+        XCTAssertTrue(defaultDetail.contains("- ID:"))
     }
 
     func testSearchResultSourceBasenameHandlesWindowsPaths() {
@@ -108,7 +103,7 @@ final class TextFormatterParityTests: XCTestCase {
 
         let output = TextFormatter.formatSearchResults(query: "path privacy", results: results, total: 1)
 
-        XCTAssertTrue(output.contains("- Source: auth.py"))
+        XCTAssertTrue(output.contains("Source: auth.py"))
         XCTAssertFalse(output.contains(#"C:\Users"#))
     }
 
@@ -237,6 +232,7 @@ final class TextFormatterParityTests: XCTestCase {
             ## Recalled context for "how did we handle session expiry"
 
             ### Chunk 1 - auth-v2.md
+            - ID: chunk-auth-1
             We chose sliding-window refresh tokens with a short grace window for concurrent tabs.
             """
         )

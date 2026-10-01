@@ -546,6 +546,55 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(result["content"] as? [[String: Any]], "Hybrid helper metadata must not overwrite MCP content.")
     }
 
+    func testBrainSearchFullHybridGatesOnlyKGPreamble() throws {
+        let path = NSTemporaryDirectory() + "diet-full-\(UUID().uuidString).db"
+        let db = BrainDatabase(path: path)
+        defer { db.close(); try? FileManager.default.removeItem(atPath: path) }
+        let preamble = "## Search results for fixture\n\n### KG Facts for Fixture\n- fixture depends_on target\n"
+        let body = "\n### 1. Fixture preview\n- ID: full-id\n- Preview: Body mentions KG Facts and must survive"
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(
+            text: preamble + body,
+            metadata: ["structuredContent": ["entity": "Fixture", "total": 1,
+                       "facts": [["relation": "depends_on"]], "results": [["chunk_id": "full-id"]]]]
+        ))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+        let text = try toolText(router.handle(toolCall(id: 176, name: "brain_search", arguments: [
+            "query": "fixture", "detail": "full"
+        ])))
+        XCTAssertFalse(text.contains("### KG Facts for Fixture"), text)
+        XCTAssertTrue(text.contains(body), text)
+        let optedIn = try toolText(router.handle(toolCall(id: 177, name: "brain_search", arguments: [
+            "query": "fixture", "detail": "full", "include_kg": true
+        ])))
+        XCTAssertEqual(optedIn, preamble + body)
+    }
+
+    func testBrainSearchHybridCompactUsesCanonicalPointersAndPreservesMetadata() throws {
+        let path = NSTemporaryDirectory() + "diet-hybrid-\(UUID().uuidString).db"
+        let db = BrainDatabase(path: path)
+        defer { db.close(); try? FileManager.default.removeItem(atPath: path) }
+        let structured: [String: Any] = [
+            "total": 1, "results": [["chunk_id": "hybrid-canonical-id", "score": 0.9876,
+                                     "project": "fixture", "date": "2026-10-01", "snippet": "Hybrid fixture preview"]],
+            "search_mode": "fts_fallback", "fallback_reason": "fixture", "degraded": true
+        ]
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(
+            text: "## Entity: Fixture\n### KG Facts\n- old boilerplate",
+            metadata: ["structuredContent": structured]
+        ))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+        let compact = try toolText(router.handle(toolCall(id: 171, name: "brain_search", arguments: ["query": "fixture"])))
+        XCTAssertTrue(compact.contains("hybrid-canonical-id"), compact)
+        XCTAssertTrue(compact.contains("0.9876"), compact)
+        XCTAssertTrue(compact.contains("Hybrid fixture preview"), compact)
+        XCTAssertTrue(compact.contains("FTS fallback"), compact)
+        XCTAssertFalse(compact.contains("KG Facts"), compact)
+        let full = try toolText(router.handle(toolCall(id: 172, name: "brain_search", arguments: ["query": "fixture", "detail": "full"])))
+        XCTAssertEqual(full, "## Entity: Fixture\n### KG Facts\n- old boilerplate")
+    }
+
     func testBrainSearchHybridSuccessDoesNotPrependSwiftKGFacts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-no-duplicate-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -622,7 +671,7 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertEqual(helper.requests.count, 1)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
-        XCTAssertFalse(text.contains("fallback-fts"), "Compact labeled markdown should not expose chunk_id by default.")
+        XCTAssertTrue(text.contains("fallback-fts"), "Compact results retain canonical chunk IDs")
         XCTAssertNil(result["structuredContent"])
     }
 
@@ -703,7 +752,7 @@ No results found.
         XCTAssertFalse(text.contains(fullContent))
     }
 
-    func testBrainSearchFallbackStillPrependsSwiftKGFacts() throws {
+    func testBrainSearchFallbackGatesSwiftKGFactsByDefault() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
@@ -739,10 +788,14 @@ No results found.
         let text = content.first?["text"] as? String ?? ""
 
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertTrue(text.contains("## Entity: Noa"), text)
-        XCTAssertTrue(text.contains("### KG Facts"), text)
-        XCTAssertTrue(text.contains("works_on: BrainLayer"), text)
+        XCTAssertFalse(text.contains("## Entity: Noa"), text)
+        XCTAssertFalse(text.contains("### KG Facts"), text)
+        XCTAssertFalse(text.contains("works_on: BrainLayer"), text)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
+        let optedIn = try toolText(router.handle(toolCall(id: 175, name: "brain_search", arguments: [
+            "query": "Noa BrainLayer", "include_kg": true
+        ])))
+        XCTAssertTrue(optedIn.contains("works_on: BrainLayer"), optedIn)
     }
 
     func testBrainSearchFallbackMarksExpiredKGFactsInEntityHeader() throws {
@@ -782,7 +835,7 @@ No results found.
         router.setDatabase(db)
 
         let text = try toolText(router.handle(toolCall(id: 173, name: "brain_search", arguments: [
-            "query": "Noa Domica",
+            "query": "Noa Domica", "include_kg": true,
             "num_results": 3
         ])))
 
@@ -827,7 +880,7 @@ No results found.
         router.setDatabase(db)
 
         let text = try toolText(router.handle(toolCall(id: 174, name: "brain_search", arguments: [
-            "query": "Noa Domica",
+            "query": "Noa Domica", "include_kg": true,
             "num_results": 3
         ])))
 
@@ -1187,7 +1240,7 @@ No results found.
         let text = content?.first?["text"] as? String ?? ""
 
         XCTAssertTrue(text.contains("Agent message still unread"), "Unread queue searches must preserve BrainBar subscriber cursor behavior.")
-        XCTAssertFalse(text.contains("unread-1"), "Compact labeled markdown should not expose chunk_id by default.")
+        XCTAssertTrue(text.contains("unread-1"), "Compact results retain canonical chunk IDs")
         XCTAssertEqual(helper.requests.count, 0)
     }
 
@@ -1611,10 +1664,10 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Socket handling code"), "Should contain the brainbar project chunk content")
         XCTAssertFalse(text.contains("Socket connection code"), "Should not contain other project chunk")
-        XCTAssertFalse(text.contains("f-1"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("f-1"), "Compact results retain canonical chunk IDs")
     }
 
     func testBrainSearchFullDetailExposesChunkID() throws {
@@ -1641,7 +1694,7 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Socket handling code"), "Should contain chunk content")
         XCTAssertTrue(text.contains("- ID: detail-1"), "full detail must expose chunk_id for chaining")
     }
@@ -1672,10 +1725,10 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Critical security finding"), "Should contain the high-importance chunk content")
         XCTAssertFalse(text.contains("Security review notes"), "Should not contain low-importance chunk")
-        XCTAssertFalse(text.contains("i-1"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("i-1"), "Compact results retain canonical chunk IDs")
     }
 
     func testBrainSearchPassesSourceFilter() throws {
@@ -1733,7 +1786,7 @@ No results found.
             "method": "tools/call",
             "params": [
                 "name": "brain_search",
-                "arguments": ["query": "Sagit Stern TechGym", "source": "all"] as [String: Any]
+                "arguments": ["query": "Sagit Stern TechGym", "source": "all", "include_kg": true] as [String: Any]
             ] as [String: Any]
         ])
 
@@ -1744,7 +1797,7 @@ No results found.
         XCTAssertTrue(text.contains("## Entity: Sagit Stern"))
         XCTAssertTrue(text.contains("lectures_at: TechGym"))
         XCTAssertTrue(text.contains("Sagit Stern delivered the TechGym lecture"))
-        XCTAssertFalse(text.contains("kg-search-ta"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("kg-search-ta"), "Compact results retain canonical chunk IDs")
     }
 
     func testBrainEntityUsesPythonSimpleEntityStructure() throws {
@@ -1781,7 +1834,7 @@ No results found.
         XCTAssertTrue(text.contains("## Entity: BrainLayer"))
         XCTAssertTrue(text.contains("### KG Facts"))
         XCTAssertTrue(text.contains("used_by: Claude Code"))
-        XCTAssertTrue(text.contains("### Recent context"))
+        XCTAssertFalse(text.contains("### Recent context"))
     }
 
     func testBrainRecallStatsIncludesProjectAndTypeLists() throws {
@@ -1956,9 +2009,9 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Agent message still unread"), "Should contain the unread chunk content")
-        XCTAssertFalse(text.contains("unread-1"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("unread-1"), "Compact results retain canonical chunk IDs")
         XCTAssertTrue(text.contains("result"), "Should contain formatted result text")
     }
 
