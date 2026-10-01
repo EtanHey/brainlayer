@@ -2867,6 +2867,24 @@ def wal_checkpoint(
     report_job_alert("wal-checkpoint", None)
 
 
+@app.command("scrub-at-rest")
+def scrub_at_rest_command(
+    db_path: Path = typer.Option(..., "--db", help="Explicit offline database copy; live paths refuse."),
+    providers: str = typer.Option("google_oauth", "--providers", help="Only google_oauth is supported."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count matches without writing."),
+    batch_size: int = typer.Option(100, "--batch-size", min=1, max=1000),
+) -> None:
+    """Redact stored provider credentials on a copy; print counts only."""
+    from ..scrub_at_rest import scrub_at_rest
+
+    try:
+        result = scrub_at_rest(db_path, providers=providers, dry_run=dry_run, batch_size=batch_size)
+    except Exception as exc:
+        typer.echo(json.dumps({"error": "at-rest scrub refused or failed", "error_type": type(exc).__name__}))
+        raise typer.Exit(1) from None
+    typer.echo(json.dumps(result, sort_keys=True))
+
+
 @app.command("repair-fts")
 def repair_fts(
     db_path: Path | None = typer.Argument(None, help="Offline database copy; omitted means read-only FTS count check."),

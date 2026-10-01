@@ -168,3 +168,27 @@ Migration for an existing hardcoded LaunchAgent: move the existing key value int
 `brainlayer init`, preferably as a 1Password `op read` reference, then have the
 deployment lead reinstall the repo-generated plist. Do not paste the key into
 shell history, logs, PRs, or chat.
+
+
+## Copy-only credential cleanup
+
+`brainlayer scrub-at-rest --providers google_oauth --db /path/to/offline-copy.db --dry-run`
+reports matched row counts per table, column and provider. Remove `--dry-run` to
+apply; `--batch-size` defaults to 100. An explicit copy is required: canonical
+and configured runtime paths, including symlink/hardlink aliases, always refuse.
+This command is manual maintenance; it never stops services or edits the live DB.
+
+The schema survey includes logical tables, FTS and repair/history copies, including
+text stored in numeric-affinity columns. Only the selected provider spans change;
+assignment/quarantine and other providers stay intact. Changed chunk content gets
+canonical hashes, SimHash bands and character counts; summaries/previews retain
+all unmatched text. Existing chunk/KG/git FTS triggers run, and session FTS refreshes
+explicitly. Bitemporal preimage capture and preview regeneration are transactionally
+suppressed during chunk redaction and restored verbatim; independent previews keep
+their unmatched text and existing history is scrubbed. Identity/reference
+matches appear in dry counts but refuse apply. Unsupported virtual/external-content
+index layouts refuse rather than silently skip. A failed batch rolls back; earlier committed batches may remain,
+so rerun after resolving the error. Writer/maintenance locks serialize apply, with
+bounded busy retries and checkpoints on the same writer connection before/after.
+The final survey must find zero selected matches. This is logical redaction, not
+physical erasure of old WAL/free pages, embeddings, source transcripts or backups.
