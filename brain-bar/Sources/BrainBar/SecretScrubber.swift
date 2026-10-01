@@ -40,6 +40,10 @@ enum SecretScrubber {
     // Same patterns, same order as _PROVIDER_PATTERNS: on an identical span the
     // earlier provider wins (e.g. anthropic over openai for sk-ant-…).
     private static let providerPatternSources: [(String, String)] = [
+        ("context7", #"ctx7sk-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])"#),
+        // EXA must be a label segment; lowercase a allows camelCase, not EXAMPLE.
+        // Only capture group 1 is redacted.
+        ("exa_labeled", #"(?<![A-Za-z0-9_.-])(?=(?:[A-Za-z0-9_.-]*[_.-])?[Ee][Xx](?:[Aa](?![A-Za-z0-9])|a(?=[A-Z])))(?=[A-Za-z0-9_.-]*[Kk][Ee][Yy])[A-Za-z0-9_.-]*[A-Za-z0-9_]["']?\s*[=:]\s*["']?(?<value>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![A-Za-z0-9_-])"#.replacingOccurrences(of: #"\s"#, with: pythonWhitespace)),
         ("anthropic", #"\bsk-ant-[A-Za-z0-9_-]{20,}\b"#),
         ("stripe", #"\b(?:[sr]k_(?:live|test)|whsec)_[A-Za-z0-9]{16,}\b"#),
         ("openai", #"\bsk-(?:proj-|svcacct-|admin-|org-)?[A-Za-z0-9_-]{20,}\b"#),
@@ -138,8 +142,9 @@ enum SecretScrubber {
             let slice = full.substring(with: NSRange(location: window.start, length: window.end - window.start)) as NSString
             for (provider, pattern) in providerPatterns {
                 for match in pattern.matches(in: slice as String, range: NSRange(location: 0, length: slice.length)) {
-                    spans.append(Span(start: window.start + match.range.location,
-                                      end: window.start + match.range.location + match.range.length,
+                    let range = provider == "exa_labeled" ? match.range(at: 1) : match.range
+                    spans.append(Span(start: window.start + range.location,
+                                      end: window.start + range.location + range.length,
                                       provider: provider, order: order))
                     order += 1
                 }

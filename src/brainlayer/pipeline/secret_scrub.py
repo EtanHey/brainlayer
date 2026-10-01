@@ -49,7 +49,16 @@ class _ProviderPattern:
     regex: re.Pattern[str]
 
 
+# EXA credentials are UUIDs: require an exa segment and key in the ASCII label.
+# Only lowercase a can introduce a camelCase capital; EXAMPLE is not EXA.
+# Capture only the value so labels survive, and never classify a bare UUID.
+_EXA_LABELED_RE = re.compile(
+    r"""(?<![A-Za-z0-9_.-])(?=(?:[A-Za-z0-9_.-]*[_.-])?[Ee][Xx](?:[Aa](?![A-Za-z0-9])|a(?=[A-Z])))(?=[A-Za-z0-9_.-]*[Kk][Ee][Yy])[A-Za-z0-9_.-]*[A-Za-z0-9_]["']?\s*[=:]\s*["']?(?P<value>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![A-Za-z0-9_-])"""
+)
+
 _PROVIDER_PATTERNS = (
+    _ProviderPattern("context7", re.compile(r"ctx7sk-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])")),
+    _ProviderPattern("exa_labeled", _EXA_LABELED_RE),
     _ProviderPattern("anthropic", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b")),
     _ProviderPattern("stripe", re.compile(r"\b(?:[sr]k_(?:live|test)|whsec)_[A-Za-z0-9]{16,}\b")),
     _ProviderPattern("openai", re.compile(r"\bsk-(?:proj-|svcacct-|admin-|org-)?[A-Za-z0-9_-]{20,}\b")),
@@ -144,13 +153,14 @@ def _provider_redactions(text: str, *, offset: int = 0) -> list[SecretRedaction]
     for provider_pattern in _PROVIDER_PATTERNS:
         placeholder = f"[REDACTED:{provider_pattern.provider}]"
         for match in provider_pattern.regex.finditer(text):
+            group = "value" if provider_pattern.provider == "exa_labeled" else 0
             redactions.append(
                 SecretRedaction(
                     provider=provider_pattern.provider,
-                    original=match.group(0),
+                    original=match.group(group),
                     placeholder=placeholder,
-                    start=offset + match.start(),
-                    end=offset + match.end(),
+                    start=offset + match.start(group),
+                    end=offset + match.end(group),
                 )
             )
     return redactions

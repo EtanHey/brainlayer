@@ -730,3 +730,84 @@ def test_schema_identifiers_and_content_cannot_inject_sql(db):
     assert db.conn.execute(f"SELECT {column} FROM {ddl_name}").fetchone()[0] == (
         "'; DROP TABLE chunks; -- [REDACTED:google_oauth_access]"
     )
+
+
+@pytest.mark.parametrize(
+    "mode,shape",
+    [
+        ("context7", "{}"),
+        ("exa_labeled", "EXA_API_KEY={}"),
+        ("exa_labeled", '"EXA_API_KEY": "{}"'),
+        ("exa_labeled", "exa_api_key: {}"),
+    ],
+)
+def test_new_key_modes_survey_apply_hashes_and_fts(db, mode, shape):
+    from brainlayer.chunk_write import canonical_content_hash
+    from brainlayer.dedupe import compute_dedupe_fields
+    from brainlayer.scrub_at_rest import scrub_at_rest
+
+    uuid = "00000000-0000-0000-0000-000000000000"
+    token = "ctx7sk-" + "0" * 24 if mode == "context7" else shape.format(uuid)
+    other = "ya29." + "0" * 24
+    text = f"ordinary {token} bare {uuid} other {other}"
+    db.conn.execute(
+        "INSERT INTO chunks(id,content,summary,key_facts,metadata,source_file,created_at) "
+        "VALUES('c',?,?,?,'{}','fixture','2026-03-01')",
+        (text, token, token),
+    )
+    # Include standalone derived copies even when a classification trigger omits them.
+    for fts in ["chunks_fts_operational", "chunks_fts_trigram"]:
+        if not db.conn.execute(f"SELECT count(*) FROM {fts}").fetchone()[0]:
+            db.conn.execute(f"INSERT INTO {fts}(content,chunk_id) VALUES(?,'c')", (text,))
+    result = CliRunner().invoke(app, ["scrub-at-rest", "--providers", mode, "--dry-run", "--db", str(db.db_path)])
+    assert result.exit_code == 0, result.output
+    survey = json.loads(result.output)
+    assert survey["tables"]["chunks"]["rows"] == 1
+    assert survey["tables"]["chunks"]["columns"]["content"] == {mode: 1}
+    assert survey["tables"]["chunks_fts"]["rows"] == 1
+    assert db.conn.execute("SELECT content FROM chunks").fetchone()[0] == text
+    assert token not in result.output
+    scrub_at_rest(db.db_path, providers=mode, batch_size=1)
+    clean = text.replace("ctx7sk-" + "0" * 24 if mode == "context7" else uuid, f"[REDACTED:{mode}]", 1)
+    row = db.conn.execute("SELECT content,content_hash,dedupe_hash,simhash,char_count FROM chunks").fetchone()
+    fields = compute_dedupe_fields(clean, "2026-03-01")
+    assert row == (clean, canonical_content_hash(clean), fields.dedupe_hash, fields.simhash, len(clean))
+    for fts in ["chunks_fts", "chunks_fts_operational", "chunks_fts_trigram"]:
+        assert db.conn.execute(f"SELECT content FROM {fts}").fetchone()[0] == clean
+    assert all(t["rows"] == 0 for t in scrub_at_rest(db.db_path, providers=mode, dry_run=True)["tables"].values())
+    assert uuid in clean and other in clean
+
+
+@pytest.mark.parametrize("mode", ["context7", "exa_labeled"])
+def test_new_modes_use_guarded_survey_and_apply(db, live_guard, mode):
+    from brainlayer.scrub_at_rest import PROVIDER_MODES, _run, scrub_at_rest
+
+    token = "ctx7sk-" + "0" * 24 if mode == "context7" else "EXA_API_KEY=" + "00000000-0000-0000-0000-000000000000"
+    db.conn.execute("UPDATE chunks SET content=? WHERE id='c'", (token,))
+    total = sum(t["rows"] for t in _run(db, True, 100, PROVIDER_MODES[mode])["tables"].values())
+    result = scrub_at_rest(db.db_path, providers=mode, allow_live_db=True, expect_rows=total)
+    assert result["tables"]["chunks"]["rows"] == 1
+    assert token not in db.conn.execute("SELECT content FROM chunks WHERE id='c'").fetchone()[0]
+    assert "no-writers" in live_guard.events
+    stopped = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "stop"}
+    resumed = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "resume"}
+    assert stopped and resumed == stopped - {"enrichment"}
+
+
+def test_exa_cli_survey_and_apply_preserve_example_join_key(db):
+    text = "example_key=00000000-0000-0000-0000-000000000000"
+    db.conn.execute(
+        "INSERT INTO chunks(id,content,summary,metadata,source_file) VALUES('join-key',?,?,'{}','fixture')",
+        (text, text),
+    )
+    before = db.conn.execute("SELECT * FROM chunks WHERE id='join-key'").fetchone()
+    fts_before = db.conn.execute("SELECT * FROM chunks_fts WHERE chunk_id='join-key'").fetchone()
+    runner = CliRunner()
+    for flags in (["--dry-run"], []):
+        result = runner.invoke(app, ["scrub-at-rest", "--db", str(db.db_path), "--providers", "exa_labeled", *flags])
+        assert result.exit_code == 0, result.output
+        survey = json.loads(result.output)
+        assert all(table["rows"] == 0 for table in survey["tables"].values())
+        assert text not in result.output
+        assert db.conn.execute("SELECT * FROM chunks WHERE id='join-key'").fetchone() == before
+        assert db.conn.execute("SELECT * FROM chunks_fts WHERE chunk_id='join-key'").fetchone() == fts_before

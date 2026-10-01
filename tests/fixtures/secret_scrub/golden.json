@@ -1043,6 +1043,292 @@
       "expected_text": "\u00e9......................................................................abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
       "expected_providers": [],
       "expected_quarantine_count": 1
+    },
+    {
+      "name": "context7-anywhere-122",
+      "input": "ctx7sk-{{0*16}}_--",
+      "expected_text": "[REDACTED:context7]",
+      "expected_providers": [
+        "context7"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "context7-anywhere-123",
+      "input": "xctx7sk-{{0*16}}_--",
+      "expected_text": "x[REDACTED:context7]",
+      "expected_providers": [
+        "context7"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "context7-anywhere-124",
+      "input": "_ctx7sk-{{0*16}}_--",
+      "expected_text": "_[REDACTED:context7]",
+      "expected_providers": [
+        "context7"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "context7-anywhere-125",
+      "input": "/ctx7sk-{{0*16}}_--",
+      "expected_text": "/[REDACTED:context7]",
+      "expected_providers": [
+        "context7"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "context7-anywhere-126",
+      "input": "\ud83d\ude00ctx7sk-{{0*16}}_--",
+      "expected_text": "\ud83d\ude00[REDACTED:context7]",
+      "expected_providers": [
+        "context7"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-127",
+      "input": "ctx7sk-000000000000000",
+      "expected_text": "ctx7sk-000000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-128",
+      "input": "ctx7sk-short",
+      "expected_text": "ctx7sk-short",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-129",
+      "input": "00000000-0000-0000-0000-000000000000",
+      "expected_text": "00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-130",
+      "input": "EXA_ID=00000000-0000-0000-0000-000000000000",
+      "expected_text": "EXA_ID=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-131",
+      "input": "API_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_text": "API_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-132",
+      "input": "exa_token=00000000-0000-0000-0000-000000000000",
+      "expected_text": "exa_token=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-133",
+      "input": "exa_api_key=00000000-0000-0000-0000-000000000000x",
+      "expected_text": "exa_api_key=00000000-0000-0000-0000-000000000000x",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "key-near-miss-134",
+      "input": "exa_api_key=00000000-0000-0000-0000-000000000000-suffix",
+      "expected_text": "exa_api_key=00000000-0000-0000-0000-000000000000-suffix",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-labeled-135",
+      "input": "EXA_API_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_text": "EXA_API_KEY=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-labeled-136",
+      "input": "\"EXA_API_KEY\": \"00000000-0000-0000-0000-000000000000\"",
+      "expected_text": "\"EXA_API_KEY\": \"[REDACTED:exa_labeled]\"",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-labeled-137",
+      "input": "exa_api_key: 00000000-0000-0000-0000-000000000000",
+      "expected_text": "exa_api_key: [REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-labeled-138",
+      "input": "'exa.key': '00000000-0000-0000-0000-000000000000'",
+      "expected_text": "'exa.key': '[REDACTED:exa_labeled]'",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-labeled-139",
+      "input": "KEY_EXA=00000000-0000-0000-0000-000000000000",
+      "expected_text": "KEY_EXA=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-labeled-140",
+      "input": "exa_api_key:\u001c00000000-0000-0000-0000-000000000000",
+      "expected_text": "exa_api_key:\u001c[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-example_key",
+      "input": "example_key=00000000-0000-0000-0000-000000000000",
+      "expected_text": "example_key=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-exact_cache_key",
+      "input": "exact_cache_key=00000000-0000-0000-0000-000000000000",
+      "expected_text": "exact_cache_key=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-hexa_color_key",
+      "input": "hexa_color_key=00000000-0000-0000-0000-000000000000",
+      "expected_text": "hexa_color_key=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-hexagon_key",
+      "input": "hexagon_key=00000000-0000-0000-0000-000000000000",
+      "expected_text": "hexagon_key=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-monkey_example_id",
+      "input": "monkey_example_id=00000000-0000-0000-0000-000000000000",
+      "expected_text": "monkey_example_id=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-EXAMPLE_KEY",
+      "input": "EXAMPLE_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_text": "EXAMPLE_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-prefixEXA_KEY",
+      "input": "prefixEXA_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_text": "prefixEXA_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-exampleApiKey",
+      "input": "exampleApiKey=00000000-0000-0000-0000-000000000000",
+      "expected_text": "exampleApiKey=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-exactKey",
+      "input": "exactKey=00000000-0000-0000-0000-000000000000",
+      "expected_text": "exactKey=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-hexaKey",
+      "input": "hexaKey=00000000-0000-0000-0000-000000000000",
+      "expected_text": "hexaKey=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-negative-hexagonKey",
+      "input": "hexagonKey=00000000-0000-0000-0000-000000000000",
+      "expected_text": "hexagonKey=00000000-0000-0000-0000-000000000000",
+      "expected_providers": [],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-positive-exaApiKey",
+      "input": "exaApiKey=00000000-0000-0000-0000-000000000000",
+      "expected_text": "exaApiKey=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-positive-EXA-KEY",
+      "input": "EXA-KEY=00000000-0000-0000-0000-000000000000",
+      "expected_text": "EXA-KEY=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-positive-prefix.exa_key",
+      "input": "prefix.exa_key=00000000-0000-0000-0000-000000000000",
+      "expected_text": "prefix.exa_key=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-positive-prefix-exaApiKey",
+      "input": "prefix-exaApiKey=00000000-0000-0000-0000-000000000000",
+      "expected_text": "prefix-exaApiKey=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-positive-key_exa",
+      "input": "key_exa=00000000-0000-0000-0000-000000000000",
+      "expected_text": "key_exa=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
+    },
+    {
+      "name": "exa-segment-positive-prefix_EXA_KEY",
+      "input": "prefix_EXA_KEY=00000000-0000-0000-0000-000000000000",
+      "expected_text": "prefix_EXA_KEY=[REDACTED:exa_labeled]",
+      "expected_providers": [
+        "exa_labeled"
+      ],
+      "expected_quarantine_count": 0
     }
   ]
 }

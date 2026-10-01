@@ -2870,7 +2870,11 @@ def wal_checkpoint(
 @app.command("scrub-at-rest")
 def scrub_at_rest_command(
     db_path: Path = typer.Option(..., "--db", help="Explicit database path; live apply requires guarded opt-in."),
-    providers: str = typer.Option("google_oauth", "--providers", help="Only google_oauth is supported."),
+    providers: str = typer.Option(
+        "google_oauth",
+        "--providers",
+        help="Provider mode: google_oauth, context7, or exa_labeled (EXA key labels only).",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Count matches without writing."),
     batch_size: int = typer.Option(100, "--batch-size", min=1, max=1000),
     allow_live_db: bool = typer.Option(

@@ -20,7 +20,18 @@ from .vector_store import value_free_sqlite_logging
 from .wal_checkpoint import checkpoint_guard
 
 PROVIDERS = frozenset({"google_oauth_access", "google_oauth_refresh", "google_client_secret"})
-PREFIXES = ("ya29.", "1//", "GOCSPX-")
+PROVIDER_MODES = {
+    "google_oauth": PROVIDERS,
+    "context7": frozenset({"context7"}),
+    "exa_labeled": frozenset({"exa_labeled"}),
+}
+_PROVIDER_PREFIXES = {
+    "google_oauth_access": "ya29.",
+    "google_oauth_refresh": "1//",
+    "google_client_secret": "GOCSPX-",
+    "context7": "ctx7sk-",
+    "exa_labeled": "exa",
+}
 LIVE_SERVICES = (
     "fleet-watchdog",
     "throughput-watchdog",
@@ -96,11 +107,19 @@ def _tables(conn):
     return sorted(targets, key=lambda t: (t[0] == "_chunks_history", t[2] == "virtual", t[0] != "chunks", t[0]))
 
 
-def _batch(conn, table, columns, keys, last, size):
-    where = " OR ".join(
-        f"(typeof({_quote(c)})='text' AND instr({_quote(c)}, ?) > 0)" for c in columns for _ in PREFIXES
-    )
-    params = [p for _ in columns for p in PREFIXES]
+def _batch(conn, table, columns, keys, last, size, selected=PROVIDERS):
+    prefixes = tuple(_PROVIDER_PREFIXES[p] for p in sorted(selected))
+
+    # EXA labels need both exa and key; the regex enforces their label boundaries.
+    # The other provider prefixes are exact.
+    def predicate(column, prefix):
+        quoted = _quote(column)
+        expression = f"lower({quoted})" if prefix == "exa" else quoted
+        key_filter = f" AND instr({expression}, 'key') > 0" if prefix == "exa" else ""
+        return f"(typeof({quoted})='text' AND instr({expression}, ?) > 0{key_filter})"
+
+    where = " OR ".join(predicate(c, p) for c in columns for p in prefixes)
+    params = [p for _ in columns for p in prefixes]
     key_sql = ",".join(map(_quote, keys))
     pagination = "1" if last is None else f"({key_sql}) > ({','.join('?' for _ in keys)})"
     if last is not None:
@@ -114,7 +133,7 @@ def _batch(conn, table, columns, keys, last, size):
     )
 
 
-def _rewrite(conn, table, columns, keys, rows, apply):
+def _rewrite(conn, table, columns, keys, rows, apply, selected=PROVIDERS):
     counts = {"rows": 0, "columns": {}}
     for row in rows:
         key, values = row[: len(keys)], row[len(keys) :]
@@ -122,7 +141,7 @@ def _rewrite(conn, table, columns, keys, rows, apply):
         for column, value in zip(columns, values):
             if not isinstance(value, str):
                 continue
-            result = scrub_secrets(value, providers=PROVIDERS)
+            result = scrub_secrets(value, providers=selected)
             if result.redactions:
                 changes[column] = result.text
                 providers = {r.provider for r in result.redactions}
@@ -163,7 +182,7 @@ def _rewrite(conn, table, columns, keys, rows, apply):
     return counts
 
 
-def _run(store, dry_run, batch_size):
+def _run(store, dry_run, batch_size, selected=PROVIDERS):
     conn = store.conn
     tables = _tables(conn)
     report = {"dry_run": dry_run, "batches": 0, "tables": {}}
@@ -176,7 +195,7 @@ def _run(store, dry_run, batch_size):
                 try:
                     if not dry_run:
                         conn.execute("BEGIN IMMEDIATE")
-                    rows = _batch(conn, table, columns, keys, last, batch_size)
+                    rows = _batch(conn, table, columns, keys, last, batch_size, selected)
                     # Preserve independent previews and avoid unsanitized history preimages.
                     suppressed = (
                         list(
@@ -190,7 +209,7 @@ def _run(store, dry_run, batch_size):
                     )
                     for name, _ in suppressed:
                         conn.execute(f"DROP TRIGGER {_quote(name)}")
-                    counts = _rewrite(conn, table, columns, keys, rows, not dry_run)
+                    counts = _rewrite(conn, table, columns, keys, rows, not dry_run, selected)
                     for _, sql in suppressed:
                         conn.execute(sql)
                     if not dry_run:
@@ -221,13 +240,13 @@ def _checkpoint(store):
             raise apsw.BusyError("scrub checkpoint busy")
 
 
-def _apply(path, batch_size):
+def _apply(path, batch_size, selected=PROVIDERS):
     with WriterRuntimeStore(path) as store:
         _checkpoint(store)
         failure = None
         try:
-            result = _run(store, False, batch_size)
-            if any(t["rows"] for t in _run(store, True, batch_size)["tables"].values()):
+            result = _run(store, False, batch_size, selected)
+            if any(t["rows"] for t in _run(store, True, batch_size, selected)["tables"].values()):
                 raise RuntimeError("remaining provider matches")
         except BaseException as exc:
             failure = _failure(exc)
@@ -266,7 +285,7 @@ def _quiesced_gates(config):
     maintenance._check_lsof_clean(config)
 
 
-def _guarded_apply(path, batch_size, expect_rows):
+def _guarded_apply(path, batch_size, expect_rows, selected=PROVIDERS):
     if expect_rows is None or expect_rows < 0:
         raise ScrubAtRestError("expected row count required", reason="expected-row-count-required")
     config = maintenance.MaintenanceConfig(db_path=path, backup_reuse_max_age_hours=24)
@@ -282,12 +301,12 @@ def _guarded_apply(path, batch_size, expect_rows):
         _quiesced_gates(config)
         _live_requirements(config)
         with ReadonlyStore(path) as store:
-            current = _run(store, True, batch_size)
+            current = _run(store, True, batch_size, selected)
         if sum(t["rows"] for t in current["tables"].values()) != expect_rows:
             raise ScrubAtRestError("expected row count mismatch", reason="expected-row-count-mismatch")
         _live_requirements(config)
         _quiesced_gates(config)
-        result = _apply(path, batch_size)
+        result = _apply(path, batch_size, selected)
     except BaseException as exc:
         failure = _failure(exc)
     finally:
@@ -324,8 +343,9 @@ def scrub_at_rest(
     failure = None
     try:
         with value_free_sqlite_logging():
-            if providers != "google_oauth" or not 1 <= batch_size <= 1000:
+            if providers not in PROVIDER_MODES or not 1 <= batch_size <= 1000:
                 raise ValueError("invalid scrub options")
+            selected = PROVIDER_MODES[providers]
             try:
                 path = assert_not_live_db(Path(db_path), allow_live=dry_run or allow_live_db)
             except RuntimeError as exc:
@@ -339,12 +359,12 @@ def scrub_at_rest(
                     break
             if dry_run:
                 with ReadonlyStore(path) as store:
-                    return _run(store, True, batch_size)
+                    return _run(store, True, batch_size, selected)
             with _maintenance_lock(path):
                 path = assert_not_live_db(path, allow_live=allow_live_db)
                 if allow_live_db:
-                    return _guarded_apply(path, batch_size, expect_rows)
-                return _apply(path, batch_size)
+                    return _guarded_apply(path, batch_size, expect_rows, selected)
+                return _apply(path, batch_size, selected)
     except Exception as exc:
         failure = _failure(exc)
     raise failure

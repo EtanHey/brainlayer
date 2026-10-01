@@ -173,7 +173,11 @@ shell history, logs, PRs, or chat.
 ## Manual credential cleanup
 
 `brainlayer scrub-at-rest --providers google_oauth --db /path/to/offline-copy.db --dry-run`
-reports matched row counts per table, column and provider. Remove `--dry-run` to
+reports matched row counts per table, column and provider. Provider modes are
+`google_oauth` (the default), `context7`, and `exa_labeled`. EXA cleanup requires
+a label with an `exa` segment and `key`; separators (`_`, `.`, `-`) or a
+camelCase capital can end the segment. Labels like `example_key` and bare UUIDs
+are preserved. Use the same mode for the survey and apply. Remove `--dry-run` to
 apply to an offline copy; `--batch-size` defaults to 100. An explicit database path
 is required. A live dry run is read-only and needs no opt-in. Live apply, including
 symlink/hardlink aliases, refuses without `--allow-live-db` and `--expect-rows N`.
