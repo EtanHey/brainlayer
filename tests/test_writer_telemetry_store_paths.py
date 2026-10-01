@@ -5,9 +5,11 @@ import time as stdlib_time
 from pathlib import Path
 from types import SimpleNamespace
 
+import apsw
 import pytest
 
 import brainlayer.vector_store as vector_store
+from brainlayer import writer_telemetry
 from brainlayer.store import store_memory
 from brainlayer.vector_store import VectorStore
 
@@ -53,7 +55,26 @@ def _embedding(seed: int) -> list[float]:
 
 def test_vector_store_init_emits_implicit_operation_span(tmp_path, monkeypatch):
     log_path = _configure(monkeypatch, tmp_path)
+    observed_sql: list[str] = []
+    original_trace = writer_telemetry._WriterSpan._trace
 
+    def trace_with_slow_non_fts(self, event):
+        if event.get("code") == apsw.SQLITE_TRACE_PROFILE:
+            observed_sql.append(str(event.get("sql") or ""))
+            event = {**event, "nanoseconds": 0}
+            # Deterministically crowd FTS out of the timing-ranked 64-entry sample.
+            for index in range(64):
+                original_trace(
+                    self,
+                    {
+                        "code": apsw.SQLITE_TRACE_PROFILE,
+                        "sql": f"SELECT slow_column_{index} FROM slow_table_{index}",
+                        "nanoseconds": 1_000_000_000,
+                    },
+                )
+        original_trace(self, event)
+
+    monkeypatch.setattr(writer_telemetry._WriterSpan, "_trace", trace_with_slow_non_fts)
     store = VectorStore(tmp_path / "brainlayer.db")
     store.close()
 
@@ -65,7 +86,9 @@ def test_vector_store_init_emits_implicit_operation_span(tmp_path, monkeypatch):
     assert event["span_kind"] == "writer_operation"
     assert event["transaction_mode"] == "implicit_per_statement"
     assert event["outcome"] == "completed"
-    assert any("chunks_fts" in statement["normalized_sql"] for statement in event["statements"])
+    assert any("chunks_fts" in sql for sql in observed_sql)
+    assert len(event["statements"]) == 64
+    assert all("slow_table_" in statement["normalized_sql"] for statement in event["statements"])
 
 
 def test_upsert_chunks_emits_one_span_per_pr570_sub_batch(tmp_path, monkeypatch):
