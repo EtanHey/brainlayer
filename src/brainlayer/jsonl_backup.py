@@ -50,6 +50,8 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic as _monotonic
+from time import sleep as _sleep
 from typing import Any
 
 from . import backup_daily
@@ -190,7 +192,7 @@ def _icloud_deadline_for_archive(
     """Set an archive-sized budget when the iCloud copy operation begins."""
     archive_size = Path(archive_path).expanduser().stat().st_size
     configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
-    return time.monotonic() + max(configured_timeout, archive_size / ICLOUD_MIN_BYTES_PER_SECOND)
+    return _monotonic() + max(configured_timeout, archive_size / ICLOUD_MIN_BYTES_PER_SECOND)
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -454,7 +456,7 @@ class ICloudProbeError(RuntimeError):
 
 
 def _check_icloud_deadline(deadline: float | None, phase: str) -> None:
-    if deadline is not None and time.monotonic() >= deadline:
+    if deadline is not None and _monotonic() >= deadline:
         raise ICloudDeadlineExceeded(f"iCloud operation deadline exceeded during {phase}")
 
 
@@ -663,7 +665,7 @@ def copy_archive_to_icloud(
     )
 
     def remaining_seconds() -> float:
-        return max(deadline - time.monotonic(), 0.001)
+        return max(deadline - _monotonic(), 0.001)
 
     icloud_dir.mkdir(parents=True, exist_ok=True)
     _check_icloud_deadline(deadline, "preparing the iCloud directory")
@@ -738,14 +740,14 @@ def copy_archive_to_icloud(
                     result = receipt(reused=True)
                     _trash_stale_unverified_icloud_items(icloud_dir, logical_sha256)
                     return result
-                if time.monotonic() >= deadline:
+                if _monotonic() >= deadline:
                     if state.get("is_uploading") is True and destination.is_file():
                         return pending_receipt()
                     raise ICloudDeadlineExceeded(
                         "existing iCloud copy was not uploaded and materialized before its deadline: "
                         f"path={destination} state={state!r}"
                     )
-                time.sleep(min(poll_interval_seconds, remaining_seconds()))
+                _sleep(min(poll_interval_seconds, remaining_seconds()))
                 status_path = placeholder if not destination.exists() and placeholder.exists() else destination
                 state = _icloud_item_state(
                     status_path,
@@ -767,7 +769,7 @@ def copy_archive_to_icloud(
                 raise
             _quarantine_unverified_icloud_item(destination)
             _quarantine_unverified_icloud_item(placeholder)
-            if time.monotonic() >= deadline:
+            if _monotonic() >= deadline:
                 raise
 
     temp_path = icloud_dir / f".{destination.name}.{os.getpid()}.partial"
@@ -800,10 +802,10 @@ def copy_archive_to_icloud(
     # The local copy/hash budget is complete. Network status gets a fresh phase
     # budget, so an expired disk-scaled deadline cannot become a 0.001-second
     # osascript timeout on the upload probe.
-    network_deadline = time.monotonic() + configured_timeout
+    network_deadline = _monotonic() + configured_timeout
 
     def network_remaining_seconds() -> float:
-        return max(network_deadline - time.monotonic(), 0.001)
+        return max(network_deadline - _monotonic(), 0.001)
 
     verified = False
     pending = False
@@ -841,10 +843,10 @@ def copy_archive_to_icloud(
                 )
                 _trash_stale_unverified_icloud_items(icloud_dir, logical_sha256)
                 return result
-            if time.monotonic() >= deadline and state.get("is_uploading") is True and destination.is_file():
+            if _monotonic() >= deadline and state.get("is_uploading") is True and destination.is_file():
                 pending = True
                 return pending_receipt()
-            if time.monotonic() >= network_deadline:
+            if _monotonic() >= network_deadline:
                 if state.get("is_uploading") is True and destination.is_file():
                     pending = True
                     return pending_receipt()
@@ -854,7 +856,7 @@ def copy_archive_to_icloud(
                     "iCloud copy was not uploaded and materialized before its deadline: "
                     f"path={destination} materialization={materialization} state={state!r}"
                 )
-            time.sleep(min(poll_interval_seconds, network_remaining_seconds()))
+            _sleep(min(poll_interval_seconds, network_remaining_seconds()))
             placeholder = destination.with_name(f".{destination.name}.icloud")
             status_path = placeholder if not destination.exists() and placeholder.exists() else destination
             state = _icloud_item_state(status_path, request_download=True, timeout_seconds=network_remaining_seconds())
@@ -1042,7 +1044,7 @@ def _icloud_inventory_is_verified(
         return False
 
     configured_timeout = _configured_icloud_timeout_seconds() if timeout_seconds is None else timeout_seconds
-    deadline = deadline if deadline is not None else time.monotonic() + configured_timeout
+    deadline = deadline if deadline is not None else _monotonic() + configured_timeout
     for archive_name in sorted(referenced_by_sources):
         try:
             _check_icloud_deadline(deadline, f"validating iCloud inventory archive {archive_name}")
@@ -1086,7 +1088,7 @@ def _icloud_inventory_is_verified(
             archive_valid = True
             while True:
                 _check_icloud_deadline(deadline, f"probing iCloud inventory archive {archive_name}")
-                remaining = max(deadline - time.monotonic(), 0.001)
+                remaining = max(deadline - _monotonic(), 0.001)
                 status_path = placeholder if not destination.exists() and placeholder.exists() else destination
                 item_state = _icloud_item_state(
                     status_path,
@@ -1117,11 +1119,11 @@ def _icloud_inventory_is_verified(
                     elif validated_sources is not None:
                         validated_sources.update(referenced_by_sources[archive_name])
                     break
-                if time.monotonic() >= deadline:
+                if _monotonic() >= deadline:
                     raise ICloudDeadlineExceeded(
                         f"iCloud operation deadline exceeded while materializing inventory archive {archive_name}"
                     )
-                time.sleep(min(poll_interval_seconds, remaining))
+                _sleep(min(poll_interval_seconds, remaining))
             if not archive_valid:
                 complete = False
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
