@@ -170,13 +170,28 @@ deployment lead reinstall the repo-generated plist. Do not paste the key into
 shell history, logs, PRs, or chat.
 
 
-## Copy-only credential cleanup
+## Manual credential cleanup
 
 `brainlayer scrub-at-rest --providers google_oauth --db /path/to/offline-copy.db --dry-run`
 reports matched row counts per table, column and provider. Remove `--dry-run` to
-apply; `--batch-size` defaults to 100. An explicit copy is required: canonical
-and configured runtime paths, including symlink/hardlink aliases, always refuse.
-This command is manual maintenance; it never stops services or edits the live DB.
+apply to an offline copy; `--batch-size` defaults to 100. An explicit database path
+is required. A live dry run is read-only and needs no opt-in. Live apply, including
+symlink/hardlink aliases, refuses without `--allow-live-db` and `--expect-rows N`.
+Use the sum of **all** table row counts from the preceding dry run for N (including
+FTS/history copies, not just chunks). Apply re-surveys after quiescence and refuses
+if the current total differs.
+
+The guarded mode holds the maintenance lock, requires an active enrichment pause
+sentinel and a verified backup receipt for that DB no older than 24 hours, and
+reuses VACUUM's quiet-window (04:00–06:00 local), idle-queue and writer gates.
+It quiesces the fleet/tier-0 watchdogs, health-check healer, BrainBar UI/daemon, hotlane, watcher, drain,
+index, tier-3 ingest and enrichment using maintenance's service helpers. It checks
+that jobs remain unloaded, BrainBar processes are gone and no writable database
+descriptors remain before applying. Any failed gate aborts before writing.
+Service restoration runs in `finally`; services previously down or deliberately
+paused remain down, and resume failures are reported by count. Proof and rehearsal
+must use copies and synthetic service stubs; canonical execution belongs to the
+deployment lead's maintenance window.
 
 The schema survey includes logical tables, FTS and repair/history copies, including
 text stored in numeric-affinity columns. Only the selected provider spans change;
@@ -188,8 +203,13 @@ explicitly. Bitemporal preimage capture and preview regeneration are transaction
 suppressed during chunk redaction and restored verbatim; independent previews keep
 their unmatched text and existing history is scrubbed. Identity/reference
 matches appear in dry counts but refuse apply. Unsupported virtual/external-content
-index layouts refuse rather than silently skip. A failed batch rolls back; earlier committed batches may remain,
+index layouts refuse rather than silently skip. Unique-index collisions caused by
+redaction (for example in KG entities/facts or git memories) abort the current
+batch rather than deleting or merging rows. A failed batch rolls back; earlier committed batches may remain,
 so rerun after resolving the error. Writer/maintenance locks serialize apply, with
 bounded busy retries and checkpoints on the same writer connection before/after.
 The final survey must find zero selected matches. This is logical redaction, not
 physical erasure of old WAL/free pages, embeddings, source transcripts or backups.
+During the entire command, SQLite diagnostics log only error codes/classes, including
+file handlers; the process's normal SQLite callback is restored after stores close.
+Failures retain value-free causal error categories and cleanup notes.

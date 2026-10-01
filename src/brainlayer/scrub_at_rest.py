@@ -1,4 +1,4 @@
-"""One-off, copy-only provider redaction; reports contain schema names and counts."""
+"""Manual provider redaction on copies or a guarded, quiesced runtime DB."""
 
 from __future__ import annotations
 
@@ -9,20 +9,60 @@ from pathlib import Path
 
 import apsw
 
+from . import chunk_origin_wipe, maintenance
 from .chunk_origin_wipe import assert_not_live_db
 from .chunk_write import canonical_content_hash
 from .dedupe import BUSY_RETRY_ATTEMPTS, _busy_retry_delay, compute_dedupe_fields
 from .maintenance import _maintenance_lock
 from .pipeline.secret_scrub import scrub_secrets
 from .runtime_store import ReadonlyStore, WriterRuntimeStore
+from .vector_store import value_free_sqlite_logging
 from .wal_checkpoint import checkpoint_guard
 
 PROVIDERS = frozenset({"google_oauth_access", "google_oauth_refresh", "google_client_secret"})
 PREFIXES = ("ya29.", "1//", "GOCSPX-")
+LIVE_SERVICES = (
+    "fleet-watchdog",
+    "tier0-watchdog",
+    "health-check",
+    "brainbar",
+    "brainbar-daemon",
+    "hotlane-brainbar",
+    "watch",
+    "drain",
+    "index",
+    "t3-ingest",
+    "enrichment",
+)
 
 
 class ScrubAtRestError(RuntimeError):
     """Value-free failure; a failed batch is rolled back, earlier batches may remain."""
+
+    def __init__(self, message, *, reason="scrub-failed"):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _safe_cause(exc):
+    # Preserve the error category without retaining SQLite messages/SQL/notes.
+    try:
+        return type(exc)(type(exc).__name__)
+    except Exception:
+        return RuntimeError(type(exc).__name__)
+
+
+def _failure(exc, cleanup=None):
+    error = ScrubAtRestError(f"at-rest scrub failed ({type(exc).__name__}); no matched values logged")
+    error.__cause__ = _safe_cause(exc)
+    if isinstance(exc, ScrubAtRestError):
+        error.reason = exc.reason
+        error.__cause__ = exc.__cause__
+        for note in getattr(exc, "__notes__", []):
+            error.add_note(note)
+    if cleanup is not None:
+        error.add_note(f"cleanup failed ({type(cleanup).__name__})")
+    return error
 
 
 def _quote(name):
@@ -156,7 +196,10 @@ def _run(store, dry_run, batch_size):
                     break
                 except BaseException as exc:
                     if not conn.getautocommit():
-                        conn.execute("ROLLBACK")
+                        try:
+                            conn.execute("ROLLBACK")
+                        except Exception as cleanup:
+                            raise _failure(exc, cleanup) from _safe_cause(exc)
                     if not isinstance(exc, apsw.BusyError) or attempt == BUSY_RETRY_ATTEMPTS - 1:
                         raise
                     time.sleep(_busy_retry_delay(attempt))
@@ -176,27 +219,130 @@ def _checkpoint(store):
             raise apsw.BusyError("scrub checkpoint busy")
 
 
-def scrub_at_rest(
-    db_path: Path, *, dry_run: bool = False, batch_size: int = 100, providers: str = "google_oauth"
-) -> dict:
-    """Scrub explicit offline copies only. Canonical/configured DBs and aliases refuse."""
+def _apply(path, batch_size):
+    with WriterRuntimeStore(path) as store:
+        _checkpoint(store)
+        failure = None
+        try:
+            result = _run(store, False, batch_size)
+            if any(t["rows"] for t in _run(store, True, batch_size)["tables"].values()):
+                raise RuntimeError("remaining provider matches")
+        except BaseException as exc:
+            failure = _failure(exc)
+        try:
+            _checkpoint(store)
+        except Exception as cleanup:
+            if failure is None:
+                failure = _failure(cleanup)
+            else:
+                failure.add_note(f"checkpoint failed ({type(cleanup).__name__})")
+        if failure is not None:
+            raise failure
+        return result
+
+
+def _live_requirements(config):
+    if not maintenance._service_is_deliberately_paused("enrichment"):
+        raise ScrubAtRestError("active enrichment pause required", reason="enrichment-pause-required")
+    if maintenance._recent_verified_backup(config) is None:
+        raise ScrubAtRestError("verified backup within 24 hours required", reason="verified-backup-required")
+
+
+def _check_no_brainbar_processes():
+    # An unregistered UI can open the daemon bundle even after its job is booted out.
+    processes = maintenance.run_command(["ps", "-axo", "comm="], check=True)
+    if any(Path(line.strip()).name in {"BrainBar", "BrainBarDaemon"} for line in processes.stdout.splitlines()):
+        raise ScrubAtRestError("BrainBar process remains running", reason="quiesce-failed")
+
+
+def _quiesced_gates(config):
+    # Both healer jobs and unregistered UI processes can revive resident writers.
+    if any(maintenance._service_is_loaded(service) for service in LIVE_SERVICES):
+        raise ScrubAtRestError("writer service remains loaded", reason="quiesce-failed")
+    _check_no_brainbar_processes()
+    config.expected_writer_patterns = ()
+    maintenance._check_lsof_clean(config)
+
+
+def _guarded_apply(path, batch_size, expect_rows):
+    if expect_rows is None or expect_rows < 0:
+        raise ScrubAtRestError("expected row count required", reason="expected-row-count-required")
+    config = maintenance.MaintenanceConfig(db_path=path, backup_reuse_max_age_hours=24)
+    _live_requirements(config)
+    maintenance._run_gates(config)
+    booted_out, failure = {}, None
     try:
-        if providers != "google_oauth" or not 1 <= batch_size <= 1000:
-            raise ValueError("invalid scrub options")
-        path = assert_not_live_db(Path(db_path))
-        if dry_run:
-            with ReadonlyStore(path) as store:
-                return _run(store, True, batch_size)
-        with _maintenance_lock(path):
-            path = assert_not_live_db(path)
-            with WriterRuntimeStore(path) as store:
-                _checkpoint(store)
-                try:
-                    result = _run(store, False, batch_size)
-                    if any(t["rows"] for t in _run(store, True, batch_size)["tables"].values()):
-                        raise RuntimeError("remaining provider matches")
-                    return result
-                finally:
-                    _checkpoint(store)
+        try:
+            maintenance._quiesce_services(LIVE_SERVICES, booted_out)
+        except Exception as exc:
+            raise ScrubAtRestError("failed to quiesce services", reason="quiesce-failed") from _safe_cause(exc)
+        # A successful bootout does not by itself establish that the job stayed down.
+        _quiesced_gates(config)
+        _live_requirements(config)
+        with ReadonlyStore(path) as store:
+            current = _run(store, True, batch_size)
+        if sum(t["rows"] for t in current["tables"].values()) != expect_rows:
+            raise ScrubAtRestError("expected row count mismatch", reason="expected-row-count-mismatch")
+        _live_requirements(config)
+        _quiesced_gates(config)
+        result = _apply(path, batch_size)
+    except BaseException as exc:
+        failure = _failure(exc)
+    finally:
+        try:
+            resume_failures = maintenance._resume_services(config.repo_root, tuple(reversed(LIVE_SERVICES)), booted_out)
+            if resume_failures:
+                error = ScrubAtRestError(
+                    f"failed to resume services: count={len(resume_failures)}", reason="resume-failed"
+                )
+                if failure is None:
+                    failure = error
+                else:
+                    failure.add_note(str(error))
+        except Exception as exc:
+            if failure is None:
+                failure = _failure(exc)
+            else:
+                failure.add_note(f"resume failed ({type(exc).__name__})")
+    if failure is not None:
+        raise failure
+    return result
+
+
+def scrub_at_rest(
+    db_path: Path,
+    *,
+    dry_run: bool = False,
+    batch_size: int = 100,
+    providers: str = "google_oauth",
+    allow_live_db: bool = False,
+    expect_rows: int | None = None,
+) -> dict:
+    """Read-only surveys need no opt-in; guarded applies require a current row total."""
+    failure = None
+    try:
+        with value_free_sqlite_logging():
+            if providers != "google_oauth" or not 1 <= batch_size <= 1000:
+                raise ValueError("invalid scrub options")
+            try:
+                path = assert_not_live_db(Path(db_path), allow_live=dry_run or allow_live_db)
+            except RuntimeError as exc:
+                raise ScrubAtRestError("live apply requires opt-in", reason="live-db-requires-allow") from _safe_cause(
+                    exc
+                )
+            # Normalize hardlink aliases to the runtime path for its locks/backup receipt.
+            for candidate in chunk_origin_wipe._live_db_candidates():
+                if chunk_origin_wipe._same_file(path, candidate):
+                    path = candidate.expanduser().resolve()
+                    break
+            if dry_run:
+                with ReadonlyStore(path) as store:
+                    return _run(store, True, batch_size)
+            with _maintenance_lock(path):
+                path = assert_not_live_db(path, allow_live=allow_live_db)
+                if allow_live_db:
+                    return _guarded_apply(path, batch_size, expect_rows)
+                return _apply(path, batch_size)
     except Exception as exc:
-        raise ScrubAtRestError(f"at-rest scrub failed ({type(exc).__name__}); no matched values logged") from None
+        failure = _failure(exc)
+    raise failure

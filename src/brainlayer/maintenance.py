@@ -376,6 +376,8 @@ def quarantine_stale_queue_files(
 
 
 def _launchd_label(service: str) -> str:
+    if service == "fleet-watchdog":
+        return "com.etanhey.brainlayer-fleet-watchdog"
     return f"com.brainlayer.{service}"
 
 
@@ -437,6 +439,12 @@ def _verify_enrichment_template_flex_backend(repo_root_or_launchd_dir: Path) -> 
 
 
 def _resume_service(repo_root: Path, service: str) -> None:
+    if service in {"brainbar", "brainbar-daemon", "fleet-watchdog"}:
+        # These already-installed jobs have no normal install.sh service option
+        # (or own a different namespace). Restore their existing configuration.
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{_launchd_label(service)}.plist"
+        run_command(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], check=True)
+        return
     launchd_dir = _launchd_dir_for_resume(repo_root)
     if service == "enrichment":
         _verify_enrichment_template_flex_backend(launchd_dir)
