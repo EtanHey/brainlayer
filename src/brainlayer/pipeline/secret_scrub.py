@@ -49,10 +49,11 @@ class _ProviderPattern:
     regex: re.Pattern[str]
 
 
-# EXA credentials are UUIDs: require an ASCII label containing both exa and key.
+# EXA credentials are UUIDs: require an exa segment and key in the ASCII label.
+# Only lowercase a can introduce a camelCase capital; EXAMPLE is not EXA.
 # Capture only the value so labels survive, and never classify a bare UUID.
 _EXA_LABELED_RE = re.compile(
-    r"""(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]*[Ee][Xx][Aa])(?=[A-Za-z0-9_.-]*[Kk][Ee][Yy])[A-Za-z0-9_.-]*[A-Za-z0-9_]["']?\s*[=:]\s*["']?(?P<value>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![A-Za-z0-9_-])"""
+    r"""(?<![A-Za-z0-9_.-])(?=(?:[A-Za-z0-9_.-]*[_.-])?[Ee][Xx](?:[Aa](?![A-Za-z0-9])|a(?=[A-Z])))(?=[A-Za-z0-9_.-]*[Kk][Ee][Yy])[A-Za-z0-9_.-]*[A-Za-z0-9_]["']?\s*[=:]\s*["']?(?P<value>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![A-Za-z0-9_-])"""
 )
 
 _PROVIDER_PATTERNS = (

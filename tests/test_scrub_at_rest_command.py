@@ -792,3 +792,22 @@ def test_new_modes_use_guarded_survey_and_apply(db, live_guard, mode):
     stopped = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "stop"}
     resumed = {e[1] for e in live_guard.events if isinstance(e, tuple) and e[0] == "resume"}
     assert stopped and resumed == stopped - {"enrichment"}
+
+
+def test_exa_cli_survey_and_apply_preserve_example_join_key(db):
+    text = "example_key=00000000-0000-0000-0000-000000000000"
+    db.conn.execute(
+        "INSERT INTO chunks(id,content,summary,metadata,source_file) VALUES('join-key',?,?,'{}','fixture')",
+        (text, text),
+    )
+    before = db.conn.execute("SELECT * FROM chunks WHERE id='join-key'").fetchone()
+    fts_before = db.conn.execute("SELECT * FROM chunks_fts WHERE chunk_id='join-key'").fetchone()
+    runner = CliRunner()
+    for flags in (["--dry-run"], []):
+        result = runner.invoke(app, ["scrub-at-rest", "--db", str(db.db_path), "--providers", "exa_labeled", *flags])
+        assert result.exit_code == 0, result.output
+        survey = json.loads(result.output)
+        assert all(table["rows"] == 0 for table in survey["tables"].values())
+        assert text not in result.output
+        assert db.conn.execute("SELECT * FROM chunks WHERE id='join-key'").fetchone() == before
+        assert db.conn.execute("SELECT * FROM chunks_fts WHERE chunk_id='join-key'").fetchone() == fts_before

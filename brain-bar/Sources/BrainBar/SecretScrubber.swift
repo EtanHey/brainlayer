@@ -41,8 +41,9 @@ enum SecretScrubber {
     // earlier provider wins (e.g. anthropic over openai for sk-ant-…).
     private static let providerPatternSources: [(String, String)] = [
         ("context7", #"ctx7sk-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])"#),
-        // EXA UUIDs require a label; only capture group 1 is redacted.
-        ("exa_labeled", #"(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]*[Ee][Xx][Aa])(?=[A-Za-z0-9_.-]*[Kk][Ee][Yy])[A-Za-z0-9_.-]*[A-Za-z0-9_]["']?\s*[=:]\s*["']?(?<value>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![A-Za-z0-9_-])"#.replacingOccurrences(of: #"\s"#, with: pythonWhitespace)),
+        // EXA must be a label segment; lowercase a allows camelCase, not EXAMPLE.
+        // Only capture group 1 is redacted.
+        ("exa_labeled", #"(?<![A-Za-z0-9_.-])(?=(?:[A-Za-z0-9_.-]*[_.-])?[Ee][Xx](?:[Aa](?![A-Za-z0-9])|a(?=[A-Z])))(?=[A-Za-z0-9_.-]*[Kk][Ee][Yy])[A-Za-z0-9_.-]*[A-Za-z0-9_]["']?\s*[=:]\s*["']?(?<value>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![A-Za-z0-9_-])"#.replacingOccurrences(of: #"\s"#, with: pythonWhitespace)),
         ("anthropic", #"\bsk-ant-[A-Za-z0-9_-]{20,}\b"#),
         ("stripe", #"\b(?:[sr]k_(?:live|test)|whsec)_[A-Za-z0-9]{16,}\b"#),
         ("openai", #"\bsk-(?:proj-|svcacct-|admin-|org-)?[A-Za-z0-9_-]{20,}\b"#),

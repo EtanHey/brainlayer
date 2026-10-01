@@ -20,7 +20,6 @@ from .vector_store import value_free_sqlite_logging
 from .wal_checkpoint import checkpoint_guard
 
 PROVIDERS = frozenset({"google_oauth_access", "google_oauth_refresh", "google_client_secret"})
-PREFIXES = ("ya29.", "1//", "GOCSPX-")
 PROVIDER_MODES = {
     "google_oauth": PROVIDERS,
     "context7": frozenset({"context7"}),
@@ -111,14 +110,15 @@ def _tables(conn):
 def _batch(conn, table, columns, keys, last, size, selected=PROVIDERS):
     prefixes = tuple(_PROVIDER_PREFIXES[p] for p in sorted(selected))
 
-    # EXA labels are case-insensitive; the other provider prefixes are exact.
-    def expression(column, prefix):
+    # EXA labels need both exa and key; the regex enforces their label boundaries.
+    # The other provider prefixes are exact.
+    def predicate(column, prefix):
         quoted = _quote(column)
-        return f"lower({quoted})" if prefix == "exa" else quoted
+        expression = f"lower({quoted})" if prefix == "exa" else quoted
+        key_filter = f" AND instr({expression}, 'key') > 0" if prefix == "exa" else ""
+        return f"(typeof({quoted})='text' AND instr({expression}, ?) > 0{key_filter})"
 
-    where = " OR ".join(
-        f"(typeof({_quote(c)})='text' AND instr({expression(c, p)}, ?) > 0)" for c in columns for p in prefixes
-    )
+    where = " OR ".join(predicate(c, p) for c in columns for p in prefixes)
     params = [p for _ in columns for p in prefixes]
     key_sql = ",".join(map(_quote, keys))
     pagination = "1" if last is None else f"({key_sql}) > ({','.join('?' for _ in keys)})"
