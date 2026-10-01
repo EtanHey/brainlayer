@@ -201,8 +201,10 @@ def _quarantine_unlabeled_entropy(
     quarantined: list[QuarantinedToken] = []
     redaction_index = _SpanIndex(redactions)
     for match in _TOKEN_RE.finditer(text):
-        value = match.group(0).strip(".,;)")
-        start = offset + match.start()
+        raw_value = match.group(0)
+        value = raw_value.strip(".,;)")
+        leading_trim = len(raw_value) - len(raw_value.lstrip(".,;)"))
+        start = offset + match.start() + leading_trim
         end = start + len(value)
         if redaction_index.overlaps(start, end):
             continue

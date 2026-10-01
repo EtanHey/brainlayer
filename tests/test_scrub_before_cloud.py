@@ -190,6 +190,71 @@ def test_cloud_quarantine_offsets_follow_provider_redaction():
     assert scrub_for_cloud(prompt) == "😀 [[REDACTED:quarantine]] [REDACTED:quarantine]; [REDACTED:quarantine]. done"
 
 
+@pytest.mark.parametrize("dots", [1, 8, 62, 70])
+def test_cloud_redacts_quarantine_after_leading_punctuation(dots, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    prompt = "é" + "." * dots + token
+    client = _FakeGeminiClient()
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+    assert client.models.sent == ["é" + "." * dots + "[REDACTED:quarantine]"]
+    assert token not in client.models.sent[0]
+    assert scrub_for_cloud(client.models.sent[0]) == client.models.sent[0]
+
+
+@pytest.mark.parametrize("case", ["repeated", "overlapping", "negative", "missing", "empty"])
+def test_cloud_quarantine_mismatch_redacts_every_value_or_blocks(case, monkeypatch):
+    from brainlayer import enrichment_controller as controller
+    from brainlayer.pipeline import cloud_scrub
+    from brainlayer.pipeline.secret_scrub import QuarantinedToken, SecretScrubResult
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    missing = case in {"missing", "empty"}
+    token = token * 2 if case == "overlapping" else token
+    prompt = "ordinary prose" if missing else f"é . {token} and {token}"
+    if case == "overlapping":
+        prompt = "é . " + token + token[:62]
+    value = "" if case == "empty" else token
+    real_scrub = cloud_scrub.scrub_secrets
+    calls = []
+
+    def scrub(text):
+        calls.append(text)
+        if len(calls) == 1:
+            return real_scrub(text)
+        return SecretScrubResult(
+            text=text,
+            quarantine=[
+                QuarantinedToken(value=value, start=4, end=4 + len(value)),
+                QuarantinedToken(
+                    value=value,
+                    start=-len(value) if case == "negative" else 0,
+                    end=len(text) if case == "negative" else len(value),
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(cloud_scrub, "scrub_secrets", scrub)
+    _neutralize_gemini_cost_accounting(monkeypatch, controller)
+    client = _FakeGeminiClient()
+    if missing:
+        with pytest.raises(cloud_scrub.CloudScrubError) as error:
+            controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+        assert token not in str(error.value)
+        assert client.models.sent == []
+    else:
+        controller._generate_content_with_rate_limit(client, "gemini-test", prompt, {}, None)
+        expected = (
+            "é . [REDACTED:quarantine]" if case == "overlapping" else prompt.replace(token, "[REDACTED:quarantine]")
+        )
+        assert client.models.sent == [expected]
+        monkeypatch.setattr(cloud_scrub, "scrub_secrets", real_scrub)
+        assert cloud_scrub.scrub_for_cloud(client.models.sent[0]) == client.models.sent[0]
+
+
 def test_realtime_loop_marks_quarantined_chunk_and_advances(monkeypatch, tmp_path):
     from brainlayer import enrichment_controller as controller
     from brainlayer.vector_store import VectorStore

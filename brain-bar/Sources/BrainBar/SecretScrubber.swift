@@ -268,11 +268,12 @@ enum SecretScrubber {
         let index = SpanIndex(redactions.map { ($0.start, $0.end) })
         var out: [(start: Int, end: Int)] = []
         for match in tokenPattern.matches(in: slice as String, range: NSRange(location: 0, length: slice.length)) {
-            // Python: value = match.group(0).strip(".,;)"); start = match.start();
-            // end = start + len(value). The start is not advanced past stripped
-            // leading characters there, so it is not here either.
-            let value = strip(slice.substring(with: match.range), ".,;)")
-            let start = offset + match.range.location
+            // Preserve Python parity: trimming leading punctuation advances the
+            // span start by those ASCII characters (UTF-16 units here).
+            let rawValue = slice.substring(with: match.range)
+            let value = strip(rawValue, ".,;)")
+            let leadingTrim = rawValue.prefix { ".,;)".contains($0) }.utf16.count
+            let start = offset + match.range.location + leadingTrim
             let end = start + (value as NSString).length
             if index.overlaps(start, end) { continue }
             if isJoinKeyLike(value) || looksLikePathOrURL(value) { continue }

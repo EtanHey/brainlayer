@@ -1015,6 +1015,34 @@
       "expected_text": "fooGOCSPX-short",
       "expected_providers": [],
       "expected_quarantine_count": 0
+    },
+    {
+      "name": "quarantine-leading-dots-1",
+      "input": "\u00e9.abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_text": "\u00e9.abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    },
+    {
+      "name": "quarantine-leading-dots-8",
+      "input": "\u00e9........abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_text": "\u00e9........abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    },
+    {
+      "name": "quarantine-leading-dots-62",
+      "input": "\u00e9..............................................................abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_text": "\u00e9..............................................................abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
+    },
+    {
+      "name": "quarantine-leading-dots-70",
+      "input": "\u00e9......................................................................abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_text": "\u00e9......................................................................abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.",
+      "expected_providers": [],
+      "expected_quarantine_count": 1
     }
   ]
 }

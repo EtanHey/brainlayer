@@ -3,8 +3,8 @@
 Two directions, both fail closed:
 
 - ``scrub_for_cloud`` runs on every text sent to a cloud model. It
-  redacts provider secrets and quarantine spans. If scrubbing raises, it
-  raises ``CloudScrubError`` and the caller must not send.
+  redacts provider secrets and quarantine spans. Scrub errors or unresolvable
+  quarantine records raise ``CloudScrubError`` and the caller must not send.
 - ``scrub_llm_output`` runs on every LLM output value before it is persisted.
   A cloud model copies tokens from its prompt into summaries and key facts,
   so output is scrubbed even when the input already was. If scrubbing raises,
@@ -46,19 +46,40 @@ def scrub_for_cloud(text: str) -> str:
     """Redact provider secrets and quarantine spans before a remote send.
 
     A second pass finds quarantine offsets in the already-redacted text, so
-    provider replacements cannot shift them. Storage retains its local-review
-    quarantine policy; cloud prompts redact even identifier-like false positives.
+    provider replacements cannot shift them. Each offset must identify its value;
+    a mismatch redacts every occurrence, or fails closed if none can be found.
+    Storage retains its local-review quarantine policy; cloud prompts redact even
+    identifier-like false positives.
     """
     if not isinstance(text, str):
         raise CloudScrubError(f"remote LLM payload must be text, got {type(text).__name__}")
     scrubbed = _scrub_text(text)
     try:
         quarantine = scrub_secrets(scrubbed).quarantine
+        spans: list[tuple[int, int]] = []
+        resolved_values: set[str] = set()
+        for token in quarantine:
+            if not token.value:
+                raise CloudScrubError("quarantine value is empty; refusing to send text")
+            if 0 <= token.start < token.end <= len(scrubbed) and scrubbed[token.start : token.end] == token.value:
+                spans.append((token.start, token.end))
+            elif token.value not in resolved_values:
+                start = scrubbed.find(token.value)
+                if start < 0:
+                    raise CloudScrubError("quarantine value not found; refusing to send text")
+                while start >= 0:
+                    end = start + len(token.value)
+                    spans.append((start, end))
+                    start = scrubbed.find(token.value, start + 1)
+                resolved_values.add(token.value)
         parts: list[str] = []
         cursor = 0
-        for token in quarantine:
-            parts.extend((scrubbed[cursor : token.start], "[REDACTED:quarantine]"))
-            cursor = token.end
+        for start, end in sorted(spans):
+            if end <= cursor:
+                continue
+            if start >= cursor:
+                parts.extend((scrubbed[cursor:start], "[REDACTED:quarantine]"))
+            cursor = end
         parts.append(scrubbed[cursor:])
         return "".join(parts)
     except Exception as exc:
