@@ -1,6 +1,33 @@
 import XCTest
 @testable import BrainBar
 
+private final class DietFixtureHybridClient: HybridSearchClientProtocol, @unchecked Sendable {
+    private let responses: [String: [String: Any]]
+    private let lock = NSLock()
+    private var calls = 0
+
+    init(path: String) throws {
+        responses = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: [String: Any]] ?? [:]
+    }
+
+    var requestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func search(arguments: [String: Any]) throws -> HybridSearchResponse {
+        lock.lock()
+        calls += 1
+        lock.unlock()
+        let key = "\(arguments["query"] as? String ?? "")|\(arguments["detail"] as? String ?? "compact")|\(arguments["project"] != nil ? "True" : "False")"
+        guard let response = responses[key], let text = response["text"] as? String else {
+            throw RecordingHybridSearchClientError.injectedFailure
+        }
+        return HybridSearchResponse(text: text, metadata: ["structuredContent": response["structuredContent"] ?? [:]])
+    }
+}
+
 final class MCPDietTests: XCTestCase {
     private func call(_ router: MCPRouter, _ name: String, _ arguments: [String: Any]) throws -> String {
         let response = router.handle([
@@ -39,6 +66,19 @@ final class MCPDietTests: XCTestCase {
             let expanded = try call(router, "brain_expand", ["chunk_id": id, "before": 0, "after": 0])
             XCTAssertTrue(expanded.contains("unique content"), expanded)
         }
+    }
+
+    func testScorePrecisionAndExactSourceDeduplication() {
+        let results = [
+            SearchResult(chunkID: "cart-id", score: 0.1234567890123456, snippet: "content", sourceFile: "a"),
+            SearchResult(chunkID: "/fixtures/same.jsonl", score: 0, snippet: "content", sourceFile: "/fixtures/same.jsonl")
+        ]
+        let text = TextFormatter.formatSearchResults(query: "fixture", results: results, total: 2)
+        XCTAssertTrue(text.contains("score: 0.1235"), text)
+        XCTAssertTrue(text.contains("score: 0.0000"), text)
+        XCTAssertFalse(text.contains("0.123456789"), text)
+        XCTAssertTrue(text.contains("  Source: a\n"), text)
+        XCTAssertFalse(text.contains("Source: same.jsonl"), text)
     }
 
     func testEntityAndPersonOmitOnlyEmptySections() {
@@ -96,18 +136,39 @@ final class MCPDietTests: XCTestCase {
                 _ = db.recordInjectionEvent(sessionID: query, query: query, chunkIDs: [id], tokenCount: 10)
             }
         }
+        let testFolder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let root = testFolder.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let hybridEnabled = ProcessInfo.processInfo.environment["MCP_DIET_HYBRID"] == "1"
+        var hybridClient: DietFixtureHybridClient?
+        if hybridEnabled {
+            let fixturePath = folder.appendingPathComponent("hybrid.json").path
+            let builder = Process()
+            builder.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            var environment = ProcessInfo.processInfo.environment
+            environment["BRAINLAYER_MCP_SOCKET"] = socketPath
+            environment["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = "1"
+            builder.environment = environment
+            builder.arguments = ["python3", testFolder.appendingPathComponent("Scripts/mcp_diet_wire.py").path,
+                                 "--helper-fixture", root.path, fixturePath]
+            try builder.run()
+            builder.waitUntilExit()
+            XCTAssertEqual(builder.terminationStatus, 0)
+            hybridClient = try DietFixtureHybridClient(path: fixturePath)
+        }
         let server = BrainBarServer(socketPath: socketPath, dbPath: path, database: db,
-                                    enableHybridSearchHelper: false, diagnostics: .none)
+                                    hybridSearchClient: hybridClient, enableHybridSearchHelper: hybridEnabled, diagnostics: .none)
         let ready = expectation(description: "scratch server database ready")
         server.onDatabaseReady = { _ in ready.fulfill() }
         server.start()
         defer { server.stop() }
         wait(for: [ready], timeout: 10)
-        let testFolder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let root = testFolder.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let receipt = ProcessInfo.processInfo.environment["MCP_DIET_RECEIPT"] ?? folder.appendingPathComponent("receipt.json").path
         let client = Process()
         client.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        var environment = ProcessInfo.processInfo.environment
+        environment["BRAINLAYER_MCP_SOCKET"] = socketPath
+        environment["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = "1"
+        client.environment = environment
         client.arguments = ["python3", testFolder.appendingPathComponent("Scripts/mcp_diet_wire.py").path, socketPath, root.path, receipt]
         let exited = expectation(description: "stdio client completed")
         client.terminationHandler = { _ in exited.fulfill() }
@@ -116,6 +177,12 @@ final class MCPDietTests: XCTestCase {
         if client.isRunning { client.terminate() }
         XCTAssertEqual(client.terminationStatus, 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: receipt))
+        if let hybridClient {
+            XCTAssertEqual(hybridClient.requestCount, 30, "Every search must traverse the fixture hybrid helper")
+            var payload = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: receipt))) as? [String: Any] ?? [:]
+            payload["hybrid_request_count"] = hybridClient.requestCount
+            try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: receipt))
+        }
     }
 
 }

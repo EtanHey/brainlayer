@@ -22,12 +22,17 @@ enum TextFormatter {
         for result in results {
             let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
             let date = formattedDate(result.date)
-            lines.append("- ID: \(result.chunkID) | score: \(result.score) | project: \(result.project.isEmpty ? "unknown" : result.project) | date: \(date.isEmpty ? "unknown" : date)")
-            // Keep source provenance unless the canonical ID already contains it.
-            if !source.isEmpty && !result.chunkID.contains(source) {
+            lines.append("- ID: \(result.chunkID) | score: \(scoreString(result.score)) | project: \(result.project.isEmpty ? "unknown" : result.project) | date: \(date.isEmpty ? "unknown" : date)")
+            // A substring of an opaque ID is not evidence of matching provenance.
+            if !source.isEmpty && result.chunkID != source && result.chunkID != result.sourceFile {
                 lines.append("  Source: \(source)")
             }
-            lines.append("  Preview: \(truncate(result.displayText, maxLen: 200))")
+            let preview = truncate(result.snippet.isEmpty ? result.displayText : result.snippet, maxLen: 200)
+            let summary = truncate(result.summary, maxLen: 100)
+            if !summary.isEmpty && summary != truncate(preview, maxLen: 100) {
+                lines.append("  Summary: \(summary)")
+            }
+            lines.append("  Preview: \(preview)")
         }
         return lines.joined(separator: "\n")
     }
@@ -89,7 +94,6 @@ enum TextFormatter {
                 lines.append(fullText)
             } else {
                 lines.append(String(fullText.prefix(1500)) + "...")
-
             }
         }
         return lines.joined(separator: "\n")
@@ -183,16 +187,7 @@ enum TextFormatter {
     }
 
     private static func scoreString(_ score: Double) -> String {
-        score == 0 ? "0.00" : String(format: "%.2f", score)
-    }
-
-    private static func titleLine(for result: SearchResult) -> String {
-        let preferred = result.summary.isEmpty ? result.displayText : result.summary
-        let title = preferred
-            .split(separator: "\n", maxSplits: 1)
-            .first
-            .map(String.init) ?? preferred
-        return truncate(title.isEmpty ? "Untitled result" : title, maxLen: 100)
+        String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), score)
     }
 
     private static func sourceBasename(_ source: String) -> String {

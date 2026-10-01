@@ -576,7 +576,8 @@ final class MCPRouterTests: XCTestCase {
         defer { db.close(); try? FileManager.default.removeItem(atPath: path) }
         let structured: [String: Any] = [
             "total": 1, "results": [["chunk_id": "hybrid-canonical-id", "score": 0.9876,
-                                     "project": "fixture", "date": "2026-10-01", "snippet": "Hybrid fixture preview"]],
+                                     "project": "fixture", "date": "2026-10-01", "snippet": "Hybrid fixture preview",
+                                     "summary": "Separate hybrid summary with different information"]],
             "search_mode": "fts_fallback", "fallback_reason": "fixture", "degraded": true
         ]
         let helper = RecordingHybridSearchClient(response: HybridSearchResponse(
@@ -588,7 +589,8 @@ final class MCPRouterTests: XCTestCase {
         let compact = try toolText(router.handle(toolCall(id: 171, name: "brain_search", arguments: ["query": "fixture"])))
         XCTAssertTrue(compact.contains("hybrid-canonical-id"), compact)
         XCTAssertTrue(compact.contains("0.9876"), compact)
-        XCTAssertTrue(compact.contains("Hybrid fixture preview"), compact)
+        XCTAssertTrue(compact.contains("Preview: Hybrid fixture preview"), compact)
+        XCTAssertTrue(compact.contains("Summary: Separate hybrid summary with different information"), compact)
         XCTAssertTrue(compact.contains("FTS fallback"), compact)
         XCTAssertFalse(compact.contains("KG Facts"), compact)
         let full = try toolText(router.handle(toolCall(id: 172, name: "brain_search", arguments: ["query": "fixture", "detail": "full"])))
