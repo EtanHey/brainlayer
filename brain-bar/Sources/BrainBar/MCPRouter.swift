@@ -1404,7 +1404,7 @@ final class MCPRouter: @unchecked Sendable {
         if !context.isEmpty {
             lines.append("\u{251c}\u{2500} Context (\(context.count) chunks)")
             for c in context {
-                let cid = (c["chunk_id"] as? String ?? "").prefix(12)
+                let cid = c["chunk_id"] as? String ?? ""
                 let snippet = String(((c["content"] as? String) ?? "").prefix(80))
                 lines.append("\u{2502}  [\(cid)] \(snippet)")
             }
@@ -1871,13 +1871,13 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_recall",
-            "description": "Get session-level context: what you are working on now, recent sessions, one session's detail, or knowledge-base stats. For topic lookup use brain_search.",
+            "description": "Recall one session's context (requires session_id), injection events, or knowledge-base stats (default). For topic lookup use brain_search.",
             "annotations": MCPRouter.recallAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "enum": ["context", "sessions", "operations", "plan", "summary", "stats", "injections"], "description": "Recall mode"],
-                    "session_id": ["type": "string", "description": "Session ID for operations/summary mode"],
+                    "mode": ["type": "string", "enum": ["context", "stats", "injections"], "description": "Recall mode"],
+                    "session_id": ["type": "string", "description": "Session ID for context mode; optional filter for injections"],
                 ] as [String: Any],
             ] as [String: Any])
         ],
