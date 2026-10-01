@@ -897,6 +897,55 @@ No results found.
         XCTAssertTrue(tagsText.contains("readonly-route"), tagsText)
     }
 
+    func testBrainExpandNeighbourIDsRoundTripWithoutPrefixCollisions() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-expand-ids-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let database = BrainDatabase(path: tempDB)
+        defer { database.close() }
+        let ids = ["0", "1", "2"].map { "rt-rollout--" + String(repeating: $0, count: 64) }
+        for (index, id) in ids.enumerated() {
+            try database.insertChunk(
+                id: id, content: "Neighbour round-trip content \(index)",
+                sessionId: "expand-neighbour-session", project: "brainlayer",
+                contentType: "assistant_text", importance: 5
+            )
+        }
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(database)
+        let text = try toolText(router.handle(toolCall(id: 305, name: "brain_expand", arguments: [
+            "chunk_id": ids[1], "before": 1, "after": 1
+        ])))
+        let renderedIDs = text.split(separator: "\n").compactMap { line -> String? in
+            let prefix = "│  ["
+            guard line.hasPrefix(prefix), let end = line.firstIndex(of: "]") else { return nil }
+            return String(line.dropFirst(prefix.count).prefix(upTo: end))
+        }
+        XCTAssertEqual(renderedIDs, [ids[0], ids[2]])
+        for (index, id) in renderedIDs.enumerated() {
+            let expanded = try toolText(router.handle(toolCall(id: 306 + index, name: "brain_expand", arguments: [
+                "chunk_id": id, "before": 0, "after": 0
+            ])))
+            XCTAssertTrue(expanded.contains("│ Neighbour round-trip content \(index * 2)"), expanded)
+        }
+    }
+
+    func testBrainRecallAdvertisesOnlyImplementedModes() throws {
+        let router = MCPRouter(profile: "full")
+        let recall = try XCTUnwrap(listedTools(router).first { ($0["name"] as? String) == "brain_recall" })
+        let schema = try XCTUnwrap(recall["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: [String: Any]])
+        XCTAssertEqual(properties["mode"]?["enum"] as? [String], ["context", "stats", "injections"])
+        let description = try XCTUnwrap(recall["description"] as? String)
+        XCTAssertTrue(description.contains("session_id"), description)
+        XCTAssertTrue(description.contains("injection"), description)
+        XCTAssertTrue(description.contains("stats"), description)
+        XCTAssertFalse(description.contains("recent sessions"), description)
+        let sessionDescription = try XCTUnwrap(properties["session_id"]?["description"] as? String)
+        XCTAssertTrue(sessionDescription.contains("context"), sessionDescription)
+        XCTAssertFalse(sessionDescription.contains("operations"), sessionDescription)
+        XCTAssertFalse(sessionDescription.contains("summary"), sessionDescription)
+    }
+
     func testBrainExpandReturnsFullTargetContentWhenSummaryExists() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-expand-full-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
@@ -1765,7 +1814,25 @@ No results found.
         XCTAssertTrue(text.contains("Types: assistant_text, user_message"))
     }
 
-    func testBrainRecallMakesStatsFallbackExplicitWithoutChangingWorkingModes() throws {
+    func testBrainRecallRejectsUnsupportedModes() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-recall-rejected-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let database = BrainDatabase(path: tempDB)
+        defer { database.close() }
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(database)
+        for mode in ["summary", "sessions", "operations", "plan", "bogus"] {
+            let rejected = router.handle(toolCall(id: 141, name: "brain_recall", arguments: ["mode": mode]))
+            let result = try XCTUnwrap(rejected["result"] as? [String: Any])
+            let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+            let text = try XCTUnwrap(content.first?["text"] as? String)
+            XCTAssertEqual(result["isError"] as? Bool, true, mode)
+            XCTAssertTrue(text.contains("Schema validation error: mode must be one of"), text)
+            XCTAssertFalse(text.contains("BrainLayer Stats"), text)
+        }
+    }
+
+    func testBrainRecallWorkingModesPreserveResponseContracts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-recall-fallback-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
@@ -1793,19 +1860,6 @@ No results found.
         func recall(_ arguments: [String: Any]) throws -> String {
             try toolText(router.handle(toolCall(id: 140, name: "brain_recall", arguments: arguments)))
         }
-
-        for mode in ["summary", "sessions", "operations", "plan"] {
-            let text = try recall(["mode": mode])
-            XCTAssertTrue(text.contains("BrainLayer Stats"), "\(mode): \(text)")
-            XCTAssertTrue(text.contains("brain_recall mode \"\(mode)\" \(fallbackNoticeFragment)"), text)
-        }
-
-        let rejected = router.handle(toolCall(id: 141, name: "brain_recall", arguments: ["mode": "bogus"]))
-        let rejectedResult = try XCTUnwrap(rejected["result"] as? [String: Any])
-        let rejectedContent = try XCTUnwrap(rejectedResult["content"] as? [[String: Any]])
-        let rejectedText = try XCTUnwrap(rejectedContent.first?["text"] as? String)
-        XCTAssertEqual(rejectedResult["isError"] as? Bool, true)
-        XCTAssertTrue(rejectedText.contains("Schema validation error: mode must be one of"))
 
         for arguments in [
             ["mode": "context"],
