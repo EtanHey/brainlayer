@@ -38,6 +38,12 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.46] - 2026-10-01
+
+- #1039: BrainBar’s Maintenance card renders a deliberate skip neutrally and unknown evidence as unknown.
+- #1035: `brainlayer doctor` flags a shadowing CLI on PATH.
+- #1041, #1045, #1048: Security: harden credential scrubbing and cloud-send redaction, add an at-rest scrub command, and scrub the canonical chunk-insert and hook write paths.
+
 ## [1.5.45] - 2026-09-30
 
 - #1011: Collapsing Dashboard Details reflows the visible content without leaving unused space.
