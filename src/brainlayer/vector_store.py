@@ -2506,9 +2506,17 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
 
-        valid_pairs: list[tuple[Dict[str, Any], List[float]]] = []
+        from .chunk_write import scrub_chunk_values
+
+        scrubbed_chunks = [scrub_chunk_values(chunk) for chunk in chunks]
+
+        valid_pairs: list[tuple[Dict[str, Any], List[float] | None]] = []
         rejected_error: ValueError | None = None
-        for chunk, embedding in zip(chunks, embeddings):
+        for chunk, embedding, original in zip(scrubbed_chunks, embeddings, chunks):
+            # The caller's vector describes raw content. Defer embedding if the
+            # at-rest boundary changed it; never blend that stale vector.
+            if chunk.get("content") != original.get("content"):
+                embedding = None
             try:
                 reject_recursive_mcp_output(
                     chunk.get("content"),
@@ -2627,12 +2635,16 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 hamming_distance_value=duplicate.hamming_distance,
                                 archive_existing_duplicate=duplicate_row_exists is not None,
                             )
-                            if content_changed:
+                            if content_changed and embedding is None:
+                                self._delete_chunk_vector(cursor, duplicate.canonical_chunk_id)
+                            elif content_changed:
                                 merged_embedding = self._blend_chunk_vector(
                                     cursor, duplicate.canonical_chunk_id, embedding
                                 )
                                 self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
-                            elif not self._chunk_vector_exists(cursor, duplicate.canonical_chunk_id):
+                            elif embedding is not None and not self._chunk_vector_exists(
+                                cursor, duplicate.canonical_chunk_id
+                            ):
                                 self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
                             continue
                         if merge_existing_chunk_seen(
@@ -2645,7 +2657,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 "last_seen_at": chunk.get("last_seen_at") or created_at,
                             },
                         ):
-                            if not self._chunk_vector_exists(cursor, chunk_id):
+                            if embedding is not None and not self._chunk_vector_exists(cursor, chunk_id):
                                 self._upsert_chunk_vector(cursor, chunk_id, embedding)
                             continue
 
@@ -2781,7 +2793,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 *([prepared.get("source_class")] if has_source_class else []),
                             ),
                         )
-                        self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                        if embedding is None:
+                            self._delete_chunk_vector(cursor, chunk_id)
+                        else:
+                            self._upsert_chunk_vector(cursor, chunk_id, embedding)
                     cursor.execute("COMMIT")
                     transaction_started = False
                     telemetry_span.finish("commit")
