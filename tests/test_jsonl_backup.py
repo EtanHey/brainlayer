@@ -1142,7 +1142,7 @@ def test_icloud_deadline_is_size_scaled_and_env_configurable(tmp_path, monkeypat
 
     archive = tmp_path / "archive.tar.gz"
     archive.write_bytes(b"12345")
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: 100.0)
     monkeypatch.setattr(jsonl_backup, "DEFAULT_ICLOUD_TIMEOUT_SECONDS", 1)
     monkeypatch.setattr(jsonl_backup, "ICLOUD_MIN_BYTES_PER_SECOND", 2)
     monkeypatch.delenv("BRAINLAYER_JSONL_BACKUP_ICLOUD_TIMEOUT_SECONDS", raising=False)
@@ -1164,7 +1164,7 @@ def test_icloud_seed_copy_deadline_starts_after_slow_bundle(tmp_path, monkeypatc
     original_create = jsonl_backup.create_jsonl_bundle_with_digests
 
     _mock_drive_success(jsonl_backup, monkeypatch)
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(
         jsonl_backup,
         "_icloud_item_state",
@@ -1319,7 +1319,7 @@ def test_icloud_timeout_quarantines_unverified_placeholder(tmp_path, monkeypatch
     archive.write_bytes(b"bytes")
     icloud_dir = tmp_path / "CloudDocs"
     clock = [0.0]
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
 
     def leave_placeholder(path, **kwargs):  # noqa: ARG001
         destination = Path(path)
@@ -1370,7 +1370,7 @@ def test_icloud_upload_still_in_progress_is_pending_not_quarantined(tmp_path, mo
         clock[0] = 2.0
         return _icloud_state(uploaded=False, status="current")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", still_uploading)
 
     result = jsonl_backup.copy_archive_to_icloud(
@@ -1409,7 +1409,7 @@ def test_uploaded_icloud_copy_proof_hash_timeout_stays_pending_not_quarantined(t
             clock[0] = deadline
         return real_sha256_file(path, deadline=deadline)
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", uploaded)
     monkeypatch.setattr(jsonl_backup, "_sha256_file", proof_hash_times_out)
 
@@ -1448,7 +1448,7 @@ def test_pending_icloud_receipt_resolves_without_rebundling(tmp_path, monkeypatc
             return _icloud_state(uploaded=False, status="current")
         return _icloud_state(uploaded=True, status="current")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", state_probe)
 
     first = jsonl_backup.run_backup(
@@ -1521,7 +1521,7 @@ def test_pending_icloud_receipt_still_uploading_defers_without_rebundling(tmp_pa
         clock[0] += 2.0
         return _icloud_state(uploaded=False, status="current")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", still_uploading)
 
     first = jsonl_backup.run_backup(
@@ -1765,7 +1765,7 @@ def test_existing_icloud_probe_cannot_restart_timeout_for_repair(tmp_path, monke
         clock[0] = 2.0
         raise RuntimeError("existing iCloud probe timed out")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", exhaust_deadline)
 
     with pytest.raises(RuntimeError, match="existing iCloud probe timed out"):
@@ -1821,7 +1821,7 @@ def test_existing_verified_object_is_not_quarantined_when_polling_reaches_deadli
         clock[0] = 2.0
         return _icloud_state(uploaded=True, status="notDownloaded")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", pending_until_deadline)
 
     with pytest.raises(jsonl_backup.ICloudDeadlineExceeded):
@@ -1891,7 +1891,7 @@ def test_icloud_deadline_starts_before_first_archive_scan(tmp_path, monkeypatch)
         observed_deadlines.append(deadline)
         raise RuntimeError("scan stopped")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: 10.0)
     monkeypatch.setattr(jsonl_backup, "_sha256_file", stop_first_scan)
 
     with pytest.raises(RuntimeError, match="scan stopped"):
@@ -1909,7 +1909,7 @@ def test_icloud_copy_deadline_blocks_status_probe(tmp_path, monkeypatch):
     status_calls = 0
     real_check = jsonl_backup._check_icloud_deadline
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_sha256_file", lambda path, **kwargs: "a" * 64)
     monkeypatch.setattr(jsonl_backup, "_sha256_gzip_payload", lambda path, **kwargs: "b" * 64)
 
@@ -2001,16 +2001,34 @@ def test_icloud_poll_sleep_cannot_overshoot_deadline(tmp_path, monkeypatch):
         [_icloud_state(uploaded=False, status="notDownloaded"), _icloud_state(uploaded=True, status="current")]
     )
     sleeps: list[float] = []
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(jsonl_backup.time, "sleep", sleeps.append)
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_sleep", sleeps.append)
+
+    completed, stopping = threading.Event(), threading.Event()
+
+    def background_sleeper():
+        while not stopping.is_set():
+            time.sleep(0.25)
+            completed.set()
+            stopping.wait()
+
+    worker = threading.Thread(target=background_sleeper)
+    worker.start()
 
     def pending_then_current(*args, **kwargs):  # noqa: ARG001
+        assert completed.wait(5), "background sleep did not complete"
         clock[0] = 0.75
         return next(states)
 
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", pending_then_current)
 
-    jsonl_backup.copy_archive_to_icloud(archive, tmp_path / "CloudDocs", timeout_seconds=1, poll_interval_seconds=10)
+    cloud = tmp_path / "CloudDocs"
+    try:
+        jsonl_backup.copy_archive_to_icloud(archive, cloud, timeout_seconds=1, poll_interval_seconds=10)
+    finally:
+        stopping.set()
+        worker.join(5)
+    assert not worker.is_alive()
 
     assert sleeps == [0.25]
 
@@ -2364,7 +2382,7 @@ def test_icloud_inventory_stops_when_receipt_hash_exhausts_shared_deadline(tmp_p
         clock[0] = 2.0
         return _icloud_state(uploaded=True, status="current")
 
-    monkeypatch.setattr(jsonl_backup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(jsonl_backup, "_icloud_item_state", exhaust_during_probe)
 
     with pytest.raises(jsonl_backup.ICloudDeadlineExceeded):
