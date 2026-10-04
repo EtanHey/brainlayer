@@ -718,7 +718,7 @@ struct ObservabilityLiveView: View {
 
         static func read(
             url: URL,
-            using operation: @escaping Operation = { ObservabilityReader.read(url: $0) }
+            using operation: @escaping Operation = { ObservabilityReader.readReconciled(url: $0) }
         ) async -> ObservabilityReadResult {
             return await operation(url)
         }
@@ -726,7 +726,7 @@ struct ObservabilityLiveView: View {
         static func watch(
             url: URL,
             every interval: Duration = .seconds(30),
-            using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) }
+            using operation: @escaping Reader.Operation = { ObservabilityReader.readReconciled(url: $0) }
         ) -> AsyncStream<ObservabilityReadResult> {
             AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
                 let producer = Task {

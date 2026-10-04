@@ -20,6 +20,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var latestStats: BrainDatabase.DashboardStats?
     private var latestState: PipelineState?
     private let statusLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// Shown under the status line only while a job alert is active.
+    private let showLogItem = NSMenuItem(title: BrainBarStatusPopoverController.showLogTitle, action: nil, keyEquivalent: "")
 
     init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
         self.runtime = runtime
@@ -37,6 +39,21 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     /// The menu's first, informational row.
     static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
         badge.badgeOn ? "Needs attention: \(badge.reason)" : "Nothing needs attention"
+    }
+
+    /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.
+    static func jobAlertKey(for badge: BadgeStatePresentation) -> String? {
+        guard badge.badgeOn else { return nil }
+        return badge.activeCodes.first { $0.hasPrefix(jobAlertCodePrefix) }.map { String($0.dropFirst(jobAlertCodePrefix.count)) }
+    }
+
+    private static let jobAlertCodePrefix = "job_alert_"
+    static let showLogTitle = "Show log"
+
+    /// The menu's rows as titles, in order; "" is a separator. The render harness draws these.
+    static func menuRowTitles(for badge: BadgeStatePresentation) -> [String] {
+        [statusLineTitle(for: badge)] + (jobAlertKey(for: badge) == nil ? [] : [showLogTitle])
+            + ["", "Open Dashboard", "Settings…", "", "Restart BrainBar", "", "Quit BrainBar"]
     }
 
     func toggle(_ sender: Any?) {
@@ -141,6 +158,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
+        showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
     }
 
     private func configureContextMenu() {
@@ -149,6 +167,11 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
         statusLineItem.isEnabled = false
         contextMenuForTesting.addItem(statusLineItem)
+#if BRAINBAR_UI
+        showLogItem.action = #selector(showJobAlertLog(_:))
+        showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
+        contextMenuForTesting.addItem(showLogItem)
+#endif
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
             NSMenuItem(
@@ -189,6 +212,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     @objc private func openDashboard(_ sender: Any?) {
         dashboardPanelController.showDashboard()
     }
+
+#if BRAINBAR_UI
+    @objc private func showJobAlertLog(_ sender: Any?) {
+        BrainBarJobAlerts.showLog(
+            forKey: Self.jobAlertKey(for: badgePresentation),
+            paths: .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath()),
+            workspace: BrainBarWorkspace()
+        )
+    }
+#endif
 
     @objc private func restartBrainBar(_ sender: Any?) {
         BrainBarProcessControl.restart()

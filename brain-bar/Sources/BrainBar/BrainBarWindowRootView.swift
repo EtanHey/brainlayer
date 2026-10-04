@@ -915,6 +915,21 @@ private struct BrainBarDashboardView: View {
         )
     }
 
+    /// The job alert (#1031) the attention list shows, with the database its producer used.
+    private var jobAlert: (text: String, dbPath: String)? {
+        guard case let .readable(document) = effectiveObservabilityResult else { return nil }
+        let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale)
+        guard status.errorIsJobAlert, let error = status.error, error.tone == .red else { return nil }
+        return (error.text, document.dbPath)
+    }
+
+#if BRAINBAR_UI
+    private func showJobAlertLog(_ alert: (text: String, dbPath: String)) {
+        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: alert.dbPath))?.key(for: alert.text)
+        BrainBarJobAlerts.showLog(forKey: key, paths: .live(databasePath: alert.dbPath), workspace: BrainBarWorkspace())
+    }
+#endif
+
     private var effectiveObservabilityResult: ObservabilityReadResult {
         if let observabilityResult { return observabilityResult }
         guard dbPath != nil else { return .unreadable("Database path unavailable.") }
@@ -1141,6 +1156,13 @@ private struct BrainBarDashboardView: View {
                                 Text(item)
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundStyle(Color.brainBarTextSecondary)
+#if BRAINBAR_UI
+                                if let alert = jobAlert, alert.text == item {
+                                    Button("Show log") { showJobAlertLog(alert) }
+                                        .controlSize(.small)
+                                        .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+                                }
+#endif
                             }
                         }
                     }

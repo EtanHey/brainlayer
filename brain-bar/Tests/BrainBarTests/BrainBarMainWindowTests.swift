@@ -157,7 +157,8 @@ final class BrainBarMainWindowTests: XCTestCase {
         defer { status.stop(); windowController.dismiss() }
 
         XCTAssertTrue(status.statusItemForTesting.menu === status.contextMenuForTesting, "every click opens the menu")
-        let titles = status.contextMenuForTesting.items.filter { !$0.isSeparatorItem }.map(\.title)
+        // Show log stays hidden while no job alert is active (lead ruling 2026-10-04).
+        let titles = status.contextMenuForTesting.items.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
         XCTAssertEqual(Array(titles.dropFirst()), ["Open Dashboard", "Settings…", "Restart BrainBar", "Quit BrainBar"])
         XCTAssertFalse(status.contextMenuForTesting.items[0].isEnabled, "the first row is a status line")
 

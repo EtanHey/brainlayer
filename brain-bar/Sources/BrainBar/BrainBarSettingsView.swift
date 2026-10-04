@@ -82,7 +82,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable."),
         confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
-            await Task.detached { ObservabilityReader.read(url: url) }.value
+            await Task.detached { ObservabilityReader.readReconciled(url: url) }.value
         },
         watcherHealthURL: URL? = nil,
         initialWatcherHealth: WatcherHealthFileRead? = nil,
@@ -311,6 +311,33 @@ final class BrainBarSettingsViewModel: ObservableObject {
             status: backupStatus,
             statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable."
         )
+    }
+
+    /// A job alert (#1031) in its own words, shown once on the Backups page as its own card.
+    var jobAlert: String? {
+        guard let status = backupStatus, status.errorIsJobAlert, status.error?.tone == .red else { return nil }
+        return status.error?.text
+    }
+
+    /// The backup status rows without the job alert, which the alert card already shows.
+    var backupStatusLines: [ObservabilityStatusLine]? {
+        guard let status = backupStatus else { return nil }
+        return status.lines.filter { line in !(status.errorIsJobAlert && line == status.error) }
+    }
+
+    /// The line under the Backups badge: the verdict's reason, unless it is the job alert the
+    /// alert card above it already shows.
+    func backupsBadgeReason(drive: DriveAuthPresentation?) -> String? {
+        let reason = backupsHealth(drive: drive).reason
+        return reason == jobAlert ? nil : reason
+    }
+
+    /// Show log for the job alert: the failing job's log, named by the live job-alert state.
+    func showJobAlertLog() {
+        guard let alert = jobAlert, case let .readable(document) = observabilityResult else { return }
+        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: document.dbPath))?.key(for: alert)
+        let paths = backupSources?.paths ?? .live(databasePath: document.dbPath)
+        BrainBarJobAlerts.showLog(forKey: key, paths: paths, workspace: workspace)
     }
 
     var backupStatusReason: String? {
@@ -904,6 +931,9 @@ struct BrainBarSettingsView: View {
             }
         case .backups:
             VStack(alignment: .leading, spacing: 16) {
+                if let alert = viewModel.jobAlert {
+                    BrainBarJobAlertCard(alert: alert) { viewModel.showJobAlertLog() }
+                }
                 if let driveAuth {
                     BrainBarDriveAwareBackupsGroup(viewModel: viewModel, driveAuth: driveAuth)
                 } else {
@@ -1013,9 +1043,9 @@ struct BrainBarSettingsView: View {
 
     @ViewBuilder
     private var backupStatus: some View {
-        if let status = viewModel.backupStatus {
+        if let lines = viewModel.backupStatusLines {
             VStack(alignment: .leading, spacing: 8) {
-                ObservabilityStatusRows(lines: status.lines, textColor: Color.brainBarTextSecondary)
+                ObservabilityStatusRows(lines: lines, textColor: Color.brainBarTextSecondary)
                     .font(.system(size: 11, weight: .medium))
             }
         } else {
@@ -1038,6 +1068,36 @@ struct BrainBarSettingsView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+}
+
+/// A job alert (#1031), once per page: the failed job's own sentence and Show log.
+private struct BrainBarJobAlertCard: View {
+    let alert: String
+    let showLog: () -> Void
+
+    var body: some View {
+        let tone = Color(nsColor: BrainBarDesignTokens.Colors.statusError)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(tone)
+            Text(alert)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 8)
+            Button("Show log", action: showLog)
+                .controlSize(.small)
+                .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tone.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tone.opacity(0.35), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("brainbar.backups.job-alert")
+    }
 }
 
 /// The Drive card and the Backups group card, observing both models so the badge follows Drive.
@@ -1106,7 +1166,8 @@ private struct BrainBarJobGroupCard: View {
         }
         return Badge(
             title: backupsHealth.badge.title, symbol: symbol, color: color,
-            reason: backupsHealth.reason,
+            // The job alert has its own card on this page; say it once (lead ruling 2026-10-04).
+            reason: backupsHealth.reason == viewModel.jobAlert ? nil : backupsHealth.reason,
             reasonColor: backupsHealth.badge == .unknown ? Color.brainBarTextMuted : color
         )
     }

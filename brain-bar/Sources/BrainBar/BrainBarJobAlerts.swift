@@ -1,0 +1,85 @@
+import Foundation
+
+/// The job-alert state the Python jobs keep in `job-alerts.json` (`brainlayer.job_alerts`): one
+/// reason per failing job key, removed by the job's next clean run.
+///
+/// `observability.json` copies one of these into `backups.error_type` as `job_alert:<reason>`, but
+/// only when its producer next runs. Reconciling with this file makes a clean run clear the alert
+/// in every BrainBar surface right away, and names the job, so Show log opens that job's log.
+struct BrainBarJobAlerts: Equatable, Sendable {
+    static let pathEnvironmentKey = "BRAINLAYER_JOB_ALERT_PATH"
+    static let observabilityPrefix = "job_alert:"
+
+    /// Job key → reason, e.g. `maintenance-light` → "BrainLayer light maintenance failed; …".
+    let active: [String: String]
+
+    /// The same path `job_alerts.alert_path` resolves: the override, else beside the database.
+    static func url(dbPath: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let override = environment[pathEnvironmentKey], !override.isEmpty {
+            return URL(fileURLWithPath: BadgeStateReader.expandedTildePath(override))
+        }
+        return URL(fileURLWithPath: BadgeStateReader.expandedTildePath(dbPath))
+            .deletingLastPathComponent()
+            .appendingPathComponent("job-alerts.json")
+    }
+
+    /// Nil when the file is missing or unreadable: unknown, never "no alerts".
+    static func read(url: URL) -> Self? {
+        guard let data = FileManager.default.contents(atPath: url.path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return Self(active: object.reduce(into: [:]) { result, entry in
+            if let reason = entry.value as? String { result[entry.key] = reason }
+        })
+    }
+
+    func key(for reason: String) -> String? {
+        active.filter { $0.value == reason }.keys.sorted().first
+    }
+
+    /// The document as of this alert state. A job alert no job still reports is cleared; if another
+    /// job still reports one, that alert is shown instead. Any other backup error is left alone.
+    func reconcile(_ document: ObservabilityDocument) -> ObservabilityDocument {
+        guard let errorType = document.backups.errorType, errorType.hasPrefix(Self.observabilityPrefix) else {
+            return document
+        }
+        let shown = String(errorType.dropFirst(Self.observabilityPrefix.count))
+        if active.values.contains(shown) { return document }
+        let remaining = active.keys.sorted().first.flatMap { active[$0] }
+        return document.replacingBackupsErrorType(remaining.map { Self.observabilityPrefix + $0 })
+    }
+
+    /// Reconciles with a state that may be unknown; an unknown state leaves the document as read.
+    static func reconcile(_ document: ObservabilityDocument, with alerts: Self?) -> ObservabilityDocument {
+        alerts?.reconcile(document) ?? document
+    }
+}
+
+extension ObservabilityDocument {
+    func replacingBackupsErrorType(_ errorType: String?) -> Self {
+        let b = backups
+        return Self(
+            schemaVersion: schemaVersion, generatedAt: generatedAt, dbPath: dbPath, windowHours: windowHours,
+            stores: stores, emitters: emitters, authorUnknown: authorUnknown,
+            backups: .init(
+                state: b.state, reason: b.reason, inputs: b.inputs, freshness: b.freshness,
+                thresholdHours: b.thresholdHours, retentionInvariant: b.retentionInvariant,
+                survivingArchives30D: b.survivingArchives30D, errorType: errorType,
+                lastVerifiedUpload: b.lastVerifiedUpload, dbSnapshot: b.dbSnapshot, launchd: b.launchd
+            )
+        )
+    }
+}
+
+extension ObservabilityReader {
+    /// What BrainBar shows: the document, reconciled with the live job-alert state beside the
+    /// producer's database.
+    static func readReconciled(
+        url: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> ObservabilityReadResult {
+        let result = read(url: url)
+        guard case let .readable(document) = result else { return result }
+        let alerts = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: document.dbPath, environment: environment))
+        return .readable(BrainBarJobAlerts.reconcile(document, with: alerts))
+    }
+}

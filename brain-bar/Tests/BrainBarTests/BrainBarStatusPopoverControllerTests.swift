@@ -50,7 +50,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
 
         let menu = controller.contextMenuForTesting
         // The first row is the informational status line; the rest are actions.
-        let actionableItems = menu.items.filter { !$0.isSeparatorItem }.dropFirst()
+        // Show log stays hidden while no job alert is active (lead ruling 2026-10-04).
+        let actionableItems = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }.dropFirst()
 
         XCTAssertTrue(controller.statusItemForTesting.menu === menu, "every click opens this one menu (#963)")
         XCTAssertFalse(menu === NSApp.mainMenu)

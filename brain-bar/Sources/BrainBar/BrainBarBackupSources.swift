@@ -5,11 +5,21 @@ import Foundation
 protocol BrainBarWorkspaceActing: Sendable {
     func reveal(_ url: URL)
     func copy(_ text: String)
+    /// Opens a file in its default app (a log opens in Console).
+    func open(_ url: URL)
+}
+
+extension BrainBarWorkspaceActing {
+    func open(_ url: URL) { reveal(url) }
 }
 
 struct BrainBarWorkspace: BrainBarWorkspaceActing {
     func reveal(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func open(_ url: URL) {
+        NSWorkspace.shared.open(url)
     }
 
     func copy(_ text: String) {
