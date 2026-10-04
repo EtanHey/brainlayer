@@ -639,8 +639,9 @@ enum BrainBarRenderHarness {
                 request.recognitionLevel = .accurate
                 try VNImageRequestHandler(cgImage: image).perform([request])
                 missing = missing.filter { label in
-                    request.results?.contains(where: {
-                        $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(label) == true && $0.boundingBox.minY > 0.025
+                    request.results?.contains(where: { observation in
+                        observation.topCandidates(1).first?.string.localizedCaseInsensitiveContains(label) == true
+                            && observation.boundingBox.minY > 0.025
                     }) != true
                 }
             }
