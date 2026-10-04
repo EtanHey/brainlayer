@@ -2903,6 +2903,7 @@ def scrub_at_rest_command(
                     "error": "at-rest scrub refused or failed",
                     "error_type": type(exc).__name__,
                     "reason": getattr(exc, "reason", "scrub-failed"),
+                    "detail": getattr(exc, "detail", None),
                 }
             )
         )
