@@ -336,7 +336,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func showJobAlertLog() {
         guard jobAlert != nil, case let .readable(document) = observabilityResult,
               let reason = BrainBarJobAlerts.rawReason(document) else { return }
-        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: document.dbPath))?.key(for: reason)
+        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.producerURL(for: document))?.key(for: reason)
         let paths = backupSources?.paths ?? .live(databasePath: document.dbPath)
         BrainBarJobAlerts.showLog(forKey: key, paths: paths, workspace: workspace)
     }

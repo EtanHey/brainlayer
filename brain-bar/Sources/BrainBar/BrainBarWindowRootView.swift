@@ -916,19 +916,19 @@ private struct BrainBarDashboardView: View {
     }
 
     /// The job alert (#1031) the attention list shows: its shown text, the job's raw reason (the
-    /// key lookup needs it unsanitized) and the database its producer used.
-    private var jobAlert: (text: String, reason: String, dbPath: String)? {
+    /// key lookup needs it unsanitized) and the document it came from.
+    private var jobAlert: (text: String, reason: String, document: ObservabilityDocument)? {
         guard case let .readable(document) = effectiveObservabilityResult,
               let reason = BrainBarJobAlerts.rawReason(document) else { return nil }
         let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale)
         guard status.errorIsJobAlert, let error = status.error, error.tone == .red else { return nil }
-        return (error.text, reason, document.dbPath)
+        return (error.text, reason, document)
     }
 
 #if BRAINBAR_UI
-    private func showJobAlertLog(_ alert: (text: String, reason: String, dbPath: String)) {
-        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: alert.dbPath))?.key(for: alert.reason)
-        BrainBarJobAlerts.showLog(forKey: key, paths: .live(databasePath: alert.dbPath), workspace: BrainBarWorkspace())
+    private func showJobAlertLog(_ alert: (text: String, reason: String, document: ObservabilityDocument)) {
+        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.producerURL(for: alert.document))?.key(for: alert.reason)
+        BrainBarJobAlerts.showLog(forKey: key, paths: .live(databasePath: alert.document.dbPath), workspace: BrainBarWorkspace())
     }
 #endif
 

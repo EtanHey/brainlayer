@@ -7,6 +7,8 @@ import Foundation
 /// only when its producer next runs. Reconciling with this file makes a clean run clear the alert
 /// in every BrainBar surface right away, and names the job, so Show log opens that job's log.
 struct BrainBarJobAlerts: Equatable, Sendable {
+    /// The LaunchAgent that writes `observability.json`; its environment names the alert file.
+    static let producerLabel = "com.brainlayer.observability"
     static let pathEnvironmentKey = "BRAINLAYER_JOB_ALERT_PATH"
     static let observabilityPrefix = "job_alert:"
 
@@ -65,6 +67,22 @@ struct BrainBarJobAlerts: Equatable, Sendable {
     }
 }
 
+extension BrainBarJobAlerts {
+    /// The alert file the producer of `document` reads (see `readReconciled`).
+    static func producerURL(
+        for document: ObservabilityDocument,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        readFile: (URL) -> Data? = { FileManager.default.contents(atPath: $0.path) }
+    ) -> URL {
+        let producer = BrainLayerJobEnvironment.effective(
+            plist: readFile(home.appendingPathComponent("Library/LaunchAgents/\(producerLabel).plist")),
+            brainBarEnvironment: environment, home: home, readFile: readFile
+        )
+        return url(dbPath: document.dbPath, environment: producer)
+    }
+}
+
 extension ObservabilityDocument {
     func replacingBackupsErrorType(_ errorType: String?) -> Self {
         let b = backups
@@ -82,15 +100,19 @@ extension ObservabilityDocument {
 }
 
 extension ObservabilityReader {
-    /// What BrainBar shows: the document, reconciled with the live job-alert state beside the
-    /// producer's database.
+    /// What BrainBar shows: the document, reconciled with the live job-alert state the producer
+    /// read: `BRAINLAYER_JOB_ALERT_PATH` from the producer's own environment (its LaunchAgent and
+    /// env file, then BrainBar's), else beside the producer's database.
     static func readReconciled(
         url: URL,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        readFile: (URL) -> Data? = { FileManager.default.contents(atPath: $0.path) }
     ) -> ObservabilityReadResult {
         let result = read(url: url)
         guard case let .readable(document) = result else { return result }
-        let alerts = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: document.dbPath, environment: environment))
+        let alertsURL = BrainBarJobAlerts.producerURL(for: document, environment: environment, home: home, readFile: readFile)
+        let alerts = BrainBarJobAlerts.read(url: alertsURL)
         return .readable(BrainBarJobAlerts.reconcile(document, with: alerts))
     }
 }

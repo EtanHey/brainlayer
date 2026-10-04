@@ -126,6 +126,31 @@ final class BrainBarJobAlertTests: XCTestCase {
         XCTAssertNil(cleared.backups.errorType)
     }
 
+    func test_the_reader_finds_the_alert_file_the_producers_launch_agent_names() throws {
+        // Macroscope #1062 r2: BRAINLAYER_JOB_ALERT_PATH set only in the observability job's own
+        // environment (its plist or env file) must be honoured, not just BrainBar's.
+        let home = root.appendingPathComponent("home")
+        let agents = home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let custom = root.appendingPathComponent("elsewhere/alerts.json")
+        try FileManager.default.createDirectory(at: custom.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let plist: [String: Any] = ["EnvironmentVariables": ["BRAINLAYER_JOB_ALERT_PATH": custom.path]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: agents.appendingPathComponent("com.brainlayer.observability.plist"))
+        let observability = root.appendingPathComponent("observability.json")
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(document(errorType: "job_alert:\(alert)")).write(to: observability)
+        _ = try writeAlerts(#"{"maintenance-light": "\#(alert)"}"#) // the default path: must be ignored
+        try Data("{}".utf8).write(to: custom)
+        guard case let .readable(cleared) = ObservabilityReader.readReconciled(url: observability, environment: [:], home: home) else {
+            XCTFail("fixture must be readable")
+            return
+        }
+        XCTAssertNil(cleared.backups.errorType, "the producer's own alert file says the alert cleared")
+    }
+
     // MARK: Show log
 
     private var paths: BrainBarBackupSources.Paths {

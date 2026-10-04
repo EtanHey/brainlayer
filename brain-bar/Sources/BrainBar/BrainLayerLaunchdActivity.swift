@@ -170,7 +170,7 @@ struct BrainLayerLaunchdGroupStatus: Equatable, Sendable {
     let lastRunText: String
     let nextRunText: String
     /// A quiet note that never changes `health`: a maintenance run that succeeded with warnings.
-    var note: String? = nil
+    var note: String?
 }
 
 enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
