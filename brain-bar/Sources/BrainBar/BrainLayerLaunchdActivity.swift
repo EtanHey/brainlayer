@@ -147,6 +147,8 @@ enum BrainLayerMaintenanceExit {
               let value = Double(warning[match].replacingOccurrences(
                   of: #"^.*: ([0-9.]+)\s*ms$"#, with: "$1", options: .regularExpression
               )) else { return warning }
+        // Int(_:) traps outside its range: anything not a sane, finite latency is shown as written.
+        guard value.isFinite, value >= 0, value < 1_000_000 else { return warning }
         return "search slower than target (\(Int(value.rounded())) ms)"
     }
 

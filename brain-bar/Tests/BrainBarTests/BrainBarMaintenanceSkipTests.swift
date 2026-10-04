@@ -358,6 +358,14 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         XCTAssertEqual(status.note, "Weekly last run OK · vacuum reclaimed less than expected")
     }
 
+    /// CodeRabbit #1062: a value too large for Int must never trap; it is shown as written.
+    func testAnOutOfRangeLatencyIsShownAsWrittenNotConverted() {
+        let huge = "post-maintenance search latency above target: 1000000000000000000000.0ms > 50.0ms"
+        XCTAssertEqual(BrainLayerMaintenanceExit.humanWarning(huge), huge)
+        XCTAssertEqual(BrainLayerMaintenanceExit.humanWarning("search latency above target: 62.4ms > 50.0ms"),
+                       "search slower than target (62 ms)")
+    }
+
     func testTheNoteClearsWhenTheLatestRunHasNoWarnings() {
         let clean = maintenance(
             completion: .completed(daysAgo(2)),

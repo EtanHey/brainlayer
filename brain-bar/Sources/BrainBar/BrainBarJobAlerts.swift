@@ -61,13 +61,6 @@ struct BrainBarJobAlerts: Equatable, Sendable {
         return document.replacingBackupsErrorType(remaining.map { Self.observabilityPrefix + $0 })
     }
 
-    /// Reconciles with a state that may be unknown; an unknown state leaves the document as read.
-    static func reconcile(_ document: ObservabilityDocument, with alerts: Self?) -> ObservabilityDocument {
-        alerts?.reconcile(document) ?? document
-    }
-}
-
-extension BrainBarJobAlerts {
     /// The alert file the producer of `document` reads (see `readReconciled`).
     static func producerURL(
         for document: ObservabilityDocument,
@@ -80,6 +73,11 @@ extension BrainBarJobAlerts {
             brainBarEnvironment: environment, home: home, readFile: readFile
         )
         return url(dbPath: document.dbPath, environment: producer)
+    }
+
+    /// Reconciles with a state that may be unknown; an unknown state leaves the document as read.
+    static func reconcile(_ document: ObservabilityDocument, with alerts: Self?) -> ObservabilityDocument {
+        alerts?.reconcile(document) ?? document
     }
 }
 
