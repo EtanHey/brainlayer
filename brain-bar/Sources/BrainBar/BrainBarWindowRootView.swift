@@ -1133,9 +1133,8 @@ private struct BrainBarDashboardView: View {
         }
         return HStack(alignment: .top, spacing: 9) {
             if attentionItems.isEmpty {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 9, height: 9)
+                BrainBarStatusDot(color: statusColor, size: 9)
+                    .font(.system(size: 13, weight: .semibold))
                 Text(status.headline)
                     .font(.system(size: 13, weight: .semibold))
                 if let reason = status.reason {
@@ -1154,9 +1153,8 @@ private struct BrainBarDashboardView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(Array(attentionItems.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Circle()
-                                    .fill(statusColor)
-                                    .frame(width: 5, height: 5)
+                                BrainBarStatusDot(color: statusColor, size: 5)
+                                    .font(.system(size: 12, weight: .medium))
                                 Text(item)
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundStyle(Color.brainBarTextSecondary)

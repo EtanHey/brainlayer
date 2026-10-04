@@ -325,7 +325,7 @@ struct ObservabilityStatusRows: View {
     var body: some View {
         ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Circle().fill(color(line.tone)).frame(width: 7, height: 7)
+                BrainBarStatusDot(color: color(line.tone))
                 Text(line.text).foregroundStyle(textColor)
             }
         }
