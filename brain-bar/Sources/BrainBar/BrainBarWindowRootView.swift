@@ -915,6 +915,25 @@ private struct BrainBarDashboardView: View {
         )
     }
 
+    /// The job alert (#1031) the attention list shows: its shown text, the job's raw reason (the
+    /// key lookup needs it unsanitized) and the document it came from.
+    private var jobAlert: (text: String, reason: String, document: ObservabilityDocument)? {
+        guard case let .readable(document) = effectiveObservabilityResult,
+              let reason = BrainBarJobAlerts.rawReason(document) else { return nil }
+        let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale)
+        guard status.errorIsJobAlert, let error = status.error, error.tone == .red else { return nil }
+        return (error.text, reason, document)
+    }
+
+#if BRAINBAR_UI
+    private func showJobAlertLog(_ alert: (text: String, reason: String, document: ObservabilityDocument)) {
+        BrainBarJobAlerts.showLog(
+            for: alert.document, paths: .live(databasePath: alert.document.dbPath),
+            workspace: BrainBarWorkspace(), panelState: panelState
+        )
+    }
+#endif
+
     private var effectiveObservabilityResult: ObservabilityReadResult {
         if let observabilityResult { return observabilityResult }
         guard dbPath != nil else { return .unreadable("Database path unavailable.") }
@@ -1141,6 +1160,19 @@ private struct BrainBarDashboardView: View {
                                 Text(item)
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundStyle(Color.brainBarTextSecondary)
+#if BRAINBAR_UI
+                                if let alert = jobAlert, alert.text == item {
+                                    Button("Show log") { showJobAlertLog(alert) }
+                                        .controlSize(.small)
+                                        .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+                                    if let message = panelState.jobAlertLogMessage(forReason: alert.reason) {
+                                        Text(message)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(Color.brainBarTextMuted)
+                                            .accessibilityIdentifier("brainbar.dashboard.job-alert.log-message")
+                                    }
+                                }
+#endif
                             }
                         }
                     }

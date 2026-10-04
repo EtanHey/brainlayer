@@ -324,6 +324,66 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         XCTAssertEqual(evidence.runRecords[.maintenanceNightly], .notAnAbort(writtenAt: written))
     }
 
+    // MARK: N1 (lead addendum 2026-10-04): a run that succeeds with warnings
+
+    func testASuccessfulRecordKeepsItsWarnings() {
+        let written = lastRun.addingTimeInterval(1)
+        let warning = "post-maintenance search latency above target: 62.0ms > 50.0ms"
+        let files: [String: Data] = [
+            "/LA/com.brainlayer.maintenance-nightly.plist": plist(nightlyPlist),
+            "/logs/nightly.out.log": Data(#"{"mode": "light", "status": "ok", "warnings": ["\#(warning)"]}"#.utf8),
+        ]
+        let evidence = sources(files, modified: ["/logs/nightly.out.log": written]).maintenanceEvidence()
+        XCTAssertEqual(evidence.runRecords[.maintenanceNightly], .notAnAbort(writtenAt: written, warnings: [warning]))
+    }
+
+    func testThisRunsWarningIsAQuietNoteNotAttention() {
+        let status = maintenance(
+            completion: .completed(daysAgo(2)),
+            records: [.maintenanceNightly: .notAnAbort(
+                writtenAt: lastRun.addingTimeInterval(60),
+                warnings: ["post-maintenance search latency above target: 62.0ms > 50.0ms"]
+            )]
+        )
+        XCTAssertEqual(status.health, .healthy, "a warning never turns the card red or 'Needs attention'")
+        XCTAssertNil(status.attentionReason)
+        XCTAssertEqual(status.note, "Nightly last run OK · search slower than target (62 ms)")
+    }
+
+    func testAnUnrecognisedWarningIsShownAsWritten() {
+        let status = maintenance(
+            completion: .completed(daysAgo(2)),
+            records: [.maintenanceWeekly: .notAnAbort(writtenAt: lastRun.addingTimeInterval(60), warnings: ["vacuum reclaimed less than expected"])]
+        )
+        XCTAssertEqual(status.note, "Weekly last run OK · vacuum reclaimed less than expected")
+    }
+
+    /// CodeRabbit #1062: a value too large for Int must never trap; it is shown as written.
+    func testAnOutOfRangeLatencyIsShownAsWrittenNotConverted() {
+        let huge = "post-maintenance search latency above target: 1000000000000000000000.0ms > 50.0ms"
+        XCTAssertEqual(BrainLayerMaintenanceExit.humanWarning(huge), huge)
+        XCTAssertEqual(BrainLayerMaintenanceExit.humanWarning("search latency above target: 62.4ms > 50.0ms"),
+                       "search slower than target (62 ms)")
+    }
+
+    func testTheNoteClearsWhenTheLatestRunHasNoWarnings() {
+        let clean = maintenance(
+            completion: .completed(daysAgo(2)),
+            records: [.maintenanceNightly: .notAnAbort(writtenAt: lastRun.addingTimeInterval(60))]
+        )
+        XCTAssertNil(clean.note)
+        // An older run's warning (its record predates this run) is not this run's note.
+        let older = maintenance(
+            completion: .completed(daysAgo(2)),
+            records: [.maintenanceNightly: .notAnAbort(
+                writtenAt: lastRun.addingTimeInterval(-86_400),
+                warnings: ["post-maintenance search latency above target: 62.0ms > 50.0ms"]
+            )]
+        )
+        XCTAssertNil(older.note)
+        XCTAssertEqual(older.health, .healthy)
+    }
+
     /// B2: an older benign abort is never reused when the newest record is partial or malformed.
     func testAPartialNewestRecordNeverFallsBackToAnOlderGateAbort() {
         let files: [String: Data] = [

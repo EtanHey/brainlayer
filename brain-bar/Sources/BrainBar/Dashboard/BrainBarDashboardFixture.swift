@@ -131,9 +131,15 @@ enum BrainBarDashboardFixture {
     static let emptyObservabilityResult = makeObservabilityResult(stats: emptyStats)
     /// Verified, fresh backups: the Backups page's Drive renders isolate the Drive state with it.
     static let healthyObservabilityResult = makeObservabilityResult(stats: stats)
+    /// The nightly light pass failed and left a job alert (Etan saw it 4x, 2026-10-02); backups
+    /// are otherwise fresh and verified, so every alert surface shows only this one alert.
+    static let maintenanceAlertText = "BrainLayer light maintenance failed; check the maintenance log"
+    static let maintenanceAlertObservabilityResult = makeObservabilityResult(
+        stats: stats, errorType: "job_alert:\(maintenanceAlertText)"
+    )
 
     private static func makeObservabilityResult(
-        stats: DashboardStats, generatedAt: Date = fetchedAt
+        stats: DashboardStats, generatedAt: Date = fetchedAt, errorType: String? = nil
     ) -> ObservabilityReadResult {
         .readable(
         ObservabilityDocument(
@@ -177,7 +183,7 @@ enum BrainBarDashboardFixture {
                 thresholdHours: 36,
                 retentionInvariant: "PASS",
                 survivingArchives30D: 3,
-                errorType: nil,
+                errorType: errorType,
                 lastVerifiedUpload: .init(
                     at: fetchedAt.addingTimeInterval(-3_600),
                     ageHours: 1,

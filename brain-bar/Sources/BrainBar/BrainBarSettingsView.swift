@@ -8,6 +8,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var onePasswordReference: String
     @Published var backendDraft: String
     @Published var errorMessage: String?
+    /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
+    @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
     @Published var isRefreshingLaunchdStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
@@ -82,7 +84,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable."),
         confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
-            await Task.detached { ObservabilityReader.read(url: url) }.value
+            await Task.detached { ObservabilityReader.readReconciled(url: url) }.value
         },
         watcherHealthURL: URL? = nil,
         initialWatcherHealth: WatcherHealthFileRead? = nil,
@@ -312,6 +314,46 @@ final class BrainBarSettingsViewModel: ObservableObject {
             statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable."
         )
     }
+
+    /// A job alert (#1031) in its own words, shown once on the Backups page as its own card.
+    var jobAlert: String? {
+        guard let status = backupStatus, status.errorIsJobAlert, status.error?.tone == .red else { return nil }
+        return status.error?.text
+    }
+
+    /// The backup status rows without the job alert, which the alert card already shows.
+    var backupStatusLines: [ObservabilityStatusLine]? {
+        guard let status = backupStatus else { return nil }
+        return status.lines.filter { line in !(status.errorIsJobAlert && line == status.error) }
+    }
+
+    /// The line under the Backups badge: the verdict's reason, unless it is the job alert the
+    /// alert card above it already shows.
+    func backupsBadgeReason(drive: DriveAuthPresentation?) -> String? {
+        let reason = backupsHealth(drive: drive).reason
+        return reason == jobAlert ? nil : reason
+    }
+
+    /// Show log for the job alert: the failing job's log, named by the live job-alert state.
+    func showJobAlertLog() {
+        guard jobAlert != nil, case let .readable(document) = observabilityResult else { return }
+        let paths = backupSources?.paths ?? .live(databasePath: document.dbPath)
+        let message = BrainBarJobAlerts.showLog(for: document, paths: paths, workspace: workspace).message
+        jobAlertLogNote = BrainBarJobAlertLogNote(reason: BrainBarJobAlerts.rawReason(document), message: message)
+    }
+
+    /// The note's sentence, only while its alert is still the current one (Macroscope #1062).
+    var jobAlertLogMessage: String? {
+        guard let note = jobAlertLogNote, case let .readable(document) = observabilityResult,
+              BrainBarJobAlerts.rawReason(document) == note.reason else { return nil }
+        return note.message
+    }
+
+#if DEBUG
+    func setObservabilityResultForTesting(_ result: ObservabilityReadResult) {
+        observabilityResult = result
+    }
+#endif
 
     var backupStatusReason: String? {
         switch observabilityResult {
@@ -904,6 +946,9 @@ struct BrainBarSettingsView: View {
             }
         case .backups:
             VStack(alignment: .leading, spacing: 16) {
+                if let alert = viewModel.jobAlert {
+                    BrainBarJobAlertCard(alert: alert, logMessage: viewModel.jobAlertLogMessage) { viewModel.showJobAlertLog() }
+                }
                 if let driveAuth {
                     BrainBarDriveAwareBackupsGroup(viewModel: viewModel, driveAuth: driveAuth)
                 } else {
@@ -1013,9 +1058,9 @@ struct BrainBarSettingsView: View {
 
     @ViewBuilder
     private var backupStatus: some View {
-        if let status = viewModel.backupStatus {
+        if let lines = viewModel.backupStatusLines {
             VStack(alignment: .leading, spacing: 8) {
-                ObservabilityStatusRows(lines: status.lines, textColor: Color.brainBarTextSecondary)
+                ObservabilityStatusRows(lines: lines, textColor: Color.brainBarTextSecondary)
                     .font(.system(size: 11, weight: .medium))
             }
         } else {
@@ -1038,6 +1083,47 @@ struct BrainBarSettingsView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+}
+
+/// A job alert (#1031), once per page: the failed job's own sentence and Show log.
+private struct BrainBarJobAlertCard: View {
+    let alert: String
+    /// Show log's sentence when the job has no log yet.
+    var logMessage: String?
+    let showLog: () -> Void
+
+    var body: some View {
+        let tone = Color(nsColor: BrainBarDesignTokens.Colors.statusError)
+        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(tone)
+            Text(alert)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.brainBarTextPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 8)
+            Button("Show log", action: showLog)
+                .controlSize(.small)
+                .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+        }
+            if let logMessage {
+                Text(logMessage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .padding(.leading, 26)
+                    .accessibilityIdentifier("brainbar.backups.job-alert.log-message")
+            }
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tone.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tone.opacity(0.35), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("brainbar.backups.job-alert")
+    }
 }
 
 /// The Drive card and the Backups group card, observing both models so the badge follows Drive.
@@ -1106,7 +1192,8 @@ private struct BrainBarJobGroupCard: View {
         }
         return Badge(
             title: backupsHealth.badge.title, symbol: symbol, color: color,
-            reason: backupsHealth.reason,
+            // The job alert has its own card on this page; say it once (lead ruling 2026-10-04).
+            reason: backupsHealth.reason == viewModel.jobAlert ? nil : backupsHealth.reason,
             reasonColor: backupsHealth.badge == .unknown ? Color.brainBarTextMuted : color
         )
     }
@@ -1133,6 +1220,13 @@ private struct BrainBarJobGroupCard: View {
                 Text(reason)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(badge.reasonColor)
+            }
+            // N1: a run that succeeded with warnings is a quiet amber note; the badge stays as is.
+            if let note = status.note {
+                Label(note, systemImage: "exclamationmark.circle")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                    .accessibilityIdentifier("brainbar.jobs.\(group.rawValue).note")
             }
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)

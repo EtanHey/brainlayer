@@ -55,8 +55,9 @@ struct BrainLayerMaintenanceEvidence: Equatable, Sendable {
     enum RunRecord: Equatable, Sendable {
         /// A complete `{"status": "aborted", "reason": …}` line; `writtenAt` is the log's mtime.
         case aborted(reason: String, writtenAt: Date)
-        /// A complete record that is not an abort, e.g. a successful run's `{"status": "ok"}`.
-        case notAnAbort(writtenAt: Date)
+        /// A complete record that is not an abort, e.g. a successful run's `{"status": "ok"}`, with
+        /// the `warnings` a successful run may carry (#1061: e.g. search latency above target).
+        case notAnAbort(writtenAt: Date, warnings: [String] = [])
         case unavailable(String)
     }
 
@@ -122,8 +123,33 @@ enum BrainLayerMaintenanceExit {
     /// The abort reason, only when the record was written during the run that started at `lastRunAt`.
     static func thisRunsReason(_ record: BrainLayerMaintenanceEvidence.RunRecord?, lastRunAt: Date?) -> String? {
         guard let lastRunAt, case let .aborted(reason, writtenAt) = record else { return nil }
+        return isThisRun(writtenAt, lastRunAt: lastRunAt) ? reason : nil
+    }
+
+    /// A successful run's warnings, only when the record was written during the run that started at
+    /// `lastRunAt`; a later run without warnings writes a newer record, which clears them.
+    static func thisRunsWarnings(_ record: BrainLayerMaintenanceEvidence.RunRecord?, lastRunAt: Date?) -> [String] {
+        guard let lastRunAt, case let .notAnAbort(writtenAt, warnings) = record,
+              isThisRun(writtenAt, lastRunAt: lastRunAt) else { return [] }
+        return warnings
+    }
+
+    private static func isThisRun(_ writtenAt: Date, lastRunAt: Date) -> Bool {
         let delay = writtenAt.timeIntervalSince(lastRunAt)
-        return delay >= -recordClockSlack && delay <= recordLatestAfterStart ? reason : nil
+        return delay >= -recordClockSlack && delay <= recordLatestAfterStart
+    }
+
+    /// `post-maintenance search latency above target: 62.0ms > 50.0ms` → `search slower than target
+    /// (62 ms)`; any other warning is shown as written.
+    static func humanWarning(_ warning: String) -> String {
+        let pattern = #"search latency above target: ([0-9.]+)\s*ms"#
+        guard let match = warning.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+              let value = Double(warning[match].replacingOccurrences(
+                  of: #"^.*: ([0-9.]+)\s*ms$"#, with: "$1", options: .regularExpression
+              )) else { return warning }
+        // Int(_:) traps outside its range: anything not a sane, finite latency is shown as written.
+        guard value.isFinite, value >= 0, value < 1_000_000 else { return warning }
+        return "search slower than target (\(Int(value.rounded())) ms)"
     }
 
     /// `outside quiet window: now=… start_hour=4 duration_minutes=120` → `outside the 04:00–06:00 quiet window`.
@@ -145,6 +171,8 @@ struct BrainLayerLaunchdGroupStatus: Equatable, Sendable {
     let attentionReason: String?
     let lastRunText: String
     let nextRunText: String
+    /// A quiet note that never changes `health`: a maintenance run that succeeded with warnings.
+    var note: String?
 }
 
 enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
@@ -255,6 +283,14 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             : unknownReason != nil ? .unknown
             : !skips.isEmpty ? .skipped
             : awaitingRun ? .awaitingRun : .healthy
+        // N1 (lead addendum 2026-10-04): a clean exit whose own record carries warnings.
+        let warningNotes = self != .maintenance ? [] : jobs.compactMap { job -> String? in
+            guard let observation = observations[job], observation.lastExitCode == 0 else { return nil }
+            let warnings = BrainLayerMaintenanceExit.thisRunsWarnings(maintenance.runRecords[job], lastRunAt: observation.lastRunAt)
+            guard !warnings.isEmpty else { return nil }
+            return "\(job.humanGroupLabel) last run OK · "
+                + warnings.map(BrainLayerMaintenanceExit.humanWarning).joined(separator: " · ")
+        }
         return BrainLayerLaunchdGroupStatus(
             health: health,
             attentionReason: reason ?? unknownReason ?? (skips.isEmpty ? nil : skips.joined(separator: " ")),
@@ -267,7 +303,8 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                     ? "Continuous"
                     : observation?.nextRunAt.map(formatDate) ?? "Unavailable"
                 return "\(job.humanGroupLabel) \(value)"
-            }.joined(separator: " · ")
+            }.joined(separator: " · "),
+            note: warningNotes.isEmpty ? nil : warningNotes.joined(separator: " · ")
         )
     }
 }

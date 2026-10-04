@@ -108,6 +108,7 @@ enum BrainBarRenderHarness {
             try renderUnifiedSettings(in: outputDirectory)
             try renderWatcherTruth(in: outputDirectory)
             try renderMainWindowShell(in: outputDirectory)
+            try renderMaintenanceAlert(in: outputDirectory)
             sampleReceipts.record(BrainBarOperationReceipt(
                 kind: .search, durationMillis: 142, count: 10, recordedAt: BrainBarDashboardFixture.fetchedAt
             ))
@@ -765,6 +766,152 @@ enum BrainBarRenderHarness {
             let url = outputDirectory.appendingPathComponent("\(name).png")
             try png.write(to: url, options: .atomic)
             print("[brainbar-render] \(name); wrote \(url.path)")
+        }
+    }
+
+    /// The maintenance job alert (Etan saw it 4x, 2026-10-02): the Dashboard, the Backups page and
+    /// the menu's rows, each with the alert and after a clean run cleared it, in the dark and the
+    /// light system appearance (BrainBar pins its own dark scheme, so the two should match).
+    private static func renderMaintenanceAlert(in outputDirectory: URL) throws {
+        let appearances: [(name: String, appearance: NSAppearance.Name)] = [("dark", .darkAqua), ("light", .aqua)]
+        let states: [(name: String, result: ObservabilityReadResult)] = [
+            ("alert", BrainBarDashboardFixture.maintenanceAlertObservabilityResult),
+            ("cleared", BrainBarDashboardFixture.healthyObservabilityResult),
+            // Codex #1062 r1 B1: Show log pressed with no maintenance.log yet.
+            ("nolog", BrainBarDashboardFixture.maintenanceAlertObservabilityResult),
+        ]
+        let noLog = BrainBarJobAlerts.missingLogMessage(forKey: "maintenance-light")
+        func capture(_ view: AnyView, width: CGFloat, height: CGFloat?, measure: () -> CGFloat, name: String,
+                     appearance: NSAppearance.Name) throws {
+            let measuring = NSHostingView(rootView: view)
+            measuring.appearance = NSAppearance(named: appearance)
+            measuring.frame = NSRect(x: 0, y: 0, width: width, height: 10_000)
+            settle(measuring)
+            let host = NSHostingView(rootView: view)
+            host.appearance = NSAppearance(named: appearance)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: height ?? ceil(measure()))
+            settle(host)
+            try writeBitmap(of: host, name: name, in: outputDirectory)
+        }
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("brainbar-maint-alert-render-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let store = BrainLayerConfigStore(configURL: fixtureDirectory.appendingPathComponent("maint-alert.env"))
+        try store.save(.defaultConfig)
+        let jobAt = BrainBarDashboardFixture.fetchedAt
+        for appearance in appearances {
+            for state in states {
+                for breakpoint in breakpoints where state.name != "nolog" || breakpoint.name == "default" {
+                    for expanded in state.name == "alert" ? [false, true] : state.name == "nolog" ? [true] : [false] {
+                        let panelState = BrainBarDashboardPanelState()
+                        panelState.attentionExpanded = expanded
+                        if state.name == "nolog" {
+                            panelState.jobAlertLogNote = .init(reason: BrainBarDashboardFixture.maintenanceAlertText, message: noLog)
+                        }
+                        let view = BrainBarDashboardPreview.make(
+                            collector: BrainBarDashboardFixture.makeCollector(),
+                            receiptStore: sampleReceipts,
+                            observabilityResult: state.result,
+                            now: BrainBarDashboardFixture.fetchedAt,
+                            panelState: panelState
+                        )
+                        try capture(view, width: breakpoint.width, height: nil, measure: { panelState.fittingHeight },
+                                    name: "maint-\(state.name)-dashboard\(expanded ? "-expanded" : "")-\(breakpoint.name)-\(appearance.name)",
+                                    appearance: appearance.appearance)
+                    }
+                    let viewModel = BrainBarSettingsViewModel(
+                        store: store,
+                        launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                        runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
+                        initialLaunchdObservations: [
+                            .backupDaily: .init(loadState: .loaded, runs: 3, lastExitCode: 0, lastRunAt: jobAt.addingTimeInterval(-7_200),
+                                                nextRunAt: jobAt.addingTimeInterval(79_200), isContinuous: false),
+                            .jsonlBackup: .init(loadState: .loaded, runs: 3, lastExitCode: 0, lastRunAt: jobAt.addingTimeInterval(-3_600),
+                                                nextRunAt: jobAt.addingTimeInterval(82_800), isContinuous: false),
+                        ],
+                        refreshStatusOnLoad: false,
+                        now: { jobAt },
+                        initialObservabilityResult: state.result
+                    )
+                    if state.name == "nolog" {
+                        viewModel.jobAlertLogNote = .init(reason: BrainBarDashboardFixture.maintenanceAlertText, message: noLog)
+                    }
+                    let panelState = BrainBarDashboardPanelState()
+                    let page = BrainBarUnifiedWindowPreview.make(
+                        collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: viewModel,
+                        panelState: panelState, section: .backups,
+                        driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: Date().addingTimeInterval(5 * 86_400))) }
+                    )
+                    try capture(page, width: breakpoint.width, height: 900, measure: { 900 },
+                                name: "maint-\(state.name)-backups-\(breakpoint.name)-\(appearance.name)",
+                                appearance: appearance.appearance)
+                }
+                // N1: Jobs → Maintenance after a run that succeeded with a latency warning, and after
+                // a later clean run (the "cleared" state).
+                let runStart = jobAt.addingTimeInterval(-6 * 3_600)
+                if state.name != "nolog" {
+                let nightlyRecord: BrainLayerMaintenanceEvidence.RunRecord = .notAnAbort(
+                    writtenAt: runStart.addingTimeInterval(40),
+                    warnings: state.name == "alert" ? ["post-maintenance search latency above target: 62.0ms > 50.0ms"] : []
+                )
+                let done = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 4, lastExitCode: 0, lastRunAt: runStart,
+                                                           nextRunAt: jobAt.addingTimeInterval(18 * 3_600), isContinuous: false)
+                for breakpoint in breakpoints where breakpoint.name == "default" {
+                    let jobsModel = BrainBarSettingsViewModel(
+                        store: store,
+                        launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                        runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
+                        initialLaunchdObservations: [
+                            .watch: .init(loadState: .running, runs: 7, lastExitCode: 0, lastRunAt: jobAt, nextRunAt: nil, isContinuous: true),
+                            .index: .init(loadState: .loaded, runs: 4, lastExitCode: 0, lastRunAt: jobAt, nextRunAt: jobAt.addingTimeInterval(900), isContinuous: false),
+                            .maintenanceNightly: done, .maintenanceWeekly: done,
+                        ],
+                        refreshStatusOnLoad: false,
+                        now: { jobAt },
+                        initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult,
+                        initialMaintenanceEvidence: .init(weeklyCompletion: .completed(runStart), runRecords: [.maintenanceNightly: nightlyRecord])
+                    )
+                    let jobsPage = BrainBarUnifiedWindowPreview.make(
+                        collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: jobsModel,
+                        panelState: BrainBarDashboardPanelState(), section: .jobs
+                    )
+                    try capture(jobsPage, width: breakpoint.width, height: 900, measure: { 900 },
+                                name: "maint-\(state.name == "alert" ? "warning" : "cleared")-jobs-\(breakpoint.name)-\(appearance.name)",
+                                appearance: appearance.appearance)
+                }
+                }
+                // The menu cannot be captured off-screen; these are its real rows, from the
+                // controller's own titles, drawn as a menu.
+                let badge: BadgeStatePresentation = state.name != "cleared"
+                    ? .init(badgeOn: true, reason: BrainBarDashboardFixture.maintenanceAlertText,
+                            activeCodes: ["job_alert_maintenance-light"])
+                    : .init(badgeOn: false, reason: "", activeCodes: [])
+                let rows = BrainBarStatusPopoverController.menuRowTitles(for: badge, showLogItem: state.name == "nolog" ? noLog : nil)
+                let menu = AnyView(
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                            if row.isEmpty {
+                                Divider().padding(.vertical, 4)
+                            } else {
+                                Text(row)
+                                    .font(.system(size: 13))
+                                    // The status line and a no-log Show log row are disabled menu items.
+                                    .foregroundStyle(index == 0 || row == noLog ? Color.secondary : Color.primary)
+                                    .padding(.horizontal, 14).padding(.vertical, 3)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                    .frame(width: 560, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .windowBackgroundColor)))
+                    .padding(16)
+                    .background(Color.black.opacity(0.85))
+                )
+                let menuHeight = NSHostingView(rootView: menu).fittingSize.height
+                try capture(menu, width: 592, height: menuHeight, measure: { menuHeight },
+                            name: "maint-\(state.name)-menu-\(appearance.name)", appearance: appearance.appearance)
+            }
         }
     }
 

@@ -29,6 +29,8 @@ struct BadgeStatePresentation: Equatable, Sendable {
     let badgeOn: Bool
     let reason: String
     let activeCodes: [String]
+    /// Each active issue's message, in `activeCodes` order; `reason` joins them.
+    var activeMessages: [String] = []
 
     static func failVisible(_ reason: String) -> Self {
         .init(badgeOn: true, reason: reason, activeCodes: [])
@@ -151,7 +153,8 @@ enum BadgeStateReader {
             return .init(
                 badgeOn: badgeOn,
                 reason: badgeOn ? active.map(\.message).joined(separator: "; ") : "",
-                activeCodes: active.map(\.code)
+                activeCodes: active.map(\.code),
+                activeMessages: active.map(\.message)
             )
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")
@@ -718,7 +721,7 @@ struct ObservabilityLiveView: View {
 
         static func read(
             url: URL,
-            using operation: @escaping Operation = { ObservabilityReader.read(url: $0) }
+            using operation: @escaping Operation = { ObservabilityReader.readReconciled(url: $0) }
         ) async -> ObservabilityReadResult {
             return await operation(url)
         }
@@ -726,7 +729,7 @@ struct ObservabilityLiveView: View {
         static func watch(
             url: URL,
             every interval: Duration = .seconds(30),
-            using operation: @escaping Reader.Operation = { ObservabilityReader.read(url: $0) }
+            using operation: @escaping Reader.Operation = { ObservabilityReader.readReconciled(url: $0) }
         ) -> AsyncStream<ObservabilityReadResult> {
             AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
                 let producer = Task {
