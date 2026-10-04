@@ -915,3 +915,81 @@ def test_enrichment_template_flex_validation_rejects_missing_or_commented_flex(t
 
     with pytest.raises(MaintenanceAbort, match="no longer uses Gemini Flex"):
         _verify_enrichment_template_flex_backend(tmp_path)
+
+
+@pytest.mark.parametrize("fts", [False, True])
+def test_search_latency_uses_five_warm_samples_and_ignores_outlier(tmp_path, monkeypatch, fts):
+    import sqlite3
+
+    from brainlayer import maintenance
+
+    path = tmp_path / "latency.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE chunks(id TEXT)")
+        if fts:
+            conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(content)")
+            conn.execute("INSERT INTO chunks_fts VALUES('brainlayer')")
+    queries = []
+    connect = maintenance.sqlite3.connect
+
+    class TracedConnection:
+        def __init__(self, *args, **kwargs):
+            self.conn = connect(*args, **kwargs)
+
+        def execute(self, sql, *args):
+            queries.append(sql)
+            return self.conn.execute(sql, *args)
+
+        def close(self):
+            self.conn.close()
+
+    monkeypatch.setattr(maintenance.sqlite3, "connect", TracedConnection)
+    ticks = iter([0, 0.04, 1, 1.041, 2, 2.9, 3, 3.039, 4, 4.042])
+    monkeypatch.setattr(maintenance.time, "perf_counter", lambda: next(ticks))
+    assert maintenance._verify_search_latency(path) == pytest.approx(41)
+    search_queries = [q for q in queries if "sqlite_master" not in q]
+    assert len(search_queries) == 6  # one warm-up, then five timed samples
+    assert len(set(search_queries)) == 1
+
+
+def test_pathological_warm_search_latency_is_failure_not_deferral(tmp_path, monkeypatch):
+    _create_enrichment_db(tmp_path / "latency.db")
+    from brainlayer import maintenance
+
+    ticks = iter([0, 0.6, 1, 1.6, 2, 2.6, 3, 3.6, 4, 4.6])
+    monkeypatch.setattr(maintenance.time, "perf_counter", lambda: next(ticks))
+    with pytest.raises(maintenance.MaintenanceAbort, match="search latency") as caught:
+        maintenance._verify_search_latency(tmp_path / "latency.db")
+    assert caught.value.code == 1
+
+
+def test_small_latency_overshoot_completes_with_logged_warning(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    config = _config(tmp_path, now=dt.datetime(2026, 5, 30, 4, 5, tzinfo=dt.UTC))
+    _create_enrichment_db(config.db_path)
+    monkeypatch.setattr(maintenance, "_run_gates", lambda _config: None)
+    monkeypatch.setattr(maintenance, "_quiesce_services", lambda *_args: None)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_resume_services", lambda *_args: [])
+    monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _path: (0, 0, 0))
+    monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _path: 52.5)
+    monkeypatch.setattr(maintenance, "_emit_telemetry", lambda _event: None)
+    result = maintenance.run_maintenance("light", config=config)
+    payload = maintenance._result_to_dict(result)
+    assert payload["warnings"] == ["post-maintenance search latency above target: 52.5ms > 50.0ms"]
+    event = json.loads(config.log_path.read_text().splitlines()[-1])
+    assert event["warnings"] == payload["warnings"]
+    monkeypatch.setattr(maintenance, "run_maintenance", lambda *args, **kwargs: result)
+    assert maintenance.main(["--light", "--dry-run"]) == 0
+
+
+@pytest.mark.parametrize("latency_ms", [50, 52.5, 500])
+def test_nonpathological_warm_latency_does_not_abort(tmp_path, monkeypatch, latency_ms):
+    from brainlayer import maintenance
+
+    path = tmp_path / "latency.db"
+    _create_enrichment_db(path)
+    ticks = iter(t for i in range(5) for t in (i, i + latency_ms / 1000))
+    monkeypatch.setattr(maintenance.time, "perf_counter", lambda: next(ticks))
+    assert maintenance._verify_search_latency(path) == pytest.approx(latency_ms)
