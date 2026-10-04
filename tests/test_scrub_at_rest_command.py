@@ -992,6 +992,7 @@ def test_oneoff_wrapper_preserves_cli_exit_before_timestamp(tmp_path, code):
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == code
     assert log.read_text().splitlines()[-1].endswith(f"exit={code}")
@@ -1025,6 +1026,7 @@ def test_real_cli_process_refusal_is_nonzero(tmp_path, mode, entry):
         ],
         capture_output=True,
         text=True,
+        check=False,
         env=env,
     )
     assert result.returncode == 1, result.stdout + result.stderr
