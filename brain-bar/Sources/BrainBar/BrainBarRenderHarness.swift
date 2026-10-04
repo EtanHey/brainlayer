@@ -970,8 +970,8 @@ enum BrainBarRenderHarness {
             if details { model.backupDetailsExpanded = true }
             return model
         }
-        let connected: (BrainBarDriveAuthModel) -> Void = {
-            $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: Date().addingTimeInterval(5 * 86_400)))
+        let connected: (BrainBarDriveAuthModel) -> Void = { model in
+            model.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: Date().addingTimeInterval(5 * 86_400)))
         }
         func capture(_ view: AnyView, width: CGFloat, height: CGFloat, name: String, appearance: NSAppearance.Name) throws {
             let host = NSHostingView(rootView: view)

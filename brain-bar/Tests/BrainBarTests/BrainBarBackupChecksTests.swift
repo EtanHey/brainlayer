@@ -5,7 +5,7 @@ import XCTest
 /// page now shows human checks with plain states and relative times; Drive IDs, file names and
 /// launchd labels move behind a Technical details disclosure, each with Copy.
 final class BrainBarBackupChecksTests: XCTestCase {
-    private let now = ISO8601DateFormatter().date(from: "2026-09-30T12:00:00Z")!
+    private let now = Date(timeIntervalSince1970: 1_790_769_600) // 2026-09-30T12:00:00Z
     private let locale = Locale(identifier: "en_US")
     private let archiveID = "1-QM42xZpLr8vDriveFileId"
     private let launchdLabel = "com.brainlayer.jsonl-backup"
@@ -24,11 +24,11 @@ final class BrainBarBackupChecksTests: XCTestCase {
             state: "measured", reason: "", inputs: [],
             freshness: freshness, thresholdHours: 36, retentionInvariant: retention,
             survivingArchives30D: archives, errorType: errorType,
-            lastVerifiedUpload: uploadVerified.map {
-                .init(at: now.addingTimeInterval(-3_600), ageHours: 1, archiveId: archiveID, verified: $0)
+            lastVerifiedUpload: uploadVerified.map { verified in
+                .init(at: now.addingTimeInterval(-3_600), ageHours: 1, archiveId: archiveID, verified: verified)
             },
-            dbSnapshot: snapshotVerified.map {
-                .init(lastAt: now.addingTimeInterval(-2 * 3_600), destination: "2026-09-30.db.gz", verified: $0)
+            dbSnapshot: snapshotVerified.map { verified in
+                .init(lastAt: now.addingTimeInterval(-2 * 3_600), destination: "2026-09-30.db.gz", verified: verified)
             },
             launchd: .init(label: launchdLabel, bootstrapped: bootstrapped, disabledDirPresent: parked)
         )
@@ -195,7 +195,8 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
 
     func test_the_backups_badge_reason_never_names_the_launchd_label() throws {
         guard case let .readable(healthy) = BrainBarDashboardFixture.healthyObservabilityResult else {
-            return XCTFail("fixture must be readable")
+            XCTFail("fixture must be readable")
+            return
         }
         let parked = ObservabilityDocument.Backups(
             state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,
