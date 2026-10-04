@@ -10,6 +10,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var errorMessage: String?
     /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
     @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
+    /// The Backups page's Technical details disclosure (E1); closed by default.
+    @Published var backupDetailsExpanded = false
     @Published var isRefreshingLaunchdStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
@@ -304,14 +306,22 @@ final class BrainBarSettingsViewModel: ObservableObject {
         return ObservabilityPresentation.backupStatus(for: document.backups)
     }
 
+    /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
+    var backupChecks: BrainBarBackupChecks? {
+        guard case let .readable(document) = observabilityResult,
+              document.backups.state == "measured" else { return nil }
+        return BrainBarBackupChecks.derive(document.backups, now: now())
+    }
+
     /// The Backups page's one verdict (#1029 review B1), from the same Drive presentation the card
-    /// shows, the Backups job group and the backup status lines.
+    /// shows, the Backups job group and the backup checks, in the checks' own words.
     func backupsHealth(drive: DriveAuthPresentation?) -> BrainBarBackupsHealth {
         BrainBarBackupsHealth.derive(
             job: groupStatus(.backups),
             drive: drive,
             status: backupStatus,
-            statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable."
+            statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable.",
+            attentionSentence: backupChecks?.attentionSentence
         )
     }
 
@@ -354,6 +364,12 @@ final class BrainBarSettingsViewModel: ObservableObject {
         observabilityResult = result
     }
 #endif
+
+    /// The one Config file row (E5): the file this model reads and saves.
+    var configFileURL: URL { store.configURL }
+    func copyConfigFilePath() { workspace.copy(store.configURL.path) }
+    func revealConfigFile() { workspace.reveal(store.configURL) }
+    func copyText(_ text: String) { workspace.copy(text) }
 
     var backupStatusReason: String? {
         switch observabilityResult {
@@ -917,15 +933,9 @@ struct BrainBarSettingsView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(navigation.selected.title)
-                    .font(.system(size: 25, weight: .semibold))
-                Text(BrainLayerConfigStore.defaultConfigURL().path)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.brainBarTextMuted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            // E5 (2026-10-01): no config path under every title; Advanced has the one Config file row.
+            Text(navigation.selected.title)
+                .font(.system(size: 25, weight: .semibold))
             Spacer()
             Button {
                 viewModel.refreshAllStatus()
@@ -969,8 +979,33 @@ struct BrainBarSettingsView: View {
                     BrainBarJobToggle(job: job, viewModel: viewModel)
                     Divider()
                 }
+                configFileRow
             }
         }
+    }
+
+    /// E5: the one place the config file appears, with what it is and Copy / Reveal.
+    private var configFileRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeading("Config file")
+            Text("Where BrainBar saves these settings. BrainLayer's background jobs read the same file.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(viewModel.configFileURL.path)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Copy path") { viewModel.copyConfigFilePath() }
+                Button("Reveal in Finder") { viewModel.revealConfigFile() }
+            }
+            .controlSize(.small)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("brainbar.settings.config-file")
     }
 
     private func sectionHeading(_ title: String) -> some View {
@@ -1040,6 +1075,7 @@ struct BrainBarSettingsView: View {
                                     .foregroundStyle(Color.brainBarTextMuted)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
+                                    .textSelection(.enabled)
                                     .help(localCopy.path)
                                 Spacer(minLength: 8)
                                 Button("Reveal in Finder") { viewModel.revealBackup(row) }
@@ -1058,11 +1094,14 @@ struct BrainBarSettingsView: View {
 
     @ViewBuilder
     private var backupStatus: some View {
-        if let lines = viewModel.backupStatusLines {
-            VStack(alignment: .leading, spacing: 8) {
-                ObservabilityStatusRows(lines: lines, textColor: Color.brainBarTextSecondary)
-                    .font(.system(size: 11, weight: .medium))
-            }
+        if let checks = viewModel.backupChecks {
+            BrainBarBackupChecksCard(
+                checks: checks,
+                // The job alert has its own card at the top of the page; say it once.
+                hiddenAlert: viewModel.jobAlert,
+                detailsExpanded: $viewModel.backupDetailsExpanded,
+                copy: { viewModel.copyText($0) }
+            )
         } else {
             Label(
                 viewModel.backupStatusReason ?? "Backup status is unmeasurable.",

@@ -432,15 +432,20 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         job: BrainLayerLaunchdGroupStatus,
         drive: DriveAuthPresentation?,
         status: ObservabilityBackupStatus?,
-        statusUnavailableReason: String
+        statusUnavailableReason: String,
+        attentionSentence: String? = nil
     ) -> Self {
         // Every red line the page shows, most severe first: the failed job's own alert, Drive
-        // access, the launchd job, then the other backup diagnostics.
+        // access, the launchd job, then the other backup diagnostics. `attentionSentence` is the
+        // same red line in the Backups page's plain words (E1); it never adds or removes one.
+        let statusAttention = status.map { status in
+            status.attentionLine.map { attentionSentence ?? $0.text }
+        }
         let red = [
             status.flatMap { $0.errorIsJobAlert ? $0.attentionLine?.text : nil },
             drive?.tone == .attention ? drive?.line : nil,
             job.health == .unhealthy ? job.attentionReason : nil,
-            status.map { $0.attentionLine?.text } ?? statusUnavailableReason,
+            statusAttention ?? statusUnavailableReason,
         ].compactMap { $0 }
         if let reason = red.first { return .init(badge: .attention, reason: reason) }
         switch drive?.tone {

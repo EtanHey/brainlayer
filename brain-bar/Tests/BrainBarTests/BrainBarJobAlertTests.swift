@@ -296,7 +296,8 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         )
         let model = try viewModel(.readable(stale))
         XCTAssertNil(model.jobAlert)
-        XCTAssertEqual(model.backupsBadgeReason(drive: nil), "Backup freshness (DB + transcript): stale (> 36 h)")
+        // E1: the badge speaks the recovery checks' plain words.
+        XCTAssertEqual(model.backupsBadgeReason(drive: nil), "Up to date: A copy is older than 36 hours")
     }
 }
 

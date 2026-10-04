@@ -42,7 +42,8 @@ struct BrainBarDriveAuthCard: View {
         let presentation = model.presentation(formatDate: BrainBarDriveAuthFormat.date)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Circle().fill(presentation.tone.color).frame(width: 8, height: 8)
+                BrainBarStatusDot(color: presentation.tone.color, size: 8)
+                    .font(.system(size: 14, weight: .semibold))
                 Text("Google Drive").font(.system(size: 14, weight: .semibold))
                 Spacer(minLength: 12)
                 BrainBarDriveReconnectButton(model: model, presentation: presentation)

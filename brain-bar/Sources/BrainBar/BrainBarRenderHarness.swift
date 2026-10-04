@@ -109,6 +109,7 @@ enum BrainBarRenderHarness {
             try renderWatcherTruth(in: outputDirectory)
             try renderMainWindowShell(in: outputDirectory)
             try renderMaintenanceAlert(in: outputDirectory)
+            try renderEtanRowsE1E4E5(in: outputDirectory)
             sampleReceipts.record(BrainBarOperationReceipt(
                 kind: .search, durationMillis: 142, count: 10, recordedAt: BrainBarDashboardFixture.fetchedAt
             ))
@@ -911,6 +912,109 @@ enum BrainBarRenderHarness {
                 let menuHeight = NSHostingView(rootView: menu).fittingSize.height
                 try capture(menu, width: 592, height: menuHeight, measure: { menuHeight },
                             name: "maint-\(state.name)-menu-\(appearance.name)", appearance: appearance.appearance)
+            }
+        }
+    }
+
+    /// Etan rows E1 (Backups checks), E4 (status dot alignment) and E5 (no path under page titles,
+    /// one Config file row): the Backups page healthy and needing attention, the Drive card alone,
+    /// and Advanced, at every width, under the dark and the light system appearance.
+    private static func renderEtanRowsE1E4E5(in outputDirectory: URL) throws {
+        let appearances: [(name: String, appearance: NSAppearance.Name)] = [("dark", .darkAqua), ("light", .aqua)]
+        // A fixed, readable path for the Config file row; the store never touches it.
+        let store = BrainLayerConfigStore(
+            configURL: URL(fileURLWithPath: "/Users/fixture/.config/brainlayer/brainlayer.env"),
+            loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) },
+            saveOverride: { _ in }
+        )
+        let now = BrainBarDashboardFixture.fetchedAt
+        guard case let .readable(healthy) = BrainBarDashboardFixture.healthyObservabilityResult else {
+            throw Failure("e1e4e5: healthy fixture must be readable")
+        }
+        let b = healthy.backups
+        // Needs attention: the transcript job parked by the retention safety stop, a copy over the
+        // freshness limit, and an unverified upload with a real-looking Drive file ID.
+        let attention = ObservabilityDocument(
+            schemaVersion: 1, generatedAt: healthy.generatedAt, dbPath: healthy.dbPath, windowHours: 24,
+            stores: healthy.stores, emitters: healthy.emitters, authorUnknown: healthy.authorUnknown,
+            backups: .init(
+                state: b.state, reason: b.reason, inputs: b.inputs, freshness: "stale", thresholdHours: 36,
+                retentionInvariant: "PASS", survivingArchives30D: 2, errorType: nil,
+                lastVerifiedUpload: .init(at: now.addingTimeInterval(-40 * 3_600), ageHours: 40,
+                                          archiveId: "1-QM42xZpLr8vT0dYwKq3", verified: false),
+                dbSnapshot: b.dbSnapshot,
+                launchd: .init(label: "com.brainlayer.jsonl-backup", bootstrapped: false, disabledDirPresent: true)
+            )
+        )
+        let localCopies: [BrainBarBackupScheduleRow] = [
+            .init(title: "Database", cadence: "daily at 03:17", lastRun: "Last run today 03:17 · verified",
+                  nextRun: "Next run tomorrow 03:17",
+                  localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/backups/2026-10-04.db.gz")),
+            .init(title: "Transcripts", cadence: "daily at 05:00", lastRun: "Last run today 05:01 · verified",
+                  nextRun: "Next run tomorrow 05:00",
+                  localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/jsonl-backups/claude-jsonl-2026-10-04.tar.gz")),
+        ]
+        let ok = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 3, lastExitCode: 0, lastRunAt: now.addingTimeInterval(-3_600),
+                                                 nextRunAt: now.addingTimeInterval(82_800), isContinuous: false)
+        func viewModel(_ result: ObservabilityReadResult, details: Bool) -> BrainBarSettingsViewModel {
+            let model = BrainBarSettingsViewModel(
+                store: store,
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
+                initialLaunchdObservations: [.backupDaily: ok, .jsonlBackup: ok],
+                refreshStatusOnLoad: false,
+                now: { now },
+                initialObservabilityResult: result,
+                initialBackupSchedules: localCopies
+            )
+            if details { model.backupDetailsExpanded = true }
+            return model
+        }
+        let connected: (BrainBarDriveAuthModel) -> Void = {
+            $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: Date().addingTimeInterval(5 * 86_400)))
+        }
+        func capture(_ view: AnyView, width: CGFloat, height: CGFloat, name: String, appearance: NSAppearance.Name) throws {
+            let host = NSHostingView(rootView: view)
+            host.appearance = NSAppearance(named: appearance)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+            settle(host)
+            try writeBitmap(of: host, name: name, in: outputDirectory)
+        }
+        let pages: [(name: String, result: ObservabilityReadResult, details: Bool, section: BrainBarSettingsSection, widths: Set<String>)] = [
+            ("backups-healthy", .readable(healthy), false, .backups, ["compact", "default", "wide"]),
+            ("backups-attention", .readable(attention), false, .backups, ["compact", "default", "wide"]),
+            ("backups-attention-details", .readable(attention), true, .backups, ["compact", "default", "wide"]),
+            ("advanced", .readable(healthy), false, .advanced, ["compact", "default", "wide"]),
+        ]
+        for appearance in appearances {
+            for page in pages {
+                for breakpoint in breakpoints where page.widths.contains(breakpoint.name) {
+                    let view = BrainBarUnifiedWindowPreview.make(
+                        collector: BrainBarDashboardFixture.makeCollector(),
+                        settingsViewModel: viewModel(page.result, details: page.details),
+                        panelState: BrainBarDashboardPanelState(), section: page.section, driveAuth: connected
+                    )
+                    try capture(view, width: breakpoint.width, height: 1_240,
+                                name: "e1e4e5-\(page.name)-\(breakpoint.name)-\(appearance.name)", appearance: appearance.appearance)
+                }
+            }
+            // E4: the Drive card on its own, so the dot and its label are inspectable.
+            for breakpoint in breakpoints {
+                let model = BrainBarDriveAuthModel(runner: nil)
+                connected(model)
+                // Drawn at 2x so the dot's position against "Google Drive" is inspectable.
+                let width = breakpoint.width - 214
+                let card = AnyView(
+                    BrainBarDriveAuthCard(model: model)
+                        .padding(28)
+                        .frame(width: width / 2, alignment: .leading)
+                        .scaleEffect(2, anchor: .topLeading)
+                        .frame(width: width, height: 240, alignment: .topLeading)
+                        .background(Color.brainBarBackgroundBase)
+                        .environment(\.colorScheme, .dark)
+                )
+                try capture(card, width: width, height: 240,
+                            name: "e1e4e5-drive-card-\(breakpoint.name)-\(appearance.name)", appearance: appearance.appearance)
             }
         }
     }
