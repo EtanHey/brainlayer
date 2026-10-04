@@ -75,6 +75,8 @@ enum BrainBarDisclosureAnimation {
 @MainActor
 final class BrainBarDashboardPanelState: ObservableObject {
     @Published var attentionExpanded = false
+    /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
+    @Published var jobAlertLogMessage: String?
     @Published var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
     @Published var signalCoverageExpanded = false
     @Published var dashboardHeight: CGFloat = 0

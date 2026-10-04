@@ -29,6 +29,8 @@ struct BadgeStatePresentation: Equatable, Sendable {
     let badgeOn: Bool
     let reason: String
     let activeCodes: [String]
+    /// Each active issue's message, in `activeCodes` order; `reason` joins them.
+    var activeMessages: [String] = []
 
     static func failVisible(_ reason: String) -> Self {
         .init(badgeOn: true, reason: reason, activeCodes: [])
@@ -151,7 +153,8 @@ enum BadgeStateReader {
             return .init(
                 badgeOn: badgeOn,
                 reason: badgeOn ? active.map(\.message).joined(separator: "; ") : "",
-                activeCodes: active.map(\.code)
+                activeCodes: active.map(\.code),
+                activeMessages: active.map(\.message)
             )
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")

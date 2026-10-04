@@ -927,8 +927,10 @@ private struct BrainBarDashboardView: View {
 
 #if BRAINBAR_UI
     private func showJobAlertLog(_ alert: (text: String, reason: String, document: ObservabilityDocument)) {
-        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.producerURL(for: alert.document))?.key(for: alert.reason)
-        BrainBarJobAlerts.showLog(forKey: key, paths: .live(databasePath: alert.document.dbPath), workspace: BrainBarWorkspace())
+        BrainBarJobAlerts.showLog(
+            for: alert.document, paths: .live(databasePath: alert.document.dbPath),
+            workspace: BrainBarWorkspace(), panelState: panelState
+        )
     }
 #endif
 
@@ -1163,6 +1165,12 @@ private struct BrainBarDashboardView: View {
                                     Button("Show log") { showJobAlertLog(alert) }
                                         .controlSize(.small)
                                         .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+                                    if let message = panelState.jobAlertLogMessage {
+                                        Text(message)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(Color.brainBarTextMuted)
+                                            .accessibilityIdentifier("brainbar.dashboard.job-alert.log-message")
+                                    }
                                 }
 #endif
                             }

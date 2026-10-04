@@ -8,6 +8,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var onePasswordReference: String
     @Published var backendDraft: String
     @Published var errorMessage: String?
+    /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
+    @Published var jobAlertLogMessage: String?
     @Published var isRefreshingLaunchdStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
@@ -334,11 +336,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// Show log for the job alert: the failing job's log, named by the live job-alert state.
     func showJobAlertLog() {
-        guard jobAlert != nil, case let .readable(document) = observabilityResult,
-              let reason = BrainBarJobAlerts.rawReason(document) else { return }
-        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.producerURL(for: document))?.key(for: reason)
+        guard jobAlert != nil, case let .readable(document) = observabilityResult else { return }
         let paths = backupSources?.paths ?? .live(databasePath: document.dbPath)
-        BrainBarJobAlerts.showLog(forKey: key, paths: paths, workspace: workspace)
+        jobAlertLogMessage = BrainBarJobAlerts.showLog(for: document, paths: paths, workspace: workspace).message
     }
 
     var backupStatusReason: String? {
@@ -933,7 +933,7 @@ struct BrainBarSettingsView: View {
         case .backups:
             VStack(alignment: .leading, spacing: 16) {
                 if let alert = viewModel.jobAlert {
-                    BrainBarJobAlertCard(alert: alert) { viewModel.showJobAlertLog() }
+                    BrainBarJobAlertCard(alert: alert, logMessage: viewModel.jobAlertLogMessage) { viewModel.showJobAlertLog() }
                 }
                 if let driveAuth {
                     BrainBarDriveAwareBackupsGroup(viewModel: viewModel, driveAuth: driveAuth)
@@ -1074,10 +1074,13 @@ struct BrainBarSettingsView: View {
 /// A job alert (#1031), once per page: the failed job's own sentence and Show log.
 private struct BrainBarJobAlertCard: View {
     let alert: String
+    /// Show log's sentence when the job has no log yet.
+    var logMessage: String?
     let showLog: () -> Void
 
     var body: some View {
         let tone = Color(nsColor: BrainBarDesignTokens.Colors.statusError)
+        VStack(alignment: .leading, spacing: 6) {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(tone)
@@ -1090,6 +1093,14 @@ private struct BrainBarJobAlertCard: View {
             Button("Show log", action: showLog)
                 .controlSize(.small)
                 .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
+        }
+            if let logMessage {
+                Text(logMessage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.brainBarTextSecondary)
+                    .padding(.leading, 26)
+                    .accessibilityIdentifier("brainbar.backups.job-alert.log-message")
+            }
         }
         .font(.system(size: 12, weight: .semibold))
         .padding(.horizontal, 14)

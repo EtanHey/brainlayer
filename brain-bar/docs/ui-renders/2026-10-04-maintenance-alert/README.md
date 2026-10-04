@@ -55,3 +55,17 @@ Healthy (never red, never "Needs attention"):
 [with a warning](after-warning-jobs-default-dark.png) ·
 [after a later clean run](after-cleared-jobs-default-dark.png) (the note is gone: 307 amber pixels
 → 0). An unrecognised warning is shown as written.
+
+## Round 1 (Codex)
+**B1, Show log with no log yet:** Show log now returns a result (`BrainBarJobAlertLogResult`). When
+the job's log does not exist, every surface says so instead of silently revealing a folder:
+[Backups](after-nolog-backups-default-dark.png) and [Dashboard](after-nolog-dashboard-expanded-default-dark.png)
+show "No maintenance log yet; it's written on the next run." under the alert. In the
+[menu](after-nolog-menu-dark.png) the Show log row becomes that sentence, as a disabled item.
+The logs folder is still revealed when it exists.
+
+**B2, the menu clears like the other surfaces:** the menu badge from `badge-state.json` is reconciled
+with the live job-alert state (`BadgeStatePresentation.reconciled`), using the same rule as Backups and the
+Dashboard. It runs on every badge read and again when the menu opens. With `job-alerts.json = {}` and a
+still-fresh failing `badge-state.json`, the menu now reads "Nothing needs attention" with no Show
+log. Fixture test: `test_the_menu_clears_a_recovered_job_alert_while_the_badge_file_is_still_fresh`.

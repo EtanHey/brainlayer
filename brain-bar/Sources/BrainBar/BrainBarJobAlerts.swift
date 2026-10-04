@@ -68,16 +68,50 @@ struct BrainBarJobAlerts: Equatable, Sendable {
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         readFile: (URL) -> Data? = { FileManager.default.contents(atPath: $0.path) }
     ) -> URL {
+        producerURL(dbPath: document.dbPath, producerLabel: producerLabel, environment: environment, home: home, readFile: readFile)
+    }
+
+    /// The alert file a producer job reads: `BRAINLAYER_JOB_ALERT_PATH` from that job's effective
+    /// environment, else beside `dbPath`. The menu badge's producer is the health check.
+    static func producerURL(
+        dbPath: String,
+        producerLabel: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        readFile: (URL) -> Data? = { FileManager.default.contents(atPath: $0.path) }
+    ) -> URL {
         let producer = BrainLayerJobEnvironment.effective(
             plist: readFile(home.appendingPathComponent("Library/LaunchAgents/\(producerLabel).plist")),
             brainBarEnvironment: environment, home: home, readFile: readFile
         )
-        return url(dbPath: document.dbPath, environment: producer)
+        return url(dbPath: dbPath, environment: producer)
     }
+
+    static let badgeProducerLabel = "com.brainlayer.health-check"
 
     /// Reconciles with a state that may be unknown; an unknown state leaves the document as read.
     static func reconcile(_ document: ObservabilityDocument, with alerts: Self?) -> ObservabilityDocument {
         alerts?.reconcile(document) ?? document
+    }
+}
+
+extension BadgeStatePresentation {
+    /// The menu badge as of the live job-alert state (Codex #1062 r1 B2), by the same rule as the
+    /// Backups page and Dashboard: a `job_alert_<key>` issue whose job no longer reports an alert
+    /// is dropped. An unknown alert state, or a badge without per-issue messages, is left as read.
+    func reconciled(with alerts: BrainBarJobAlerts?) -> Self {
+        let prefix = "job_alert_"
+        guard let alerts, activeMessages.count == activeCodes.count else { return self }
+        let kept = zip(activeCodes, activeMessages).filter { code, _ in
+            !code.hasPrefix(prefix) || alerts.active[String(code.dropFirst(prefix.count))] != nil
+        }
+        guard kept.count != activeCodes.count else { return self }
+        return Self(
+            badgeOn: !kept.isEmpty,
+            reason: kept.map(\.1).joined(separator: "; "),
+            activeCodes: kept.map(\.0),
+            activeMessages: kept.map(\.1)
+        )
     }
 }
 

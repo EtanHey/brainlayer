@@ -299,3 +299,148 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         XCTAssertEqual(model.backupsBadgeReason(drive: nil), "Backup freshness (DB + transcript): stale (> 36 h)")
     }
 }
+
+/// Codex #1062 r1 B1: Show log with no log file says so on every surface, never silently reveals
+/// a folder. B2: the menu clears exactly like Backups and the Dashboard.
+@MainActor
+final class BrainBarJobAlertRoundOneTests: XCTestCase {
+    private let alert = "BrainLayer light maintenance failed: post-maintenance search latency pathological"
+    private let missing = "No maintenance log yet; it's written on the next run."
+    private let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("brainbar-job-alert-r1-\(UUID().uuidString)", isDirectory: true)
+
+    private final class Recorder: BrainBarWorkspaceActing, @unchecked Sendable {
+        var opened: [URL] = [], revealed: [URL] = []
+        func open(_ url: URL) { opened.append(url) }
+        func reveal(_ url: URL) { revealed.append(url) }
+        func copy(_ text: String) {}
+    }
+
+    override func setUpWithError() throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("logs"), withIntermediateDirectories: true)
+        try Data(#"{"maintenance-light": "\#(alert)"}"#.utf8).write(to: root.appendingPathComponent("job-alerts.json"))
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
+
+    private var paths: BrainBarBackupSources.Paths {
+        .init(launchAgents: root.appendingPathComponent("LA"), databaseLog: root.appendingPathComponent("logs/backup-daily.log"),
+              archiveLog: root.appendingPathComponent("logs/jsonl-backup.log"),
+              maintenanceLog: root.appendingPathComponent("logs/maintenance.log"),
+              snapshotDirectory: root, archiveDirectory: root)
+    }
+
+    private func document() -> ObservabilityDocument {
+        guard case let .readable(base) = BrainBarDashboardFixture.maintenanceAlertObservabilityResult else {
+            fatalError("fixture must be readable")
+        }
+        let moved = ObservabilityDocument(
+            schemaVersion: 1, generatedAt: base.generatedAt, dbPath: root.appendingPathComponent("brainlayer.db").path,
+            windowHours: 24, stores: base.stores, emitters: base.emitters, authorUnknown: base.authorUnknown, backups: base.backups
+        )
+        return moved.replacingBackupsErrorType("job_alert:\(alert)")
+    }
+
+    // MARK: B1
+
+    func test_show_log_result_names_a_missing_log_and_opens_an_existing_one() throws {
+        let workspace = Recorder()
+        XCTAssertEqual(
+            BrainBarJobAlerts.showLog(forKey: "maintenance-light", paths: paths, workspace: workspace),
+            .missing(message: missing)
+        )
+        try Data("{}\n".utf8).write(to: paths.maintenanceLog)
+        XCTAssertEqual(
+            BrainBarJobAlerts.showLog(forKey: "maintenance-light", paths: paths, workspace: workspace),
+            .opened(paths.maintenanceLog)
+        )
+        XCTAssertEqual(workspace.opened, [paths.maintenanceLog])
+        XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: "backup-daily"), "No database backup log yet; it's written on the next run.")
+        XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: "jsonl-backup"), "No transcript backup log yet; it's written on the next run.")
+        XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: nil), "BrainBar doesn't know this job's log; showing the logs folder.")
+    }
+
+    func test_backups_page_shows_the_missing_log_message() throws {
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
+        try store.save(.defaultConfig)
+        let workspace = Recorder()
+        let model = BrainBarSettingsViewModel(
+            store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            refreshStatusOnLoad: false, initialObservabilityResult: .readable(document()),
+            backupSources: BrainBarBackupSources(paths: paths, readFile: { _ in nil }, listDirectory: { _ in [] }, isRegularFile: { _ in false }),
+            workspace: workspace
+        )
+        XCTAssertNil(model.jobAlertLogMessage)
+        model.showJobAlertLog()
+        XCTAssertEqual(model.jobAlertLogMessage, missing)
+        try Data("{}\n".utf8).write(to: paths.maintenanceLog)
+        model.showJobAlertLog()
+        XCTAssertNil(model.jobAlertLogMessage, "an opened log leaves no message")
+        XCTAssertEqual(workspace.opened, [paths.maintenanceLog])
+    }
+
+    func test_dashboard_shows_the_missing_log_message() throws {
+        let panel = BrainBarDashboardPanelState()
+        let workspace = Recorder()
+        BrainBarJobAlerts.showLog(for: document(), paths: paths, workspace: workspace, panelState: panel)
+        XCTAssertEqual(panel.jobAlertLogMessage, missing)
+        try Data("{}\n".utf8).write(to: paths.maintenanceLog)
+        BrainBarJobAlerts.showLog(for: document(), paths: paths, workspace: workspace, panelState: panel)
+        XCTAssertNil(panel.jobAlertLogMessage)
+    }
+
+    func test_menu_says_there_is_no_log_yet_instead_of_offering_show_log() throws {
+        let badge = BadgeStatePresentation(badgeOn: true, reason: alert, activeCodes: ["job_alert_maintenance-light"])
+        XCTAssertEqual(
+            BrainBarStatusPopoverController.showLogItemTitle(for: badge, paths: paths),
+            missing
+        )
+        try Data("{}\n".utf8).write(to: paths.maintenanceLog)
+        XCTAssertEqual(BrainBarStatusPopoverController.showLogItemTitle(for: badge, paths: paths), "Show log")
+        XCTAssertNil(BrainBarStatusPopoverController.showLogItemTitle(
+            for: .init(badgeOn: false, reason: "", activeCodes: []), paths: paths
+        ))
+    }
+
+    // MARK: B2
+
+    /// Exactly Codex's fixture: job-alerts.json recovered to {} while badge-state.json still holds
+    /// a fresh, failing job_alert_maintenance-light issue.
+    func test_the_menu_clears_a_recovered_job_alert_while_the_badge_file_is_still_fresh() throws {
+        let now = Date()
+        let badgeURL = root.appendingPathComponent("badge-state.json")
+        let generated = ISO8601DateFormatter().string(from: now.addingTimeInterval(-30))
+        try Data("""
+        {"schema_version": 1, "generated_at": "\(generated)", "alerts": {"state": "measured", "reason": "", "inputs": [],
+         "badge_on": true, "active": [{"code": "job_alert_maintenance-light", "severity": "critical", "message": "\(alert)"}],
+         "suppressed": []}}
+        """.utf8).write(to: badgeURL)
+        let raw = BadgeStateReader.read(url: badgeURL, now: now, cadence: .known(300))
+        XCTAssertTrue(raw.badgeOn, "fixture: the badge file is fresh and failing")
+        let alertsURL = root.appendingPathComponent("job-alerts.json")
+
+        let live = raw.reconciled(with: BrainBarJobAlerts.read(url: alertsURL))
+        XCTAssertEqual(BrainBarStatusPopoverController.jobAlertKey(for: live), "maintenance-light")
+
+        try Data("{}".utf8).write(to: alertsURL)
+        let recovered = raw.reconciled(with: BrainBarJobAlerts.read(url: alertsURL))
+        XCTAssertFalse(recovered.badgeOn)
+        XCTAssertEqual(recovered.reason, "")
+        XCTAssertNil(BrainBarStatusPopoverController.jobAlertKey(for: recovered))
+        XCTAssertEqual(BrainBarStatusPopoverController.statusLineTitle(for: recovered), "Nothing needs attention")
+        XCTAssertFalse(BrainBarStatusPopoverController.menuRowTitles(for: recovered).contains("Show log"))
+    }
+
+    func test_reconciling_the_badge_keeps_other_issues_and_never_guesses_from_an_unknown_file() {
+        let raw = BadgeStatePresentation(
+            badgeOn: true, reason: "Queue backed up; \(alert)",
+            activeCodes: ["queue_backed_up", "job_alert_maintenance-light"],
+            activeMessages: ["Queue backed up", alert]
+        )
+        let cleared = raw.reconciled(with: BrainBarJobAlerts(active: [:]))
+        XCTAssertTrue(cleared.badgeOn)
+        XCTAssertEqual(cleared.reason, "Queue backed up")
+        XCTAssertEqual(cleared.activeCodes, ["queue_backed_up"])
+        XCTAssertEqual(raw.reconciled(with: nil), raw, "an unreadable alert file changes nothing")
+    }
+}

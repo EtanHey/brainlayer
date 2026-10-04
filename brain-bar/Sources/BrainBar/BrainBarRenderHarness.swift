@@ -777,7 +777,10 @@ enum BrainBarRenderHarness {
         let states: [(name: String, result: ObservabilityReadResult)] = [
             ("alert", BrainBarDashboardFixture.maintenanceAlertObservabilityResult),
             ("cleared", BrainBarDashboardFixture.healthyObservabilityResult),
+            // Codex #1062 r1 B1: Show log pressed with no maintenance.log yet.
+            ("nolog", BrainBarDashboardFixture.maintenanceAlertObservabilityResult),
         ]
+        let noLog = BrainBarJobAlerts.missingLogMessage(forKey: "maintenance-light")
         func capture(_ view: AnyView, width: CGFloat, height: CGFloat?, measure: () -> CGFloat, name: String,
                      appearance: NSAppearance.Name) throws {
             let measuring = NSHostingView(rootView: view)
@@ -799,10 +802,11 @@ enum BrainBarRenderHarness {
         let jobAt = BrainBarDashboardFixture.fetchedAt
         for appearance in appearances {
             for state in states {
-                for breakpoint in breakpoints {
-                    for expanded in state.name == "alert" ? [false, true] : [false] {
+                for breakpoint in breakpoints where state.name != "nolog" || breakpoint.name == "default" {
+                    for expanded in state.name == "alert" ? [false, true] : state.name == "nolog" ? [true] : [false] {
                         let panelState = BrainBarDashboardPanelState()
                         panelState.attentionExpanded = expanded
+                        if state.name == "nolog" { panelState.jobAlertLogMessage = noLog }
                         let view = BrainBarDashboardPreview.make(
                             collector: BrainBarDashboardFixture.makeCollector(),
                             receiptStore: sampleReceipts,
@@ -828,6 +832,7 @@ enum BrainBarRenderHarness {
                         now: { jobAt },
                         initialObservabilityResult: state.result
                     )
+                    if state.name == "nolog" { viewModel.jobAlertLogMessage = noLog }
                     let panelState = BrainBarDashboardPanelState()
                     let page = BrainBarUnifiedWindowPreview.make(
                         collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: viewModel,
@@ -841,6 +846,7 @@ enum BrainBarRenderHarness {
                 // N1: Jobs → Maintenance after a run that succeeded with a latency warning, and after
                 // a later clean run (the "cleared" state).
                 let runStart = jobAt.addingTimeInterval(-6 * 3_600)
+                if state.name != "nolog" {
                 let nightlyRecord: BrainLayerMaintenanceEvidence.RunRecord = .notAnAbort(
                     writtenAt: runStart.addingTimeInterval(40),
                     warnings: state.name == "alert" ? ["post-maintenance search latency above target: 62.0ms > 50.0ms"] : []
@@ -870,13 +876,14 @@ enum BrainBarRenderHarness {
                                 name: "maint-\(state.name == "alert" ? "warning" : "cleared")-jobs-\(breakpoint.name)-\(appearance.name)",
                                 appearance: appearance.appearance)
                 }
+                }
                 // The menu cannot be captured off-screen; these are its real rows, from the
                 // controller's own titles, drawn as a menu.
-                let badge: BadgeStatePresentation = state.name == "alert"
+                let badge: BadgeStatePresentation = state.name != "cleared"
                     ? .init(badgeOn: true, reason: BrainBarDashboardFixture.maintenanceAlertText,
                             activeCodes: ["job_alert_maintenance-light"])
                     : .init(badgeOn: false, reason: "", activeCodes: [])
-                let rows = BrainBarStatusPopoverController.menuRowTitles(for: badge)
+                let rows = BrainBarStatusPopoverController.menuRowTitles(for: badge, showLogItem: state.name == "nolog" ? noLog : nil)
                 let menu = AnyView(
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
@@ -885,7 +892,8 @@ enum BrainBarRenderHarness {
                             } else {
                                 Text(row)
                                     .font(.system(size: 13))
-                                    .foregroundStyle(index == 0 ? Color.secondary : Color.primary)
+                                    // The status line and a no-log Show log row are disabled menu items.
+                                    .foregroundStyle(index == 0 || row == noLog ? Color.secondary : Color.primary)
                                     .padding(.horizontal, 14).padding(.vertical, 3)
                             }
                         }
