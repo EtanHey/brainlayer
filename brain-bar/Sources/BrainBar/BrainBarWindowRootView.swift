@@ -1165,7 +1165,7 @@ private struct BrainBarDashboardView: View {
                                     Button("Show log") { showJobAlertLog(alert) }
                                         .controlSize(.small)
                                         .help("Opens the failed job's log. If it has no log yet, shows the logs folder.")
-                                    if let message = panelState.jobAlertLogMessage {
+                                    if let message = panelState.jobAlertLogMessage(forReason: alert.reason) {
                                         Text(message)
                                             .font(.system(size: 11, weight: .medium))
                                             .foregroundStyle(Color.brainBarTextMuted)

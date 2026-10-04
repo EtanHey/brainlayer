@@ -76,7 +76,12 @@ enum BrainBarDisclosureAnimation {
 final class BrainBarDashboardPanelState: ObservableObject {
     @Published var attentionExpanded = false
     /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
-    @Published var jobAlertLogMessage: String?
+    @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
+
+    /// The note's sentence, only while `reason` is still the alert it was produced for.
+    func jobAlertLogMessage(forReason reason: String) -> String? {
+        jobAlertLogNote.flatMap { $0.reason == reason ? $0.message : nil }
+    }
     @Published var detailsExpanded = BrainBarOnePageComposition.detailsExpandedByDefault
     @Published var signalCoverageExpanded = false
     @Published var dashboardHeight: CGFloat = 0

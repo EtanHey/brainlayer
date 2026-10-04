@@ -9,7 +9,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var backendDraft: String
     @Published var errorMessage: String?
     /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
-    @Published var jobAlertLogMessage: String?
+    @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
     @Published var isRefreshingLaunchdStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
@@ -338,8 +338,22 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func showJobAlertLog() {
         guard jobAlert != nil, case let .readable(document) = observabilityResult else { return }
         let paths = backupSources?.paths ?? .live(databasePath: document.dbPath)
-        jobAlertLogMessage = BrainBarJobAlerts.showLog(for: document, paths: paths, workspace: workspace).message
+        let message = BrainBarJobAlerts.showLog(for: document, paths: paths, workspace: workspace).message
+        jobAlertLogNote = BrainBarJobAlertLogNote(reason: BrainBarJobAlerts.rawReason(document), message: message)
     }
+
+    /// The note's sentence, only while its alert is still the current one (Macroscope #1062).
+    var jobAlertLogMessage: String? {
+        guard let note = jobAlertLogNote, case let .readable(document) = observabilityResult,
+              BrainBarJobAlerts.rawReason(document) == note.reason else { return nil }
+        return note.message
+    }
+
+#if DEBUG
+    func setObservabilityResultForTesting(_ result: ObservabilityReadResult) {
+        observabilityResult = result
+    }
+#endif
 
     var backupStatusReason: String? {
         switch observabilityResult {

@@ -178,15 +178,33 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             badgeOn: badge.badgeOn,
             size: NSSize(width: 26, height: 14)
         )
-        statusItemForTesting.button?.toolTip = badge.badgeOn
-            ? "BrainBar — needs attention: \(badge.reason)"
+        updateTooltip()
+    }
+
+    private func updateTooltip() {
+        statusItemForTesting.button?.toolTip = badgePresentation.badgeOn
+            ? "BrainBar — needs attention: \(badgePresentation.reason)"
             : "BrainBar"
     }
+
+#if DEBUG
+    func setBadgeForTesting(_ raw: BadgeStatePresentation, alertsURL: URL) {
+        rawBadgePresentation = raw
+        badgePresentation = raw
+        jobAlertsURL = alertsURL
+    }
+#endif
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         // The alert file can clear between badge reads; the open menu reads it now.
         if let raw = rawBadgePresentation, let jobAlertsURL {
-            badgePresentation = raw.reconciled(with: BrainBarJobAlerts.read(url: jobAlertsURL))
+            let reconciled = raw.reconciled(with: BrainBarJobAlerts.read(url: jobAlertsURL))
+            if reconciled != badgePresentation {
+                badgePresentation = reconciled
+                // The icon and its tooltip follow the menu (Macroscope #1062), not the next read.
+                if let stats = latestStats, let state = latestState { renderStatusIcon(stats: stats, state: state) }
+                updateTooltip()
+            }
         }
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil

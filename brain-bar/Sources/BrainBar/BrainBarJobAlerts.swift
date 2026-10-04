@@ -6,6 +6,20 @@ import Foundation
 /// `observability.json` copies one of these into `backups.error_type` as `job_alert:<reason>`, but
 /// only when its producer next runs. Reconciling with this file makes a clean run clear the alert
 /// in every BrainBar surface right away, and names the job, so Show log opens that job's log.
+/// Show log's sentence for one alert, keyed by the alert's raw reason so it never outlives that
+/// alert (Macroscope #1062): a surface shows it only while the same alert is current.
+struct BrainBarJobAlertLogNote: Equatable, Sendable {
+    let reason: String
+    let message: String
+
+    /// Nil unless both are known: no alert or no sentence means no note.
+    init?(reason: String?, message: String?) {
+        guard let reason, let message else { return nil }
+        self.reason = reason
+        self.message = message
+    }
+}
+
 struct BrainBarJobAlerts: Equatable, Sendable {
     /// The LaunchAgent that writes `observability.json`; its environment names the alert file.
     static let producerLabel = "com.brainlayer.observability"

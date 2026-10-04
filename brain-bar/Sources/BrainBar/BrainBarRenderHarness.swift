@@ -806,7 +806,9 @@ enum BrainBarRenderHarness {
                     for expanded in state.name == "alert" ? [false, true] : state.name == "nolog" ? [true] : [false] {
                         let panelState = BrainBarDashboardPanelState()
                         panelState.attentionExpanded = expanded
-                        if state.name == "nolog" { panelState.jobAlertLogMessage = noLog }
+                        if state.name == "nolog" {
+                            panelState.jobAlertLogNote = .init(reason: BrainBarDashboardFixture.maintenanceAlertText, message: noLog)
+                        }
                         let view = BrainBarDashboardPreview.make(
                             collector: BrainBarDashboardFixture.makeCollector(),
                             receiptStore: sampleReceipts,
@@ -832,7 +834,9 @@ enum BrainBarRenderHarness {
                         now: { jobAt },
                         initialObservabilityResult: state.result
                     )
-                    if state.name == "nolog" { viewModel.jobAlertLogMessage = noLog }
+                    if state.name == "nolog" {
+                        viewModel.jobAlertLogNote = .init(reason: BrainBarDashboardFixture.maintenanceAlertText, message: noLog)
+                    }
                     let panelState = BrainBarDashboardPanelState()
                     let page = BrainBarUnifiedWindowPreview.make(
                         collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: viewModel,

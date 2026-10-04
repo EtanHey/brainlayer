@@ -74,6 +74,7 @@ extension BrainBarJobAlerts {
         workspace: any BrainBarWorkspaceActing,
         panelState: BrainBarDashboardPanelState
     ) {
-        panelState.jobAlertLogMessage = showLog(for: document, paths: paths, workspace: workspace).message
+        let message = showLog(for: document, paths: paths, workspace: workspace).message
+        panelState.jobAlertLogNote = BrainBarJobAlertLogNote(reason: rawReason(document), message: message)
     }
 }

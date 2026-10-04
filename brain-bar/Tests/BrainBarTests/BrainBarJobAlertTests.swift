@@ -383,10 +383,10 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         let panel = BrainBarDashboardPanelState()
         let workspace = Recorder()
         BrainBarJobAlerts.showLog(for: document(), paths: paths, workspace: workspace, panelState: panel)
-        XCTAssertEqual(panel.jobAlertLogMessage, missing)
+        XCTAssertEqual(panel.jobAlertLogMessage(forReason: alert), missing)
         try Data("{}\n".utf8).write(to: paths.maintenanceLog)
         BrainBarJobAlerts.showLog(for: document(), paths: paths, workspace: workspace, panelState: panel)
-        XCTAssertNil(panel.jobAlertLogMessage)
+        XCTAssertNil(panel.jobAlertLogMessage(forReason: alert))
     }
 
     func test_menu_says_there_is_no_log_yet_instead_of_offering_show_log() throws {
@@ -443,4 +443,87 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         XCTAssertEqual(cleared.activeCodes, ["queue_backed_up"])
         XCTAssertEqual(raw.reconciled(with: nil), raw, "an unreadable alert file changes nothing")
     }
+}
+
+/// Macroscope #1062 (after r1): a Show log note belongs to the alert it was produced for, and the
+/// status item follows the menu's reconciled badge.
+@MainActor
+final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
+    private let first = "BrainLayer light maintenance failed: gate A"
+    private let second = "BrainLayer full maintenance failed: gate B"
+    private let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("brainbar-job-alert-r1b-\(UUID().uuidString)", isDirectory: true)
+
+    override func setUpWithError() throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("logs"), withIntermediateDirectories: true)
+        try Data(#"{"maintenance-light": "\#(first)", "maintenance-full": "\#(second)"}"#.utf8)
+            .write(to: root.appendingPathComponent("job-alerts.json"))
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
+
+    private var paths: BrainBarBackupSources.Paths {
+        .init(launchAgents: root.appendingPathComponent("LA"), databaseLog: root.appendingPathComponent("logs/backup-daily.log"),
+              archiveLog: root.appendingPathComponent("logs/jsonl-backup.log"),
+              maintenanceLog: root.appendingPathComponent("logs/maintenance.log"),
+              snapshotDirectory: root, archiveDirectory: root)
+    }
+
+    private func document(_ reason: String) -> ObservabilityDocument {
+        guard case let .readable(base) = BrainBarDashboardFixture.maintenanceAlertObservabilityResult else {
+            fatalError("fixture must be readable")
+        }
+        return ObservabilityDocument(
+            schemaVersion: 1, generatedAt: base.generatedAt, dbPath: root.appendingPathComponent("brainlayer.db").path,
+            windowHours: 24, stores: base.stores, emitters: base.emitters, authorUnknown: base.authorUnknown, backups: base.backups
+        ).replacingBackupsErrorType("job_alert:\(reason)")
+    }
+
+    func test_the_backups_note_never_outlives_its_alert() async throws {
+        let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
+        try store.save(.defaultConfig)
+        let next = document(second)
+        let model = BrainBarSettingsViewModel(
+            store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            refreshStatusOnLoad: false,
+            observabilityURL: root.appendingPathComponent("observability.json"),
+            initialObservabilityResult: .readable(document(first)),
+            observabilityRead: { _ in .readable(next) },
+            backupSources: BrainBarBackupSources(paths: paths, readFile: { _ in nil }, listDirectory: { _ in [] }, isRegularFile: { _ in false })
+        )
+        // The initial read may already be in flight; pin the first alert, then press Show log.
+        model.setObservabilityResultForTesting(.readable(document(first)))
+        model.showJobAlertLog()
+        XCTAssertEqual(model.jobAlertLogMessage, "No maintenance log yet; it's written on the next run.")
+        model.setObservabilityResultForTesting(.readable(next))
+        XCTAssertNil(model.jobAlertLogMessage, "a different alert must not inherit the old note")
+    }
+
+    func test_the_dashboard_note_never_outlives_its_alert() {
+        let panel = BrainBarDashboardPanelState()
+        BrainBarJobAlerts.showLog(for: document(first), paths: paths, workspace: BrainBarWorkspaceStub(), panelState: panel)
+        XCTAssertEqual(panel.jobAlertLogMessage(forReason: first), "No maintenance log yet; it's written on the next run.")
+        XCTAssertNil(panel.jobAlertLogMessage(forReason: second))
+    }
+
+    func test_the_status_item_follows_the_menus_reconciled_badge() throws {
+        let alertsURL = root.appendingPathComponent("job-alerts.json")
+        try Data("{}".utf8).write(to: alertsURL)
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let windowController = BrainBarDashboardPanelController(runtime: runtime)
+        let status = BrainBarStatusPopoverController(runtime: runtime, dashboardPanelController: windowController)
+        defer { status.stop(); windowController.dismiss() }
+        status.setBadgeForTesting(
+            .init(badgeOn: true, reason: first, activeCodes: ["job_alert_maintenance-light"], activeMessages: [first]),
+            alertsURL: alertsURL
+        )
+        status.menuNeedsUpdate(status.contextMenuForTesting)
+        XCTAssertEqual(status.contextMenuForTesting.items.first?.title, "Nothing needs attention")
+        XCTAssertEqual(status.statusItemForTesting.button?.toolTip, "BrainBar", "the icon's tooltip follows the menu")
+    }
+}
+
+private struct BrainBarWorkspaceStub: BrainBarWorkspaceActing {
+    func reveal(_ url: URL) {}
+    func copy(_ text: String) {}
 }
