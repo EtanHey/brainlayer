@@ -630,14 +630,21 @@ enum BrainBarRenderHarness {
         }
         if fixedHeight != nil {
             guard emittedBitmap.pixelsWide * Int(height) == emittedBitmap.pixelsHigh * Int(breakpoint.width), let image = emittedBitmap.cgImage else { throw Failure("\(name): invalid fixed-height bitmap") }
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            try VNImageRequestHandler(cgImage: image).perform([request])
-            for label in ["Details", detailsExpanded && !collapseInPlace ? "Last seen" : "Details"] {
-                guard request.results?.contains(where: {
-                    $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(label) == true && $0.boundingBox.minY > 0.025
-                }) == true else { throw Failure("\(name): \(label) or bottom padding clipped") }
+            // Vision can miss a label on one pass and find it on the next for the same pixels
+            // (#1064 review N1), so a label must be missing on three passes before it counts.
+            let labels = ["Details", detailsExpanded && !collapseInPlace ? "Last seen" : "Details"]
+            var missing = labels
+            for _ in 0 ..< 3 where !missing.isEmpty {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                try VNImageRequestHandler(cgImage: image).perform([request])
+                missing = missing.filter { label in
+                    request.results?.contains(where: {
+                        $0.topCandidates(1).first?.string.localizedCaseInsensitiveContains(label) == true && $0.boundingBox.minY > 0.025
+                    }) != true
+                }
             }
+            if let label = missing.first { throw Failure("\(name): \(label) or bottom padding clipped") }
         }
 
         let cardHeights = panelState.renderedSummaryTileHeights
@@ -842,7 +849,7 @@ enum BrainBarRenderHarness {
                     let page = BrainBarUnifiedWindowPreview.make(
                         collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: viewModel,
                         panelState: panelState, section: .backups,
-                        driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: Date().addingTimeInterval(5 * 86_400))) }
+                        driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: jobAt.addingTimeInterval(5 * 86_400))) }
                     )
                     try capture(page, width: breakpoint.width, height: 900, measure: { 900 },
                                 name: "maint-\(state.name)-backups-\(breakpoint.name)-\(appearance.name)",
@@ -946,17 +953,27 @@ enum BrainBarRenderHarness {
                 launchd: .init(label: "com.brainlayer.jsonl-backup", bootstrapped: false, disabledDirPresent: true)
             )
         )
-        let localCopies: [BrainBarBackupScheduleRow] = [
-            .init(title: "Database", cadence: "daily at 03:17", lastRun: "Last run today 03:17 · verified",
-                  nextRun: "Next run tomorrow 03:17",
-                  localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/backups/2026-10-04.db.gz")),
-            .init(title: "Transcripts", cadence: "daily at 05:00", lastRun: "Last run today 05:01 · verified",
-                  nextRun: "Next run tomorrow 05:00",
-                  localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/jsonl-backups/claude-jsonl-2026-10-04.tar.gz")),
-        ]
+        // Lead UX r1: every time on these renders comes from the one fixture clock (`now`), so the
+        // Schedule rows, the checks and Technical details tell the same story.
+        let show = DashboardMetricFormatter.jobDateTimeString
+        let day = { (date: Date) in date.formatted(.iso8601.year().month().day()) }
+        func schedule(upload: ObservabilityDocument.LastVerifiedUpload?, parked: Bool) -> [BrainBarBackupScheduleRow] {
+            let snapshotAt = b.dbSnapshot?.lastAt ?? now.addingTimeInterval(-7_200)
+            let uploadAt = upload?.at ?? now.addingTimeInterval(-3_600)
+            return [
+                .init(title: "Database", cadence: "daily", lastRun: "Last run \(show(snapshotAt)) · verified",
+                      nextRun: "Next run \(show(snapshotAt.addingTimeInterval(86_400)))",
+                      localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/backups/\(day(snapshotAt)).db.gz")),
+                .init(title: "Transcripts", cadence: parked ? "Not scheduled: its LaunchAgent is parked" : "daily",
+                      lastRun: "Last run \(show(uploadAt))\(upload?.verified == false ? " · NOT verified" : " · verified")",
+                      nextRun: parked ? "Next run none" : "Next run \(show(uploadAt.addingTimeInterval(86_400)))",
+                      localCopy: URL(fileURLWithPath: "/Users/fixture/.local/share/brainlayer/jsonl-backups/claude-jsonl-\(day(uploadAt)).tar.gz")),
+            ]
+        }
         let ok = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 3, lastExitCode: 0, lastRunAt: now.addingTimeInterval(-3_600),
                                                  nextRunAt: now.addingTimeInterval(82_800), isContinuous: false)
         func viewModel(_ result: ObservabilityReadResult, details: Bool) -> BrainBarSettingsViewModel {
+            let backups: ObservabilityDocument.Backups? = if case let .readable(document) = result { document.backups } else { nil }
             let model = BrainBarSettingsViewModel(
                 store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
@@ -965,13 +982,15 @@ enum BrainBarRenderHarness {
                 refreshStatusOnLoad: false,
                 now: { now },
                 initialObservabilityResult: result,
-                initialBackupSchedules: localCopies
+                initialBackupSchedules: schedule(
+                    upload: backups?.lastVerifiedUpload, parked: backups?.launchd?.bootstrapped == false
+                )
             )
             if details { model.backupDetailsExpanded = true }
             return model
         }
         let connected: (BrainBarDriveAuthModel) -> Void = { model in
-            model.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: Date().addingTimeInterval(5 * 86_400)))
+            model.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86_400)))
         }
         func capture(_ view: AnyView, width: CGFloat, height: CGFloat, name: String, appearance: NSAppearance.Name) throws {
             let host = NSHostingView(rootView: view)

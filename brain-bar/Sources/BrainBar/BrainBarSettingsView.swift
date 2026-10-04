@@ -340,8 +340,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
     /// The line under the Backups badge: the verdict's reason, unless it is the job alert the
     /// alert card above it already shows.
     func backupsBadgeReason(drive: DriveAuthPresentation?) -> String? {
+        // Each failure once per screen (lead UX r1 on #1064): the job-alert card, the Google Drive
+        // card and the Recovery checks card each say their own; the header keeps only the badge.
         let reason = backupsHealth(drive: drive).reason
-        return reason == jobAlert ? nil : reason
+        let shownElsewhere = [jobAlert, drive?.line, backupChecks?.attentionSentence].compactMap { $0 }
+        return reason.flatMap { shownElsewhere.contains($0) ? nil : $0 }
     }
 
     /// Show log for the job alert: the failing job's log, named by the live job-alert state.
@@ -962,7 +965,10 @@ struct BrainBarSettingsView: View {
                 if let driveAuth {
                     BrainBarDriveAwareBackupsGroup(viewModel: viewModel, driveAuth: driveAuth)
                 } else {
-                    BrainBarJobGroupCard(group: .backups, viewModel: viewModel, backupsHealth: viewModel.backupsHealth(drive: nil))
+                    BrainBarJobGroupCard(
+                        group: .backups, viewModel: viewModel,
+                        backupsHealth: viewModel.backupsHealth(drive: nil), backupsReason: viewModel.backupsBadgeReason(drive: nil)
+                    )
                 }
                 Divider()
                 backupSchedule
@@ -1174,10 +1180,12 @@ private struct BrainBarDriveAwareBackupsGroup: View {
         VStack(alignment: .leading, spacing: 16) {
             BrainBarDriveAuthCard(model: driveAuth)
             Divider()
+            let drive = driveAuth.presentation(formatDate: BrainBarDriveAuthFormat.date)
             BrainBarJobGroupCard(
                 group: .backups,
                 viewModel: viewModel,
-                backupsHealth: viewModel.backupsHealth(drive: driveAuth.presentation(formatDate: BrainBarDriveAuthFormat.date))
+                backupsHealth: viewModel.backupsHealth(drive: drive),
+                backupsReason: viewModel.backupsBadgeReason(drive: drive)
             )
         }
     }
@@ -1188,6 +1196,8 @@ private struct BrainBarJobGroupCard: View {
     @ObservedObject var viewModel: BrainBarSettingsViewModel
     /// The Backups page passes its combined verdict; other groups show launchd health alone.
     var backupsHealth: BrainBarBackupsHealth?
+    /// The Backups verdict's reason, minus anything another card on the page already shows.
+    var backupsReason: String?
 
     static func symbol(_ health: BrainLayerLaunchdGroupHealth) -> String {
         switch health {
@@ -1231,8 +1241,7 @@ private struct BrainBarJobGroupCard: View {
         }
         return Badge(
             title: backupsHealth.badge.title, symbol: symbol, color: color,
-            // The job alert has its own card on this page; say it once (lead ruling 2026-10-04).
-            reason: backupsHealth.reason == viewModel.jobAlert ? nil : backupsHealth.reason,
+            reason: backupsReason,
             reasonColor: backupsHealth.badge == .unknown ? Color.brainBarTextMuted : color
         )
     }
@@ -1267,8 +1276,11 @@ private struct BrainBarJobGroupCard: View {
                     .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
                     .accessibilityIdentifier("brainbar.jobs.\(group.rawValue).note")
             }
-            groupTiming(label: "LAST RUN", value: status.lastRunText)
-            groupTiming(label: "NEXT RUN", value: status.nextRunText)
+            // The Backups page's Schedule section is its one source of last/next runs (lead UX r1).
+            if backupsHealth == nil {
+                groupTiming(label: "LAST RUN", value: status.lastRunText)
+                groupTiming(label: "NEXT RUN", value: status.nextRunText)
+            }
         }
         .padding(.vertical, 6)
     }

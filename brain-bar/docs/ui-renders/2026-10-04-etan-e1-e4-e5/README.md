@@ -54,3 +54,21 @@ Every capture was rendered under the `darkAqua` and `aqua` system appearances
 ([light example](after-backups-attention-default-light.png)). They match pixel for pixel except
 the few digits of the Drive card's "renews by …" time, which comes from the wall clock at render
 time. BrainBar pins its own dark scheme.
+
+## Round 1 (lead UX)
+- **Each failure shows once.** The Backups header keeps only its badge. Any reason that another card
+  already states (a recovery check, the Google Drive card or the job-alert card) is not repeated
+  under it. A reason that appears nowhere else, such as the launchd job's exit, still shows.
+  Test: `test_the_backups_header_never_repeats_a_reason_the_page_already_shows`.
+- **No monospace `LAST RUN` / `NEXT RUN` rows** on the Backups page: the Schedule section is the one
+  source of last/next runs. The Jobs page keeps them.
+- **Coherent fixture times:** every time in these renders comes from the fixture's single clock (the
+  Schedule rows, the checks, Technical details, the local-copy names and the Drive renewal).
+  A parked job reads "Not scheduled" with no next run. Light and dark Backups captures are now
+  byte-identical (the wall-clock minute is gone).
+- **Harness OCR (review N1):** the fixed-height Dashboard check now requires a label to be missing
+  on three Vision passes before it fails. The full harness exits 0 on two consecutive runs.
+
+The `after-*` images above are the round-1 renders. Healthy is shown at
+[760](after-backups-healthy-compact-light.png) · [960](after-backups-healthy-default-light.png) ·
+[1280](after-backups-healthy-wide-light.png) under the light appearance too.

@@ -171,7 +171,8 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
     }
 
     private func makeViewModel(
-        observability: ObservabilityReadResult, workspace: Recorder = Recorder()
+        observability: ObservabilityReadResult, workspace: Recorder = Recorder(),
+        jsonl: BrainLayerLaunchdJobObservation? = nil
     ) throws -> (BrainBarSettingsViewModel, URL) {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("brainbar-plain-paths-\(UUID().uuidString)", isDirectory: true)
@@ -184,7 +185,7 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdObservations: [
                 .backupDaily: .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
-                .jsonlBackup: .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
+                .jsonlBackup: jsonl ?? .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
             ],
             refreshStatusOnLoad: false,
             initialObservabilityResult: observability,
@@ -216,6 +217,34 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
         XCTAssertEqual(viewModel.backupChecks?.attentionSentence, health.reason)
     }
 
+    /// Lead UX r1 on #1064: each failure is shown once. The Backups header keeps its badge but drops
+    /// any reason the page already shows (a recovery check, the Drive card, the job-alert card); a
+    /// reason shown nowhere else (the launchd job's exit) still appears under the badge.
+    func test_the_backups_header_never_repeats_a_reason_the_page_already_shows() throws {
+        guard case let .readable(healthy) = BrainBarDashboardFixture.healthyObservabilityResult else {
+            XCTFail("fixture must be readable")
+            return
+        }
+        let unverified = healthy.replacingBackupsLastVerifiedUpload(verified: false)
+        let (model, _) = try makeViewModel(observability: .readable(unverified))
+        XCTAssertEqual(model.backupsHealth(drive: nil).badge, .attention)
+        XCTAssertNil(model.backupsBadgeReason(drive: nil), "the Recovery checks card already says it")
+
+        let drive = DriveAuthPresentation.derive(
+            status: .init(state: .missing, reason: nil, expiresAt: nil),
+            isReconnecting: false, lastOutcome: nil, now: Date(), formatDate: { _ in "" }
+        )
+        let (healthyModel, _) = try makeViewModel(observability: .readable(healthy))
+        XCTAssertEqual(healthyModel.backupsHealth(drive: drive).reason, drive.line)
+        XCTAssertNil(healthyModel.backupsBadgeReason(drive: drive), "the Google Drive card already says it")
+
+        let failedJob = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 2, lastExitCode: 1, lastRunAt: Date(),
+                                                        nextRunAt: Date(), isContinuous: false)
+        let (jobModel, _) = try makeViewModel(observability: .readable(healthy), jsonl: failedJob)
+        let reason = try XCTUnwrap(jobModel.backupsHealth(drive: nil).reason)
+        XCTAssertEqual(jobModel.backupsBadgeReason(drive: nil), reason, "shown nowhere else, so it stays")
+    }
+
     func test_the_config_file_row_copies_and_reveals_the_file_the_model_reads() throws {
         let workspace = Recorder()
         let (viewModel, configURL) = try makeViewModel(observability: .unreadable("x"), workspace: workspace)
@@ -226,5 +255,22 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
         XCTAssertEqual(workspace.revealed, [configURL])
         viewModel.copyText("1-QM42")
         XCTAssertEqual(workspace.copied.last, "1-QM42")
+    }
+}
+
+private extension ObservabilityDocument {
+    func replacingBackupsLastVerifiedUpload(verified: Bool) -> Self {
+        let b = backups
+        return Self(
+            schemaVersion: schemaVersion, generatedAt: generatedAt, dbPath: dbPath, windowHours: windowHours,
+            stores: stores, emitters: emitters, authorUnknown: authorUnknown,
+            backups: .init(
+                state: b.state, reason: b.reason, inputs: b.inputs, freshness: b.freshness,
+                thresholdHours: b.thresholdHours, retentionInvariant: b.retentionInvariant,
+                survivingArchives30D: b.survivingArchives30D, errorType: b.errorType,
+                lastVerifiedUpload: b.lastVerifiedUpload.map { .init(at: $0.at, ageHours: $0.ageHours, archiveId: $0.archiveId, verified: verified) },
+                dbSnapshot: b.dbSnapshot, launchd: b.launchd
+            )
+        )
     }
 }

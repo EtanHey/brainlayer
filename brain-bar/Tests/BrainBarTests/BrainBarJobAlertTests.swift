@@ -296,8 +296,9 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
         )
         let model = try viewModel(.readable(stale))
         XCTAssertNil(model.jobAlert)
-        // E1: the badge speaks the recovery checks' plain words.
-        XCTAssertEqual(model.backupsBadgeReason(drive: nil), "Up to date: A copy is older than 36 hours")
+        // Lead UX r1 on #1064: the Recovery checks card already says it; the header shows it once.
+        XCTAssertEqual(model.backupsHealth(drive: nil).reason, "Up to date: A copy is older than 36 hours")
+        XCTAssertNil(model.backupsBadgeReason(drive: nil))
     }
 }
 
