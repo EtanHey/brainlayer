@@ -38,3 +38,20 @@ BrainBar now reconciles `observability.json` with that file on every read
 (`ObservabilityReader.readReconciled`). A cleared alert disappears right away, not at the next
 observability write. When that file is missing or unreadable, the document is shown as read
 (unknown, never "no alerts").
+
+## Addendum (lead, from the #1061 review)
+
+**Show log opens `~/.local/share/brainlayer/logs/maintenance.log`** for every `maintenance-*`
+alert. That is the file #1061 makes hold every abort and failure reason, never the LaunchAgent's
+`.out`/`.err`. The path is the one the job itself writes: `BRAINLAYER_MAINTENANCE_LOG_PATH` from
+the job's LaunchAgent environment, which on this Mac is unset (checked read-only on 2026-10-04 for
+both maintenance LaunchAgents), so the default applies. Pinned by
+`test_show_log_defaults_to_the_shared_maintenance_log_never_the_launch_agent_stdout`.
+
+**N1, a run that succeeds with warnings:** #1061's `{"status": "ok", "warnings": [...]}` record is
+now read. When the latest run's own record carries warnings, the Maintenance card shows a quiet
+amber note, e.g. "Nightly last run OK · search slower than target (62 ms)". The badge stays
+Healthy (never red, never "Needs attention"):
+[with a warning](after-warning-jobs-default-dark.png) ·
+[after a later clean run](after-cleared-jobs-default-dark.png) (the note is gone: 307 amber pixels
+→ 0). An unrecognised warning is shown as written.

@@ -838,6 +838,38 @@ enum BrainBarRenderHarness {
                                 name: "maint-\(state.name)-backups-\(breakpoint.name)-\(appearance.name)",
                                 appearance: appearance.appearance)
                 }
+                // N1: Jobs → Maintenance after a run that succeeded with a latency warning, and after
+                // a later clean run (the "cleared" state).
+                let runStart = jobAt.addingTimeInterval(-6 * 3_600)
+                let nightlyRecord: BrainLayerMaintenanceEvidence.RunRecord = .notAnAbort(
+                    writtenAt: runStart.addingTimeInterval(40),
+                    warnings: state.name == "alert" ? ["post-maintenance search latency above target: 62.0ms > 50.0ms"] : []
+                )
+                let done = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 4, lastExitCode: 0, lastRunAt: runStart,
+                                                           nextRunAt: jobAt.addingTimeInterval(18 * 3_600), isContinuous: false)
+                for breakpoint in breakpoints where breakpoint.name == "default" {
+                    let jobsModel = BrainBarSettingsViewModel(
+                        store: store,
+                        launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                        runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
+                        initialLaunchdObservations: [
+                            .watch: .init(loadState: .running, runs: 7, lastExitCode: 0, lastRunAt: jobAt, nextRunAt: nil, isContinuous: true),
+                            .index: .init(loadState: .loaded, runs: 4, lastExitCode: 0, lastRunAt: jobAt, nextRunAt: jobAt.addingTimeInterval(900), isContinuous: false),
+                            .maintenanceNightly: done, .maintenanceWeekly: done,
+                        ],
+                        refreshStatusOnLoad: false,
+                        now: { jobAt },
+                        initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult,
+                        initialMaintenanceEvidence: .init(weeklyCompletion: .completed(runStart), runRecords: [.maintenanceNightly: nightlyRecord])
+                    )
+                    let jobsPage = BrainBarUnifiedWindowPreview.make(
+                        collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: jobsModel,
+                        panelState: BrainBarDashboardPanelState(), section: .jobs
+                    )
+                    try capture(jobsPage, width: breakpoint.width, height: 900, measure: { 900 },
+                                name: "maint-\(state.name == "alert" ? "warning" : "cleared")-jobs-\(breakpoint.name)-\(appearance.name)",
+                                appearance: appearance.appearance)
+                }
                 // The menu cannot be captured off-screen; these are its real rows, from the
                 // controller's own titles, drawn as a menu.
                 let badge: BadgeStatePresentation = state.name == "alert"

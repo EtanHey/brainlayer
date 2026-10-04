@@ -157,6 +157,24 @@ final class BrainBarJobAlertTests: XCTestCase {
         XCTAssertEqual(live.maintenanceLog, home.appendingPathComponent(".local/share/brainlayer/logs/maintenance.log"))
     }
 
+    /// Lead addendum 2026-10-04: Show log opens maintenance.log (which #1061 makes hold every abort
+    /// and failure reason), never the LaunchAgent's .out/.err logs.
+    func test_show_log_defaults_to_the_shared_maintenance_log_never_the_launch_agent_stdout() throws {
+        let home = root.appendingPathComponent("home")
+        let agents = home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        for job in [BrainLayerLaunchdJob.maintenanceNightly, .maintenanceWeekly] {
+            let plist: [String: Any] = ["StandardOutPath": "/Users/x/Library/Logs/brainlayer/\(job.launchdLabel).out.log"]
+            try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+                .write(to: agents.appendingPathComponent("\(job.launchdLabel).plist"))
+        }
+        let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home)
+        let expected = home.appendingPathComponent(".local/share/brainlayer/logs/maintenance.log")
+        for key in ["maintenance-light", "maintenance-full", "maintenance-burn"] {
+            XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live), expected, key)
+        }
+    }
+
     func test_each_job_alert_key_names_its_own_log() {
         XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "maintenance-light", paths: paths), paths.maintenanceLog)
         XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "maintenance-full", paths: paths), paths.maintenanceLog)

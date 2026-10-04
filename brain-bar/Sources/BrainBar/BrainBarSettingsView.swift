@@ -1196,6 +1196,13 @@ private struct BrainBarJobGroupCard: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(badge.reasonColor)
             }
+            // N1: a run that succeeded with warnings is a quiet amber note; the badge stays as is.
+            if let note = status.note {
+                Label(note, systemImage: "exclamationmark.circle")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                    .accessibilityIdentifier("brainbar.jobs.\(group.rawValue).note")
+            }
             groupTiming(label: "LAST RUN", value: status.lastRunText)
             groupTiming(label: "NEXT RUN", value: status.nextRunText)
         }
