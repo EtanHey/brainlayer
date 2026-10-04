@@ -917,6 +917,16 @@ def test_enrichment_template_flex_validation_rejects_missing_or_commented_flex(t
         _verify_enrichment_template_flex_backend(tmp_path)
 
 
+def _latency_clock(ticks):
+    def clock():
+        try:
+            return next(ticks)
+        except StopIteration:
+            pytest.fail("search latency probe exceeded its clock-sample budget")
+
+    return clock
+
+
 @pytest.mark.parametrize("fts", [False, True])
 def test_search_latency_uses_five_warm_samples_and_ignores_outlier(tmp_path, monkeypatch, fts):
     import sqlite3
@@ -945,7 +955,7 @@ def test_search_latency_uses_five_warm_samples_and_ignores_outlier(tmp_path, mon
 
     monkeypatch.setattr(maintenance.sqlite3, "connect", TracedConnection)
     ticks = iter([0, 0.04, 1, 1.041, 2, 2.9, 3, 3.039, 4, 4.042])
-    monkeypatch.setattr(maintenance.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(maintenance.time, "perf_counter", _latency_clock(ticks))
     assert maintenance._verify_search_latency(path) == pytest.approx(41)
     search_queries = [q for q in queries if "sqlite_master" not in q]
     assert len(search_queries) == 6  # one warm-up, then five timed samples
@@ -957,7 +967,7 @@ def test_pathological_warm_search_latency_is_failure_not_deferral(tmp_path, monk
     from brainlayer import maintenance
 
     ticks = iter([0, 0.6, 1, 1.6, 2, 2.6, 3, 3.6, 4, 4.6])
-    monkeypatch.setattr(maintenance.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(maintenance.time, "perf_counter", _latency_clock(ticks))
     with pytest.raises(maintenance.MaintenanceAbort, match="search latency") as caught:
         maintenance._verify_search_latency(tmp_path / "latency.db")
     assert caught.value.code == 1
@@ -991,5 +1001,5 @@ def test_nonpathological_warm_latency_does_not_abort(tmp_path, monkeypatch, late
     path = tmp_path / "latency.db"
     _create_enrichment_db(path)
     ticks = iter(t for i in range(5) for t in (i, i + latency_ms / 1000))
-    monkeypatch.setattr(maintenance.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(maintenance.time, "perf_counter", _latency_clock(ticks))
     assert maintenance._verify_search_latency(path) == pytest.approx(latency_ms)
