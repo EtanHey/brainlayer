@@ -1068,11 +1068,8 @@ def _result_to_dict(result: MaintenanceResult) -> dict[str, Any]:
     }
 
 
-def _failure_alert(mode: str, reason: str) -> str:
-    return (
-        f"BrainLayer {mode} maintenance failed: {reason}. "
-        f"Retry after resolving the gate; inspect {MaintenanceConfig().log_path}"
-    )
+def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
+    return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the gate; inspect {log_path}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1084,20 +1081,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Run gates and report actions without touching state")
     args = parser.parse_args(argv)
     mode = "full" if args.full else "burn" if args.burn else "light"
+    log_path = MaintenanceConfig().log_path
     try:
         result = run_maintenance(mode, dry_run=args.dry_run)
     except MaintenanceAbort as exc:
         if not args.dry_run:
-            from .job_alerts import report
+            _write_log(
+                log_path,
+                {"status": "deferred" if exc.code == 75 else "aborted", "mode": mode, "reason": exc.reason},
+            )
+            if exc.code != 75:
+                from .job_alerts import report
 
-            report(f"maintenance-{mode}", _failure_alert(mode, exc.reason))
+                report(f"maintenance-{mode}", _failure_alert(mode, exc.reason, log_path))
         print(json.dumps({"status": "aborted", "reason": exc.reason}, sort_keys=True), flush=True)
         return exc.code
     except Exception as exc:
         if not args.dry_run:
+            reason = type(exc).__name__
+            _write_log(log_path, {"status": "failed", "mode": mode, "reason": reason})
             from .job_alerts import report
 
-            report(f"maintenance-{mode}", _failure_alert(mode, type(exc).__name__))
+            report(
+                f"maintenance-{mode}",
+                f"BrainLayer {mode} maintenance hit an unexpected error ({reason}); see {log_path}",
+            )
         raise
     if not args.dry_run:
         from .job_alerts import report

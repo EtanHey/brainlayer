@@ -1,6 +1,18 @@
 """Job alerts retain only safe reasons and notify once per episode."""
 
+import datetime as dt
+import json
+
+import pytest
+
 from brainlayer.job_alerts import active_alerts, report
+
+
+@pytest.fixture(autouse=True)
+def isolated_maintenance_log(tmp_path, monkeypatch):
+    path = tmp_path / "maintenance.log"
+    monkeypatch.setenv("BRAINLAYER_MAINTENANCE_LOG_PATH", str(path))
+    return path
 
 
 def test_failure_episode_and_recovery(tmp_path):
@@ -45,21 +57,61 @@ def test_database_backup_exit_reports_and_clears(monkeypatch):
     assert notices[1] == ("backup-daily", None)
 
 
-def test_weekly_maintenance_abort_reports_failure(monkeypatch):
+@pytest.mark.parametrize("code", [1, 76])
+def test_weekly_maintenance_abort_reports_failure(monkeypatch, isolated_maintenance_log, code):
     from brainlayer import job_alerts, maintenance
 
     notices = []
     monkeypatch.setattr(job_alerts, "report", lambda key, reason: notices.append((key, reason)))
 
     def abort(mode, *, dry_run):
-        raise maintenance.MaintenanceAbort("fixture")
+        raise maintenance.MaintenanceAbort("fixture", code=code)
 
     monkeypatch.setattr(maintenance, "run_maintenance", abort)
-    assert maintenance.main(["--full"]) == 75
+    assert maintenance.main(["--full"]) == code
     assert notices[0][0] == "maintenance-full"
     assert "fixture" in notices[0][1]
     assert "Retry" in notices[0][1]
     assert str(maintenance.MaintenanceConfig().log_path) in notices[0][1]
+    event = json.loads(isolated_maintenance_log.read_text())
+    assert event["status"] == "aborted"
+    assert event["mode"] == "full"
+    assert event["reason"] == "fixture"
+    assert dt.datetime.fromisoformat(event["ts"]).tzinfo is not None
+
+
+@pytest.mark.parametrize("reason", ["outside quiet window", "writer active"])
+def test_maintenance_deferral_logs_without_failure_alert(monkeypatch, isolated_maintenance_log, reason):
+    from brainlayer import job_alerts, maintenance
+
+    notices = []
+    monkeypatch.setattr(job_alerts, "report", lambda *args: notices.append(args))
+
+    def defer(*args, **kwargs):
+        raise maintenance.MaintenanceAbort(reason)
+
+    monkeypatch.setattr(maintenance, "run_maintenance", defer)
+    assert maintenance.main(["--light"]) == 75
+    assert notices == []
+    event = json.loads(isolated_maintenance_log.read_text())
+    assert event["status"] == "deferred"
+    assert event["mode"] == "light"
+    assert event["reason"] == reason
+
+
+def test_dry_run_abort_does_not_write_log_or_alert(monkeypatch, isolated_maintenance_log):
+    from brainlayer import job_alerts, maintenance
+
+    notices = []
+    monkeypatch.setattr(job_alerts, "report", lambda *args: notices.append(args))
+
+    def abort(*args, **kwargs):
+        raise maintenance.MaintenanceAbort("synthetic failure", code=1)
+
+    monkeypatch.setattr(maintenance, "run_maintenance", abort)
+    assert maintenance.main(["--light", "--dry-run"]) == 1
+    assert notices == []
+    assert not isolated_maintenance_log.exists()
 
 
 def test_maintenance_alert_episode_clears_after_warning_success(tmp_path, monkeypatch):
@@ -86,9 +138,7 @@ def test_maintenance_alert_episode_clears_after_warning_success(tmp_path, monkey
     assert notices[-1] == "BrainLayer maintenance-light recovered"
 
 
-def test_unexpected_maintenance_failure_alert_does_not_expose_exception_value(monkeypatch):
-    import pytest
-
+def test_unexpected_maintenance_failure_alert_does_not_expose_exception_value(monkeypatch, isolated_maintenance_log):
     from brainlayer import job_alerts, maintenance
 
     notices = []
@@ -101,5 +151,13 @@ def test_unexpected_maintenance_failure_alert_does_not_expose_exception_value(mo
     with pytest.raises(RuntimeError):
         maintenance.main(["--light"])
     assert "RuntimeError" in notices[0]
+    assert "hit an unexpected error (RuntimeError)" in notices[0]
+    assert "Retry after resolving the gate" not in notices[0]
     assert "private-value" not in notices[0]
     assert str(maintenance.MaintenanceConfig().log_path) in notices[0]
+    event = json.loads(isolated_maintenance_log.read_text())
+    assert event["status"] == "failed"
+    assert event["mode"] == "light"
+    assert event["reason"] == "RuntimeError"
+    assert "private-value" not in isolated_maintenance_log.read_text()
+    assert dt.datetime.fromisoformat(event["ts"]).tzinfo is not None
