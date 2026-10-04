@@ -37,8 +37,10 @@ LIVE_SERVICES = (
     "throughput-watchdog",
     "tier0-watchdog",
     "health-check",
-    "brainbar",
+    # The daemon's UI-watchdog can fall back to openBundle after the UI bootout.
+    # Stop that supervisor before its subject; the UI only kickstarts the daemon.
     "brainbar-daemon",
+    "brainbar",
     "hotlane-brainbar",
     "watch",
     "drain",
@@ -49,12 +51,25 @@ LIVE_SERVICES = (
 )
 
 
+BRAINBAR_EXIT_TIMEOUT_SECONDS = 30.0
+_QUIESCE_DETAILS = frozenset(
+    {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
+    | {
+        f"{step}:{maintenance._launchd_label(service)}"
+        for step in ("bootout", "state", "loaded")
+        for service in LIVE_SERVICES
+    }
+)
+
+
 class ScrubAtRestError(RuntimeError):
     """Value-free failure; a failed batch is rolled back, earlier batches may remain."""
 
-    def __init__(self, message, *, reason="scrub-failed"):
+    def __init__(self, message, *, reason="scrub-failed", detail=None):
         super().__init__(message)
         self.reason = reason
+        # Only fixed service labels and gate names can reach refusal JSON.
+        self.detail = detail if isinstance(detail, str) and detail in _QUIESCE_DETAILS else None
 
 
 def _safe_cause(exc):
@@ -70,6 +85,7 @@ def _failure(exc, cleanup=None):
     error.__cause__ = _safe_cause(exc)
     if isinstance(exc, ScrubAtRestError):
         error.reason = exc.reason
+        error.detail = exc.detail
         error.__cause__ = exc.__cause__
         for note in getattr(exc, "__notes__", []):
             error.add_note(note)
@@ -271,18 +287,59 @@ def _live_requirements(config):
 
 def _check_no_brainbar_processes():
     # An unregistered UI can open the daemon bundle even after its job is booted out.
-    processes = maintenance.run_command(["ps", "-axo", "comm="], check=True)
-    if any(Path(line.strip()).name in {"BrainBar", "BrainBarDaemon"} for line in processes.stdout.splitlines()):
-        raise ScrubAtRestError("BrainBar process remains running", reason="quiesce-failed")
+    try:
+        processes = maintenance.run_command(["ps", "-axo", "comm="], check=True)
+    except Exception as exc:
+        raise ScrubAtRestError(
+            "could not verify BrainBar process exit", reason="quiesce-failed", detail="brainbar-process-probe"
+        ) from _safe_cause(exc)
+    for line in processes.stdout.splitlines():
+        name = Path(line.strip()).name
+        if name in {"BrainBar", "BrainBarDaemon"}:
+            raise ScrubAtRestError(
+                "BrainBar process remains running", reason="quiesce-failed", detail=f"process:{name}"
+            )
+
+
+def _wait_for_brainbar_exit():
+    """Bootout removes a job before its process necessarily finishes SIGTERM cleanup."""
+    deadline = time.monotonic() + BRAINBAR_EXIT_TIMEOUT_SECONDS
+    while True:
+        try:
+            _check_no_brainbar_processes()
+            return
+        except ScrubAtRestError as exc:
+            if exc.detail not in {"process:BrainBar", "process:BrainBarDaemon"}:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(0.1, remaining))
 
 
 def _quiesced_gates(config):
     # Both healer jobs and unregistered UI processes can revive resident writers.
-    if any(maintenance._service_is_loaded(service) for service in LIVE_SERVICES):
-        raise ScrubAtRestError("writer service remains loaded", reason="quiesce-failed")
+    for service in LIVE_SERVICES:
+        try:
+            loaded = maintenance._service_is_loaded(service)
+        except maintenance.MaintenanceAbort as exc:
+            raise ScrubAtRestError(
+                "writer service state unknown", reason="quiesce-failed", detail=exc.detail
+            ) from _safe_cause(exc)
+        if loaded:
+            raise ScrubAtRestError(
+                "writer service remains loaded",
+                reason="quiesce-failed",
+                detail=f"loaded:{maintenance._launchd_label(service)}",
+            )
     _check_no_brainbar_processes()
     config.expected_writer_patterns = ()
-    maintenance._check_lsof_clean(config)
+    try:
+        maintenance._check_lsof_clean(config)
+    except Exception as exc:
+        raise ScrubAtRestError(
+            "writer file-descriptor gate failed", reason="quiesce-failed", detail="lsof-writers"
+        ) from _safe_cause(exc)
 
 
 def _guarded_apply(path, batch_size, expect_rows, selected=PROVIDERS):
@@ -296,7 +353,12 @@ def _guarded_apply(path, batch_size, expect_rows, selected=PROVIDERS):
         try:
             maintenance._quiesce_services(LIVE_SERVICES, booted_out)
         except Exception as exc:
-            raise ScrubAtRestError("failed to quiesce services", reason="quiesce-failed") from _safe_cause(exc)
+            raise ScrubAtRestError(
+                "failed to quiesce services",
+                reason="quiesce-failed",
+                detail=getattr(exc, "detail", None) or "quiesce-services",
+            ) from _safe_cause(exc)
+        _wait_for_brainbar_exit()
         # A successful bootout does not by itself establish that the job stayed down.
         _quiesced_gates(config)
         _live_requirements(config)

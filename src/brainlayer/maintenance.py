@@ -54,10 +54,11 @@ MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
 
 
 class MaintenanceAbort(RuntimeError):
-    def __init__(self, reason: str, *, code: int = 75) -> None:
+    def __init__(self, reason: str, *, code: int = 75, detail: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
         self.code = code
+        self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -390,12 +391,21 @@ def _bootout_service(service: str) -> bool:
 
 
 def _service_is_loaded(service: str) -> bool:
-    state = is_launchd_label_loaded(
-        _launchd_label(service),
-        command_runner=lambda args: run_command(args, check=False),
-    )
+    try:
+        state = is_launchd_label_loaded(
+            _launchd_label(service),
+            command_runner=lambda args: run_command(args, check=False),
+        )
+    except Exception as exc:
+        raise MaintenanceAbort(
+            f"cannot determine whether launchd service {service} is loaded ({type(exc).__name__})",
+            detail=f"state:{_launchd_label(service)}",
+        ) from None
     if state is None:
-        raise MaintenanceAbort(f"cannot determine whether launchd service {service} is loaded")
+        raise MaintenanceAbort(
+            f"cannot determine whether launchd service {service} is loaded",
+            detail=f"state:{_launchd_label(service)}",
+        )
     return state
 
 
@@ -453,9 +463,18 @@ def _resume_service(repo_root: Path, service: str) -> None:
 
 def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> None:
     for service in services:
-        booted_out[service] = bool(_bootout_service(service))
+        try:
+            booted_out[service] = bool(_bootout_service(service))
+        except Exception as exc:
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service} ({type(exc).__name__})",
+                detail=f"bootout:{_launchd_label(service)}",
+            ) from None
         if not booted_out[service] and _service_is_loaded(service):
-            raise MaintenanceAbort(f"failed to quiesce launchd service {service}; it remains loaded")
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service}; it remains loaded",
+                detail=f"bootout:{_launchd_label(service)}",
+            )
 
 
 def _clean_git_env() -> dict[str, str]:

@@ -42,6 +42,13 @@ SESSION_COLUMNS = [
 ]
 
 
+def _fixture_next(values):
+    try:
+        return next(values)
+    except StopIteration:
+        pytest.fail("quiesce fixture exceeded its sample budget")
+
+
 @pytest.fixture
 def db(tmp_path):
     store = VectorStore(tmp_path / "copy.db")
@@ -282,6 +289,7 @@ def live_guard(db, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(maintenance, "PAUSE_SENTINEL_PATH", pause)
     monkeypatch.setattr(chunk_origin_wipe, "_live_db_candidates", lambda: [db.db_path])
+    loaded_probe = maintenance._service_is_loaded
     events, loaded = [], {}
     monkeypatch.setattr(maintenance, "_run_gates", lambda config: events.append("gates"))
     monkeypatch.setattr(maintenance, "_check_lsof_clean", lambda config: events.append("no-writers"))
@@ -307,7 +315,14 @@ def live_guard(db, tmp_path, monkeypatch):
 
     total = sum(table["rows"] for table in _run(db, True, 100)["tables"].values())
     return SimpleNamespace(
-        events=events, loaded=loaded, pause=pause, backup=backup, receipt=receipt, now=now, total=total
+        events=events,
+        loaded=loaded,
+        loaded_probe=loaded_probe,
+        pause=pause,
+        backup=backup,
+        receipt=receipt,
+        now=now,
+        total=total,
     )
 
 
@@ -811,3 +826,241 @@ def test_exa_cli_survey_and_apply_preserve_example_join_key(db):
         assert text not in result.output
         assert db.conn.execute("SELECT * FROM chunks WHERE id='join-key'").fetchone() == before
         assert db.conn.execute("SELECT * FROM chunks_fts WHERE chunk_id='join-key'").fetchone() == fts_before
+
+
+@pytest.mark.parametrize("mode", ["google_oauth", "context7", "exa_labeled"])
+@pytest.mark.parametrize("failure", ["quiesce", "apply"])
+def test_cli_refusal_and_failure_exit_nonzero_with_value_free_detail(db, live_guard, monkeypatch, mode, failure):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    if failure == "quiesce":
+
+        def fail_stop(service):
+            if service == "drain":
+                raise OSError("private-diagnostic")
+            live_guard.loaded[service] = False
+            return True
+
+        monkeypatch.setattr(maintenance, "_bootout_service", fail_stop)
+        expected_detail = "bootout:com.brainlayer.drain"
+    else:
+
+        def fail_apply(*args):
+            raise OSError("private-diagnostic")
+
+        monkeypatch.setattr(module, "_apply", fail_apply)
+        expected_detail = None
+    total = sum(t["rows"] for t in module._run(db, True, 100, module.PROVIDER_MODES[mode])["tables"].values())
+    result = CliRunner().invoke(
+        app,
+        ["scrub-at-rest", "--db", str(db.db_path), "--providers", mode, "--allow-live-db", "--expect-rows", str(total)],
+    )
+    assert result.exit_code == 1
+    assert "private-diagnostic" not in result.output
+    payload = json.loads(result.stdout)
+    assert payload["detail"] == expected_detail
+    assert payload["reason"] == ("quiesce-failed" if failure == "quiesce" else "scrub-failed")
+
+
+@pytest.mark.parametrize("service", ["fleet-watchdog", "brainbar", "drain"])
+def test_quiesced_loaded_job_names_exact_label(db, live_guard, monkeypatch, service):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda name: name == service)
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module._quiesced_gates(maintenance.MaintenanceConfig(db_path=db.db_path))
+    assert error.value.detail == "loaded:" + maintenance._launchd_label(service)
+
+
+def test_quiesced_lsof_failure_has_gate_detail_without_values(db, live_guard, monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _: False)
+
+    def fail_lsof(config):
+        raise maintenance.MaintenanceAbort("private-command-value")
+
+    monkeypatch.setattr(maintenance, "_check_lsof_clean", fail_lsof)
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    assert error.value.reason == "quiesce-failed"
+    assert error.value.detail == "lsof-writers"
+    assert "private-command-value" not in str(error.value)
+    assert "private-command-value" not in str(error.value.__cause__)
+
+
+@pytest.mark.parametrize("name", ["BrainBar", "BrainBarDaemon"])
+def test_remaining_brainbar_process_names_gate(monkeypatch, name):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    monkeypatch.setattr(
+        maintenance,
+        "run_command",
+        lambda *args, **kwargs: SimpleNamespace(stdout=f"/Applications/BrainBar.app/Contents/MacOS/{name}\n"),
+    )
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module._check_no_brainbar_processes()
+    assert error.value.detail == "process:" + name
+
+
+def test_unknown_launchd_state_names_service(db, live_guard, monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    monkeypatch.setattr(maintenance, "is_launchd_label_loaded", lambda label, **kwargs: None)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", live_guard.loaded_probe)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _: False)
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
+
+
+def test_async_brainbar_exit_settles_before_gate_without_weakening_gate(monkeypatch):
+    from brainlayer import scrub_at_rest as module
+
+    pending = iter([True, True, False])
+    checks = []
+
+    def check():
+        checks.append(True)
+        if _fixture_next(pending):
+            raise module.ScrubAtRestError("still exiting", reason="quiesce-failed", detail="process:BrainBar")
+
+    monkeypatch.setattr(module, "_check_no_brainbar_processes", check)
+    monkeypatch.setattr(module.time, "monotonic", lambda: 0)
+    waits = []
+    monkeypatch.setattr(module.time, "sleep", waits.append)
+    module._wait_for_brainbar_exit()
+    assert len(checks) == 3
+    assert len(waits) == 2
+
+
+def test_brainbar_exit_timeout_refuses_and_retains_process_detail(monkeypatch):
+    from brainlayer import scrub_at_rest as module
+
+    def check():
+        raise module.ScrubAtRestError("still running", reason="quiesce-failed", detail="process:BrainBarDaemon")
+
+    monkeypatch.setattr(module, "_check_no_brainbar_processes", check)
+    ticks = iter([0, 31])
+    monkeypatch.setattr(module.time, "monotonic", lambda: _fixture_next(ticks))
+    monkeypatch.setattr(module.time, "sleep", lambda _: pytest.fail("slept beyond deadline"))
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module._wait_for_brainbar_exit()
+    assert error.value.detail == "process:BrainBarDaemon"
+
+
+def test_daemon_cannot_revive_ui_during_bootout(db, live_guard, monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    def bootout(service):
+        live_guard.events.append(("stop", service))
+        live_guard.loaded[service] = False
+        if service == "brainbar" and live_guard.loaded.get("brainbar-daemon", True):
+            # Daemon UI-watchdog's kickstart fails for an unloaded UI, then openBundle revives it.
+            live_guard.loaded["brainbar"] = True
+        return True
+
+    monkeypatch.setattr(maintenance, "_bootout_service", bootout)
+    result = module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    assert result["tables"]["chunks"]["rows"] == 1
+    stops = [event[1] for event in live_guard.events if isinstance(event, tuple) and event[0] == "stop"]
+    assert stops.index("brainbar-daemon") < stops.index("brainbar")
+
+
+@pytest.mark.parametrize("code", [0, 1, 75])
+def test_oneoff_wrapper_preserves_cli_exit_before_timestamp(tmp_path, code):
+    from pathlib import Path
+
+    interpreter = tmp_path / "fake-python"
+    interpreter.write_text(f"#!/bin/sh\necho '{{\"synthetic\":true}}'\nexit {code}\n")
+    interpreter.chmod(0o700)
+    log = tmp_path / "oneoff.log"
+    result = subprocess.run(
+        [
+            "/bin/sh",
+            str(Path(__file__).resolve().parents[1] / "scripts/scrub-at-rest-oneoff.sh"),
+            str(log),
+            str(interpreter),
+            "--db",
+            str(tmp_path / "never-opened.db"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == code
+    assert log.read_text().splitlines()[-1].endswith(f"exit={code}")
+    assert not (tmp_path / "never-opened.db").exists()
+
+
+def test_unexpected_quiesce_detail_is_not_retained():
+    from brainlayer import scrub_at_rest as module
+
+    error = module.ScrubAtRestError("safe", reason="quiesce-failed", detail="private-value")
+    assert module._failure(error).detail is None
+
+
+@pytest.mark.parametrize("mode", ["google_oauth", "context7", "exa_labeled"])
+@pytest.mark.parametrize("entry", [["-m", "brainlayer"], ["-c", "from brainlayer.cli import app; app()"]])
+def test_real_cli_process_refusal_is_nonzero(tmp_path, mode, entry):
+    import os
+    from pathlib import Path
+
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    result = subprocess.run(
+        [
+            sys.executable,
+            *entry,
+            "scrub-at-rest",
+            "--db",
+            str(tmp_path / "missing.db"),
+            "--dry-run",
+            "--providers",
+            mode,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["reason"] == "scrub-failed"
+    assert payload["detail"] is None
+
+
+def test_process_probe_failure_refuses_without_waiting_or_values(monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    def fail(*args, **kwargs):
+        raise OSError("private-probe-value")
+
+    monkeypatch.setattr(maintenance, "run_command", fail)
+    monkeypatch.setattr(module.time, "sleep", lambda _: pytest.fail("probe failure retried"))
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module._wait_for_brainbar_exit()
+    assert error.value.detail == "brainbar-process-probe"
+    assert "private-probe-value" not in str(error.value.__cause__)
+
+
+def test_launchd_probe_exception_names_service_and_discards_value(db, live_guard, monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    def fail(*args, **kwargs):
+        raise OSError("private-probe-value")
+
+    monkeypatch.setattr(maintenance, "is_launchd_label_loaded", fail)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", live_guard.loaded_probe)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _: False)
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
+    assert "private-probe-value" not in str(error.value.__cause__)
