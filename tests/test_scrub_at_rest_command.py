@@ -42,6 +42,13 @@ SESSION_COLUMNS = [
 ]
 
 
+def _fixture_next(values):
+    try:
+        return next(values)
+    except StopIteration:
+        pytest.fail("quiesce fixture exceeded its sample budget")
+
+
 @pytest.fixture
 def db(tmp_path):
     store = VectorStore(tmp_path / "copy.db")
@@ -920,7 +927,7 @@ def test_async_brainbar_exit_settles_before_gate_without_weakening_gate(monkeypa
 
     def check():
         checks.append(True)
-        if next(pending):
+        if _fixture_next(pending):
             raise module.ScrubAtRestError("still exiting", reason="quiesce-failed", detail="process:BrainBar")
 
     monkeypatch.setattr(module, "_check_no_brainbar_processes", check)
@@ -940,7 +947,7 @@ def test_brainbar_exit_timeout_refuses_and_retains_process_detail(monkeypatch):
 
     monkeypatch.setattr(module, "_check_no_brainbar_processes", check)
     ticks = iter([0, 31])
-    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(module.time, "monotonic", lambda: _fixture_next(ticks))
     monkeypatch.setattr(module.time, "sleep", lambda _: pytest.fail("slept beyond deadline"))
     with pytest.raises(module.ScrubAtRestError) as error:
         module._wait_for_brainbar_exit()
