@@ -334,8 +334,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// Show log for the job alert: the failing job's log, named by the live job-alert state.
     func showJobAlertLog() {
-        guard let alert = jobAlert, case let .readable(document) = observabilityResult else { return }
-        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: document.dbPath))?.key(for: alert)
+        guard jobAlert != nil, case let .readable(document) = observabilityResult,
+              let reason = BrainBarJobAlerts.rawReason(document) else { return }
+        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: document.dbPath))?.key(for: reason)
         let paths = backupSources?.paths ?? .live(databasePath: document.dbPath)
         BrainBarJobAlerts.showLog(forKey: key, paths: paths, workspace: workspace)
     }

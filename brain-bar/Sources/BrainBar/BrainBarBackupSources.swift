@@ -56,6 +56,8 @@ struct BrainBarBackupSources: Sendable {
         let maintenanceLog: URL
         let snapshotDirectory: URL
         let archiveDirectory: URL
+        /// The nightly light pass's log, from its own LaunchAgent; nil when not resolved.
+        var nightlyMaintenanceLog: URL? = nil
 
         /// The same paths the Python jobs use (#1016 R1 B1). Each value comes from the environment
         /// its job runs with: the job's installed LaunchAgent `EnvironmentVariables`, overlaid by the
@@ -88,7 +90,8 @@ struct BrainBarBackupSources: Sendable {
                 archiveLog: path(.jsonlBackup, "BRAINLAYER_JSONL_BACKUP_LOG_PATH", data.appendingPathComponent("logs/jsonl-backup.log")),
                 maintenanceLog: path(.maintenanceWeekly, "BRAINLAYER_MAINTENANCE_LOG_PATH", data.appendingPathComponent("logs/maintenance.log")),
                 snapshotDirectory: path(.backupDaily, "BRAINLAYER_BACKUP_STAGING_DIR", data.appendingPathComponent("backups")),
-                archiveDirectory: path(.jsonlBackup, "BRAINLAYER_JSONL_BACKUP_STAGING_DIR", data.appendingPathComponent("jsonl-backups"))
+                archiveDirectory: path(.jsonlBackup, "BRAINLAYER_JSONL_BACKUP_STAGING_DIR", data.appendingPathComponent("jsonl-backups")),
+                nightlyMaintenanceLog: path(.maintenanceNightly, "BRAINLAYER_MAINTENANCE_LOG_PATH", data.appendingPathComponent("logs/maintenance.log"))
             )
         }
     }

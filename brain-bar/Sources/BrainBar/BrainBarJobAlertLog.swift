@@ -5,6 +5,8 @@ extension BrainBarJobAlerts {
     /// The log a job writes, by its alert key; nil for a job without a log BrainBar knows.
     static func logURL(forKey key: String?, paths: BrainBarBackupSources.Paths) -> URL? {
         switch key {
+        // The nightly LaunchAgent may name its own log; the weekly's is the shared default.
+        case "maintenance-light": paths.nightlyMaintenanceLog ?? paths.maintenanceLog
         case let key? where key.hasPrefix("maintenance-"): paths.maintenanceLog
         case "backup-daily": paths.databaseLog
         case "jsonl-backup": paths.archiveLog

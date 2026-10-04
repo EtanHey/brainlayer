@@ -23,17 +23,28 @@ struct BrainBarJobAlerts: Equatable, Sendable {
             .appendingPathComponent("job-alerts.json")
     }
 
-    /// Nil when the file is missing or unreadable: unknown, never "no alerts".
+    /// Nil when the file is missing, unreadable or not a map of job key → reason string: unknown,
+    /// never "no alerts", so a malformed file can never clear a live alert.
     static func read(url: URL) -> Self? {
         guard let data = FileManager.default.contents(atPath: url.path),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return Self(active: object.reduce(into: [:]) { result, entry in
-            if let reason = entry.value as? String { result[entry.key] = reason }
-        })
+        var active: [String: String] = [:]
+        for (key, value) in object {
+            guard let reason = value as? String else { return nil }
+            active[key] = reason
+        }
+        return Self(active: active)
+    }
+
+    /// The job alert's reason exactly as the job wrote it, before display sanitizing; the key
+    /// lookup must use this, since the shown text may be redacted or shortened.
+    static func rawReason(_ document: ObservabilityDocument) -> String? {
+        guard let errorType = document.backups.errorType, errorType.hasPrefix(observabilityPrefix) else { return nil }
+        return String(errorType.dropFirst(observabilityPrefix.count))
     }
 
     func key(for reason: String) -> String? {
-        active.filter { $0.value == reason }.keys.sorted().first
+        active.filter { $0.value == reason }.keys.min()
     }
 
     /// The document as of this alert state. A job alert no job still reports is cleared; if another
@@ -44,7 +55,7 @@ struct BrainBarJobAlerts: Equatable, Sendable {
         }
         let shown = String(errorType.dropFirst(Self.observabilityPrefix.count))
         if active.values.contains(shown) { return document }
-        let remaining = active.keys.sorted().first.flatMap { active[$0] }
+        let remaining = active.keys.min().flatMap { active[$0] }
         return document.replacingBackupsErrorType(remaining.map { Self.observabilityPrefix + $0 })
     }
 

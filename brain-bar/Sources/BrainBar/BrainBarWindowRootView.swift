@@ -915,17 +915,19 @@ private struct BrainBarDashboardView: View {
         )
     }
 
-    /// The job alert (#1031) the attention list shows, with the database its producer used.
-    private var jobAlert: (text: String, dbPath: String)? {
-        guard case let .readable(document) = effectiveObservabilityResult else { return nil }
+    /// The job alert (#1031) the attention list shows: its shown text, the job's raw reason (the
+    /// key lookup needs it unsanitized) and the database its producer used.
+    private var jobAlert: (text: String, reason: String, dbPath: String)? {
+        guard case let .readable(document) = effectiveObservabilityResult,
+              let reason = BrainBarJobAlerts.rawReason(document) else { return nil }
         let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale)
         guard status.errorIsJobAlert, let error = status.error, error.tone == .red else { return nil }
-        return (error.text, document.dbPath)
+        return (error.text, reason, document.dbPath)
     }
 
 #if BRAINBAR_UI
-    private func showJobAlertLog(_ alert: (text: String, dbPath: String)) {
-        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: alert.dbPath))?.key(for: alert.text)
+    private func showJobAlertLog(_ alert: (text: String, reason: String, dbPath: String)) {
+        let key = BrainBarJobAlerts.read(url: BrainBarJobAlerts.url(dbPath: alert.dbPath))?.key(for: alert.reason)
         BrainBarJobAlerts.showLog(forKey: key, paths: .live(databasePath: alert.dbPath), workspace: BrainBarWorkspace())
     }
 #endif

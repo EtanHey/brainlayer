@@ -7,11 +7,10 @@ import XCTest
 @MainActor
 final class BrainBarJobAlertTests: XCTestCase {
     private let alert = "BrainLayer light maintenance failed; check the maintenance log"
-    private var root: URL!
+    private let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("brainbar-job-alert-\(UUID().uuidString)", isDirectory: true)
 
     override func setUpWithError() throws {
-        root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("brainbar-job-alert-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("logs"), withIntermediateDirectories: true)
     }
 
@@ -62,6 +61,26 @@ final class BrainBarJobAlertTests: XCTestCase {
         )
     }
 
+    func test_a_schema_invalid_alert_file_is_unknown_not_empty() throws {
+        // Macroscope #1062: a null reason must not read as "no alerts" and clear a live one.
+        let url = try writeAlerts(#"{"maintenance-light": null}"#)
+        XCTAssertNil(BrainBarJobAlerts.read(url: url))
+        XCTAssertEqual(
+            BrainBarJobAlerts.reconcile(document(errorType: "job_alert:\(alert)"), with: BrainBarJobAlerts.read(url: url))
+                .backups.errorType,
+            "job_alert:\(alert)"
+        )
+    }
+
+    func test_show_log_finds_the_job_by_the_raw_reason_not_the_sanitized_text() {
+        // Macroscope #1062: the shown text is sanitized; the job key is matched on the raw reason.
+        let raw = "BrainLayer light maintenance failed: token sk-ant-api03-\(String(repeating: "x", count: 40))"
+        let doc = document(errorType: "job_alert:\(raw)")
+        XCTAssertEqual(BrainBarJobAlerts.rawReason(doc), raw)
+        XCTAssertEqual(BrainBarJobAlerts(active: ["maintenance-light": raw]).key(for: raw), "maintenance-light")
+        XCTAssertNil(BrainBarJobAlerts.rawReason(document(errorType: "drive_credentials_missing")))
+    }
+
     // MARK: a clean run clears the alert
 
     func test_a_clean_run_clears_a_job_alert_before_the_next_observability_write() {
@@ -95,12 +114,14 @@ final class BrainBarJobAlertTests: XCTestCase {
         try encoder.encode(document(errorType: "job_alert:\(alert)")).write(to: observability)
         _ = try writeAlerts(#"{"maintenance-light": "\#(alert)"}"#)
         guard case let .readable(live) = ObservabilityReader.readReconciled(url: observability, environment: [:]) else {
-            return XCTFail("fixture must be readable")
+            XCTFail("fixture must be readable")
+            return
         }
         XCTAssertEqual(live.backups.errorType, "job_alert:\(alert)")
         _ = try writeAlerts("{}")
         guard case let .readable(cleared) = ObservabilityReader.readReconciled(url: observability, environment: [:]) else {
-            return XCTFail("fixture must be readable")
+            XCTFail("fixture must be readable")
+            return
         }
         XCTAssertNil(cleared.backups.errorType)
     }
@@ -114,6 +135,26 @@ final class BrainBarJobAlertTests: XCTestCase {
             maintenanceLog: root.appendingPathComponent("logs/maintenance.log"),
             snapshotDirectory: root, archiveDirectory: root
         )
+    }
+
+    func test_the_nightly_alert_opens_the_nightly_jobs_own_log() {
+        // Macroscope #1062: the nightly LaunchAgent can name its own BRAINLAYER_MAINTENANCE_LOG_PATH.
+        var paths = self.paths
+        paths.nightlyMaintenanceLog = root.appendingPathComponent("logs/nightly.log")
+        XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "maintenance-light", paths: paths), paths.nightlyMaintenanceLog)
+        XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "maintenance-full", paths: paths), paths.maintenanceLog)
+    }
+
+    func test_the_nightly_log_path_comes_from_the_nightly_launch_agent() throws {
+        let home = root.appendingPathComponent("home")
+        let agents = home.appendingPathComponent("Library/LaunchAgents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let plist: [String: Any] = ["EnvironmentVariables": ["BRAINLAYER_MAINTENANCE_LOG_PATH": "/x/nightly.log"]]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: agents.appendingPathComponent("\(BrainLayerLaunchdJob.maintenanceNightly.launchdLabel).plist"))
+        let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home)
+        XCTAssertEqual(live.nightlyMaintenanceLog, URL(fileURLWithPath: "/x/nightly.log"))
+        XCTAssertEqual(live.maintenanceLog, home.appendingPathComponent(".local/share/brainlayer/logs/maintenance.log"))
     }
 
     func test_each_job_alert_key_names_its_own_log() {
@@ -197,7 +238,10 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
     }
 
     func test_any_other_red_reason_still_shows_under_the_badge() throws {
-        guard case let .readable(doc) = BrainBarDashboardFixture.healthyObservabilityResult else { return XCTFail() }
+        guard case let .readable(doc) = BrainBarDashboardFixture.healthyObservabilityResult else {
+            XCTFail("fixture must be readable")
+            return
+        }
         let b = doc.backups
         let stale = ObservabilityDocument(
             schemaVersion: 1, generatedAt: doc.generatedAt, dbPath: doc.dbPath, windowHours: 24,
