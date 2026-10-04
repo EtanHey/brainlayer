@@ -112,14 +112,16 @@ struct BrainBarJobAlerts: Equatable, Sendable {
 extension BadgeStatePresentation {
     /// The menu badge as of the live job-alert state (Codex #1062 r1 B2), by the same rule as the
     /// Backups page and Dashboard: a `job_alert_<key>` issue whose job no longer reports an alert
-    /// is dropped. An unknown alert state, or a badge without per-issue messages, is left as read.
+    /// is dropped, and one whose job re-reported carries the job's current reason (Macroscope
+    /// #1062). An unknown alert state, or a badge without per-issue messages, is left as read.
     func reconciled(with alerts: BrainBarJobAlerts?) -> Self {
         let prefix = "job_alert_"
         guard let alerts, activeMessages.count == activeCodes.count else { return self }
-        let kept = zip(activeCodes, activeMessages).filter { code, _ in
-            !code.hasPrefix(prefix) || alerts.active[String(code.dropFirst(prefix.count))] != nil
+        let kept = zip(activeCodes, activeMessages).compactMap { code, message -> (String, String)? in
+            guard code.hasPrefix(prefix) else { return (code, message) }
+            return alerts.active[String(code.dropFirst(prefix.count))].map { (code, $0) }
         }
-        guard kept.count != activeCodes.count else { return self }
+        guard kept.map(\.0) != activeCodes || kept.map(\.1) != activeMessages else { return self }
         return Self(
             badgeOn: !kept.isEmpty,
             reason: kept.map(\.1).joined(separator: "; "),

@@ -431,6 +431,20 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         XCTAssertFalse(BrainBarStatusPopoverController.menuRowTitles(for: recovered).contains("Show log"))
     }
 
+    /// Macroscope #1062: a job that re-reports with a new reason (drive-consent does) shows the live
+    /// reason, never the badge file's older copy.
+    func test_reconciling_the_badge_shows_the_jobs_current_reason() {
+        let raw = BadgeStatePresentation(
+            badgeOn: true, reason: "Drive consent expires in 2 days",
+            activeCodes: ["job_alert_drive-consent"], activeMessages: ["Drive consent expires in 2 days"]
+        )
+        let live = raw.reconciled(with: BrainBarJobAlerts(active: ["drive-consent": "Drive consent expired; reconnect"]))
+        XCTAssertTrue(live.badgeOn)
+        XCTAssertEqual(live.reason, "Drive consent expired; reconnect")
+        XCTAssertEqual(live.activeMessages, ["Drive consent expired; reconnect"])
+        XCTAssertEqual(live.activeCodes, ["job_alert_drive-consent"])
+    }
+
     func test_reconciling_the_badge_keeps_other_issues_and_never_guesses_from_an_unknown_file() {
         let raw = BadgeStatePresentation(
             badgeOn: true, reason: "Queue backed up; \(alert)",
