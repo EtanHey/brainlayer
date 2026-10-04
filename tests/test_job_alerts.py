@@ -2,6 +2,8 @@
 
 import datetime as dt
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -57,31 +59,56 @@ def test_database_backup_exit_reports_and_clears(monkeypatch):
     assert notices[1] == ("backup-daily", None)
 
 
-@pytest.mark.parametrize("code", [1, 76])
-def test_weekly_maintenance_abort_reports_failure(monkeypatch, isolated_maintenance_log, code):
+@pytest.mark.parametrize(
+    "code, reason",
+    [
+        (1, "fixture"),
+        (76, "fixture"),
+        (77, "maintenance lock timed out"),
+        (75, "failed to resume 1 launchd service(s): watch"),
+        (75, "failed to quiesce launchd service watch; it remains loaded"),
+        (75, "unknown maintenance failure"),
+        (75, "outside quiet window"),
+        (75, "prefix queue depth growing: before=1 after=2"),
+        (75, "queue depth growing: before=1 after=2; failure"),
+        (75, "unexpected writer holds brainlayer db: pid=42 command=FAILED TO RESUME fd=9u"),
+        (1, "queue depth growing: before=1 after=2"),
+    ],
+)
+def test_weekly_maintenance_abort_reports_failure(monkeypatch, isolated_maintenance_log, code, reason):
     from brainlayer import job_alerts, maintenance
 
     notices = []
     monkeypatch.setattr(job_alerts, "report", lambda key, reason: notices.append((key, reason)))
 
     def abort(mode, *, dry_run):
-        raise maintenance.MaintenanceAbort("fixture", code=code)
+        raise maintenance.MaintenanceAbort(reason, code=code)
 
     monkeypatch.setattr(maintenance, "run_maintenance", abort)
     assert maintenance.main(["--full"]) == code
     assert notices[0][0] == "maintenance-full"
-    assert "fixture" in notices[0][1]
+    assert reason in notices[0][1]
     assert "Retry" in notices[0][1]
     assert str(maintenance.MaintenanceConfig().log_path) in notices[0][1]
     event = json.loads(isolated_maintenance_log.read_text())
     assert event["status"] == "aborted"
     assert event["mode"] == "full"
-    assert event["reason"] == "fixture"
+    assert event["reason"] == reason
     assert dt.datetime.fromisoformat(event["ts"]).tzinfo is not None
 
 
-@pytest.mark.parametrize("reason", ["outside quiet window", "writer active"])
-def test_maintenance_deferral_logs_without_failure_alert(monkeypatch, isolated_maintenance_log, reason):
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "outside quiet window: now=2026-10-05T12:00:00+00:00 start_hour=4 duration_minutes=30",
+        "recent queue write activity: 2 file(s) modified recently",
+        "queue depth growing: before=1 after=2",
+        "unexpected writer holds brainlayer db: pid=42 command=python3 fd=9u",
+    ],
+)
+@pytest.mark.parametrize("uppercase", [False, True])
+def test_maintenance_deferral_logs_without_failure_alert(monkeypatch, isolated_maintenance_log, reason, uppercase):
+    reason = reason.upper() if uppercase else reason
     from brainlayer import job_alerts, maintenance
 
     notices = []
@@ -161,3 +188,15 @@ def test_unexpected_maintenance_failure_alert_does_not_expose_exception_value(mo
     assert event["reason"] == "RuntimeError"
     assert "private-value" not in isolated_maintenance_log.read_text()
     assert dt.datetime.fromisoformat(event["ts"]).tzinfo is not None
+
+
+def test_maintenance_deliberate_deferrals_match_swift_allowlist():
+    from brainlayer import maintenance
+
+    swift = (
+        Path(__file__).resolve().parents[1] / "brain-bar/Sources/BrainBar/BrainLayerLaunchdActivity.swift"
+    ).read_text()
+    block = swift.split("static let deliberateDeferrals = [", 1)[1].split("]", 1)[0]
+    patterns = re.findall(r'#"(.*?)"#', block)
+    assert len(patterns) == 4
+    assert tuple(patterns) == maintenance.DELIBERATE_DEFERRALS

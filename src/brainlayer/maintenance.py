@@ -8,6 +8,7 @@ import fcntl
 import functools
 import json
 import os
+import re
 import signal
 import sqlite3
 import statistics
@@ -56,6 +57,20 @@ SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
 SEARCH_LATENCY_FAILURE_MS = 500.0
 SEARCH_LATENCY_SAMPLES = 5
+# Keep in parity with BrainLayerMaintenanceExit.deliberateDeferrals in BrainBar.
+# Exit 75 is also used for real failures; only these whole reasons are deliberate skips.
+DELIBERATE_DEFERRALS = (
+    r"^outside quiet window: now=\S+ start_hour=\d+ duration_minutes=\d+$",
+    r"^recent queue write activity: \d+ file\(s\) modified recently$",
+    r"^queue depth growing: before=\d+ after=\d+$",
+    r"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$",
+)
+
+
+def _is_deliberate_deferral(reason: str) -> bool:
+    return "failed to resume" not in reason.casefold() and any(
+        re.fullmatch(pattern, reason, flags=re.IGNORECASE) for pattern in DELIBERATE_DEFERRALS
+    )
 
 
 class MaintenanceAbort(RuntimeError):
@@ -1069,7 +1084,7 @@ def _result_to_dict(result: MaintenanceResult) -> dict[str, Any]:
 
 
 def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
-    return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the gate; inspect {log_path}"
+    return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the failure; inspect {log_path}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1085,12 +1100,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = run_maintenance(mode, dry_run=args.dry_run)
     except MaintenanceAbort as exc:
+        deferred = exc.code == 75 and _is_deliberate_deferral(exc.reason)
         if not args.dry_run:
             _write_log(
                 log_path,
-                {"status": "deferred" if exc.code == 75 else "aborted", "mode": mode, "reason": exc.reason},
+                {"status": "deferred" if deferred else "aborted", "mode": mode, "reason": exc.reason},
             )
-            if exc.code != 75:
+            if not deferred:
                 from .job_alerts import report
 
                 report(f"maintenance-{mode}", _failure_alert(mode, exc.reason, log_path))
