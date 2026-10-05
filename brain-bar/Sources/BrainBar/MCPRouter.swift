@@ -823,7 +823,8 @@ final class MCPRouter: @unchecked Sendable {
                     query: query,
                     results: typedResults,
                     total: typedResults.count,
-                    detail: args["detail"] as? String ?? "compact"
+                    detail: args["detail"] as? String ?? "compact",
+                    scopedProject: project
                 ),
                 [:]
             )
@@ -857,7 +858,8 @@ final class MCPRouter: @unchecked Sendable {
                            let results = structured["results"] as? [[String: Any]] {
                             textSection = TextFormatter.formatSearchResults(
                                 query: query, results: results.map(SearchResult.init(payload:)),
-                                total: structured["total"] as? Int ?? results.count
+                                total: structured["total"] as? Int ?? results.count,
+                                scopedProject: project
                             ) + hybridSearchNotices(structured)
                             kgSection = localKGSection()
                         } else {

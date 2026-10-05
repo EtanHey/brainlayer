@@ -81,6 +81,15 @@ try:
             if tool == 'brain_search' and arguments.get('detail') != 'full' and os.environ.get('MCP_DIET_HYBRID') == '1':
                 assert 'decision summary ' in text and 'content snippet ' in text, text
             rows.append(dict(item=item, query=query, response_bytes=len(raw), text_bytes=len(text.encode())))
+            if tool == 'brain_search' and arguments.get('detail') != 'full':
+                ids = [line.removeprefix('- ID: ').split('|', 1)[0].strip()
+                       for line in text.splitlines() if line.startswith('- ID: ')]
+                assert len(ids) == 5 and len(set(ids)) == 5, text
+                for chunk_id in ids:
+                    _, expanded = request('tools/call', {'name': 'brain_expand', 'arguments': {
+                        'chunk_id': chunk_id, 'before': 0, 'after': 0}})
+                    expanded_text = '\n'.join(c.get('text', '') for c in expanded['content'])
+                    assert 'fixture decision' in expanded_text, (chunk_id, expanded_text)
     raw, result = request('tools/list')
     with open(receipt, 'w') as output:
         json.dump(dict(rows=rows, tools_list_bytes=len(raw)), output, indent=2)

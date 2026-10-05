@@ -23,6 +23,12 @@ final class BrainBarOperationReceiptTests: XCTestCase {
         XCTAssertNil(BrainBarOperationReceipt.searchCount(in: "some search text with 10 results"))
     }
 
+    func testCompactSearchCountRecognizesOnlyItsLabeledHeader() {
+        XCTAssertEqual(BrainBarOperationReceipt.searchCount(in: "## \"x\" 3/8\nID|score|project|date|source; S=summary P=preview\n"), 3)
+        XCTAssertNil(BrainBarOperationReceipt.searchCount(in: "## \"x\" 3/8\nother text"))
+        XCTAssertNil(BrainBarOperationReceipt.searchCount(in: "P: ## \"x\" 3/8\n"))
+    }
+
     func testReceiptFormatsMeasuredAndUnavailableFields() {
         let now = Date(timeIntervalSince1970: 1_000)
         XCTAssertEqual(

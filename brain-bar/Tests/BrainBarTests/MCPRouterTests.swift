@@ -589,8 +589,8 @@ final class MCPRouterTests: XCTestCase {
         let compact = try toolText(router.handle(toolCall(id: 171, name: "brain_search", arguments: ["query": "fixture"])))
         XCTAssertTrue(compact.contains("hybrid-canonical-id"), compact)
         XCTAssertTrue(compact.contains("0.9876"), compact)
-        XCTAssertTrue(compact.contains("Preview: Hybrid fixture preview"), compact)
-        XCTAssertTrue(compact.contains("Summary: Separate hybrid summary with different information"), compact)
+        XCTAssertTrue(compact.contains("P: Hybrid fixture preview"), compact)
+        XCTAssertTrue(compact.contains("S: Separate hybrid summary with different information"), compact)
         XCTAssertTrue(compact.contains("FTS fallback"), compact)
         XCTAssertFalse(compact.contains("KG Facts"), compact)
         let full = try toolText(router.handle(toolCall(id: 172, name: "brain_search", arguments: ["query": "fixture", "detail": "full"])))
@@ -1666,7 +1666,7 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Socket handling code"), "Should contain the brainbar project chunk content")
         XCTAssertFalse(text.contains("Socket connection code"), "Should not contain other project chunk")
         XCTAssertTrue(text.contains("f-1"), "Compact results retain canonical chunk IDs")
@@ -1696,7 +1696,7 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Socket handling code"), "Should contain chunk content")
         XCTAssertTrue(text.contains("- ID: detail-1"), "full detail must expose chunk_id for chaining")
     }
@@ -1727,7 +1727,7 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Critical security finding"), "Should contain the high-importance chunk content")
         XCTAssertFalse(text.contains("Security review notes"), "Should not contain low-importance chunk")
         XCTAssertTrue(text.contains("i-1"), "Compact results retain canonical chunk IDs")
@@ -1759,7 +1759,7 @@ No results found.
         let text = content?.first?["text"] as? String ?? ""
 
         XCTAssertTrue(text.contains("Sagit meeting notes"))
-        XCTAssertTrue(text.contains("1 of 1 shown"), "Only one matching source should be returned")
+        XCTAssertTrue(text.contains("1/1"), "Only one matching source should be returned")
     }
 
     func testBrainSearchSourceAllKeepsKGAugmentation() throws {
@@ -2011,10 +2011,10 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("Search "), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Agent message still unread"), "Should contain the unread chunk content")
         XCTAssertTrue(text.contains("unread-1"), "Compact results retain canonical chunk IDs")
-        XCTAssertTrue(text.contains("result"), "Should contain formatted result text")
+        XCTAssertTrue(text.contains("ID|score|project|date|source"), "Should label compact result columns")
     }
 
     func testBrainArchiveHidesChunkFromDefaultSearch() throws {

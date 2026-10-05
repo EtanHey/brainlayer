@@ -45,8 +45,16 @@ struct BrainBarOperationReceipt: Codable, Equatable, Sendable {
 
     /// Known providers emit this header; unknown shapes stay unavailable.
     static func searchCount(in text: String) -> Int? {
-        for line in text.split(separator: "\n") {
+        let lines = text.split(separator: "\n")
+        for (index, line) in lines.enumerated() {
             let value = String(line)
+            if value.hasPrefix("## \""), index + 1 < lines.count,
+               lines[index + 1] == TextFormatter.compactSearchLegend,
+               let range = value.range(of: "\" ", options: .backwards) {
+                let counts = value[range.upperBound...].split(separator: "/", omittingEmptySubsequences: false)
+                if counts.count == 2, let shown = Int(counts[0]), let total = Int(counts[1]),
+                   shown >= 0, total >= shown { return shown }
+            }
             if value.hasPrefix("## Search results for "),
                let range = value.range(of: " - ", options: .backwards),
                let count = Int(value[range.upperBound...].split(separator: " ").first ?? "") {
