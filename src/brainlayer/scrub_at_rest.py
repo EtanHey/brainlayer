@@ -303,7 +303,7 @@ def _wait_for_verified_backup(path, timeout_seconds):
         )
         if remaining <= 0:
             raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
-        time.sleep(min(30.0, remaining))
+        time.sleep(min(30.0, remaining / 2))
         # Inspect the final receipt only within the deadline and window reserve.
         window_left = _remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS
         if time.monotonic() > deadline or window_left <= 0:

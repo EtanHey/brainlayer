@@ -1093,9 +1093,14 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
     def sleep(seconds):
         assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        elapsed[0] += seconds + (1 if outcome == "oversleep" and len(sleeps) == 2 else 0)
+        elapsed[0] += seconds + (0.01 if outcome == "final-poll" else 0)
+        if outcome == "oversleep" and len(sleeps) == 2:
+            elapsed[0] = 91
         sleeps.append(seconds)
-        if len(sleeps) == {"appears": 2, "final-poll": 3, "oversleep": 3}.get(outcome):
+        arrival = (
+            elapsed[0] >= 85 if outcome == "final-poll" else len(sleeps) == {"appears": 2, "oversleep": 3}.get(outcome)
+        )
+        if arrival:
             live_guard.backup.write_text(json.dumps(live_guard.receipt) + "\n")
 
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep))
@@ -1127,7 +1132,7 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
     )
     if outcome in {"appears", "final-poll", "dry-run"}:
         assert result.exit_code == 0, result.output
-        assert len(sleeps) == {"appears": 2, "final-poll": 3, "dry-run": 0}[outcome]
+        assert len(sleeps) == {"appears": 2, "final-poll": 5, "dry-run": 0}[outcome]
         assert len(locks) == (0 if outcome == "dry-run" else 1)
     else:
         assert result.exit_code == 1, result.output
@@ -1138,7 +1143,7 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
         if outcome != "zero":
             assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        assert elapsed[0] == {"timeout": 90, "oversleep": 91, "window": 1, "zero": 0, "missing-count": 0}[outcome]
+        assert elapsed[0] == {"timeout": 90, "oversleep": 91, "window": 0.5, "zero": 0, "missing-count": 0}[outcome]
 
 
 @pytest.mark.parametrize("guarded", [False, True])
