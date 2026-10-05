@@ -63,6 +63,7 @@ _SCRUBBED_ENV_PREFIXES = ("BRAINLAYER_CHANGED_FILES", "BRAINLAYER_PREPUSH")
 
 def _script_env() -> dict[str, str]:
     env = os.environ.copy()
+    env["GOLEMS_HEAVY_SUITE_HELPER"] = os.devnull  # Never queue synthetic suites on the fleet lock.
     for key in [key for key in env if key.startswith(_SCRUBBED_ENV_PREFIXES)]:
         env.pop(key, None)
     # An inherited GIT_DIR/GIT_WORK_TREE overrides the cwd, so a script copied OUTSIDE a repo would
@@ -159,6 +160,7 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
             [
                 "#!/usr/bin/env bash",
                 "{",
+                '  echo "PREPUSH=${BRAINLAYER_PREPUSH:-<unset>}"',
                 '  echo "SCOPE=${BRAINLAYER_PREPUSH_SCOPE:-<unset>}"',
                 '  echo "RANGE=${BRAINLAYER_CHANGED_FILES_RANGE:-<unset>}"',
                 '  echo "FILES=${BRAINLAYER_CHANGED_FILES:-<unset>}"',
@@ -1905,3 +1907,48 @@ def test_a_mapped_watchdog_change_still_falls_back_when_another_source_is_unmapp
     assert result.returncode == 0
     assert "falling back to full pytest unit suite" in result.stdout
     assert "src/brainlayer/no_such_module.py" in result.stdout
+
+
+@pytest.mark.parametrize("helper_mode", ["present", "missing", "unset-home", "empty-override"])
+@pytest.mark.parametrize("suite_exit", [0, 7])
+def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_exit: int) -> None:
+    helper_exists = helper_mode == "present"
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    suite = repo / "scripts" / "run_tests.sh"
+    suite.write_text(suite.read_text().replace("exit 0", f"exit {suite_exit}"))
+    helper = tmp_path / "helper with spaces.py"
+    if helper_exists:
+        helper.write_text(
+            "import os, subprocess, sys\n"
+            "assert sys.argv[1:] == ['--', 'python3', 'scripts/ci/run_with_deadline.py', "
+            "'--seconds', '1800', '--label', 'pre-push', '--', 'bash', 'scripts/run_tests.sh']\n"
+            "print('FAKE HEAVY HELPER', flush=True)\n"
+            "sys.exit(subprocess.call(sys.argv[2:]))\n"
+        )
+    env = _script_env()
+    env.update(
+        HOME=str(tmp_path),
+        GOLEMS_HEAVY_LOCK=str(tmp_path / "heavy.lock"),
+        GOLEMS_HEAVY_SUITE_HELPER=str(helper),
+        HOOK_ENV_LOG=str(env_log),
+    )
+    if helper_mode == "unset-home":
+        env.pop("HOME", None)
+        env.pop("GOLEMS_HEAVY_SUITE_HELPER", None)
+    elif helper_mode == "empty-override":
+        env["GOLEMS_HEAVY_SUITE_HELPER"] = ""
+    git_keys = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR")
+    env.update(dict.fromkeys(git_keys, "synthetic"))
+    command = ["bash", str(repo / ".githooks" / "pre-push")]
+    result = subprocess.run(  # noqa: S603 - fixture hook, returncode asserted by callers
+        command, cwd=repo, env=env, input="", capture_output=True, text=True, timeout=20, check=False
+    )
+    assert result.returncode == suite_exit, result.stdout + result.stderr
+    assert env_log.exists(), "suite did not run"
+    assert (
+        "FAKE HEAVY HELPER" in result.stdout
+        if helper_exists
+        else ("heavy-suite: helper missing; running unqueued" in result.stderr)
+    )
+    assert all(f"{key}=<unset>" in env_log.read_text() for key in git_keys)
+    assert "PREPUSH=1" in env_log.read_text()

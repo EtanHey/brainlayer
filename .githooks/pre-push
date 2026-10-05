@@ -97,12 +97,15 @@ if [ "$tag_count" -gt 0 ]; then
   fi
 fi
 
-BRAINLAYER_PREPUSH=1 env \
-  -u GIT_DIR \
-  -u GIT_INDEX_FILE \
-  -u GIT_WORK_TREE \
-  -u GIT_COMMON_DIR \
-  python3 scripts/ci/run_with_deadline.py --seconds 1800 --label pre-push -- bash scripts/run_tests.sh
+HS="${GOLEMS_HEAVY_SUITE_HELPER:-${HOME:-}/Gits/golems/scripts/hooks/heavy-suite.py}"
+if [ -f "$HS" ] && command -v python3 >/dev/null; then
+  BRAINLAYER_PREPUSH=1 env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+    python3 "$HS" -- python3 scripts/ci/run_with_deadline.py --seconds 1800 --label pre-push -- bash scripts/run_tests.sh
+else
+  echo "heavy-suite: helper missing; running unqueued" >&2
+  BRAINLAYER_PREPUSH=1 env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+    python3 scripts/ci/run_with_deadline.py --seconds 1800 --label pre-push -- bash scripts/run_tests.sh
+fi
 exit_status=$?
 
 if [ $exit_status -ne 0 ]; then
