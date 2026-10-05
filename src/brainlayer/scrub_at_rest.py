@@ -52,6 +52,7 @@ LIVE_SERVICES = (
 
 
 BRAINBAR_EXIT_TIMEOUT_SECONDS = 30.0
+BACKUP_WAIT_SAFE_MARGIN_SECONDS = 60.0
 _QUIESCE_DETAILS = frozenset(
     {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
     | {
@@ -285,6 +286,30 @@ def _live_requirements(config):
         raise ScrubAtRestError("verified backup within 24 hours required", reason="verified-backup-required")
 
 
+def _wait_for_verified_backup(path, timeout_seconds):
+    """Wait without holding a maintenance lock or stopping any writer services."""
+    config = maintenance.MaintenanceConfig(db_path=path, backup_reuse_max_age_hours=24)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            _live_requirements(config)
+            return
+        except ScrubAtRestError as exc:
+            if exc.reason != "verified-backup-required":
+                raise
+        remaining = min(
+            deadline - time.monotonic(),
+            maintenance._remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS,
+        )
+        if remaining <= 0:
+            raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
+        time.sleep(min(30.0, remaining))
+        # The final poll may have produced a receipt; inspect it on the next loop.
+        # Preserve the window margin even when that final receipt is available.
+        if maintenance._remaining_quiet_window_seconds(config) <= BACKUP_WAIT_SAFE_MARGIN_SECONDS:
+            raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
+
+
 def _check_no_brainbar_processes():
     # An unregistered UI can open the daemon bundle even after its job is booted out.
     try:
@@ -400,12 +425,13 @@ def scrub_at_rest(
     providers: str = "google_oauth",
     allow_live_db: bool = False,
     expect_rows: int | None = None,
+    wait_for_backup_seconds: int = 0,
 ) -> dict:
     """Read-only surveys need no opt-in; guarded applies require a current row total."""
     failure = None
     try:
         with value_free_sqlite_logging():
-            if providers not in PROVIDER_MODES or not 1 <= batch_size <= 1000:
+            if providers not in PROVIDER_MODES or not 1 <= batch_size <= 1000 or wait_for_backup_seconds < 0:
                 raise ValueError("invalid scrub options")
             selected = PROVIDER_MODES[providers]
             try:
@@ -422,6 +448,8 @@ def scrub_at_rest(
             if dry_run:
                 with ReadonlyStore(path) as store:
                     return _run(store, True, batch_size, selected)
+            if allow_live_db and wait_for_backup_seconds > 0:
+                _wait_for_verified_backup(path, wait_for_backup_seconds)
             with _maintenance_lock(path):
                 path = assert_not_live_db(path, allow_live=allow_live_db)
                 if allow_live_db:

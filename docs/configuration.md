@@ -188,6 +188,11 @@ if the current total differs.
 The guarded mode holds the maintenance lock, requires an active enrichment pause
 sentinel and a verified backup receipt for that DB no older than 24 hours, and
 reuses VACUUM's quiet-window (04:00–06:00 local), idle-queue and writer gates.
+`--wait-for-backup-seconds N` (default 0) lets guarded live apply poll every 30 seconds
+for a qualifying receipt before taking the lock or quiescing services. Dry runs and
+offline applies ignore it. Waiting ends at N seconds or when only 60 seconds remain
+in the quiet window, with `verified-backup-timeout`; the default still refuses with
+`verified-backup-required`. Receipt freshness continues to use `attempted_at`.
 It quiesces the fleet/throughput/tier-0 watchdogs, health-check healer, BrainBar UI/daemon,
 hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using maintenance's service helpers. It checks
 that jobs remain unloaded, BrainBar processes are gone and no writable database

@@ -2883,6 +2883,12 @@ def scrub_at_rest_command(
     expect_rows: int | None = typer.Option(
         None, "--expect-rows", min=0, help="Required guarded apply total from the preceding dry run."
     ),
+    wait_for_backup_seconds: int = typer.Option(
+        0,
+        "--wait-for-backup-seconds",
+        min=0,
+        help="Wait for a verified backup before guarded apply; dry runs ignore this option.",
+    ),
 ) -> None:
     """Redact provider credentials on a copy or a guarded runtime DB; print counts only."""
     from ..scrub_at_rest import scrub_at_rest
@@ -2895,6 +2901,7 @@ def scrub_at_rest_command(
             batch_size=batch_size,
             allow_live_db=allow_live_db,
             expect_rows=expect_rows,
+            wait_for_backup_seconds=wait_for_backup_seconds,
         )
     except Exception as exc:
         typer.echo(

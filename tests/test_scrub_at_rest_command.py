@@ -1064,3 +1064,95 @@ def test_launchd_probe_exception_names_service_and_discards_value(db, live_guard
         module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
     assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
     assert "private-probe-value" not in str(error.value.__cause__)
+
+
+@pytest.mark.parametrize("mode", ["google_oauth", "context7", "exa_labeled"])
+@pytest.mark.parametrize("outcome", ["appears", "final-poll", "timeout", "window", "zero", "dry-run"])
+def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, outcome):
+    from contextlib import contextmanager
+
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    live_guard.backup.unlink()
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", str(db.db_path.parent / "absent.sock"))
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    elapsed, sleeps, locks = [0.0], [], []
+    factory = maintenance.MaintenanceConfig
+
+    def config(**kwargs):
+        result = factory(**kwargs)
+        start = live_guard.now if outcome != "window" else live_guard.now.replace(hour=5, minute=58, second=59)
+        result.now_fn = lambda: start + dt.timedelta(seconds=elapsed[0])
+        return result
+
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", config)
+
+    def sleep(seconds):
+        assert not locks
+        assert not any(isinstance(e, tuple) for e in live_guard.events)
+        elapsed[0] += seconds
+        sleeps.append(seconds)
+        if len(sleeps) == {"appears": 2, "final-poll": 3}.get(outcome):
+            live_guard.backup.write_text(json.dumps(live_guard.receipt) + "\n")
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep))
+    lock = module._maintenance_lock
+
+    @contextmanager
+    def tracked_lock(path):
+        locks.append(path)
+        with lock(path):
+            yield
+
+    monkeypatch.setattr(module, "_maintenance_lock", tracked_lock)
+    total = sum(t["rows"] for t in module._run(db, True, 100, module.PROVIDER_MODES[mode])["tables"].values())
+    flags = ["--dry-run"] if outcome == "dry-run" else ["--allow-live-db", "--expect-rows", str(total)]
+    result = CliRunner().invoke(
+        app,
+        [
+            "scrub-at-rest",
+            "--db",
+            str(db.db_path),
+            "--providers",
+            mode,
+            "--wait-for-backup-seconds",
+            "0" if outcome == "zero" else "90",
+            *flags,
+        ],
+    )
+    if outcome in {"appears", "final-poll", "dry-run"}:
+        assert result.exit_code == 0, result.output
+        assert len(sleeps) == {"appears": 2, "final-poll": 3, "dry-run": 0}[outcome]
+        assert len(locks) == (0 if outcome == "dry-run" else 1)
+    else:
+        assert result.exit_code == 1, result.output
+        assert json.loads(result.stdout)["reason"] == (
+            "verified-backup-required" if outcome == "zero" else "verified-backup-timeout"
+        )
+        if outcome != "zero":
+            assert not locks
+        assert not any(isinstance(e, tuple) for e in live_guard.events)
+        assert elapsed[0] == {"timeout": 90, "window": 1, "zero": 0}[outcome]
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_backup_wait_does_not_sleep_for_offline_apply_or_existing_receipt(db, live_guard, monkeypatch, guarded):
+    from brainlayer import chunk_origin_wipe
+    from brainlayer import scrub_at_rest as module
+
+    if not guarded:
+        live_guard.backup.unlink()
+        monkeypatch.setattr(chunk_origin_wipe, "_live_db_candidates", lambda: [])
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(monotonic=lambda: 0, sleep=lambda _: pytest.fail("unexpected backup wait")),
+    )
+    result = module.scrub_at_rest(
+        db.db_path,
+        allow_live_db=guarded,
+        expect_rows=live_guard.total,
+        wait_for_backup_seconds=90,
+    )
+    assert result["tables"]["chunks"]["rows"] == 1
