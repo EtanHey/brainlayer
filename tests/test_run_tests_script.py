@@ -160,6 +160,7 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
             [
                 "#!/usr/bin/env bash",
                 "{",
+                '  echo "PREPUSH=${BRAINLAYER_PREPUSH:-<unset>}"',
                 '  echo "SCOPE=${BRAINLAYER_PREPUSH_SCOPE:-<unset>}"',
                 '  echo "RANGE=${BRAINLAYER_CHANGED_FILES_RANGE:-<unset>}"',
                 '  echo "FILES=${BRAINLAYER_CHANGED_FILES:-<unset>}"',
@@ -1908,9 +1909,10 @@ def test_a_mapped_watchdog_change_still_falls_back_when_another_source_is_unmapp
     assert "src/brainlayer/no_such_module.py" in result.stdout
 
 
-@pytest.mark.parametrize("helper_exists", [True, False])
+@pytest.mark.parametrize("helper_mode", ["present", "missing", "unset-home", "empty-override"])
 @pytest.mark.parametrize("suite_exit", [0, 7])
-def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_exists: bool, suite_exit: int) -> None:
+def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_exit: int) -> None:
+    helper_exists = helper_mode == "present"
     repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
     suite = repo / "scripts" / "run_tests.sh"
     suite.write_text(suite.read_text().replace("exit 0", f"exit {suite_exit}"))
@@ -1930,10 +1932,17 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_exists: bool, suit
         GOLEMS_HEAVY_SUITE_HELPER=str(helper),
         HOOK_ENV_LOG=str(env_log),
     )
+    if helper_mode == "unset-home":
+        env.pop("HOME", None)
+        env.pop("GOLEMS_HEAVY_SUITE_HELPER", None)
+    elif helper_mode == "empty-override":
+        env["GOLEMS_HEAVY_SUITE_HELPER"] = ""
     git_keys = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR")
     env.update(dict.fromkeys(git_keys, "synthetic"))
     command = ["bash", str(repo / ".githooks" / "pre-push")]
-    result = subprocess.run(command, cwd=repo, env=env, input="", capture_output=True, text=True, timeout=20)
+    result = subprocess.run(  # noqa: S603 - fixture hook, returncode asserted by callers
+        command, cwd=repo, env=env, input="", capture_output=True, text=True, timeout=20, check=False
+    )
     assert result.returncode == suite_exit, result.stdout + result.stderr
     assert env_log.exists(), "suite did not run"
     assert (
@@ -1942,3 +1951,4 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_exists: bool, suit
         else ("heavy-suite: helper missing; running unqueued" in result.stderr)
     )
     assert all(f"{key}=<unset>" in env_log.read_text() for key in git_keys)
+    assert "PREPUSH=1" in env_log.read_text()

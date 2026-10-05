@@ -212,8 +212,9 @@ brainlayer search "how did I implement authentication"
 brainlayer enrich
 ```
 - Lint/format: `ruff check src/ tests/ && ruff format src/ tests/`
-- Pre-push: suites are queued via golems' heavy-suite lock; `GOLEMS_HEAVY_FORCE=1` is the human override. `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
-  runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
+- Pre-push: suites are queued via golems' heavy-suite lock; `GOLEMS_HEAVY_FORCE=1` is the human
+  override. `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full runs
+  are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
 - A **tag** push has no branch to diff against, so the hook reads the pushed refs off its stdin and
   scopes the run to `<previous release tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`, naming the
   tag in `BRAINLAYER_PREPUSH_TAG`. The predecessor must be a **full release**: resolved with
