@@ -1064,3 +1064,144 @@ def test_launchd_probe_exception_names_service_and_discards_value(db, live_guard
         module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
     assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
     assert "private-probe-value" not in str(error.value.__cause__)
+
+
+@pytest.mark.parametrize("mode", ["google_oauth", "context7", "exa_labeled"])
+@pytest.mark.parametrize(
+    "outcome", ["appears", "final-poll", "oversleep", "timeout", "window", "zero", "dry-run", "missing-count"]
+)
+def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, outcome):
+    from contextlib import contextmanager
+
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    live_guard.backup.unlink()
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", str(db.db_path.parent / "absent.sock"))
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    elapsed, sleeps, locks = [0.0], [], []
+    factory = maintenance.MaintenanceConfig
+
+    def config(**kwargs):
+        result = factory(**kwargs)
+        start = {"window": live_guard.now.replace(hour=5, minute=39, second=59)}.get(outcome, live_guard.now)
+        result.now_fn = lambda: start + dt.timedelta(seconds=elapsed[0])
+        return result
+
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", config)
+
+    def sleep(seconds):
+        assert not locks
+        assert not any(isinstance(e, tuple) for e in live_guard.events)
+        elapsed[0] += seconds + {"final-poll": 0.01, "window": 1.0}.get(outcome, 0)
+        elapsed[0] = {("oversleep", 2): 91}.get((outcome, len(sleeps)), elapsed[0])
+        sleeps.append(seconds)
+        arrival = (
+            elapsed[0] >= 85
+            if outcome == "final-poll"
+            else len(sleeps) == {"appears": 2, "oversleep": 3, "window": 1}.get(outcome)
+        )
+        if arrival:
+            live_guard.backup.write_text(json.dumps(live_guard.receipt) + "\n")
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep))
+    lock = module._maintenance_lock
+
+    @contextmanager
+    def tracked_lock(path):
+        locks.append(path)
+        with lock(path):
+            yield
+
+    monkeypatch.setattr(module, "_maintenance_lock", tracked_lock)
+    total = sum(t["rows"] for t in module._run(db, True, 100, module.PROVIDER_MODES[mode])["tables"].values())
+    flags = ["--dry-run"] if outcome == "dry-run" else ["--allow-live-db", "--expect-rows", str(total)]
+    if outcome == "missing-count":
+        flags = ["--allow-live-db"]
+    result = CliRunner().invoke(
+        app,
+        [
+            "scrub-at-rest",
+            "--db",
+            str(db.db_path),
+            "--providers",
+            mode,
+            "--wait-for-backup-seconds",
+            "0" if outcome == "zero" else "90",
+            *flags,
+        ],
+    )
+    if outcome in {"appears", "final-poll", "dry-run"}:
+        assert result.exit_code == 0, result.output
+        assert len(sleeps) == {"appears": 2, "final-poll": 5, "dry-run": 0}[outcome]
+        assert len(locks) == (0 if outcome == "dry-run" else 1)
+    else:
+        assert result.exit_code == 1, result.output
+        expected = "verified-backup-required" if outcome == "zero" else "verified-backup-timeout"
+        if outcome == "missing-count":
+            expected = "expected-row-count-required"
+        assert json.loads(result.stdout)["reason"] == expected
+        if outcome != "zero":
+            assert not locks
+        assert not any(isinstance(e, tuple) for e in live_guard.events)
+        assert elapsed[0] == {"timeout": 90, "oversleep": 91, "window": 1.5, "zero": 0, "missing-count": 0}[outcome]
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_backup_wait_does_not_sleep_for_offline_apply_or_existing_receipt(db, live_guard, monkeypatch, guarded):
+    from brainlayer import chunk_origin_wipe
+    from brainlayer import scrub_at_rest as module
+
+    if not guarded:
+        live_guard.backup.unlink()
+        monkeypatch.setattr(chunk_origin_wipe, "_live_db_candidates", lambda: [])
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(monotonic=lambda: 0, sleep=lambda _: pytest.fail("unexpected backup wait")),
+    )
+    result = module.scrub_at_rest(
+        db.db_path,
+        allow_live_db=guarded,
+        expect_rows=live_guard.total,
+        wait_for_backup_seconds=90,
+    )
+    assert result["tables"]["chunks"]["rows"] == 1
+
+
+@pytest.mark.parametrize("state", ["before-window", "after-window", "within-reserve", "missing-pause"])
+def test_backup_wait_refuses_without_sleep_for_unavailable_window_or_other_gate(db, live_guard, monkeypatch, state):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    live_guard.backup.unlink()
+    if state == "missing-pause":
+        live_guard.pause.unlink()
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", str(db.db_path.parent / "absent.sock"))
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    start = {
+        "before-window": live_guard.now.replace(hour=3, minute=50),
+        "after-window": live_guard.now.replace(hour=7, minute=50),
+        "within-reserve": live_guard.now.replace(hour=5, minute=50),
+    }.get(state, live_guard.now)
+    factory = maintenance.MaintenanceConfig
+    elapsed, sleeps = [0.0], []
+
+    def config(**kwargs):
+        result = factory(**kwargs)
+        result.now_fn = lambda: start + dt.timedelta(seconds=elapsed[0])
+        return result
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        elapsed[0] += 1801
+
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", config)
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep))
+    monkeypatch.setattr(module, "_maintenance_lock", lambda _: pytest.fail("lock taken before refusal"))
+    reason = "enrichment-pause-required" if state == "missing-pause" else "verified-backup-required"
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total, wait_for_backup_seconds=1800)
+    assert error.value.reason == reason
+    assert sleeps == []
+    assert not any(isinstance(e, tuple) for e in live_guard.events)
