@@ -38,6 +38,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.47] - 2026-10-05
+- BrainBar maintenance/job alerts: show each alert once per screen with its actual reason and Show log, clear it after a clean run, and use amber warnings for moderate warm-search latency (#1061, #1062).
+- Backups: rename verification to Recovery checks, centre status dots, and consolidate the Config file path row (#1064).
+- MCP correctness: preserve full expandable neighbor IDs and advertise only implemented recall modes (#1055).
+- MCP output: retain both summary and preview in compact results; reduce framing while preserving canonical IDs, scores and dates, with the hybrid compact wire-size gate at or below pre-#1058 bytes (#1058, #1068).
+- At-rest scrub reliability: settle process exit before writing, name refusal gates with value-free diagnostics, and preserve CLI exit status in the run wrapper (#1063).
+- Credential scrubbing: extend provider and labeled-credential coverage while preserving non-credential identifiers (#1054).
+- Test reliability: isolate backup poll-timing patches and check initial FTS telemetry independently of timing-ranked samples (#1051, #1052).
+
 ## [1.5.46] - 2026-10-01
 
 - #1039: BrainBar’s Maintenance card renders a deliberate skip neutrally and unknown evidence as unknown.
