@@ -8,8 +8,10 @@ import fcntl
 import functools
 import json
 import os
+import re
 import signal
 import sqlite3
+import statistics
 import subprocess
 import sys
 import time
@@ -51,6 +53,24 @@ EXPECTED_WRITER_PATTERNS = (
     "com.brainlayer.",
 )
 MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
+SEARCH_LATENCY_TARGET_MS = 50.0
+# Ten times the target distinguishes sustained pathological delay from scheduler jitter.
+SEARCH_LATENCY_FAILURE_MS = 500.0
+SEARCH_LATENCY_SAMPLES = 5
+# Keep in parity with BrainLayerMaintenanceExit.deliberateDeferrals in BrainBar.
+# Exit 75 is also used for real failures; only these whole reasons are deliberate skips.
+DELIBERATE_DEFERRALS = (
+    r"^outside quiet window: now=\S+ start_hour=\d+ duration_minutes=\d+$",
+    r"^recent queue write activity: \d+ file\(s\) modified recently$",
+    r"^queue depth growing: before=\d+ after=\d+$",
+    r"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$",
+)
+
+
+def _is_deliberate_deferral(reason: str) -> bool:
+    return "failed to resume" not in reason.casefold() and any(
+        re.fullmatch(pattern, reason, flags=re.IGNORECASE) for pattern in DELIBERATE_DEFERRALS
+    )
 
 
 class MaintenanceAbort(RuntimeError):
@@ -94,6 +114,7 @@ class MaintenanceResult:
     data_dir_before_bytes: int | None = None
     data_dir_after_bytes: int | None = None
     search_latency_ms: float | None = None
+    warnings: list[str] = field(default_factory=list)
     vacuum_before_bytes: int | None = None
     vacuum_after_bytes: int | None = None
     backup_status: str | None = None
@@ -674,24 +695,34 @@ def _directory_size(path: Path) -> int:
     return total
 
 
-def _verify_search_latency(db_path: Path, *, threshold_ms: float = 50.0) -> float | None:
+def _verify_search_latency(db_path: Path, *, threshold_ms: float = SEARCH_LATENCY_FAILURE_MS) -> float | None:
+    """Measure warm query latency; connection setup and one cold query are excluded."""
     if not db_path.exists():
         return None
-    started = time.perf_counter()
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
     try:
         has_fts = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts' LIMIT 1"
         ).fetchone()
-        if has_fts:
-            conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1", ("brainlayer",)).fetchall()
-        else:
-            conn.execute("SELECT id FROM chunks LIMIT 1").fetchall()
+        query, params = (
+            ("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1", ("brainlayer",))
+            if has_fts
+            else ("SELECT id FROM chunks LIMIT 1", ())
+        )
+        conn.execute(query, params).fetchall()
+        samples = []
+        for _ in range(SEARCH_LATENCY_SAMPLES):
+            started = time.perf_counter()
+            conn.execute(query, params).fetchall()
+            samples.append((time.perf_counter() - started) * 1000)
     finally:
         conn.close()
-    latency_ms = (time.perf_counter() - started) * 1000
+    latency_ms = statistics.median(samples)
     if latency_ms > threshold_ms:
-        raise MaintenanceAbort(f"post-maintenance search latency too high: {latency_ms:.1f}ms > {threshold_ms:.1f}ms")
+        raise MaintenanceAbort(
+            f"post-maintenance search latency pathological: {latency_ms:.1f}ms > {threshold_ms:.1f}ms",
+            code=1,
+        )
     return latency_ms
 
 
@@ -1017,6 +1048,11 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     result.queue_after_files = len(_queue_files(config.queue_dir))
     result.data_dir_after_bytes = _directory_size(config.db_path.parent)
     result.search_latency_ms = _verify_search_latency(config.db_path)
+    if result.search_latency_ms is not None and result.search_latency_ms > SEARCH_LATENCY_TARGET_MS:
+        result.warnings.append(
+            f"post-maintenance search latency above target: {result.search_latency_ms:.1f}ms > "
+            f"{SEARCH_LATENCY_TARGET_MS:.1f}ms"
+        )
     event = {
         "mode": mode,
         "dry_run": False,
@@ -1030,6 +1066,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         "data_dir_before_bytes": result.data_dir_before_bytes,
         "data_dir_after_bytes": result.data_dir_after_bytes,
         "search_latency_ms": result.search_latency_ms,
+        "warnings": result.warnings,
         "vacuum_before_bytes": result.vacuum_before_bytes,
         "vacuum_after_bytes": result.vacuum_after_bytes,
         "backup_status": result.backup_status,
@@ -1057,11 +1094,16 @@ def _result_to_dict(result: MaintenanceResult) -> dict[str, Any]:
         "data_dir_before_bytes": result.data_dir_before_bytes,
         "data_dir_after_bytes": result.data_dir_after_bytes,
         "search_latency_ms": result.search_latency_ms,
+        "warnings": result.warnings,
         "vacuum_before_bytes": result.vacuum_before_bytes,
         "vacuum_after_bytes": result.vacuum_after_bytes,
         "backup_status": result.backup_status,
         "actions": result.actions,
     }
+
+
+def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
+    return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the failure; inspect {log_path}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1073,20 +1115,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Run gates and report actions without touching state")
     args = parser.parse_args(argv)
     mode = "full" if args.full else "burn" if args.burn else "light"
+    log_path = MaintenanceConfig().log_path
     try:
         result = run_maintenance(mode, dry_run=args.dry_run)
     except MaintenanceAbort as exc:
+        deferred = exc.code == 75 and _is_deliberate_deferral(exc.reason)
         if not args.dry_run:
-            from .job_alerts import report
+            _write_log(
+                log_path,
+                {"status": "deferred" if deferred else "aborted", "mode": mode, "reason": exc.reason},
+            )
+            if not deferred:
+                from .job_alerts import report
 
-            report(f"maintenance-{mode}", f"BrainLayer {mode} maintenance failed; check the maintenance log")
+                report(f"maintenance-{mode}", _failure_alert(mode, exc.reason, log_path))
         print(json.dumps({"status": "aborted", "reason": exc.reason}, sort_keys=True), flush=True)
         return exc.code
-    except Exception:
+    except Exception as exc:
         if not args.dry_run:
+            reason = type(exc).__name__
+            _write_log(log_path, {"status": "failed", "mode": mode, "reason": reason})
             from .job_alerts import report
 
-            report(f"maintenance-{mode}", f"BrainLayer {mode} maintenance failed; check the maintenance log")
+            report(
+                f"maintenance-{mode}",
+                f"BrainLayer {mode} maintenance hit an unexpected error ({reason}); see {log_path}",
+            )
         raise
     if not args.dry_run:
         from .job_alerts import report
