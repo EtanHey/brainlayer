@@ -1084,7 +1084,7 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
 
     def config(**kwargs):
         result = factory(**kwargs)
-        start = live_guard.now if outcome != "window" else live_guard.now.replace(hour=5, minute=58, second=59)
+        start = {"window": live_guard.now.replace(hour=5, minute=58, second=59)}.get(outcome, live_guard.now)
         result.now_fn = lambda: start + dt.timedelta(seconds=elapsed[0])
         return result
 
@@ -1093,9 +1093,8 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
     def sleep(seconds):
         assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        elapsed[0] += seconds + (0.01 if outcome == "final-poll" else 0)
-        if outcome == "oversleep" and len(sleeps) == 2:
-            elapsed[0] = 91
+        elapsed[0] += seconds + {"final-poll": 0.01}.get(outcome, 0)
+        elapsed[0] = {("oversleep", 2): 91}.get((outcome, len(sleeps)), elapsed[0])
         sleeps.append(seconds)
         arrival = (
             elapsed[0] >= 85 if outcome == "final-poll" else len(sleeps) == {"appears": 2, "oversleep": 3}.get(outcome)
