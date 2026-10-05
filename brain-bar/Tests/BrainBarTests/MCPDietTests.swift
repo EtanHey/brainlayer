@@ -54,12 +54,12 @@ final class MCPDietTests: XCTestCase {
         let router = MCPRouter(profile: "full")
         router.setDatabase(db)
         let text = try call(router, "brain_search", ["query": "dietprobe"])
-        XCTAssertTrue(text.contains("score:"), text)
-        XCTAssertTrue(text.contains("project: fixture"), text)
+        XCTAssertTrue(text.contains("ID|score|project|date|source"), text)
+        XCTAssertTrue(text.contains("|fixture|"), text)
         XCTAssertTrue(text.contains("2026-10-01"), text)
         XCTAssertFalse(text.contains("###"), text)
         let renderedIDs = text.split(separator: "\n").filter { $0.hasPrefix("- ID: ") }.map {
-            String($0.dropFirst(6).components(separatedBy: " | ")[0])
+            String($0.dropFirst(6).components(separatedBy: "|")[0])
         }
         XCTAssertEqual(Set(renderedIDs), Set(ids))
         for id in renderedIDs {
@@ -74,11 +74,66 @@ final class MCPDietTests: XCTestCase {
             SearchResult(chunkID: "/fixtures/same.jsonl", score: 0, snippet: "content", sourceFile: "/fixtures/same.jsonl")
         ]
         let text = TextFormatter.formatSearchResults(query: "fixture", results: results, total: 2)
-        XCTAssertTrue(text.contains("score: 0.1235"), text)
-        XCTAssertTrue(text.contains("score: 0.0000"), text)
+        XCTAssertTrue(text.contains("|0.1235|"), text)
+        XCTAssertTrue(text.contains("|0.0000|"), text)
         XCTAssertFalse(text.contains("0.123456789"), text)
-        XCTAssertTrue(text.contains("  Source: a\n"), text)
-        XCTAssertFalse(text.contains("Source: same.jsonl"), text)
+        XCTAssertTrue(text.contains("|a\n"), text)
+        XCTAssertFalse(text.contains("|same.jsonl"), text)
+    }
+
+    func testScopedCompactOmitsOnlyTheImpliedProject() throws {
+        let path = NSTemporaryDirectory() + "diet-scope-\(UUID().uuidString).db"
+        let db = BrainDatabase(path: path)
+        defer { db.close(); try? FileManager.default.removeItem(atPath: path) }
+        try db.insertChunk(id: "scope-id", content: "scopeprobe content", sessionId: "s",
+                           project: "fixture", contentType: "assistant_text", importance: 5)
+        let local = MCPRouter(profile: "full")
+        local.setDatabase(db)
+        let scoped = try call(local, "brain_search", ["query": "scopeprobe", "project": "fixture"])
+        XCTAssertFalse(scoped.contains("|fixture|"), scoped)
+        let unscoped = try call(local, "brain_search", ["query": "scopeprobe"])
+        XCTAssertTrue(unscoped.contains("|fixture|"), unscoped)
+
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(text: "unused", metadata: [
+            "structuredContent": ["total": 2, "results": [
+                ["chunk_id": "scope-id", "project": "fixture", "snippet": "content"],
+                ["chunk_id": "different-id", "project": "other", "snippet": "other content"]
+            ]]
+        ]))
+        let hybrid = MCPRouter(profile: "full", hybridSearchClient: helper)
+        hybrid.setDatabase(db)
+        let text = try call(hybrid, "brain_search", ["query": "scopeprobe", "project": "fixture"])
+        XCTAssertFalse(text.contains("|fixture|"), text)
+        XCTAssertTrue(text.contains("|other|"), text)
+        let full = try call(local, "brain_search", ["query": "scopeprobe", "project": "fixture", "detail": "full"])
+        XCTAssertTrue(full.contains("project: fixture"), full)
+    }
+
+    func testSummaryOmittedOnlyWhenItsContentIsAlreadyVisible() {
+        let results = [
+            SearchResult(chunkID: "contained", summary: "shared fact", snippet: "Intro: shared fact. More preview evidence."),
+            SearchResult(chunkID: "distinct", summary: "different fact", snippet: "shared fact"),
+            SearchResult(chunkID: "beyond-preview", summary: "hidden fact", snippet: String(repeating: "x", count: 200) + "hidden fact"),
+            SearchResult(chunkID: "normalized", summary: "shared\nfact", snippet: "Intro: shared fact."),
+            SearchResult(chunkID: "long", summary: String(repeating: "x", count: 99) + "distinct tail", snippet: String(repeating: "x", count: 99) + "other tail")
+        ]
+        let text = TextFormatter.formatSearchResults(query: "fixture", results: results, total: results.count)
+        XCTAssertFalse(text.contains("S: shared fact"), text)
+        XCTAssertTrue(text.contains("S: different fact"), text)
+        XCTAssertTrue(text.contains("S: hidden fact"), text)
+        // The existing 100-character summary budget still applies.
+        XCTAssertTrue(text.contains("P: Intro: shared fact."), text)
+    }
+
+    func testCompactDisplayFieldsEscapeColumnDelimiters() {
+        let text = TextFormatter.formatSearchResults(query: "fixture", results: [
+            SearchResult(chunkID: "canonical-id", project: "project|part\\name\nnext",
+                         date: "bad|date", snippet: "content", sourceFile: "/fixtures/source|part.jsonl")
+        ], total: 1)
+        XCTAssertTrue(text.contains("project\\|part\\\\name\\nnext"), text)
+        XCTAssertTrue(text.contains("bad\\|date"), text)
+        XCTAssertTrue(text.contains("source\\|part.jsonl"), text)
+        XCTAssertTrue(text.contains("- ID: canonical-id|"), text)
     }
 
     func testEntityAndPersonOmitOnlyEmptySections() {
@@ -138,7 +193,8 @@ final class MCPDietTests: XCTestCase {
         }
         let testFolder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let root = testFolder.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let hybridEnabled = ProcessInfo.processInfo.environment["MCP_DIET_HYBRID"] == "1"
+        // The release gate runs in ordinary CI; set 0 explicitly for the local FTS receipt.
+        let hybridEnabled = ProcessInfo.processInfo.environment["MCP_DIET_HYBRID"] != "0"
         var hybridClient: DietFixtureHybridClient?
         if hybridEnabled {
             let fixturePath = folder.appendingPathComponent("hybrid.json").path
@@ -168,6 +224,7 @@ final class MCPDietTests: XCTestCase {
         var environment = ProcessInfo.processInfo.environment
         environment["BRAINLAYER_MCP_SOCKET"] = socketPath
         environment["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = "1"
+        environment["MCP_DIET_HYBRID"] = hybridEnabled ? "1" : "0"
         client.environment = environment
         client.arguments = ["python3", testFolder.appendingPathComponent("Scripts/mcp_diet_wire.py").path, socketPath, root.path, receipt]
         let exited = expectation(description: "stdio client completed")
@@ -182,6 +239,13 @@ final class MCPDietTests: XCTestCase {
             var payload = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: receipt))) as? [String: Any] ?? [:]
             payload["hybrid_request_count"] = hybridClient.requestCount
             try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: receipt))
+            let rows = try XCTUnwrap(payload["rows"] as? [[String: Any]])
+            for (item, ceiling) in [("1 compact IDs", 27_440), ("2 KG default", 29_110)] {
+                let measured = rows.filter { $0["item"] as? String == item }
+                XCTAssertEqual(measured.count, 10)
+                let bytes = try measured.reduce(0) { try $0 + XCTUnwrap($1["response_bytes"] as? Int) }
+                XCTAssertLessThanOrEqual(bytes, ceiling, "#1060 hybrid release size gate: \(item)")
+            }
         }
     }
 

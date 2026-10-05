@@ -27,13 +27,13 @@ final class TextFormatterParityTests: XCTestCase {
         XCTAssertEqual(
             output,
             """
-            ## Search results for "brainbar native swift renderer parity should trun…" - 1 of 1 shown
-            - ID: rt-abc123def4567890 | score: 0.8700 | project: brainlayer | date: 2026-03-29
-              Source: MCPRouter.swift
-              Preview: BrainBar is a native macOS daemon for BrainLayer MCP routing.
+            ## "brainbar native swift renderer parity should trun…" 1/1
+            ID|score|project|date|source; S=summary P=preview
+            - ID: rt-abc123def4567890|0.8700|brainlayer|2026-03-29|MCPRouter.swift
+            P: BrainBar is a native macOS daemon for BrainLayer MCP routing.
             """
         )
-        XCTAssertTrue(output.contains("score:"))
+        XCTAssertTrue(output.contains("ID|score|project|date|source"))
         XCTAssertTrue(output.contains("rt-abc123def4567890"))
     }
 
@@ -103,7 +103,7 @@ final class TextFormatterParityTests: XCTestCase {
 
         let output = TextFormatter.formatSearchResults(query: "path privacy", results: results, total: 1)
 
-        XCTAssertTrue(output.contains("Source: auth.py"))
+        XCTAssertTrue(output.contains("|auth.py"))
         XCTAssertFalse(output.contains(#"C:\Users"#))
     }
 

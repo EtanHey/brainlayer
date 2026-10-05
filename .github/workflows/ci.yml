@@ -43,6 +43,12 @@ jobs:
       - name: Swift version
         run: swift --version
 
+      - name: Python for the synthetic MCP wire client and helper formatter
+        if: needs.changes.outputs.brain_bar == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Cache SwiftPM
         if: needs.changes.outputs.brain_bar == 'true'
         uses: actions/cache@v4

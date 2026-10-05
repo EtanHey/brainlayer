@@ -1,13 +1,14 @@
 import Foundation
 
 enum TextFormatter {
+    static let compactSearchLegend = "ID|score|project|date|source; S=summary P=preview"
     private enum Alignment {
         case left
         case right
         case center
     }
 
-    static func formatSearchResults(query: String, results: [SearchResult], total: Int, detail: String = "compact") -> String {
+    static func formatSearchResults(query: String, results: [SearchResult], total: Int, detail: String = "compact", scopedProject: String? = nil) -> String {
         let truncatedQuery = truncate(query, maxLen: 50)
 
         if total == 0 {
@@ -18,21 +19,33 @@ enum TextFormatter {
             ].joined(separator: "\n")
         }
 
-        var lines = ["## Search results for \"\(truncatedQuery)\" - \(results.count) of \(total) shown"]
+        let compact = detail != "full"
+        var lines = compact
+            ? ["## \"\(truncatedQuery)\" \(results.count)/\(total)", compactSearchLegend]
+            : ["## Search results for \"\(truncatedQuery)\" - \(results.count) of \(total) shown"]
         for result in results {
             let source = sourceBasename(result.sourceFile.isEmpty ? result.project : result.sourceFile)
             let date = formattedDate(result.date)
-            lines.append("- ID: \(result.chunkID) | score: \(scoreString(result.score)) | project: \(result.project.isEmpty ? "unknown" : result.project) | date: \(date.isEmpty ? "unknown" : date)")
             // A substring of an opaque ID is not evidence of matching provenance.
-            if !source.isEmpty && result.chunkID != source && result.chunkID != result.sourceFile {
-                lines.append("  Source: \(source)")
+            let separateSource = !source.isEmpty && result.chunkID != source && result.chunkID != result.sourceFile
+            let project = compact && scopedProject == result.project && !result.project.isEmpty
+                ? "" : (result.project.isEmpty ? "unknown" : result.project)
+            if compact {
+                // Label the columns once; keep canonical IDs, score precision and dates intact.
+                // An empty project column is implied by the caller's project filter.
+                let fields = [scoreString(result.score), project, date.isEmpty ? "unknown" : date, separateSource ? source : ""]
+                lines.append("- ID: \(result.chunkID)|" + fields.map(compactField).joined(separator: "|"))
+            } else {
+                lines.append("- ID: \(result.chunkID) | score: \(scoreString(result.score)) | project: \(project) | date: \(date.isEmpty ? "unknown" : date)")
+                if separateSource { lines.append("  Source: \(source)") }
             }
             let preview = truncate(result.snippet.isEmpty ? result.displayText : result.snippet, maxLen: 200)
             let summary = truncate(result.summary, maxLen: 100)
-            if !summary.isEmpty && summary != truncate(preview, maxLen: 100) {
-                lines.append("  Summary: \(summary)")
+            let summaryAlreadyVisible = compact && preview.contains(truncate(result.summary, maxLen: Int.max))
+            if !summary.isEmpty && summary != truncate(preview, maxLen: 100) && !summaryAlreadyVisible {
+                lines.append("\(compact ? "S:" : "  Summary:") \(summary)")
             }
-            lines.append("  Preview: \(preview)")
+            lines.append("\(compact ? "P:" : "  Preview:") \(preview)")
         }
         return lines.joined(separator: "\n")
     }
@@ -169,6 +182,13 @@ enum TextFormatter {
         let clean = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard clean.count > maxLen else { return clean }
         return String(clean.prefix(maxLen - 1)) + "…"
+    }
+
+    private static func compactField(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "|", with: "\\|")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 
     private static func pad(_ text: String, width: Int, align: Alignment = .left) -> String {

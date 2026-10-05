@@ -29,10 +29,10 @@ final class FormattersTests: XCTestCase {
             "tags": "[\"swift\", \"macos\"]"
         ]
         let out = Formatters.formatSearchResults(query: "brainbar", results: [result], total: 1, useColor: false)
-        XCTAssertTrue(out.contains("1 of 1 shown"))
+        XCTAssertTrue(out.contains("1/1"))
         XCTAssertTrue(out.contains("rt-abc123def4"))
         XCTAssertTrue(out.contains("0.87"))
-        XCTAssertTrue(out.contains("Source: brainlayer"))
+        XCTAssertTrue(out.contains("|brainlayer"))
         XCTAssertTrue(out.contains("2026-03-29"))
         XCTAssertTrue(out.contains("BrainBar is a native macOS daemon"))
         XCTAssertFalse(out.contains("imp:"))
@@ -44,7 +44,7 @@ final class FormattersTests: XCTestCase {
             ["chunk_id": "b2", "score": 0.5, "project": "proj2", "created_at": "2026-03-02", "summary": "Second result", "importance": 3],
         ]
         let out = Formatters.formatSearchResults(query: "test", results: results, total: 2, useColor: false)
-        XCTAssertTrue(out.contains("2 of 2 shown"))
+        XCTAssertTrue(out.contains("2/2"))
         XCTAssertTrue(out.contains("- ID: a1"))
         XCTAssertTrue(out.contains("- ID: b2"))
     }
@@ -174,7 +174,7 @@ final class FormattersTests: XCTestCase {
 
         let out = Formatters.formatSearchResults(query: "path privacy", results: results, total: 1, useColor: false)
 
-        XCTAssertTrue(out.contains("Source: auth.py"))
+        XCTAssertTrue(out.contains("|auth.py"))
         XCTAssertFalse(out.contains(#"C:\Users"#))
     }
 
@@ -344,9 +344,9 @@ final class FormattersTests: XCTestCase {
         let searchOut = Formatters.formatSearchResults(query: "q", results: [
             ["chunk_id": "x", "score": 0.1, "project": "p", "created_at": "d", "summary": "s", "importance": 1]
         ], total: 1, useColor: false)
-        XCTAssertTrue(searchOut.contains("Search "))
+        XCTAssertTrue(searchOut.contains("## "))
         XCTAssertTrue(searchOut.contains("- ID: x"))
-        XCTAssertTrue(searchOut.contains("score:"))
+        XCTAssertTrue(searchOut.contains("ID|score|project|date|source"))
 
         let entityOut = Formatters.formatEntityCard(entity: ["name": "X"], useColor: false)
         XCTAssertTrue(entityOut.contains("## Entity: X"))
