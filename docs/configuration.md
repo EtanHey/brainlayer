@@ -191,9 +191,10 @@ reuses VACUUM's quiet-window (04:00–06:00 local), idle-queue and writer gates.
 `--wait-for-backup-seconds N` (default 0) lets guarded live apply poll at intervals of up to 30 seconds
 for a qualifying receipt before taking the lock or quiescing services. Dry runs and
 offline applies ignore it. Poll intervals shorten near the deadline. Waiting ends
-at N seconds or when only 60 seconds remain
-in the quiet window, with `verified-backup-timeout`; the default still refuses with
-`verified-backup-required`. Receipt freshness continues to use `attempted_at`.
+at N seconds or when only 20 minutes remain in the quiet window, reserving that
+time for the guarded run. A refusal after sleeping reports `verified-backup-timeout`;
+if no wait is possible before the first sleep, it reports `verified-backup-required`,
+as does the default. Receipt freshness continues to use `attempted_at`.
 It quiesces the fleet/throughput/tier-0 watchdogs, health-check healer, BrainBar UI/daemon,
 hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using maintenance's service helpers. It checks
 that jobs remain unloaded, BrainBar processes are gone and no writable database

@@ -1084,7 +1084,7 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
 
     def config(**kwargs):
         result = factory(**kwargs)
-        start = {"window": live_guard.now.replace(hour=5, minute=58, second=59)}.get(outcome, live_guard.now)
+        start = {"window": live_guard.now.replace(hour=5, minute=39, second=59)}.get(outcome, live_guard.now)
         result.now_fn = lambda: start + dt.timedelta(seconds=elapsed[0])
         return result
 
@@ -1093,11 +1093,13 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
     def sleep(seconds):
         assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        elapsed[0] += seconds + {"final-poll": 0.01}.get(outcome, 0)
+        elapsed[0] += seconds + {"final-poll": 0.01, "window": 1.0}.get(outcome, 0)
         elapsed[0] = {("oversleep", 2): 91}.get((outcome, len(sleeps)), elapsed[0])
         sleeps.append(seconds)
         arrival = (
-            elapsed[0] >= 85 if outcome == "final-poll" else len(sleeps) == {"appears": 2, "oversleep": 3}.get(outcome)
+            elapsed[0] >= 85
+            if outcome == "final-poll"
+            else len(sleeps) == {"appears": 2, "oversleep": 3, "window": 1}.get(outcome)
         )
         if arrival:
             live_guard.backup.write_text(json.dumps(live_guard.receipt) + "\n")
@@ -1142,7 +1144,7 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
         if outcome != "zero":
             assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        assert elapsed[0] == {"timeout": 90, "oversleep": 91, "window": 0.5, "zero": 0, "missing-count": 0}[outcome]
+        assert elapsed[0] == {"timeout": 90, "oversleep": 91, "window": 1.5, "zero": 0, "missing-count": 0}[outcome]
 
 
 @pytest.mark.parametrize("guarded", [False, True])
@@ -1165,3 +1167,41 @@ def test_backup_wait_does_not_sleep_for_offline_apply_or_existing_receipt(db, li
         wait_for_backup_seconds=90,
     )
     assert result["tables"]["chunks"]["rows"] == 1
+
+
+@pytest.mark.parametrize("state", ["before-window", "after-window", "within-reserve", "missing-pause"])
+def test_backup_wait_refuses_without_sleep_for_unavailable_window_or_other_gate(db, live_guard, monkeypatch, state):
+    from brainlayer import maintenance
+    from brainlayer import scrub_at_rest as module
+
+    live_guard.backup.unlink()
+    if state == "missing-pause":
+        live_guard.pause.unlink()
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", str(db.db_path.parent / "absent.sock"))
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    start = {
+        "before-window": live_guard.now.replace(hour=3, minute=50),
+        "after-window": live_guard.now.replace(hour=7, minute=50),
+        "within-reserve": live_guard.now.replace(hour=5, minute=50),
+    }.get(state, live_guard.now)
+    factory = maintenance.MaintenanceConfig
+    elapsed, sleeps = [0.0], []
+
+    def config(**kwargs):
+        result = factory(**kwargs)
+        result.now_fn = lambda: start + dt.timedelta(seconds=elapsed[0])
+        return result
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        elapsed[0] += 1801
+
+    monkeypatch.setattr(maintenance, "MaintenanceConfig", config)
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep))
+    monkeypatch.setattr(module, "_maintenance_lock", lambda _: pytest.fail("lock taken before refusal"))
+    reason = "enrichment-pause-required" if state == "missing-pause" else "verified-backup-required"
+    with pytest.raises(module.ScrubAtRestError) as error:
+        module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total, wait_for_backup_seconds=1800)
+    assert error.value.reason == reason
+    assert sleeps == []
+    assert not any(isinstance(e, tuple) for e in live_guard.events)

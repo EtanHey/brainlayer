@@ -52,7 +52,7 @@ LIVE_SERVICES = (
 
 
 BRAINBAR_EXIT_TIMEOUT_SECONDS = 30.0
-BACKUP_WAIT_SAFE_MARGIN_SECONDS = 60.0
+BACKUP_WAIT_SAFE_MARGIN_SECONDS = 20 * 60.0
 _QUIESCE_DETAILS = frozenset(
     {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
     | {
@@ -290,6 +290,7 @@ def _wait_for_verified_backup(path, timeout_seconds):
     """Wait without holding a maintenance lock or stopping any writer services."""
     config = maintenance.MaintenanceConfig(db_path=path, backup_reuse_max_age_hours=24)
     deadline = time.monotonic() + timeout_seconds
+    slept = False
     while True:
         try:
             _live_requirements(config)
@@ -302,8 +303,11 @@ def _wait_for_verified_backup(path, timeout_seconds):
             _remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS,
         )
         if remaining <= 0:
+            if not slept:
+                raise ScrubAtRestError("verified backup within 24 hours required", reason="verified-backup-required")
             raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
         time.sleep(min(30.0, remaining / 2))
+        slept = True
         # Inspect the final receipt only within the deadline and window reserve.
         window_left = _remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS
         if time.monotonic() > deadline or window_left <= 0:
