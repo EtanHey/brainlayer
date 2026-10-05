@@ -1067,7 +1067,9 @@ def test_launchd_probe_exception_names_service_and_discards_value(db, live_guard
 
 
 @pytest.mark.parametrize("mode", ["google_oauth", "context7", "exa_labeled"])
-@pytest.mark.parametrize("outcome", ["appears", "final-poll", "timeout", "window", "zero", "dry-run"])
+@pytest.mark.parametrize(
+    "outcome", ["appears", "final-poll", "oversleep", "timeout", "window", "zero", "dry-run", "missing-count"]
+)
 def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, outcome):
     from contextlib import contextmanager
 
@@ -1091,9 +1093,9 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
     def sleep(seconds):
         assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        elapsed[0] += seconds
+        elapsed[0] += seconds + (1 if outcome == "oversleep" and len(sleeps) == 2 else 0)
         sleeps.append(seconds)
-        if len(sleeps) == {"appears": 2, "final-poll": 3}.get(outcome):
+        if len(sleeps) == {"appears": 2, "final-poll": 3, "oversleep": 3}.get(outcome):
             live_guard.backup.write_text(json.dumps(live_guard.receipt) + "\n")
 
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep))
@@ -1108,6 +1110,8 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
     monkeypatch.setattr(module, "_maintenance_lock", tracked_lock)
     total = sum(t["rows"] for t in module._run(db, True, 100, module.PROVIDER_MODES[mode])["tables"].values())
     flags = ["--dry-run"] if outcome == "dry-run" else ["--allow-live-db", "--expect-rows", str(total)]
+    if outcome == "missing-count":
+        flags = ["--allow-live-db"]
     result = CliRunner().invoke(
         app,
         [
@@ -1127,13 +1131,14 @@ def test_backup_wait_before_lock_and_quiesce(db, live_guard, monkeypatch, mode, 
         assert len(locks) == (0 if outcome == "dry-run" else 1)
     else:
         assert result.exit_code == 1, result.output
-        assert json.loads(result.stdout)["reason"] == (
-            "verified-backup-required" if outcome == "zero" else "verified-backup-timeout"
-        )
+        expected = "verified-backup-required" if outcome == "zero" else "verified-backup-timeout"
+        if outcome == "missing-count":
+            expected = "expected-row-count-required"
+        assert json.loads(result.stdout)["reason"] == expected
         if outcome != "zero":
             assert not locks
         assert not any(isinstance(e, tuple) for e in live_guard.events)
-        assert elapsed[0] == {"timeout": 90, "window": 1, "zero": 0}[outcome]
+        assert elapsed[0] == {"timeout": 90, "oversleep": 91, "window": 1, "zero": 0, "missing-count": 0}[outcome]
 
 
 @pytest.mark.parametrize("guarded", [False, True])

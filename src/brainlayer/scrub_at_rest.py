@@ -13,7 +13,7 @@ from . import chunk_origin_wipe, maintenance
 from .chunk_origin_wipe import assert_not_live_db
 from .chunk_write import canonical_content_hash
 from .dedupe import BUSY_RETRY_ATTEMPTS, _busy_retry_delay, compute_dedupe_fields
-from .maintenance import _maintenance_lock
+from .maintenance import _maintenance_lock, _remaining_quiet_window_seconds
 from .pipeline.secret_scrub import scrub_secrets
 from .runtime_store import ReadonlyStore, WriterRuntimeStore
 from .vector_store import value_free_sqlite_logging
@@ -299,14 +299,14 @@ def _wait_for_verified_backup(path, timeout_seconds):
                 raise
         remaining = min(
             deadline - time.monotonic(),
-            maintenance._remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS,
+            _remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS,
         )
         if remaining <= 0:
             raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
         time.sleep(min(30.0, remaining))
-        # The final poll may have produced a receipt; inspect it on the next loop.
-        # Preserve the window margin even when that final receipt is available.
-        if maintenance._remaining_quiet_window_seconds(config) <= BACKUP_WAIT_SAFE_MARGIN_SECONDS:
+        # Inspect the final receipt only within the deadline and window reserve.
+        window_left = _remaining_quiet_window_seconds(config) - BACKUP_WAIT_SAFE_MARGIN_SECONDS
+        if time.monotonic() > deadline or window_left <= 0:
             raise ScrubAtRestError("verified backup wait timed out", reason="verified-backup-timeout")
 
 
@@ -449,6 +449,8 @@ def scrub_at_rest(
                 with ReadonlyStore(path) as store:
                     return _run(store, True, batch_size, selected)
             if allow_live_db and wait_for_backup_seconds > 0:
+                if expect_rows is None or expect_rows < 0:
+                    raise ScrubAtRestError("expected row count required", reason="expected-row-count-required")
                 _wait_for_verified_backup(path, wait_for_backup_seconds)
             with _maintenance_lock(path):
                 path = assert_not_live_db(path, allow_live=allow_live_db)
