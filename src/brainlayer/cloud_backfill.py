@@ -1,29 +1,11 @@
 #!/usr/bin/env python3
-"""Cloud backfill for non-destructive BrainLayer summary re-enrichment.
+"""Local compatibility readers and replay for historical batch enrichment data.
 
-Exports pending re-enrichment candidates to JSONL, submits them to the Gemini
-Batch API, polls for completion, and imports preview summaries into
-``summary_v2`` without mutating the live ``summary`` column.
-
-Usage:
-    # Dry run — export JSONL only, don't submit
-    python3 scripts/cloud_backfill.py --dry-run
-
-    # Run 100-chunk validation sample
-    python3 scripts/cloud_backfill.py --sample 100
-
-    # Full backfill
-    python3 scripts/cloud_backfill.py
-
-    # Resume from checkpoint
-    python3 scripts/cloud_backfill.py --resume
-
-    # Show status of running/completed jobs
-    python3 scripts/cloud_backfill.py --status
+Batch production and all cloud polling/download workflows are retired. Existing
+checkpoint tables, saved result files, provenance and local import semantics stay
+unchanged. The former executable entry point fails loudly without opening a DB.
 """
 
-import json
-import os
 import sqlite3
 import sys
 import time
@@ -33,11 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import apsw
 
-from .enrichment_controller import (
-    _apply_enrichment,
-    _raise_if_enrich_daily_cap_reached,
-    _record_enrich_cost_usd,
-)
+from .enrichment_controller import _apply_enrichment
 from .paths import get_db_path
 from .pipeline.enrichment import (
     HIGH_VALUE_TYPES,
@@ -56,61 +34,9 @@ CHECKPOINT_DB_PATH = DEFAULT_DB_PATH.with_name("enrichment_checkpoints.db")
 CHECKPOINT_STABLE_STATUSES = ("submitted", "completed", "imported", "expired")
 CHECKPOINT_WRITE_MAX_RETRIES = 6
 CHECKPOINT_WRITE_BASE_DELAY = 0.25
+# Historical provenance for saved outputs, not a model activation setting.
 DEFAULT_BATCH_MODEL = "models/gemini-2.5-flash-lite"
 REENRICHMENT_VERSION = "2.0"
-
-# Gemini Batch API limits (Tier 1)
-# AIDEV-NOTE: Tier 1 has low enqueued-token quota for 2.5-flash batch.
-# 12K chunks/job (~9M tokens) hits 429 RESOURCE_EXHAUSTED.
-# 500 chunks/job (~350K tokens) stays safely under quota.
-MAX_TOKENS_PER_JOB = 350_000  # Conservative: stay under Tier 1 enqueued limit
-AVG_PROMPT_TOKENS = 700  # Estimated avg tokens per chunk prompt
-CHUNKS_PER_JOB = MAX_TOKENS_PER_JOB // AVG_PROMPT_TOKENS  # ~500
-BATCH_INPUT_COST_PER_MILLION = 0.05
-BATCH_OUTPUT_COST_PER_MILLION = 0.20
-
-# Supabase usage logging
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-
-# 10-field JSON schema for structured output
-ENRICHMENT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string", "description": "One sentence describing what this chunk is about"},
-        "tags": {"type": "array", "items": {"type": "string"}, "description": "3-7 lowercase hyphenated topic tags"},
-        "importance": {"type": "integer", "description": "1-10 importance score"},
-        "intent": {
-            "type": "string",
-            "enum": ["debugging", "designing", "configuring", "discussing", "deciding", "implementing", "reviewing"],
-        },
-        "primary_symbols": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Classes, functions, files mentioned",
-        },
-        "resolved_query": {"type": "string", "description": "Hypothetical question this chunk answers"},
-        "epistemic_level": {"type": "string", "enum": ["hypothesis", "substantiated", "validated"]},
-        "version_scope": {"type": "string", "description": "Version or system state discussed, or null"},
-        "debt_impact": {"type": "string", "enum": ["introduction", "resolution", "none"]},
-        "external_deps": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Libraries or external APIs used",
-        },
-    },
-    "required": [
-        "summary",
-        "tags",
-        "importance",
-        "intent",
-        "primary_symbols",
-        "resolved_query",
-        "epistemic_level",
-        "debt_impact",
-        "external_deps",
-    ],
-}
 
 CHECKPOINT_COLUMNS = (
     "batch_id",
@@ -131,18 +57,6 @@ CHECKPOINT_COLUMNS = (
 IMPORT_MODE_AUTO = "auto"
 IMPORT_MODE_DRAIN = "drain"
 IMPORT_MODE_PREVIEW = "preview"
-
-
-def estimate_batch_cost_usd(input_tokens: int, output_tokens: int) -> float:
-    """Estimate Gemini 2.5 Flash-Lite Batch API cost using the 50% batch discount."""
-    return (input_tokens * BATCH_INPUT_COST_PER_MILLION + output_tokens * BATCH_OUTPUT_COST_PER_MILLION) / 1_000_000
-
-
-def record_batch_usage_against_daily_cap(input_tokens: int, output_tokens: int) -> float:
-    """Record Gemini Batch usage against the shared enrichment daily cap counter."""
-    _raise_if_enrich_daily_cap_reached()
-    cost_usd = estimate_batch_cost_usd(input_tokens, output_tokens)
-    return _record_enrich_cost_usd(cost_usd)
 
 
 # ── DB helpers ──────────────────────────────────────────────────────────
@@ -511,145 +425,6 @@ def get_backlog_drain_stats(store: Any, *, min_char_count: int = 50) -> Dict[str
     return {"remaining": remaining}
 
 
-# ── Export ──────────────────────────────────────────────────────────────
-
-
-# ── Gemini Batch API (google.genai SDK) ────────────────────────────────
-
-
-def _get_genai_client():
-    """Get a google.genai Client configured with API key."""
-    try:
-        from google import genai
-    except ImportError:
-        print("ERROR: google-genai not installed. Run: pip install google-genai")
-        sys.exit(1)
-
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
-    if not api_key:
-        print("ERROR: GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY not set")
-        sys.exit(1)
-
-    return genai.Client(api_key=api_key)
-
-
-def poll_gemini_batch(batch_name: str, timeout_hours: float = 25) -> Dict[str, Any]:
-    """Poll a Gemini batch job until completion. Returns job state."""
-    deadline = time.time() + (timeout_hours * 3600)
-    poll_interval = 30  # Start with 30s, increase over time
-
-    print(f"\nPolling job: {batch_name}")
-    while time.time() < deadline:
-        try:
-            status = get_gemini_batch_state(batch_name)
-        except Exception as exc:
-            err_str = str(exc)
-            if "404" in err_str or "NOT_FOUND" in err_str:
-                print(f"  Job not found (404) — may have expired: {batch_name}")
-                return {"state": "failed", "error": "NOT_FOUND (expired or invalid)"}
-            raise
-
-        state = status["state"]
-        if state == "succeeded":
-            print("  Job SUCCEEDED!")
-            return status
-        if state == "failed":
-            print(f"  Job FAILED: {status.get('error', 'unknown error')}")
-            return status
-        if state == "cancelled":
-            print("  Job CANCELLED")
-            return status
-
-        print(f"  State: {status.get('raw_state', state)} — waiting {poll_interval:.0f}s...")
-        _sleep(poll_interval)
-
-        # Gradually increase poll interval (max 5 min)
-        poll_interval = min(poll_interval * 1.2, 300)
-
-    return {"state": "timeout", "error": "Exceeded timeout"}
-
-
-def get_gemini_batch_state(batch_name: str) -> Dict[str, Any]:
-    """Fetch a Gemini batch state once without blocking."""
-    client = _get_genai_client()
-    batch_job = client.batches.get(name=batch_name)
-    raw_state = str(batch_job.state)
-    state = raw_state.split(".")[-1]
-
-    if state == "JOB_STATE_SUCCEEDED":
-        normalized = "succeeded"
-    elif state == "JOB_STATE_FAILED":
-        normalized = "failed"
-    elif state == "JOB_STATE_CANCELLED":
-        normalized = "cancelled"
-    else:
-        normalized = "pending"
-
-    error = getattr(batch_job, "error", None)
-    return {
-        "state": normalized,
-        "raw_state": raw_state,
-        "error": str(error) if error else None,
-        "job": batch_job,
-    }
-
-
-def _extract_usage_metadata(batch_job: Any) -> Dict[str, float]:
-    """Normalize batch usage metadata into checkpoint/logging fields."""
-    usage = getattr(batch_job, "usage_metadata", None)
-    input_tokens = getattr(usage, "prompt_token_count", 0) or 0
-    output_tokens = getattr(usage, "candidates_token_count", 0) or 0
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cost_usd": estimate_batch_cost_usd(input_tokens, output_tokens),
-    }
-
-
-def download_gemini_results(batch_job) -> List[Dict[str, Any]]:
-    """Download and parse results from a completed Gemini batch job."""
-    client = _get_genai_client()
-    results = []
-
-    # The dest field contains the output file reference
-    dest = batch_job.dest
-    if not dest:
-        print("  WARNING: No dest on batch job")
-        return results
-
-    # dest is a BatchJobDestination with file_name
-    file_name = None
-    if hasattr(dest, "file_name"):
-        file_name = dest.file_name
-    elif isinstance(dest, str):
-        file_name = dest
-    elif isinstance(dest, dict):
-        file_name = dest.get("file_name", dest.get("gcs_uri"))
-
-    if not file_name:
-        print(f"  WARNING: Could not extract file name from dest: {dest}")
-        return results
-
-    print(f"  Downloading results: {file_name}")
-
-    try:
-        # Download the result file (SDK uses file= not name=)
-        content = client.files.download(file=file_name)
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-
-        for line in content.strip().splitlines():
-            try:
-                results.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    except Exception as e:
-        print(f"  Error downloading results: {e}")
-
-    print(f"  Downloaded {len(results)} results")
-    return results
-
-
 # ── Import results ──────────────────────────────────────────────────────
 
 
@@ -794,41 +569,6 @@ def import_results(
     )
 
     return {"success": success, "failed": failed, "skipped": skipped}
-
-
-# ── Usage logging ───────────────────────────────────────────────────────
-
-
-def log_batch_usage(batch_id: str, model: str, input_tokens: int, output_tokens: int, cost_usd: float) -> None:
-    """Log batch usage to Supabase. Best-effort."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return
-    try:
-        import requests
-
-        requests.post(
-            f"{SUPABASE_URL}/rest/v1/llm_usage",
-            headers={
-                "apikey": SUPABASE_SERVICE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal",
-            },
-            json={
-                "model": model,
-                "source": "enrichment-batch",
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": cost_usd,
-                "tier": "paid",
-            },
-            timeout=5,
-        )
-    except Exception:
-        pass  # Never let logging failure block backfill
-
-
-# ── Main workflows ──────────────────────────────────────────────────────
 
 
 def show_status(db_path: Path) -> None:
