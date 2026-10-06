@@ -680,7 +680,9 @@ unload_plist() {
         echo "ERROR: unload attempts must be a positive integer for $label; got '$attempts'" >&2
         return 1
     fi
-    launchctl unload "$dst" 2>/dev/null || true
+    if [ "${2:-}" != "--wait-only" ]; then
+        launchctl unload "$dst" 2>/dev/null || true
+    fi
     while [ "$attempt" -le "$attempts" ]; do
         if ! launchctl print "$domain" >/dev/null 2>&1; then
             echo "  Unloaded: $label"
@@ -1227,7 +1229,7 @@ remove_plist() {
     if [ ! -f "$dst" ]; then
         local domain="gui/$UID/com.brainlayer.$name"
         launchctl print "$domain" >/dev/null 2>&1 || return 0
-        if ! launchctl bootout "$domain" || launchctl print "$domain" >/dev/null 2>&1; then
+        if ! launchctl bootout "$domain" || ! unload_plist "$name" --wait-only; then
             echo "ERROR: could not retire $domain without a plist; refusing to remove its executable" >&2
             return 1
         fi

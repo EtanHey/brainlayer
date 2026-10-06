@@ -3320,7 +3320,7 @@ def test_launchd_all_never_attempts_enrichment_bootstrap(tmp_path: Path) -> None
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode != 0
     assert "replacement bootstrap failed" not in result.stderr
-    assert not any(command.startswith("bootstrap ") and "com.brainlayer.enrichment" in command for command in commands)
+    assert all(command.startswith("print ") for command in commands if "com.brainlayer.enrich" in command)
     assert not any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
 
 
