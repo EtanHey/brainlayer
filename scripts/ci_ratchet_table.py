@@ -1771,6 +1771,7 @@ def row_quiesce(report: Path | None, unavailable: str | None, measured_sha: str 
             and head["status"] == "GREEN"
             and head["revived"] is False
             and head["held"] is True
+            and head["resume_errors"] == []
         ):
             raise ValueError("replay SHA or verdict mismatch")
         for replay in (bug, head):

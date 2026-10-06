@@ -66,6 +66,7 @@ def test_row_binds_both_replays_to_their_shas_and_requires_every_postcondition(t
     report.write_text("{}")
     assert row_quiesce(report, None, "a" * 40).status == RED
     sample = dict(positive_control=True, resumed=True, marker_removed=True, interval_seconds=3, window_seconds=8)
+    sample["resume_errors"] = []
     data = {
         "bug": dict(sample, sha="e59cf87142c88db044dd701cf5ee993267c8d090", status="RED", revived=True),
         "head": dict(sample, sha="a" * 40, status="GREEN", revived=False, held=True),
@@ -78,7 +79,7 @@ def test_row_binds_both_replays_to_their_shas_and_requires_every_postcondition(t
         ("head", "held", False),
         ("head", "marker_removed", False),
         ("head", "window_seconds", 5),
-        ("bug", "positive_control", False),
+        ("head", "resume_errors", ["bootstrap failed"]),
     ]:
         changed = json.loads(json.dumps(data))
         changed[side][key] = value

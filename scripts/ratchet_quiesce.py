@@ -1,4 +1,4 @@
-"""Real launchd replay on GitHub macOS only; local tests must use fake commands."""
+"""Real launchd replay on GitHub macOS only; local tests use fake commands."""
 
 from __future__ import annotations
 
@@ -75,7 +75,6 @@ def replay(source, home, mapping):
 
     if Path(maintenance.__file__).resolve() != source / "src/brainlayer/maintenance.py":
         raise RuntimeError("maintenance imported from a different checkout")
-    # This is configuration injection, never a replacement quiesce/state algorithm.
     with (
         patch.dict(os.environ, {"HOME": str(home), "BRAINLAYER_MAINTENANCE_KEEP_DOWN": ""}),
         patch.object(maintenance, "_launchd_label", side_effect=lambda service: mapping[service]),
@@ -112,7 +111,6 @@ def replay(source, home, mapping):
         wait_until(loaded, "initial subject bootstrap")
         if disabled() is not False:
             raise RuntimeError("watchdog was not enabled initially")
-        # Positive control: prove this exact watchdog revives this exact subject.
         launchctl("bootout", f"gui/{os.getuid()}/{mapping['brainbar-daemon']}", check=True)
         wait_until(lambda: not loaded(), "positive-control subject bootout")
         wait_until(loaded, "positive-control watchdog revival")
@@ -131,8 +129,9 @@ def replay(source, home, mapping):
                 time.sleep(0.2)
         finally:
             failures = maintenance._resume_services(source, ("brainbar-daemon",), stopped)
-            if failures:
-                raise RuntimeError(f"real resume failed: {failures}")
+        # The bug's already-revived subject can reject bootstrap; verify actual restored state below.
+        if failures and not revived:
+            raise RuntimeError(f"real resume failed: {failures}")
         wait_until(lambda: loaded() and maintenance._service_is_loaded("fleet-watchdog"), "both jobs resumed")
         if disabled() is not False:
             raise RuntimeError("watchdog still disabled after resume")
@@ -140,6 +139,7 @@ def replay(source, home, mapping):
         if not marker_removed:
             raise RuntimeError("watchdog hold marker left behind")
         return {
+            "resume_errors": [f"{service}: {type(error).__name__}" for service, error in failures],
             "revived": revived,
             "held": held,
             "resumed": True,
