@@ -38,6 +38,14 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.48] - 2026-10-06
+
+### Fixed
+- Maintenance backup readiness and fleet quiescence safeguards (#1071, #1076).
+
+### Changed
+- Queue pre-push and release test suites through the shared heavy-suite lock (#1074).
+
 ## [1.5.47] - 2026-10-05
 - BrainBar maintenance/job alerts: show each alert once per screen with its actual reason and Show log, clear it after a clean run, and use amber warnings for moderate warm-search latency (#1061, #1062).
 - Backups: rename verification to Recovery checks, centre status dots, and consolidate the Config file path row (#1064).
