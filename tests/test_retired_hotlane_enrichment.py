@@ -44,21 +44,64 @@ def test_hotlane_retired_enrichment_preserves_local_vectors(tmp_path, caplog, sp
         store.close()
 
 
-def test_hotlane_has_no_enrichment_controller_dependency(monkeypatch):
+def test_hotlane_has_no_enrichment_controller_dependency(monkeypatch, tmp_path):
     import builtins
     import sys
+    from types import SimpleNamespace
 
     original_import = builtins.__import__
 
-    def local_import(name, *args, **kwargs):
-        if name == "brainlayer.enrichment_controller" or name.startswith(("google.genai", "google.generativeai")):
-            raise AssertionError(f"retired hotlane dependency: {name}")
-        return original_import(name, *args, **kwargs)
+    def local_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if (
+            name == "brainlayer.enrichment_controller"
+            or (name == "brainlayer" and "enrichment_controller" in (fromlist or ()))
+            or name.startswith(("google.genai", "google.generativeai"))
+        ):
+            raise AssertionError(f"retired hotlane dependency: {name} {fromlist}")
+        return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", local_import)
-    sys.modules.pop("scripts.hotlane_brainbar_daemon", None)
+    monkeypatch.delitem(sys.modules, "brainlayer.enrichment_controller", raising=False)
+    monkeypatch.delitem(sys.modules, "scripts.hotlane_brainbar_daemon", raising=False)
     hotlane = importlib.import_module("scripts.hotlane_brainbar_daemon")
     assert hotlane.get_embedding_model.__module__ == "brainlayer.embeddings"
+    assert "brainlayer.enrichment_controller" not in sys.modules
+
+    run = hotlane.run
+    calls = []
+    monkeypatch.setattr(hotlane, "run", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(hotlane.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(sys, "argv", ["hotlane"])
+    hotlane.main()
+    assert len(calls) == 1
+    assert "brainlayer.enrichment_controller" not in sys.modules
+
+    run(
+        db_path=tmp_path / "synthetic.db",
+        interval=0.25,
+        recent_limit=5,
+        backlog_interval=1.0,
+        backlog_batch=0,
+        enrich_interval=0.0,
+        enrich_limit=0,
+        enrich_since_hours=0,
+        max_cycles=1,
+        model_factory=lambda: SimpleNamespace(embed_query=lambda text: [0.125] * 1024),
+        vector_store_cls=lambda path: SimpleNamespace(close=lambda: None),
+        cycle_fn=lambda **kwargs: hotlane.CycleResult(),
+        queue_dir=tmp_path / "queue",
+        sleep_fn=lambda seconds: None,
+    )
+    assert "brainlayer.enrichment_controller" not in sys.modules
+
+
+def test_hotlane_source_has_no_enrichment_controller_reference():
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "scripts/hotlane_brainbar_daemon.py"
+    tree = ast.parse(source.read_text())
+    assert "enrichment_controller" not in ast.dump(tree)
 
 
 def test_hotlane_cli_advertises_only_local_work(monkeypatch, capsys):
@@ -74,15 +117,37 @@ def test_hotlane_cli_advertises_only_local_work(monkeypatch, capsys):
     assert "--enrich-" not in help_text
 
 
-@pytest.mark.parametrize("option", ["--enrich-limit", "--enrich-interval", "--enrich-since-hours"])
-def test_hotlane_cli_rejects_retired_cloud_options(monkeypatch, capsys, option):
+@pytest.mark.parametrize("legacy_values", [("10.0", "0", "87600"), ("0", "0", "0"), ("1", "25", "87600")])
+def test_hotlane_cli_accepts_retired_plist_options_as_noops(monkeypatch, caplog, legacy_values):
     import sys
 
     hotlane = importlib.import_module("scripts.hotlane_brainbar_daemon")
-    monkeypatch.setattr(sys, "argv", ["hotlane", option, "25"])
-    monkeypatch.setattr(hotlane, "run", MagicMock())
-    with pytest.raises(SystemExit) as error:
-        hotlane.main()
-    assert error.value.code == 2
-    assert "unrecognized arguments" in capsys.readouterr().err
-    hotlane.run.assert_not_called()
+    argv = [
+        "hotlane",
+        "--interval",
+        "1.0",
+        "--recent-limit",
+        "5",
+        "--backlog-interval",
+        "7.0",
+        "--backlog-batch",
+        "16",
+        "--enrich-interval",
+        legacy_values[0],
+        "--enrich-limit",
+        legacy_values[1],
+        "--enrich-since-hours",
+        legacy_values[2],
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(hotlane.signal, "signal", lambda *args: None)
+    calls = []
+    monkeypatch.setattr(hotlane, "run", lambda **kwargs: calls.append(kwargs))
+    hotlane.main()
+    assert len(calls) == 1
+    assert calls[0]["enrich_limit"] == 0
+    assert calls[0]["enrich_interval"] == 0.0
+    assert calls[0]["enrich_since_hours"] == 0
+    assert calls[0]["backlog_batch"] == 16
+    warnings = [record for record in caplog.records if "retired" in record.getMessage()]
+    assert len(warnings) == int(any(float(value) != 0 for value in legacy_values))

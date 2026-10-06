@@ -991,9 +991,16 @@ def main() -> None:
     parser.add_argument("--recent-limit", type=int, default=5)
     parser.add_argument("--backlog-interval", type=float, default=10.0)
     parser.add_argument("--backlog-batch", type=int, default=DEFAULT_BACKLOG_BATCH)
+    # Old installed plists outlive a keg upgrade. Remove these inert shims only
+    # after the lead receipts hotlane plist re-rendering on BOTH Macs.
+    parser.add_argument("--enrich-interval", type=float, default=0.0, help=argparse.SUPPRESS)
+    parser.add_argument("--enrich-limit", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--enrich-since-hours", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if any(value != 0 for value in (args.enrich_interval, args.enrich_limit, args.enrich_since_hours)):
+        LOGGER.warning("Hotlane enrichment options are retired and ignored; continuing local embedding")
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     run(
