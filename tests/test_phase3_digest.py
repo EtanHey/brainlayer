@@ -1,6 +1,7 @@
 """Phase 3: Brain Digest + Brain Entity tests."""
 
 from typing import List
+from unittest.mock import MagicMock
 
 from brainlayer.vector_store import VectorStore
 
@@ -128,28 +129,17 @@ def test_digest_content_extracts_entities(tmp_path):
     assert any("Etan" in n for n in entity_names) or any("Dor" in n for n in entity_names)
 
 
-def test_digest_content_persists_llm_people_entities_for_lookup(tmp_path, monkeypatch):
-    """brain_digest persists LLM-extracted people so brain_entity can find them."""
+def test_brain_digest_retired_ner_persists_seed_people_for_lookup(tmp_path, monkeypatch):
+    """Local participant seeds persist with evidence and no implicit model call."""
     from brainlayer.pipeline.digest import digest_content, entity_lookup
 
-    def fake_extraction(prompt):  # noqa: ARG001
-        return """
-        {
-          "entities": [
-            {"text": "Katya Taershmidt", "type": "person", "description": "Operations lead"},
-            {"text": "Rotem Maimon", "type": "person", "description": "Product strategist"},
-            {"text": "Israel Davidson", "type": "person", "description": "Engineering advisor"}
-          ],
-          "relations": []
-        }
-        """
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.call_gemini_for_extraction", fake_extraction)
+    cloud_extraction = MagicMock(side_effect=AssertionError("digest attempted implicit cloud NER"))
+    monkeypatch.setattr("brainlayer.enrichment_controller.call_gemini_for_extraction", cloud_extraction)
 
     store = VectorStore(tmp_path / "test.db")
     content = (
-        "PEOPLE-ROLES: Katya Taershmidt owns operations, Rotem Maimon handles product strategy, "
-        "and Israel Davidson advises engineering."
+        "PEOPLE-ROLES: Person Alpha owns operations, Person Beta handles product strategy, "
+        "and Person Gamma advises engineering."
     )
 
     result = digest_content(
@@ -157,14 +147,16 @@ def test_digest_content_persists_llm_people_entities_for_lookup(tmp_path, monkey
         store=store,
         embed_fn=_dummy_embed,
         project="kg-regression",
+        participants=["Person Alpha", "Person Beta", "Person Gamma"],
         faceted_enrich_fn=lambda **kw: {"status": "skipped"},
     )
 
     assert result["stats"]["entities_found"] >= 3
-    found = entity_lookup("Katya Taershmidt", store, _dummy_embed, entity_type="person")
+    found = entity_lookup("Person Alpha", store, _dummy_embed, entity_type="person")
     assert found is not None
-    assert found["name"] == "Katya Taershmidt"
+    assert found["name"] == "Person Alpha"
     assert found["evidence"]
+    cloud_extraction.assert_not_called()
 
 
 def test_digest_content_applies_sentiment(tmp_path):
