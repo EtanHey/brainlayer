@@ -522,30 +522,40 @@ def _watchdog_hold_lock(path: Path):
         os.close(fd)
 
 
-def _recover_watchdog_hold(path: Path, command_runner=None, alert_path: Path | None = None) -> bool:
+def _watchdog_hold_owner_alive(path: Path) -> bool | None:
     try:
         record = json.loads(path.read_text())
         pid, start = record["pid"], record["pid_start_time"]
         if path.is_symlink() or type(pid) is not int or pid <= 0 or not isinstance(start, str) or not start:
             raise ValueError
-        if _pid_is_alive(pid):
-            current = _pid_start_time(pid)
-            if not current:
-                raise ValueError
-            if current == start:
-                raise MaintenanceAbort(
-                    "watchdog hold owner alive", detail=f"hold-active:{_launchd_label('fleet-watchdog')}"
-                )
+        if not _pid_is_alive(pid):
+            return False
+        current = _pid_start_time(pid)
+        if not current:
+            raise ValueError
+        return current == start
     except FileNotFoundError:
-        return False
+        return None
     except (OSError, ValueError, KeyError, TypeError):
         raise MaintenanceAbort(
             "watchdog hold state unknown", detail=f"hold-state:{_launchd_label('fleet-watchdog')}"
         ) from None
+
+
+def _watchdog_recovery_paused(path: Path) -> bool:
     payload, active, _ = pause_sentinel_state(path.with_name("pause.sentinel"), dt.datetime.now(dt.UTC))
-    if (
-        active and pause_applies_to_label(payload, _launchd_label("fleet-watchdog"))
-    ) or "fleet-watchdog" in _maintenance_keep_down_services():
+    return bool(active and pause_applies_to_label(payload, _launchd_label("fleet-watchdog"))) or (
+        "fleet-watchdog" in _maintenance_keep_down_services()
+    )
+
+
+def _recover_watchdog_hold(path: Path, command_runner=None, alert_path: Path | None = None) -> bool:
+    owner_alive = _watchdog_hold_owner_alive(path)
+    if owner_alive is None:
+        return False
+    if owner_alive:
+        raise MaintenanceAbort("watchdog hold owner alive", detail=f"hold-active:{_launchd_label('fleet-watchdog')}")
+    if _watchdog_recovery_paused(path):
         raise MaintenanceAbort("watchdog recovery paused", detail=f"hold-state:{_launchd_label('fleet-watchdog')}")
     runner = command_runner or (lambda args: run_command(args, check=False))
     target = f"gui/{os.getuid()}"
@@ -578,7 +588,7 @@ def recover_fleet_watchdog_hold(
 
 
 @contextmanager
-def _sigterm_cleanup():
+def sigterm_cleanup():
     """Unwind CLI work on SIGTERM, allowing its finally to restore services."""
     if threading.current_thread() is not threading.main_thread():
         yield
@@ -647,6 +657,8 @@ def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> N
                 detail=f"bootout:{_launchd_label(service)}",
             )
         _wait_for_service_exit(service)
+        if service == "fleet-watchdog" and not disabled:
+            booted_out[service] = True  # An owned hold must restore even an already-absent supervisor.
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -958,7 +970,7 @@ def _serialize_maintenance(func: Callable[..., MaintenanceResult]) -> Callable[.
     return wrapped
 
 
-@_sigterm_cleanup()
+@sigterm_cleanup()
 def run_coordinated_fts_repair(db_path: Path, *, repo_root: Path | None = None) -> dict[str, int]:
     """Repair the configured DB only after resident writers have been quiesced."""
     with _maintenance_lock(db_path):
@@ -1271,7 +1283,7 @@ def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
     return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the failure; inspect {log_path}"
 
 
-@_sigterm_cleanup()
+@sigterm_cleanup()
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run safety-gated BrainLayer maintenance.")
     modes = parser.add_mutually_exclusive_group()

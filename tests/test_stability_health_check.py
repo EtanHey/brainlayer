@@ -59,6 +59,26 @@ def test_health_check_recovers_watchdog_hold_only_when_healing(tmp_path, monkeyp
     )
 
 
+def test_live_watchdog_hold_keeps_health_monitoring_without_healing(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    def active_hold(**kwargs):
+        raise maintenance.MaintenanceAbort("owner alive", detail="hold-active:com.etanhey.brainlayer-fleet-watchdog")
+
+    monkeypatch.setattr(maintenance, "recover_fleet_watchdog_hold", active_hold)
+    commands = []
+    _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(hours=1),
+        pending_store_count=2,
+        heal=True,
+        command_runner=lambda args: commands.append(args) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    assert commands  # State probes still monitor the fleet.
+    assert not any(args[1] in {"bootstrap", "bootout", "kickstart", "enable", "disable"} for args in commands)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
     """Isolate HealthCheckConfig defaults that point at live developer state.

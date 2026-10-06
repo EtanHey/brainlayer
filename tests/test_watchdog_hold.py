@@ -66,6 +66,17 @@ def test_operator_disable_without_hold_is_preserved(fleet):
     assert state["disabled"] and state["bootstraps"] == 1 and not marker.exists()
 
 
+def test_owned_hold_restores_an_already_absent_watchdog(fleet, monkeypatch):
+    marker, state, _ = fleet
+    state["loaded"] = False
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda service: service != "fleet-watchdog")
+    receipt = {}
+    maintenance._quiesce_services(("watch",), receipt)
+    maintenance._resume_services(marker.parent, ("watch",), receipt)
+    assert not state["disabled"] and state["loaded"] and state["bootstraps"] == 2
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize("step", ["enable", "bootstrap"])
 def test_failed_watchdog_resume_retains_owned_marker(fleet, monkeypatch, step):
     marker, _, _ = fleet

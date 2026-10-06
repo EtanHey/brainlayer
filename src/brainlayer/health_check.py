@@ -1296,6 +1296,7 @@ def _run_health_check_locked(
                 alert_path=config.job_alert_path,
             )
         except Exception as exc:
+            config = replace(config, heal=False)  # Monitor without reviving writers during an owned hold.
             if (
                 not isinstance(exc, MaintenanceAbort)
                 or exc.detail != "hold-active:com.etanhey.brainlayer-fleet-watchdog"
