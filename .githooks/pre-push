@@ -32,23 +32,30 @@ set -uo pipefail
 #   - a tag with no previous RELEASE tag has no range at all
 # In all five the scope is left exactly as the caller set it, and the reason is printed instead of
 # paid for silently.
+delete_refs=0
 tag_count=0
 non_tag_refs=0
 tag_name=""
 if [ ! -t 0 ]; then
   # `[ ! -t 0 ]` so a hand-run of this hook does not block reading a terminal.
-  while read -r local_ref local_sha _remote_ref _remote_sha; do
+  while read -r local_ref local_sha _remote_ref _remote_sha || [ -n "${local_ref:-}" ]; do
     [ -z "$local_ref" ] && continue
     case "$local_sha" in
       # An all-zero LOCAL sha is a DELETION: it ships no content, so there is nothing to test.
-      *[!0]*) ;;
-      *) continue ;;
+      ""|*[!0]*) ;;
+      *) delete_refs=$((delete_refs + 1)); continue ;;
     esac
     case "$local_ref" in
       refs/tags/*) tag_count=$((tag_count + 1)); tag_name="${local_ref#refs/tags/}" ;;
       *) non_tag_refs=$((non_tag_refs + 1)) ;;
     esac
   done
+fi
+
+# No content moves in a delete-only push. Empty stdin remains a normal manual gate.
+if [ "$delete_refs" -gt 0 ] && [ "$tag_count" -eq 0 ] && [ "$non_tag_refs" -eq 0 ]; then
+  echo "==> pre-push: delete-only push — no content to test; skipping suite"
+  exit 0
 fi
 
 if [ "$tag_count" -gt 0 ]; then

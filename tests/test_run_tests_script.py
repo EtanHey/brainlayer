@@ -1451,9 +1451,8 @@ def test_pre_push_hook_ignores_a_tag_deletion(tmp_path: Path) -> None:
     result = _run_hook(repo, env_log, f"(delete) {'0' * 40} refs/tags/v1.1.0 {sha}\n")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    handed = env_log.read_text()
-    assert "SCOPE=<unset>" in handed
-    assert "RANGE=<unset>" in handed
+    assert not env_log.exists(), "a tag deletion must not start the suite"
+    assert "delete-only" in result.stdout
 
 
 def test_pre_push_hook_respects_an_explicit_changed_set_on_a_tag_push(tmp_path: Path) -> None:

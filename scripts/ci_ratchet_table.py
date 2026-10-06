@@ -75,6 +75,7 @@ import shutil
 import socket as socket_module
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
@@ -1677,6 +1678,65 @@ def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
     return Row("fallback replay debt", RED, value, method, FALLBACK_NOTES)
 
 
+PRE_PUSH_DELETE_BUG_SHA = "44ecbf5ba6f1ada3b965797559eee90c94b45595"
+DELETE_REF = f"(delete) {'0' * 40} refs/heads/fixture {'a' * 40}\n"
+
+
+def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[str], int]:
+    """Execute the checkout's real hook; only its expensive suite is a sentinel."""
+    bash = shutil.which("bash")
+    if bash is None:
+        raise FileNotFoundError("bash binary unavailable for real hook replay")
+    with tempfile.TemporaryDirectory(prefix="brainlayer-prepush-") as directory:
+        fixture = Path(directory)
+        scripts = fixture / "scripts"
+        (scripts / "ci").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/ci/run_with_deadline.py", scripts / "ci/run_with_deadline.py")
+        sentinel = fixture / "suite-starts"
+        (scripts / "run_tests.sh").write_text('echo started >> "$SUITE_STARTS"\n', encoding="utf-8")
+        env = {
+            key: value
+            for key, value in _clean_git_env().items()
+            if not key.startswith(("BRAINLAYER_", "GOLEMS_HEAVY_"))
+        }
+        env.update(
+            HOME=str(fixture),
+            GOLEMS_HEAVY_SUITE_HELPER=str(fixture / "absent-helper"),
+            SUITE_STARTS=str(sentinel),
+        )
+        result = subprocess.run(
+            [bash, str(hook.resolve()), "origin", "fixture.invalid"],
+            cwd=fixture,
+            input=refs,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            env=env,
+            check=False,
+        )
+        starts = len(sentinel.read_text().splitlines()) if sentinel.exists() else 0
+        return result, starts
+
+
+def row_pre_push_delete(probe: Probe, _corpus: dict) -> Row:
+    name = "pre-push: delete-only push runs no suite"
+    method = "real checkout hook · delete-only stdin · sentinel suite runner"
+    notes = (
+        f"Bug SHA: `{PRE_PUSH_DELETE_BUG_SHA}` (RED replay, 2026-10-06). "
+        f"Fix: #1084; measured at `{probe.measured_sha or probe.head_sha or 'unread'}`. "
+        "Ceiling: **0 suite starts**; hook must exit 0 and announce the delete-only skip."
+    )
+    try:
+        result, starts = replay_pre_push(ROOT / ".githooks/pre-push", DELETE_REF)
+    except (OSError, subprocess.SubprocessError) as error:
+        return Row(name, RED, f"n/a — real hook replay failed: {error}", method, notes)
+    passed = result.returncode == 0 and starts == 0 and "delete-only" in result.stdout
+    value = f"{starts} suite starts · exit {result.returncode}"
+    if not passed:
+        value += f" · replay output: {result.stdout.strip()} {result.stderr.strip()}"
+    return Row(name, GREEN if passed else RED, value, method, notes)
+
+
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
 # reader has to see that sha before reading a number measured against it. `baseline attestation`
 # is second for the same reason: it names what the numbers are measured AGAINST.
@@ -1685,6 +1745,7 @@ ROW_BUILDERS = (
     row_baseline_attestation,
     row_provenance,
     row_fallback_debt,
+    row_pre_push_delete,
     row_mapped_bytes,
     row_search_latency,
     row_idle_cpu,
