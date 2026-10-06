@@ -1,10 +1,9 @@
-"""Regression tests for cloud_backfill batch export helpers."""
+"""Compatibility tests for historical batch checkpoints and local result replay."""
 
 import json
 import sqlite3
 
 import apsw
-import pytest
 
 import brainlayer.cloud_backfill as cloud_backfill
 from brainlayer.vector_store import VectorStore
@@ -32,14 +31,6 @@ def _insert_unenriched_chunk(
             None,
         ),
     )
-
-
-def test_estimate_batch_cost_uses_discounted_batch_rates():
-    """Batch usage cost helper should apply the documented 50% discount."""
-    cost = cloud_backfill.estimate_batch_cost_usd(1_000_000, 2_000_000)
-
-    assert cost == pytest.approx(0.45)
-    assert cloud_backfill.estimate_batch_cost_usd(0, 0) == 0
 
 
 def test_checkpoint_sidecar_db_migrates_legacy_rows_and_keeps_new_writes_off_main_db(tmp_path, monkeypatch):
@@ -202,27 +193,6 @@ def test_get_pending_jobs_is_scoped_to_the_selected_db(tmp_path, monkeypatch):
     finally:
         store_a.close()
         store_b.close()
-
-
-def test_record_batch_usage_counts_against_enrichment_daily_cap(tmp_path, monkeypatch):
-    """Batch usage should spend from the same enrichment daily cost counter."""
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
-    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "0.10")
-
-    first_cost = cloud_backfill.record_batch_usage_against_daily_cap(1_000_000, 0)
-
-    assert first_cost == pytest.approx(0.05)
-    counter = json.loads((tmp_path / "enrich-daily-cost.json").read_text(encoding="utf-8"))
-    assert counter["spent_usd"] == pytest.approx(0.05)
-
-    second_cost = cloud_backfill.record_batch_usage_against_daily_cap(2_000_000, 0)
-    assert second_cost == pytest.approx(0.10)
-
-    counter = json.loads((tmp_path / "enrich-daily-cost.json").read_text(encoding="utf-8"))
-    assert counter["spent_usd"] == pytest.approx(0.15)
-
-    with pytest.raises(RuntimeError, match="ENRICH_DAILY_CAP_REACHED"):
-        cloud_backfill.record_batch_usage_against_daily_cap(1, 0)
 
 
 def test_import_results_commits_canonical_fields_for_unenriched_chunks(tmp_path, monkeypatch):

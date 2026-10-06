@@ -89,3 +89,40 @@ def test_batch_backlog_export_helpers_are_removed(name):
     from brainlayer import cloud_backfill
 
     assert not hasattr(cloud_backfill, name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_get_genai_client",
+        "poll_gemini_batch",
+        "get_gemini_batch_state",
+        "download_gemini_results",
+        "_extract_usage_metadata",
+        "log_batch_usage",
+        "record_batch_usage_against_daily_cap",
+        "estimate_batch_cost_usd",
+    ],
+)
+def test_batch_remote_client_and_producer_accounting_are_removed(name):
+    from brainlayer import cloud_backfill
+
+    assert not hasattr(cloud_backfill, name)
+
+
+def test_batch_replay_module_contains_no_provider_import_or_batch_file_call():
+    import ast
+
+    from brainlayer import cloud_backfill
+    from brainlayer.pipeline.sanitize import Sanitizer
+
+    tree = ast.parse(Path(cloud_backfill.__file__).read_text())
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.extend(f"{node.module}.{alias.name}" for alias in node.names)
+    assert not any(name.startswith(("google.genai", "google.generativeai", "requests")) for name in imports)
+    assert not any(isinstance(node, ast.Attribute) and node.attr in {"batches", "files"} for node in ast.walk(tree))
+    assert callable(Sanitizer)  # Public local API survives removal of its batch producer caller.
