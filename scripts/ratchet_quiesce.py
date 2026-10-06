@@ -123,8 +123,11 @@ def replay(source, home, mapping):
             maintenance._quiesce_services(("brainbar-daemon",), stopped)
             deadline = time.monotonic() + WINDOW
             while time.monotonic() < deadline:
-                revived |= loaded()
-                held &= disabled() is True and not maintenance._service_is_loaded("fleet-watchdog")
+                subject_loaded = loaded()
+                revived |= subject_loaded
+                held &= (
+                    not subject_loaded and disabled() is True and not maintenance._service_is_loaded("fleet-watchdog")
+                )
                 time.sleep(0.2)
             revived &= watchdog_log.read_text().count("re-bootstrapped") > revivals_before
         finally:
