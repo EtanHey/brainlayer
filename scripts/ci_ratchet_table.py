@@ -1708,12 +1708,12 @@ def row_spacy_model(probe: Probe, _corpus: dict) -> Row:
             or payload.get("scope") not in ("candidate", "published")
             or not payload.get("python")
             or type(payload.get("published_loaded")) is not bool
+            or (payload.get("scope") == "published" and payload.get("loaded") != payload.get("published_loaded"))
         ):
             raise ValueError("incomplete report or wrong commit")
         published = "PASS" if payload["published_loaded"] else "FAIL"
         value = (
-            f"baseline `{SPACY_BUG_SHA}`: FAIL (E050); fix `{fix}`: "
-            f"{payload['scope']} · published {published} · model/NER "
+            f"fix `{fix}`: {payload['scope']} · published {published} · model/NER "
             f"{'PASS' if payload.get('loaded') is True else 'FAIL'}"
         )
         status = GREEN if payload.get("loaded") is True else RED

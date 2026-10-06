@@ -131,7 +131,11 @@ def test_spacy_row_measured_pass_and_failed_published_are_distinct(tmp_path, sco
     row = ratchet.row_spacy_model(probe, {})
     assert row.status == ratchet.GREEN
     assert f"{scope} · published {'PASS' if scope == 'published' else 'FAIL'}" in row.value
-    assert ratchet.SPACY_BUG_SHA in row.value and "a" * 40 in row.value
+    assert ratchet.SPACY_BUG_SHA in row.notes and "a" * 40 in row.value
+    payload = json.loads(path.read_text())
+    payload.update(scope="published", published_loaded=False)
+    path.write_text(json.dumps(payload))
+    assert ratchet.row_spacy_model(probe, {}).status == ratchet.RED
 
 
 def test_spacy_workflow_defaults_to_published_and_opt_in_is_explicit():
