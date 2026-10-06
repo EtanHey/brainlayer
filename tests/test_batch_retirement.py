@@ -63,3 +63,10 @@ def test_batch_submission_orchestrator_is_removed():
     from brainlayer import cloud_backfill
 
     assert not hasattr(cloud_backfill, "run_full_backfill")
+
+
+@pytest.mark.parametrize("name", ["process_pending_jobs_once", "resume_backfill"])
+def test_batch_remote_resume_executors_are_removed(name):
+    from brainlayer import cloud_backfill
+
+    assert not hasattr(cloud_backfill, name)
