@@ -23,7 +23,7 @@
 #   ./scripts/launchd/install.sh fleet-watchdog # Install com.brainlayer.* revival watchdog only
 #   ./scripts/launchd/install.sh fleet-watchdog-quiesce # Disable + bootout the fleet watchdog (upgrades)
 #   ./scripts/launchd/install.sh fleet-watchdog-resume  # Re-enable + bootstrap the fleet watchdog
-#   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
+#   ./scripts/launchd/install.sh hotlane      # Install BrainBar local hotlane embedding daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
@@ -1308,7 +1308,6 @@ case "${1:-all}" in
         resume_fleet_watchdog
         ;;
     hotlane|hotlane-brainbar)
-        verify_gemini_env_file
         install_plist hotlane-brainbar
         ;;
     p0-counter)
