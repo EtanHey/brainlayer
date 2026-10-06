@@ -64,10 +64,14 @@ def test_hotlane_template_arguments_match_local_cli(monkeypatch):
     hotlane = importlib.import_module("scripts.hotlane_brainbar_daemon")
     config = plistlib.loads((REPO_ROOT / "scripts/launchd/com.brainlayer.hotlane-brainbar.plist").read_bytes())
     calls = []
-    monkeypatch.setattr(sys, "argv", ["hotlane", *config["ProgramArguments"][3:]])
     monkeypatch.setattr(hotlane, "run", lambda **kwargs: calls.append(kwargs))
     monkeypatch.setattr(hotlane.signal, "signal", lambda *args: None)
-    hotlane.main()
-    assert len(calls) == 1
-    assert calls[0]["backlog_batch"] == 16
-    assert calls[0]["enrich_limit"] == 0
+    local_args = config["ProgramArguments"][3:]
+    old_1548_args = ["--enrich-interval", "10.0", "--enrich-limit", "0", "--enrich-since-hours", "87600"]
+    for args in (local_args, [*local_args, *old_1548_args]):
+        calls.clear()
+        monkeypatch.setattr(sys, "argv", ["hotlane", *args])
+        hotlane.main()
+        assert len(calls) == 1
+        assert calls[0]["backlog_batch"] == 16
+        assert calls[0]["enrich_limit"] == 0
