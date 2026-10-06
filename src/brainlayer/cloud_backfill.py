@@ -22,10 +22,10 @@ Usage:
     python3 scripts/cloud_backfill.py --status
 """
 
-import argparse
 import json
 import os
 import sqlite3
+import sys
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -1463,46 +1463,9 @@ def show_status(db_path: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Cloud backfill for BrainLayer enrichment")
-    parser.add_argument("--db", type=str, default=None, help="Database path")
-    parser.add_argument(
-        "--model",
-        type=str,
-        default=DEFAULT_BATCH_MODEL,
-        help=f"Gemini batch model (default: {DEFAULT_BATCH_MODEL})",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Export JSONL only, don't submit")
-    parser.add_argument("--sample", type=int, default=0, help="Run N-chunk validation sample")
-    parser.add_argument("--resume", action="store_true", help="Resume pending batch jobs")
-    parser.add_argument("--status", action="store_true", help="Show batch job status")
-    parser.add_argument(
-        "--no-sanitize",
-        action="store_true",
-        help="Skip PII sanitization (local testing only — NEVER use for external APIs)",
-    )
-    parser.add_argument(
-        "--submit-only",
-        action="store_true",
-        help="Submit batch jobs and exit — don't poll. Use --resume later to import.",
-    )
-
-    args = parser.parse_args()
-    db = Path(args.db) if args.db else DEFAULT_DB_PATH
-
-    if args.status:
-        show_status(db)
-    elif args.resume:
-        resume_backfill(db)
-    else:
-        run_full_backfill(
-            db,
-            model=args.model,
-            dry_run=args.dry_run,
-            sample=args.sample,
-            no_sanitize=args.no_sanitize,
-            submit_only=args.submit_only,
-        )
-    return 0
+    """Fail stale batch commands before opening a database or creating a client."""
+    print("ERROR: batch enrichment is retired; checkpoints and local result replay are preserved", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
