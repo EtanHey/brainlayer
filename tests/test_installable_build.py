@@ -3329,7 +3329,7 @@ def test_launchd_all_never_attempts_enrichment_bootstrap(tmp_path: Path) -> None
     assert not any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
 
 
-def test_launchd_all_leaves_legacy_enrich_untouched_despite_sibling_failure(
+def test_launchd_all_cleans_legacy_enrich_despite_sibling_failure(
     tmp_path: Path,
 ) -> None:
     fake_bin = tmp_path / "bin"
@@ -3350,6 +3350,9 @@ def test_launchd_all_leaves_legacy_enrich_untouched_despite_sibling_failure(
     fake_launchctl.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir()
+    legacy = home / "Library/LaunchAgents/com.brainlayer.enrich.plist"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("historical legacy plist")
     env_file = tmp_path / "brainlayer.env"
     _write_full_launchd_env(env_file)
 
@@ -3374,7 +3377,8 @@ def test_launchd_all_leaves_legacy_enrich_untouched_despite_sibling_failure(
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode != 0
     assert "repair bootstrap failed" in result.stderr
-    assert not any("com.brainlayer.enrich" in command for command in commands)
+    assert any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
+    assert not legacy.exists()
 
 
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
