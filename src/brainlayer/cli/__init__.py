@@ -2600,32 +2600,32 @@ def consolidate(
 
 @app.command("enrich", hidden=True)
 def enrich(
-    mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
-    limit: Optional[int] = typer.Option(
+    _mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
+    _limit: Optional[int] = typer.Option(
         None,
         "--limit",
         "-n",
         help="Realtime: max chunks to process. Batch submit/run: optional sample size; defaults to all.",
     ),
-    since_hours: Optional[int] = typer.Option(
+    _since_hours: Optional[int] = typer.Option(
         None,
         "--since-hours",
         help=(
             f"Realtime mode: only enrich chunks from the last N hours. Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h"
         ),
     ),
-    phase: str = typer.Option(
+    _phase: str = typer.Option(
         "run",
         "--phase",
         help="Batch mode phase: submit, poll, import, run, status, drain-submit, drain-poll, drain-import, drain-run",
     ),
-    model: str = typer.Option(
+    _model: str = typer.Option(
         "models/gemini-2.5-flash-lite",
         "--model",
         help="Batch mode Gemini model override",
     ),
-    stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
-    supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
+    _stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
+    _supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
 ) -> None:
     """Compatibility error for retired enrichment commands."""
     rprint("[bold red]Enrichment has been retired.[/] Local indexing, embeddings and search remain available.")
