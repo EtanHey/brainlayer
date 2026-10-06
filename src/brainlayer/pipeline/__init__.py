@@ -2,7 +2,6 @@
 
 from .chunk import chunk_content
 from .classify import classify_content
-from .enrichment import build_external_prompt
 from .extract import extract_system_prompts
 from .extract_markdown import (
     classify_by_path,
@@ -42,6 +41,4 @@ __all__ = [
     "SanitizeConfig",
     "SanitizeResult",
     "Replacement",
-    # External enrichment (sanitized)
-    "build_external_prompt",
 ]
