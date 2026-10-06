@@ -393,8 +393,8 @@ def test_live_apply_quiesces_all_writers_and_preserves_enrichment_pause(db, live
 @pytest.mark.parametrize("fail_apply", [False, True])
 @pytest.mark.parametrize("operator_disabled", [False, True])
 def test_guarded_restoration_preserves_real_fleet_pause(db, live_guard, monkeypatch, fail_apply, operator_disabled):
-    from brainlayer import maintenance
-    from brainlayer import scrub_at_rest as scrub_module
+    import brainlayer.maintenance as maintenance
+    import brainlayer.scrub_at_rest as scrub_module
 
     labels = ["com.brainlayer.enrichment"] + ([] if operator_disabled else ["com.etanhey.brainlayer-fleet-watchdog"])
     live_guard.pause.write_text(json.dumps({"labels": labels}))
@@ -883,8 +883,8 @@ def test_quiesced_loaded_job_names_exact_label(db, live_guard, monkeypatch, serv
 
 
 def test_quiesced_lsof_failure_has_gate_detail_without_values(db, live_guard, monkeypatch):
-    from brainlayer import maintenance
-    from brainlayer import scrub_at_rest as module
+    import brainlayer.maintenance as maintenance
+    import brainlayer.scrub_at_rest as module
 
     monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _, **kwargs: False)
 
