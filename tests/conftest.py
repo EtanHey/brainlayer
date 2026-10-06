@@ -226,6 +226,51 @@ def disable_live_gemini_for_unit_tests(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
+    """Fail even when a retired entrypoint swallows a cloud-factory exception.
+
+    Scope this to retired CLI/MCP/store tests; retained producer fixtures and
+    the non-enrichment cloud exceptions continue to exercise their own mocks.
+    SDK class initialization is patched in place so pre-bound aliases cannot evade
+    the guard. The teardown assertion also catches attempts in joined threads.
+    """
+    retired = (
+        request.node.path.name == "test_cli_enrich.py"
+        or request.node.name.startswith("test_brain_enrich_handler_")
+        or "TestStoreAutoEnrich" in request.node.nodeid
+    )
+    if not retired:
+        yield
+        return
+
+    import httpx
+    import requests
+    from google.genai import client
+
+    from brainlayer import enrichment_controller
+    from brainlayer.pipeline import enrichment
+
+    attempts = []
+
+    def forbidden(name):
+        def fail(*_args, **_kwargs):
+            attempts.append(name)
+            raise AssertionError(f"Forbidden cloud construction/send: {name}")
+
+        return fail
+
+    for cls in (client.Client, client.AsyncClient, httpx.Client, httpx.AsyncClient):
+        monkeypatch.setattr(cls, "__init__", forbidden(f"{cls.__module__}.{cls.__name__}"))
+    monkeypatch.setattr(requests.Session, "request", forbidden("requests.Session.request"))
+    monkeypatch.setattr(enrichment_controller, "_get_gemini_client", forbidden("_get_gemini_client"))
+    monkeypatch.setattr(enrichment, "call_llm", forbidden("call_llm"))
+    monkeypatch.setenv("GOOGLE_API_KEY", "synthetic-retirement-key")
+    monkeypatch.setenv("GROQ_API_KEY", "synthetic-retirement-key")
+    yield
+    assert not attempts, f"Cloud construction/send attempted in retirement test: {attempts}"
+
+
+@pytest.fixture(autouse=True)
 def isolate_backup_daily_log(monkeypatch, tmp_path):
     """Keep backup_daily tests and subprocesses from appending to the production heartbeat log."""
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "pytest-backup-daily.log"))
