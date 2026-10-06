@@ -48,10 +48,6 @@ export const BRAINBAR_MCP_TOOL_GROUPS = [
         name: "brain_archive",
         desc: "Archive a chunk while preserving its audit trail",
       },
-      {
-        name: "brain_enrich",
-        desc: "Backfill summaries and enrichment metadata",
-      },
     ],
   },
   {
@@ -91,4 +87,4 @@ export const BRAINBAR_MCP_TOOL_COUNT = BRAINBAR_MCP_TOOL_GROUPS.reduce(
   0,
 );
 
-export const PYTHON_MCP_TOOL_COUNT = 13;
+export const PYTHON_MCP_TOOL_COUNT = 12;
