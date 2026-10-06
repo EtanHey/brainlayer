@@ -1584,31 +1584,28 @@ def test_telemetry_enrichment_helpers_exist():
 
 
 @pytest.mark.asyncio
-async def test_brain_enrich_handler_returns_error_for_unknown_mode(monkeypatch):
+@pytest.mark.parametrize("mode", ["unknown", "realtime", "batch"])
+async def test_brain_enrich_handler_is_retired_before_database_access(monkeypatch, mode):
     from brainlayer.mcp.enrich_handler import _brain_enrich
 
-    result = await _brain_enrich(mode="unknown")
+    forbidden_db = MagicMock(side_effect=AssertionError("retired handler opened DB"))
+    monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", forbidden_db, raising=False)
+    result = await _brain_enrich(mode=mode, phase="submit", chunk_ids=["synthetic"])
     assert result.is_error is True
-    assert "Unknown mode" in result.content[0].text
+    assert "Enrichment has been retired" in result.content[0].text
+    forbidden_db.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_brain_enrich_handler_stats_mode(monkeypatch):
+async def test_brain_enrich_handler_stats_is_retired_without_reading_metadata(monkeypatch):
     from brainlayer.mcp.enrich_handler import _brain_enrich
 
-    store = MagicMock()
-    cursor = MagicMock()
-    cursor.execute.return_value.fetchone.return_value = (100,)
-    store._read_cursor.return_value = cursor
-
-    monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", lambda: store)
-
+    forbidden_db = MagicMock(side_effect=AssertionError("retired stats opened DB"))
+    monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", forbidden_db, raising=False)
     result = await _brain_enrich(stats=True)
-    assert result.is_error is not True
-    text = result.content[0].text
-    # _enrich_stats returns formatted text with box-drawing chars, not JSON
-    assert "Total:" in text
-    assert "Enriched:" in text
+    assert result.is_error is True
+    assert "Enrichment has been retired" in result.content[0].text
+    forbidden_db.assert_not_called()
 
 
 @pytest.mark.asyncio

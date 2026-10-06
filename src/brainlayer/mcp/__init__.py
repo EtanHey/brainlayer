@@ -26,7 +26,6 @@ from mcp.types import (
     Tool as _McpTool,
 )
 
-from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ._shared import (  # noqa: I001
     _auto_importance as _auto_importance,
 )
@@ -43,7 +42,6 @@ from ._shared import (
 from ._shared import (
     _normalize_project_name as _normalize_project_name,
 )
-from .enrich_handler import _brain_enrich
 from .entity_handler import _brain_entity as _brain_entity
 from .entity_handler import _brain_get_person
 from .palette import EXPAND_TOOL_NAME, ToolPalette
@@ -1262,57 +1260,6 @@ def _full_tool_definitions() -> list[Tool]:
                 }
             ),
         ),
-        Tool(
-            name="brain_enrich",
-            title="Enrich Chunks",
-            description="""Backfill summaries and enrichment metadata on existing chunks.""",
-            annotations=_WRITE,
-            input_schema=_bounded_input_schema(
-                {
-                    "type": "object",
-                    "properties": {
-                        "mode": {
-                            "type": "string",
-                            "enum": ["realtime", "batch"],
-                            "default": "realtime",
-                            "description": "Enrichment mode: realtime (Gemini Flash) or batch (Gemini Batch API).",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "default": 25,
-                            "minimum": 1,
-                            "maximum": 5000,
-                            "description": "Maximum number of chunks to process.",
-                        },
-                        "since_hours": {
-                            "type": "integer",
-                            "default": DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
-                            "minimum": 1,
-                            "description": (
-                                "Only enrich chunks from the last N hours (realtime mode only). "
-                                f"Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h."
-                            ),
-                        },
-                        "phase": {
-                            "type": "string",
-                            "enum": ["submit", "poll", "import", "run"],
-                            "default": "run",
-                            "description": "Batch phase: submit (upload), poll (check), import (results), run (all-in-one).",
-                        },
-                        "chunk_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional: specific chunk IDs to enrich (realtime mode only).",
-                        },
-                        "stats": {
-                            "type": "boolean",
-                            "default": False,
-                            "description": "Return enrichment progress statistics without running enrichment.",
-                        },
-                    },
-                }
-            ),
-        ),
     ]
 
 
@@ -1621,16 +1568,6 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                 )
             ],
             is_error=True,
-        )
-
-    elif name == "brain_enrich":
-        return await _brain_enrich(
-            mode=arguments.get("mode", "realtime"),
-            limit=arguments.get("limit", 25),
-            since_hours=arguments.get("since_hours", DEFAULT_REALTIME_ENRICH_SINCE_HOURS),
-            phase=arguments.get("phase", "run"),
-            chunk_ids=arguments.get("chunk_ids"),
-            stats=arguments.get("stats", False),
         )
 
     # --- Backward-compat aliases (old tool names route to same handlers) ---

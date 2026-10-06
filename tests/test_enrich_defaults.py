@@ -18,7 +18,6 @@ def test_invalid_realtime_enrich_since_hours_env_falls_back(monkeypatch):
 
         assert config.DEFAULT_REALTIME_ENRICH_SINCE_HOURS == 8760
         assert cli.DEFAULT_REALTIME_ENRICH_SINCE_HOURS == 8760
-        assert mcp.DEFAULT_REALTIME_ENRICH_SINCE_HOURS == 8760
         assert enrich_handler.DEFAULT_REALTIME_ENRICH_SINCE_HOURS == 8760
     finally:
         monkeypatch.delenv("BRAINLAYER_DEFAULT_ENRICH_SINCE_HOURS", raising=False)

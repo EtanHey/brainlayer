@@ -1,13 +1,12 @@
-"""Tests for auto-enrichment on brain_store (R47 two-pass pattern).
+"""Library enrichment fixtures and retirement of store auto-enrichment.
 
-Pass 1: sync embedding (immediate, searchable) — already tested in test_deferred_embedding.py
-Pass 2: async Gemini enrichment (~600ms) — tested here
-
-Tests use mock Gemini client — no real API calls.
+Direct single-chunk tests mock Gemini. Store integration checks local embedding
+and queue flushing without invoking the retained library producer.
 """
 
 import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -300,22 +299,33 @@ class TestEnrichSingle:
 
 
 class TestStoreAutoEnrich:
-    """Test that brain_store's background thread triggers auto-enrichment."""
+    """Local embedding and queue flushing survive retirement of auto-enrichment."""
 
     @pytest.fixture(autouse=True)
     def _isolate_store_paths(self, tmp_path, monkeypatch):
         """Keep shared queue pressure and legacy flushes out of these store tests."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "synthetic-retirement-key")
+        monkeypatch.setenv("GROQ_API_KEY", "synthetic-retirement-key")
+        monkeypatch.setenv("BRAINLAYER_AUTO_ENRICH", "1")
         queue_dir = tmp_path / "queue"
         queue_dir.mkdir()
         monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
         monkeypatch.setenv("BRAINLAYER_DB", str(tmp_path / "test.db"))
 
     @pytest.mark.asyncio
-    async def test_store_triggers_enrich_single(self, tmp_path, monkeypatch):
-        """_store's background thread calls enrich_single after embedding."""
+    async def test_store_embeds_and_flushes_without_enrich_single(self, tmp_path, monkeypatch):
+        """The owned thread embeds and flushes without invoking a model producer."""
         from brainlayer.mcp import store_handler
 
         enriched_ids = []
+        flushed = []
+        original_flush = store_handler._flush_pending_stores
+
+        def tracking_flush(bg_store, embed_fn):
+            flushed.append(bg_store.db_path)
+            return original_flush(bg_store, embed_fn)
+
+        monkeypatch.setattr(store_handler, "_flush_pending_stores", tracking_flush)
 
         def mock_enrich_single(bg_store, cid):
             enriched_ids.append(cid)
@@ -358,16 +368,21 @@ class TestStoreAutoEnrich:
         started_threads[0].join(timeout=5.0)
         assert not started_threads[0].is_alive()
 
-        assert len(enriched_ids) == 1
-        assert enriched_ids[0] == chunk_id
+        assert enriched_ids == []
+        assert len(flushed) == 1
+        assert Path(flushed[0]) == db_path
+        assert test_store.conn.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone()
         test_store.close()
 
     @pytest.mark.asyncio
-    async def test_store_succeeds_when_enrichment_fails(self, tmp_path, monkeypatch):
-        """_store returns success even if auto-enrichment throws."""
+    async def test_store_receipt_and_embedding_do_not_require_enrichment(self, tmp_path, monkeypatch):
+        """The stored receipt and local vector do not depend on a cloud producer."""
         from brainlayer.mcp import store_handler
 
+        calls = []
+
         def mock_enrich_single(bg_store, cid):
+            calls.append(cid)
             raise RuntimeError("Gemini exploded")
 
         monkeypatch.setattr(
@@ -407,6 +422,11 @@ class TestStoreAutoEnrich:
         assert len(started_threads) == 1
         started_threads[0].join(timeout=5.0)
         assert not started_threads[0].is_alive()
+
+        assert calls == []
+        assert test_store.conn.execute(
+            "SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (structured["chunk_id"],)
+        ).fetchone()
 
         test_store.close()
 
