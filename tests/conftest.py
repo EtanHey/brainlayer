@@ -264,7 +264,10 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
 
     for cls in (client.Client, client.AsyncClient, httpx.Client, httpx.AsyncClient):
         monkeypatch.setattr(cls, "__init__", forbidden(f"{cls.__module__}.{cls.__name__}"))
+    for cls in (httpx.Client, httpx.AsyncClient):
+        monkeypatch.setattr(cls, "send", forbidden(f"{cls.__module__}.{cls.__name__}.send"))
     monkeypatch.setattr(requests.Session, "request", forbidden("requests.Session.request"))
+    monkeypatch.setattr(requests.Session, "send", forbidden("requests.Session.send"))
     monkeypatch.setattr(enrichment_controller, "_get_gemini_client", forbidden("_get_gemini_client"))
     monkeypatch.setattr(enrichment, "call_llm", forbidden("call_llm"))
     monkeypatch.setenv("GOOGLE_API_KEY", "synthetic-retirement-key")

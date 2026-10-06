@@ -49,6 +49,9 @@ def test_retirement_guard_works_without_collection_import_side_effects(target):
         "AsyncClient(api_client=None)",
         "httpx.Client()",
         "httpx.AsyncClient()",
+        "precreated_httpx.send(httpx.Request('POST', 'http://retirement.invalid'))",
+        "send_precreated_async()",
+        "precreated_requests.send(requests.Request('POST', 'http://retirement.invalid').prepare())",
     ],
 )
 def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
@@ -61,17 +64,48 @@ def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
     probe = f"""
 import pytest
 import httpx
+import requests
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 class Mutation:
     def pytest_collection_finish(self, session):
         # Conftest isolates config before these imports. Capture SDK aliases
         # before the guard is armed, and make an absent guard network-safe.
-        global Client, AsyncClient, controller, enrichment
+        global Client, AsyncClient, controller, enrichment, precreated_httpx, precreated_requests, send_precreated_async
         from google.genai.client import Client, AsyncClient
         from brainlayer import enrichment_controller as controller
         from brainlayer.pipeline import enrichment
         enrichment.GROQ_API_KEY = ''
         enrichment.ENRICH_BACKEND = 'groq'
+        if {"precreated" in attempt!r}:
+            transport = httpx.MockTransport(lambda req: httpx.Response(200, request=req))
+            precreated_httpx = httpx.Client(transport=transport, trust_env=False)
+            precreated_async = httpx.AsyncClient(transport=transport, trust_env=False)
+            precreated_requests = requests.Session()
+            precreated_requests.trust_env = False
+            class OfflineAdapter(requests.adapters.BaseAdapter):
+                def send(self, request, **kwargs):
+                    response = requests.Response()
+                    response.status_code = 200
+                    response._content = b'{{}}'
+                    response.request = request
+                    return response
+                def close(self):
+                    pass
+            precreated_requests.mount('http://', OfflineAdapter())
+            def send_precreated_async():
+                # Also works when the MCP test already owns an event loop.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    executor.submit(lambda: asyncio.run(precreated_async.send(
+                        httpx.Request('POST', 'http://retirement.invalid')))).result()
+            self.clients = (precreated_httpx, precreated_async, precreated_requests)
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        if hasattr(self, 'clients'):
+            self.clients[0].close()
+            asyncio.run(self.clients[1].aclose())
+            self.clients[2].close()
 
     def pytest_runtest_call(self, item):
         monkeypatch = item.funcargs['monkeypatch']
