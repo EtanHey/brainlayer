@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import plistlib
+import subprocess
 from pathlib import Path
 
 import apsw
@@ -60,6 +61,13 @@ def _config(tmp_path: Path, *, now: dt.datetime):
         idle_sample_seconds=0,
         recent_write_grace_seconds=0,
     )
+
+
+@pytest.fixture(autouse=True)
+def fake_watchdog_hold(monkeypatch):
+    from brainlayer import maintenance
+
+    monkeypatch.setattr(maintenance, "run_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
 
 
 def test_off_window_gate_aborts_before_touching_queue(tmp_path, monkeypatch):
@@ -217,7 +225,7 @@ def test_weekly_backup_timeout_aborts_before_destructive_work(tmp_path, monkeypa
 
     _create_enrichment_db(config.db_path)
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: False)
     checkpoints = []
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: checkpoints.append(1) or (0, 0, 0))
@@ -442,7 +450,7 @@ def test_coordinated_fts_repair_resumes_writers_after_repair_error(tmp_path, mon
     from brainlayer import maintenance, runtime_store
 
     events = []
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda service: events.append(("stop", service)) or True)
     monkeypatch.setattr(maintenance, "_resume_service", lambda _root, service: events.append(("start", service)))
 
@@ -454,9 +462,11 @@ def test_coordinated_fts_repair_resumes_writers_after_repair_error(tmp_path, mon
     with pytest.raises(RuntimeError, match="writer unavailable"):
         maintenance.run_coordinated_fts_repair(tmp_path / "fixture.db", repo_root=tmp_path)
     assert events == [
+        ("stop", "fleet-watchdog"),
         *(("stop", service) for service in maintenance.DEFAULT_SERVICES),
         ("open", "writer"),
         *(("start", service) for service in maintenance.DEFAULT_SERVICES),
+        ("start", "fleet-watchdog"),
     ]
 
 
@@ -484,7 +494,7 @@ def test_coordinated_fts_repair_resumes_every_successful_bootout(tmp_path, monke
     from brainlayer import maintenance, runtime_store
 
     resumed = []
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda service: service != "watch")
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: True)
     monkeypatch.setattr(maintenance, "_resume_service", lambda _root, service: resumed.append(service))
 
@@ -503,7 +513,7 @@ def test_coordinated_fts_repair_resumes_every_successful_bootout(tmp_path, monke
 
     monkeypatch.setattr(runtime_store, "WriterRuntimeStore", FakeStore)
     maintenance.run_coordinated_fts_repair(tmp_path / "fixture.db", repo_root=tmp_path)
-    assert resumed == list(maintenance.DEFAULT_SERVICES)
+    assert resumed == [*maintenance.DEFAULT_SERVICES, "fleet-watchdog"]
 
 
 def test_stale_queue_quarantine_moves_only_already_enriched_matching_hash(tmp_path):
@@ -743,7 +753,7 @@ def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_p
     quiesced: list[str] = []
     resumed: list[str] = []
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda service: quiesced.append(service) or True)
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
@@ -758,8 +768,8 @@ def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_p
     with pytest.raises(maintenance.MaintenanceAbort, match="failed to resume 1 launchd service"):
         maintenance.run_maintenance("light", config=config)
 
-    assert quiesced == list(maintenance.DEFAULT_SERVICES)
-    assert resumed == list(maintenance.DEFAULT_SERVICES)
+    assert quiesced == ["fleet-watchdog", *maintenance.DEFAULT_SERVICES]
+    assert resumed == [*maintenance.DEFAULT_SERVICES, "fleet-watchdog"]
 
 
 def test_maintenance_resumes_successful_bootout_even_after_stale_loaded_probe(tmp_path, monkeypatch, capsys):
@@ -773,11 +783,13 @@ def test_maintenance_resumes_successful_bootout_even_after_stale_loaded_probe(tm
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
 
     def fake_launchctl(args, **_kwargs):
+        if args[1] in {"disable", "enable", "print-disabled"}:
+            return subprocess.CompletedProcess(args, 0, "", "")
         assert args[:2] == ["launchctl", "print"]
-        service = args[-1].rsplit(".", 1)[-1]
+        service = "fleet-watchdog" if args[-1].endswith("fleet-watchdog") else args[-1].rsplit(".", 1)[-1]
         if ("probe", service) not in events:
             events.append(("probe", service))
-        returncode = 113 if service in {"watch", "enrichment"} else 0
+        returncode = 113 if service in {"watch", "enrichment"} or ("bootout", service) in events else 0
         stderr = "Could not find service" if returncode else ""
         return maintenance.subprocess.CompletedProcess(args, returncode, "", stderr)
 
@@ -789,7 +801,7 @@ def test_maintenance_resumes_successful_bootout_even_after_stale_loaded_probe(tm
     monkeypatch.setattr(maintenance, "_bootout_service", fake_bootout)
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: (0, 0, 0))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
-    monkeypatch.setattr(maintenance, "_service_is_deliberately_paused", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_service_is_deliberately_paused", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_resume_service", lambda _root, service: resumed.append(service))
 
     maintenance.run_maintenance("light", config=config)
@@ -797,9 +809,10 @@ def test_maintenance_resumes_successful_bootout_even_after_stale_loaded_probe(tm
     assert "watch" not in resumed, "maintenance resurrected a service that was down before quiesce"
     expected_services = list(maintenance.DEFAULT_SERVICES)
     expected_events = [("probe", service) for service in expected_services]
+    expected_events.extend([("bootout", "fleet-watchdog"), ("probe", "fleet-watchdog")])
     expected_events.extend(("bootout", service) for service in expected_services)
     assert events == expected_events
-    assert resumed == ["enrichment", "index", "drain"]
+    assert resumed == ["enrichment", "index", "drain", "fleet-watchdog"]
     assert "maintenance did not boot out service watch; leaving it down" in capsys.readouterr().err
 
 
@@ -825,8 +838,9 @@ def test_maintenance_aborts_before_db_work_when_launchd_state_is_unsafe(tmp_path
 
     assert commands == [["launchctl", "print", f"gui/{maintenance.os.getuid()}/com.brainlayer.watch"]]
     monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: False)
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
-    with pytest.raises(maintenance.MaintenanceAbort, match="failed to quiesce launchd service watch"):
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: True)
+    monkeypatch.setattr(maintenance, "run_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
+    with pytest.raises(maintenance.MaintenanceAbort, match="failed to quiesce launchd service fleet-watchdog"):
         maintenance._quiesce_services(("watch",), {})
 
 
@@ -838,7 +852,7 @@ def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_pa
     config.db_path.write_bytes(b"db")
     resumed: list[str] = []
     monkeypatch.setattr(maintenance, "collect_lsof_entries", lambda _paths: [])
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_bootout_service", lambda _service: True)
     monkeypatch.setattr(
         maintenance,
@@ -856,7 +870,7 @@ def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_pa
     with pytest.raises(maintenance.MaintenanceAbort, match="checkpoint failed") as exc_info:
         maintenance.run_maintenance("light", config=config)
 
-    assert resumed == list(maintenance.DEFAULT_SERVICES)
+    assert resumed == [*maintenance.DEFAULT_SERVICES, "fleet-watchdog"]
     assert "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in exc_info.value.reason
     assert any(
         "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in note
@@ -980,7 +994,7 @@ def test_small_latency_overshoot_completes_with_logged_warning(tmp_path, monkeyp
     _create_enrichment_db(config.db_path)
     monkeypatch.setattr(maintenance, "_run_gates", lambda _config: None)
     monkeypatch.setattr(maintenance, "_quiesce_services", lambda *_args: None)
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: False)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service, **kwargs: False)
     monkeypatch.setattr(maintenance, "_resume_services", lambda *_args: [])
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _path: (0, 0, 0))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _path: 52.5)

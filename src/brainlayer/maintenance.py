@@ -18,6 +18,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any, Callable, Mapping, Sequence
 
 import apsw
@@ -32,7 +33,7 @@ from .backup_daily import (
     _recent_verified_backup_for_reuse,
 )
 from .drain import BurnDrainResult, burn_drain_once
-from .launchd_primitive import is_launchd_label_loaded
+from .launchd_primitive import is_launchd_label_disabled, is_launchd_label_loaded
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .queue_io import get_queue_dir
@@ -52,6 +53,8 @@ EXPECTED_WRITER_PATTERNS = (
     "drain_daemon.py",
     "com.brainlayer.",
 )
+QUIESCE_EXIT_TIMEOUT_SECONDS = 45.0
+_WATCHDOG_DISABLED_BEFORE = "_fleet_watchdog_disabled_before"
 MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
 SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
@@ -150,8 +153,8 @@ class MaintenanceConfig:
     backup_reuse_max_age_hours: float = 6
 
 
-def run_command(args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(args), text=True, capture_output=True, check=check)
+def run_command(args: Sequence[str], *, check: bool = True, timeout=None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(list(args), text=True, capture_output=True, check=check, timeout=timeout)
 
 
 def _write_log(path: Path, event: dict[str, Any]) -> None:
@@ -411,11 +414,11 @@ def _bootout_service(service: str) -> bool:
     return result.returncode == 0
 
 
-def _service_is_loaded(service: str) -> bool:
+def _service_is_loaded(service: str, *, timeout: float | None = None) -> bool:
     try:
         state = is_launchd_label_loaded(
             _launchd_label(service),
-            command_runner=lambda args: run_command(args, check=False),
+            command_runner=lambda args: run_command(args, check=False, timeout=timeout),
         )
     except Exception as exc:
         raise MaintenanceAbort(
@@ -482,7 +485,35 @@ def _resume_service(repo_root: Path, service: str) -> None:
     run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
+def _wait_for_service_exit(service: str) -> None:
+    deadline = monotonic() + QUIESCE_EXIT_TIMEOUT_SECONDS
+    while _service_is_loaded(service, timeout=max(0.001, deadline - monotonic())):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service}; it remains loaded",
+                detail=f"loaded:{_launchd_label(service)}",
+            )
+        sleep(min(0.1, remaining))
+
+
 def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> None:
+    if not services:
+        return
+    disabled = is_launchd_label_disabled(
+        _launchd_label("fleet-watchdog"), command_runner=lambda args: run_command(args, check=False)
+    )
+    if disabled is None:
+        raise MaintenanceAbort("watchdog disabled state unknown", detail=f"state:{_launchd_label('fleet-watchdog')}")
+    booted_out[_WATCHDOG_DISABLED_BEFORE] = disabled
+    if not disabled:
+        try:
+            run_command(["launchctl", "disable", f"gui/{os.getuid()}/{_launchd_label('fleet-watchdog')}"], check=True)
+        except Exception:
+            raise MaintenanceAbort(
+                "watchdog hold failed", detail=f"disable:{_launchd_label('fleet-watchdog')}"
+            ) from None
+    services = ("fleet-watchdog", *(service for service in services if service != "fleet-watchdog"))
     for service in services:
         try:
             booted_out[service] = bool(_bootout_service(service))
@@ -496,6 +527,7 @@ def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> N
                 f"failed to quiesce launchd service {service}; it remains loaded",
                 detail=f"bootout:{_launchd_label(service)}",
             )
+        _wait_for_service_exit(service)
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -647,7 +679,18 @@ def _resume_services(
 ) -> list[tuple[str, Exception]]:
     failures: list[tuple[str, Exception]] = []
     keep_down = _maintenance_keep_down_services()
+    held = loaded_before is not None and _WATCHDOG_DISABLED_BEFORE in loaded_before
+    if held:
+        services = (*(service for service in services if service != "fleet-watchdog"), "fleet-watchdog")
     for service in services:
+        if service == "fleet-watchdog" and held:
+            if loaded_before[_WATCHDOG_DISABLED_BEFORE]:
+                continue  # Never undo an operator disable.
+            try:
+                run_command(["launchctl", "enable", f"gui/{os.getuid()}/{_launchd_label(service)}"], check=True)
+            except Exception as exc:
+                failures.append((service, exc))
+                continue
         if loaded_before is not None and not loaded_before.get(service, False):
             print(f"maintenance did not boot out service {service}; leaving it down", file=sys.stderr)
             continue

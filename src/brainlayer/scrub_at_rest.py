@@ -57,7 +57,7 @@ _QUIESCE_DETAILS = frozenset(
     {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
     | {
         f"{step}:{maintenance._launchd_label(service)}"
-        for step in ("bootout", "state", "loaded")
+        for step in ("bootout", "state", "loaded", "disable")
         for service in LIVE_SERVICES
     }
 )

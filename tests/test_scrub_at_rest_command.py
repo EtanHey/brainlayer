@@ -12,6 +12,7 @@ import apsw
 import pytest
 from typer.testing import CliRunner
 
+from brainlayer import maintenance, scrub_at_rest
 from brainlayer.cli import app
 from brainlayer.vector_store import VectorStore
 
@@ -289,12 +290,13 @@ def live_guard(db, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(maintenance, "PAUSE_SENTINEL_PATH", pause)
     monkeypatch.setattr(chunk_origin_wipe, "_live_db_candidates", lambda: [db.db_path])
+    monkeypatch.setattr(maintenance, "run_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
     loaded_probe = maintenance._service_is_loaded
     events, loaded = [], {}
     monkeypatch.setattr(maintenance, "_run_gates", lambda config: events.append("gates"))
     monkeypatch.setattr(maintenance, "_check_lsof_clean", lambda config: events.append("no-writers"))
     monkeypatch.setattr(scrub_at_rest, "_check_no_brainbar_processes", lambda: events.append("no-brainbar"))
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda service: loaded.get(service, True))
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda service, **kwargs: loaded.get(service, True))
 
     def bootout(service):
         events.append(("stop", service))
@@ -390,12 +392,15 @@ def test_live_apply_quiesces_all_writers_and_preserves_enrichment_pause(db, live
 
 
 @pytest.mark.parametrize("fail_apply", [False, True])
-def test_guarded_restoration_preserves_real_fleet_pause(db, live_guard, monkeypatch, fail_apply):
+@pytest.mark.parametrize("operator_disabled", [False, True])
+def test_guarded_restoration_preserves_real_fleet_pause(db, live_guard, monkeypatch, fail_apply, operator_disabled):
     from brainlayer import scrub_at_rest as scrub_module
 
-    live_guard.pause.write_text(
-        json.dumps({"labels": ["com.brainlayer.enrichment", "com.etanhey.brainlayer-fleet-watchdog"]})
-    )
+    labels = ["com.brainlayer.enrichment"] + ([] if operator_disabled else ["com.etanhey.brainlayer-fleet-watchdog"])
+    live_guard.pause.write_text(json.dumps({"labels": labels}))
+    if operator_disabled:
+        monkeypatch.setattr(maintenance, "is_launchd_label_disabled", lambda *args, **kwargs: True)
+        monkeypatch.setattr(maintenance, "run_command", lambda *a, **k: pytest.fail("operator-disable modified"))
     if fail_apply:
 
         def fail(*args, **kwargs):
@@ -878,7 +883,7 @@ def test_quiesced_lsof_failure_has_gate_detail_without_values(db, live_guard, mo
     from brainlayer import maintenance
     from brainlayer import scrub_at_rest as module
 
-    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _: False)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _, **kwargs: False)
 
     def fail_lsof(config):
         raise maintenance.MaintenanceAbort("private-command-value")
@@ -913,7 +918,7 @@ def test_unknown_launchd_state_names_service(db, live_guard, monkeypatch):
 
     monkeypatch.setattr(maintenance, "is_launchd_label_loaded", lambda label, **kwargs: None)
     monkeypatch.setattr(maintenance, "_service_is_loaded", live_guard.loaded_probe)
-    monkeypatch.setattr(maintenance, "_bootout_service", lambda _: False)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _, **kwargs: False)
     with pytest.raises(module.ScrubAtRestError) as error:
         module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
     assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
@@ -1059,7 +1064,7 @@ def test_launchd_probe_exception_names_service_and_discards_value(db, live_guard
 
     monkeypatch.setattr(maintenance, "is_launchd_label_loaded", fail)
     monkeypatch.setattr(maintenance, "_service_is_loaded", live_guard.loaded_probe)
-    monkeypatch.setattr(maintenance, "_bootout_service", lambda _: False)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda _, **kwargs: False)
     with pytest.raises(module.ScrubAtRestError) as error:
         module.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
     assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
@@ -1205,3 +1210,61 @@ def test_backup_wait_refuses_without_sleep_for_unavailable_window_or_other_gate(
     assert error.value.reason == reason
     assert sleeps == []
     assert not any(isinstance(e, tuple) for e in live_guard.events)
+
+
+@pytest.mark.parametrize("slow_service", ["fleet-watchdog", "hotlane-brainbar"])
+@pytest.mark.parametrize("timeout", [False, True])
+def test_watchdog_hold_waits_and_restores_last(db, live_guard, monkeypatch, slow_service, timeout):
+    clock, held = [0.0], [False]
+
+    def launchctl(args, **kwargs):
+        if args[1] in {"disable", "enable"}:
+            held[0] = args[1] == "disable"
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(maintenance, "run_command", launchctl)
+    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(maintenance, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(
+        maintenance,
+        "_service_is_loaded",
+        lambda service, **kwargs: (
+            clock[0] < (100 if timeout else 30) if service == slow_service else live_guard.loaded.get(service, True)
+        ),
+    )
+    apply = scrub_at_rest._apply
+
+    def guarded_apply(*args):
+        assert held[0]
+        return apply(*args)
+
+    monkeypatch.setattr(scrub_at_rest, "_apply", guarded_apply)
+    if timeout:
+        monkeypatch.setattr(scrub_at_rest, "WriterRuntimeStore", lambda _: pytest.fail("writer opened after timeout"))
+        with pytest.raises(scrub_at_rest.ScrubAtRestError) as error:
+            scrub_at_rest.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+        assert error.value.reason == "quiesce-failed"
+        assert error.value.detail == "loaded:" + maintenance._launchd_label(slow_service)
+        assert clock[0] == 45
+    else:
+        scrub_at_rest.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+        assert clock[0] == pytest.approx(30)
+    assert not held[0]
+    assert live_guard.events[-1] == ("resume", "fleet-watchdog")
+
+
+def test_hung_unload_probe_is_bounded_and_refuses(db, live_guard, monkeypatch):
+    timeouts = []
+
+    def launchctl(args, **kwargs):
+        if args[1] == "print":
+            timeouts.append(kwargs.get("timeout"))
+            raise subprocess.TimeoutExpired(args, 45)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(maintenance, "run_command", launchctl)
+    monkeypatch.setattr(maintenance, "_service_is_loaded", live_guard.loaded_probe)
+    with pytest.raises(scrub_at_rest.ScrubAtRestError) as error:
+        scrub_at_rest.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
+    assert 0 < timeouts[0] <= 45
