@@ -41,4 +41,15 @@ __all__ = [
     "SanitizeConfig",
     "SanitizeResult",
     "Replacement",
+    # build_external_prompt remains an explicit lazy import. Including it here
+    # would make star imports load enrichment's transport dependencies.
 ]
+
+
+def __getattr__(name: str):
+    """Resolve the legacy prompt builder only when explicitly requested."""
+    if name == "build_external_prompt":
+        from .enrichment import build_external_prompt
+
+        return build_external_prompt
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
