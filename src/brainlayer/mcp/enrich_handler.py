@@ -2,20 +2,14 @@
 
 from mcp.types import CallToolResult, TextContent
 
-from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ._shared import _error_result
 
 
 async def _brain_enrich(
-    mode: str = "realtime",
-    limit: int = 25,
-    since_hours: int = DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
-    phase: str = "run",
-    chunk_ids: list[str] | None = None,
-    stats: bool = False,
+    *_legacy_args: object,
+    **_legacy_options: object,
 ) -> CallToolResult:
-    """Return a transport-free error for stale direct library callers."""
-    del mode, limit, since_hours, phase, chunk_ids, stats
+    """Accept legacy options solely to return a transport-free retirement error."""
     return _error_result("Enrichment has been retired. Local store, embeddings and search remain available.")
 
 
