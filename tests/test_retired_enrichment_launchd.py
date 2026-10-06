@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _dispatch(tmp_path, *args, fail=False, disabled=False, helper=False):
+def _dispatch(tmp_path, *args, fail=False, disabled=False, helper=False, loaded_name=None):
     source = (ROOT / "scripts/launchd/install.sh").read_text()
     dispatcher = 'case "${1:-all}" in' + source.split('case "${1:-all}" in', 1)[1]
     log = tmp_path / "actions"
@@ -23,7 +23,8 @@ load_plist() { record load "$@"; }
 launchctl() {
     record launchctl "$@"
     case "$1" in
-        print) [ -f "$LAUNCH_DIR/loaded" ] ;;
+        print) [ "$2" = "gui/$UID/$LOADED_LABEL" ] && [ -f "$LAUNCH_DIR/loaded" ] ;;
+        bootout) [ "$FAIL_UNLOAD" != 1 ] && { [ "$FAIL_UNLOAD" = 2 ] || rm -f "$LAUNCH_DIR/loaded"; } ;;
         unload) [ "$FAIL_UNLOAD" = 0 ] && rm -f "$LAUNCH_DIR/loaded" ;;
         print-disabled) printf '"com.brainlayer.enrichment" => %s\n' "$DISABLED" ;;
     esac
@@ -47,6 +48,12 @@ launchctl() {
             "BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS": "1",
             "FAIL_UNLOAD": str(int(fail)),
             "DISABLED": str(disabled).lower(),
+            "LOADED_LABEL": loaded_name
+            or (
+                "com.brainlayer.enrich"
+                if (tmp_path / "com.brainlayer.enrich.plist").exists()
+                else "com.brainlayer.enrichment"
+            ),
         },
         capture_output=True,
         text=True,
@@ -76,7 +83,7 @@ def test_install_all_keeps_local_services_without_enrichment(tmp_path, args):
 def test_retired_install_and_load_routes_fail_without_service_actions(tmp_path, args):
     result, actions = _dispatch(tmp_path, *args)
     assert result.returncode != 0
-    assert actions == []
+    assert all(a.startswith("launchctl print ") for a in actions)
 
 
 @pytest.mark.parametrize("name", ["enrich", "enrichment"])
@@ -113,7 +120,7 @@ def test_retired_installed_labels_are_removed_safely(tmp_path, action, name, dis
     assert all(p.read_bytes() == b"historical bytes" for p in untouched)
     assert not any("watch" in a or "drain" in a or ".PAUSED-" in a for a in calls)
     if not present:
-        assert calls == []
+        assert all(a.startswith("launchctl print ") for a in calls)
     elif fail:
         assert result.returncode != 0 and "refusing to remove" in result.stderr
         assert all(p.read_bytes() == b"historical bytes" for p in targets)
@@ -123,3 +130,22 @@ def test_retired_installed_labels_are_removed_safely(tmp_path, action, name, dis
         assert result.returncode == (0 if action == "all" else 1)
         if action != "all":
             assert "retired" in result.stderr
+
+
+@pytest.mark.parametrize("name", ["enrich", "enrichment"])
+@pytest.mark.parametrize("loaded,fail", [(False, 0), (True, 0), (True, 1), (True, 2)])
+def test_missing_plist_removes_loaded_label_or_fails_loudly(tmp_path, loaded, fail, name):
+    marker = tmp_path / "loaded"
+    if loaded:
+        marker.write_text("loaded job without file")
+    result, actions = _dispatch(tmp_path, "all", fail=fail, loaded_name=f"com.brainlayer.{name}")
+    bootouts = [a for a in actions if a.startswith("launchctl bootout ")]
+    if loaded:
+        assert bootouts == [f"launchctl bootout gui/{os.getuid()}/com.brainlayer.{name}"]
+        if fail:
+            assert result.returncode != 0 and "could not retire" in result.stderr
+            assert marker.exists()
+        else:
+            assert result.returncode == 0 and not marker.exists()
+    else:
+        assert result.returncode == 0 and not bootouts

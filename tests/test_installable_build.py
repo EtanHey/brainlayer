@@ -1306,7 +1306,10 @@ def test_launchd_installer_preflights_all_before_loading_without_google_key(tmp_
 
     assert result.returncode != 0
     assert "did not provide GOOGLE_API_KEY" in result.stdout
-    assert not launchctl_log.exists()
+    assert launchctl_log.read_text().splitlines() == [
+        f"print gui/{os.getuid()}/com.brainlayer.enrichment",
+        f"print gui/{os.getuid()}/com.brainlayer.enrich",
+    ]
     assert not list((home / "Library" / "LaunchAgents").glob("com.brainlayer.*.plist"))
 
 
@@ -3242,15 +3245,7 @@ def test_launchd_all_does_not_load_backup_jobs_when_wrapper_render_fails(tmp_pat
     fake_sed.chmod(0o755)
     launchctl_log = tmp_path / "launchctl.log"
     fake_launchctl = fake_bin / "launchctl"
-    fake_launchctl.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                'printf "%s\\n" "$*" >> "$FAKE_LAUNCHCTL_LOG"',
-            ]
-        ),
-        encoding="utf-8",
-    )
+    fake_launchctl.write_text("\n".join(_fake_launchctl_lines()), encoding="utf-8")
     fake_launchctl.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir()
@@ -3325,7 +3320,7 @@ def test_launchd_all_never_attempts_enrichment_bootstrap(tmp_path: Path) -> None
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode != 0
     assert "replacement bootstrap failed" not in result.stderr
-    assert not any("com.brainlayer.enrichment" in command for command in commands)
+    assert not any(command.startswith("bootstrap ") and "com.brainlayer.enrichment" in command for command in commands)
     assert not any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
 
 

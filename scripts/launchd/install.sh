@@ -1224,8 +1224,14 @@ remove_fleet_watchdog() {
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    [ -f "$dst" ] || return 0
-    if ! unload_plist "$name"; then
+    if [ ! -f "$dst" ]; then
+        local domain="gui/$UID/com.brainlayer.$name"
+        launchctl print "$domain" >/dev/null 2>&1 || return 0
+        if ! launchctl bootout "$domain" || launchctl print "$domain" >/dev/null 2>&1; then
+            echo "ERROR: could not retire $domain without a plist; refusing to remove its executable" >&2
+            return 1
+        fi
+    elif ! unload_plist "$name"; then
         return 1
     fi
     rm -f "$dst"
