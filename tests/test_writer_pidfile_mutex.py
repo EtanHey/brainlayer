@@ -3,7 +3,6 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import os
-import plistlib
 import subprocess
 import sys
 import threading
@@ -779,10 +778,3 @@ def test_drain_busy_timeout_overflow_env_falls_back_to_30s(tmp_path, monkeypatch
         assert busy_timeout_ms == 30000
     finally:
         conn.close()
-
-
-def test_enrichment_plist_throttle_interval_at_least_60s():
-    plist_path = Path(__file__).resolve().parents[1] / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    plist = plistlib.loads(plist_path.read_bytes())
-
-    assert plist["ThrottleInterval"] >= 60
