@@ -54,12 +54,12 @@ untouched — so wiring the bridge yourself, as recommended above, is not undone
    grep '"id":1' /tmp/brainlayer-mcp-smoke.out
    ```
 
-2. In Claude Code, the **core palette** should appear — 5 tools, not all 17:
+2. In Claude Code, the **core palette** should appear — 5 tools, not all 16:
    - `brain_search` - Search memory by topic
    - `brain_store` - Persist decisions, corrections, learnings
    - `brain_recall` - Session context and stats
    - `brain_expand` - Open one search result in full, with surrounding chunks
-   - `expand_palette` - Expose the other 13 tools for this session
+   - `expand_palette` - Expose the other 12 tools for this session
 
    Calling `expand_palette` (or starting the server with `BRAINLAYER_MCP_PROFILE=full`) returns all
-   17 with their full descriptions. A gated tool called before expanding returns an error saying so.
+   16 with their full descriptions. A gated tool called before expanding returns an error saying so.

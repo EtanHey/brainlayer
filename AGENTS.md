@@ -322,7 +322,7 @@ brainlayer enrich
 ## Interfaces
 - **There is no HTTP API.** The FastAPI daemon and its `/health`, `/stats`, `/search`, `/brain/graph`,
   `/backlog/items` routes were removed. Anything still calling them is calling a surface that is gone.
-- MCP tools: 17, defined in `brain-bar/Sources/BrainBar/MCPRouter.swift` — see **MCP Tools** above for
+- MCP tools: 16, defined in `brain-bar/Sources/BrainBar/MCPRouter.swift` — see **MCP Tools** above for
   the core/gated split. Legacy `brainlayer_*` names are still handled by the Python library handlers
   under `src/brainlayer/mcp/`, but BrainBar does not serve them.
 - `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors there; the
