@@ -2598,190 +2598,38 @@ def consolidate(
     raise typer.Exit(result.returncode)
 
 
-@app.command("enrich")
+@app.command("enrich", hidden=True)
 def enrich(
-    mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
-    limit: Optional[int] = typer.Option(
+    _mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
+    _limit: Optional[int] = typer.Option(
         None,
         "--limit",
         "-n",
         help="Realtime: max chunks to process. Batch submit/run: optional sample size; defaults to all.",
     ),
-    since_hours: Optional[int] = typer.Option(
+    _since_hours: Optional[int] = typer.Option(
         None,
         "--since-hours",
         help=(
             f"Realtime mode: only enrich chunks from the last N hours. Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h"
         ),
     ),
-    phase: str = typer.Option(
+    _phase: str = typer.Option(
         "run",
         "--phase",
         help="Batch mode phase: submit, poll, import, run, status, drain-submit, drain-poll, drain-import, drain-run",
     ),
-    model: str = typer.Option(
+    _model: str = typer.Option(
         "models/gemini-2.5-flash-lite",
         "--model",
         help="Batch mode Gemini model override",
     ),
-    stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
-    supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
+    _stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
+    _supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
 ) -> None:
-    """Enrich chunks via Gemini-backed realtime or batch modes."""
-    try:
-        from .. import cloud_backfill
-        from ..enrichment_controller import (
-            DEFAULT_ENRICH_SUPERVISOR_LIMIT,
-            DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
-            enrich_realtime,
-            run_enrich_supervisor,
-        )
-        from ..parent_death import install_parent_death_watcher
-        from ..vector_store import VectorStore
-
-        install_parent_death_watcher()
-
-        if mode not in ("realtime", "batch"):
-            raise typer.BadParameter(f"Invalid mode: {mode}")
-
-        db_path = get_db_path()
-
-        if stats_only:
-            if mode == "batch":
-                cloud_backfill.show_status(db_path)
-            else:
-                store = VectorStore(db_path)
-                try:
-                    s = store.get_enrichment_stats()
-                    console.print(f"[bold]Total:[/] {s['total_chunks']}")
-                    console.print(f"[bold]Enriched:[/] {s['enriched']} ({s['percent']}%)")
-                    console.print(f"[bold]Remaining:[/] {s['remaining']}")
-                    if s["by_intent"]:
-                        console.print(f"[bold]Intent distribution:[/] {s['by_intent']}")
-                finally:
-                    store.close()
-            return
-
-        if mode == "realtime":
-            if supervisor:
-                import signal
-                import threading
-
-                try:
-                    from ..deploy_drift import record_launch_from_environment
-
-                    record_launch_from_environment()
-                except Exception:
-                    logging.getLogger(__name__).debug("Failed to record enrichment launch provenance", exc_info=True)
-
-                stop_event = threading.Event()
-
-                def handle_signal(signum, frame):
-                    rprint("\n[bold yellow]Stopping enrich supervisor...[/]")
-                    stop_event.set()
-
-                previous_sigterm = signal.getsignal(signal.SIGTERM)
-                previous_sigint = signal.getsignal(signal.SIGINT)
-                signal.signal(signal.SIGTERM, handle_signal)
-                signal.signal(signal.SIGINT, handle_signal)
-                try:
-                    result = run_enrich_supervisor(
-                        db_path,
-                        limit=limit or DEFAULT_ENRICH_SUPERVISOR_LIMIT,
-                        since_hours=since_hours if since_hours is not None else DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
-                        stop_event=stop_event,
-                    )
-                finally:
-                    signal.signal(signal.SIGTERM, previous_sigterm)
-                    signal.signal(signal.SIGINT, previous_sigint)
-                console.print(
-                    f"[bold green]Done![/] mode={result.mode} cycles={result.cycles} "
-                    f"attempted={result.attempted} enriched={result.enriched} "
-                    f"skipped={result.skipped} failed={result.failed}"
-                )
-                raise typer.Exit(result.exit_code)
-
-            store = VectorStore(db_path)
-            try:
-                result = enrich_realtime(
-                    store,
-                    limit=limit or 25,
-                    since_hours=since_hours if since_hours is not None else DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
-                )
-                console.print(
-                    f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
-                    f"enriched={result.enriched} skipped={result.skipped} failed={result.failed}"
-                )
-            finally:
-                store.close()
-            return
-
-        if phase == "submit":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=True,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=submit sample={limit or 0} model={model}")
-            return
-        if phase == "drain-submit":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=True,
-                drain_backlog=True,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=drain-submit sample={limit or 0} model={model}")
-            return
-        if phase == "run":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=False,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=run sample={limit or 0} model={model}")
-            return
-        if phase == "drain-run":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=False,
-                drain_backlog=True,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=drain-run sample={limit or 0} model={model}")
-            return
-        if phase in {"poll", "import"}:
-            summary = cloud_backfill.process_pending_jobs_once(db_path)
-            console.print(
-                "[bold green]Done![/] "
-                f"mode=batch phase={phase} checked={summary['checked']} "
-                f"imported_jobs={summary['imported_jobs']} pending={summary['still_pending']} "
-                f"success={summary['success']} failed={summary['failed']} skipped={summary['skipped']}"
-            )
-            return
-        if phase in {"drain-poll", "drain-import"}:
-            summary = cloud_backfill.process_pending_jobs_once(db_path, import_mode=cloud_backfill.IMPORT_MODE_DRAIN)
-            console.print(
-                "[bold green]Done![/] "
-                f"mode=batch phase={phase} checked={summary['checked']} "
-                f"imported_jobs={summary['imported_jobs']} pending={summary['still_pending']} "
-                f"success={summary['success']} failed={summary['failed']} skipped={summary['skipped']}"
-            )
-            return
-        if phase == "status":
-            cloud_backfill.show_status(db_path)
-            return
-
-        raise typer.BadParameter(f"Invalid batch phase: {phase}")
-    except typer.Exit:
-        raise
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+    """Compatibility error for retired enrichment commands."""
+    rprint("[bold red]Enrichment has been retired.[/] Local indexing, embeddings and search remain available.")
+    raise typer.Exit(1)
 
 
 @app.command("decay")
