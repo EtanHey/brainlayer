@@ -254,31 +254,15 @@ def test_local_llm_senders_scrub_because_their_url_can_be_remote(monkeypatch, se
     _assert_clean(sent[0], f"{sender} payload")
 
 
-def test_longitudinal_analyzer_ollama_calls_scrub_their_prompt(monkeypatch):
-    """N2: ollama.generate honours OLLAMA_HOST, so it is not necessarily local."""
-    from brainlayer.pipeline import longitudinal_analyzer
-
-    prompts: list[str] = []
-    fake_ollama = types.SimpleNamespace(
-        generate=lambda model=None, prompt=None, options=None, **kwargs: prompts.append(prompt) or {"response": ""}
-    )
-    monkeypatch.setattr(longitudinal_analyzer, "ollama", fake_ollama, raising=False)
-
-    longitudinal_analyzer._ollama_generate(model="m", prompt=_text(), options={})
-
-    assert prompts
-    _assert_clean(prompts[0], "longitudinal ollama prompt")
-
-
-def test_longitudinal_analyzer_has_no_unscrubbed_ollama_call_site():
+def test_longitudinal_analyzer_has_one_scrubbed_loopback_call_site():
     from pathlib import Path
 
     from brainlayer.pipeline import longitudinal_analyzer
 
     source = Path(longitudinal_analyzer.__file__).read_text(encoding="utf-8")
-    direct_calls = source.count("ollama.generate(")
-
-    assert direct_calls == 1, "every ollama.generate call must go through _ollama_generate"
+    assert "import ollama" not in source
+    assert source.count("client.post(") == 1
+    assert 'kwargs["prompt"] = scrub_for_cloud(kwargs["prompt"])' in source
 
 
 def test_drain_store_records_providers_found_only_in_tags(store):
