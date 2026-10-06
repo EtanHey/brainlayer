@@ -1,5 +1,3 @@
-"""Real launchd replay on GitHub macOS only; local tests use fake commands."""
-
 from __future__ import annotations
 
 import argparse
@@ -114,8 +112,9 @@ def replay(source, home, mapping):
         launchctl("bootout", f"gui/{os.getuid()}/{mapping['brainbar-daemon']}", check=True)
         wait_until(lambda: not loaded(), "positive-control subject bootout")
         wait_until(loaded, "positive-control watchdog revival")
-        if "re-bootstrapped" not in (home / "Library/Logs/brainlayer/fleet-watchdog.log").read_text():
-            raise RuntimeError("subject revival has no real-watchdog log receipt")
+        watchdog_log = home / "Library/Logs/brainlayer/fleet-watchdog.log"
+        wait_until(lambda: watchdog_log.exists() and "re-bootstrapped" in watchdog_log.read_text(), "revival log")
+        revivals_before = watchdog_log.read_text().count("re-bootstrapped")
 
         stopped = {}
         revived = False
@@ -127,9 +126,9 @@ def replay(source, home, mapping):
                 revived |= loaded()
                 held &= disabled() is True and not maintenance._service_is_loaded("fleet-watchdog")
                 time.sleep(0.2)
+            revived &= watchdog_log.read_text().count("re-bootstrapped") > revivals_before
         finally:
             failures = maintenance._resume_services(source, ("brainbar-daemon",), stopped)
-        # The bug's already-revived subject can reject bootstrap; verify actual restored state below.
         if failures and not revived:
             raise RuntimeError(f"real resume failed: {failures}")
         wait_until(lambda: loaded() and maintenance._service_is_loaded("fleet-watchdog"), "both jobs resumed")
