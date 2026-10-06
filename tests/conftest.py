@@ -237,6 +237,7 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
     retired = (
         request.node.path.name == "test_cli_enrich.py"
         or request.node.name.startswith("test_brain_enrich_handler_")
+        or request.node.name.startswith("test_brain_digest_retired_")
         or "TestStoreAutoEnrich" in request.node.nodeid
     )
     if not retired:
