@@ -3094,3 +3094,38 @@ def test_the_ratchet_suite_scrubs_the_fallback_root_env():
     assertions could become host-dependent, or walk production docs.local during the suite.
     """
     assert "BRAINLAYER_FALLBACK_GITS_ROOT" not in os.environ
+
+
+def test_pre_push_delete_ratchet_runs_real_hook(tmp_path: Path) -> None:
+    result = ratchet.row_pre_push_delete(linux_probe(tmp_path), {})
+    assert result.status == ratchet.GREEN, result.value
+    assert "0 suite starts" in result.value
+    assert ratchet.PRE_PUSH_DELETE_BUG_SHA in result.notes
+    assert HEAD in result.notes
+
+
+@pytest.mark.parametrize(
+    "refs,starts",
+    [
+        (ratchet.DELETE_REF, 0),
+        (ratchet.DELETE_REF * 2, 0),
+        (ratchet.DELETE_REF + f"refs/heads/fixture {'b' * 40} refs/heads/fixture {'a' * 40}\n", 1),
+        (f"refs/tags/v0.0.0 {'b' * 40} refs/tags/v0.0.0 {'0' * 40}\n", 1),
+        ("", 1),
+    ],
+)
+def test_pre_push_delete_only_boundary(refs: str, starts: int) -> None:
+    result, measured = ratchet.replay_pre_push(ROOT / ".githooks/pre-push", refs)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert measured == starts
+
+
+def test_pre_push_delete_ratchet_missing_hook_is_red(tmp_path: Path, monkeypatch) -> None:
+    probe = linux_probe(tmp_path)
+    runner = tmp_path / "scripts/ci/run_with_deadline.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text((ROOT / "scripts/ci/run_with_deadline.py").read_text())
+    monkeypatch.setattr(ratchet, "ROOT", tmp_path)
+    result = ratchet.row_pre_push_delete(probe, {})
+    assert result.status == ratchet.RED
+    assert "exit 127" in result.value
