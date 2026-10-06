@@ -35,6 +35,9 @@ def test_hotlane_retired_enrichment_preserves_local_vectors(tmp_path, caplog, sp
             result = hotlane.run_cycle(store=store, **options)
         callback.assert_not_called()
         assert result == hotlane.CycleResult(embedded=1)
+        # CycleResult retains its legacy tuple shape; neither real cycle produces diagnostics.
+        assert result.enrich_attempted == result.enriched == result.enrich_skipped == result.enrich_failed == 0
+        assert result.enrich_daily_cap_reached is False
         assert list(store.conn.cursor().execute("SELECT id FROM chunk_vectors_rowids")) == [("synthetic-hot",)]
         assert list(store.conn.cursor().execute("SELECT summary, tags, enriched_at FROM chunks")) == [
             (None, None, None)
