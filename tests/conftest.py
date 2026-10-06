@@ -233,12 +233,14 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
     the non-enrichment cloud exceptions continue to exercise their own mocks.
     SDK class initialization is patched in place so pre-bound aliases cannot evade
     the guard. The teardown assertion also catches attempts in joined threads.
+    Unjoined/daemon threads and subprocess children are NOT covered.
     """
     retired = (
         request.node.path.name == "test_cli_enrich.py"
         or request.node.name.startswith("test_brain_enrich_handler_")
         or request.node.name.startswith("test_brain_digest_retired_")
         or "TestStoreAutoEnrich" in request.node.nodeid
+        or request.node.name.startswith("test_retired_enrich_is_neither_advertised_nor_dispatched")
     )
     if not retired:
         yield
@@ -246,12 +248,19 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
 
     request.getfixturevalue("isolate_brainlayer_runtime_paths")
 
-    import httpx
-    import requests
-    from google.genai import client
+    import socket
 
-    from brainlayer import enrichment_controller
-    from brainlayer.pipeline import enrichment
+    def optional_module(name):
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError:
+            return None
+
+    client = optional_module("google.genai.client")
+    httpx = optional_module("httpx")
+    requests = optional_module("requests")
+    enrichment_controller = optional_module("brainlayer.enrichment_controller")
+    enrichment = optional_module("brainlayer.pipeline.enrichment")
 
     attempts = []
 
@@ -262,14 +271,30 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
 
         return fail
 
-    for cls in (client.Client, client.AsyncClient, httpx.Client, httpx.AsyncClient):
-        monkeypatch.setattr(cls, "__init__", forbidden(f"{cls.__module__}.{cls.__name__}"))
-    for cls in (httpx.Client, httpx.AsyncClient):
-        monkeypatch.setattr(cls, "send", forbidden(f"{cls.__module__}.{cls.__name__}.send"))
-    monkeypatch.setattr(requests.Session, "request", forbidden("requests.Session.request"))
-    monkeypatch.setattr(requests.Session, "send", forbidden("requests.Session.send"))
-    monkeypatch.setattr(enrichment_controller, "_get_gemini_client", forbidden("_get_gemini_client"))
-    monkeypatch.setattr(enrichment, "call_llm", forbidden("call_llm"))
+    for module in (client, httpx):
+        if module is not None:
+            for cls in (module.Client, module.AsyncClient):
+                monkeypatch.setattr(cls, "__init__", forbidden(f"{cls.__module__}.{cls.__name__}"))
+    if httpx is not None:
+        for cls in (httpx.Client, httpx.AsyncClient):
+            monkeypatch.setattr(cls, "send", forbidden(f"{cls.__module__}.{cls.__name__}.send"))
+    if requests is not None:
+        monkeypatch.setattr(requests.Session, "request", forbidden("requests.Session.request"))
+        monkeypatch.setattr(requests.Session, "send", forbidden("requests.Session.send"))
+    for module, symbol in ((enrichment_controller, "_get_gemini_client"), (enrichment, "call_llm")):
+        if module is not None and hasattr(module, symbol):
+            monkeypatch.setattr(module, symbol, forbidden(symbol))
+
+    def guarded_connect(method, original):
+        def connect(sock, *args, **kwargs):
+            if sock.family in (socket.AF_INET, socket.AF_INET6):
+                forbidden(f"socket.{method}")(sock, *args, **kwargs)
+            return original(sock, *args, **kwargs)
+
+        return connect
+
+    for method in ("connect", "connect_ex"):
+        monkeypatch.setattr(socket.socket, method, guarded_connect(method, getattr(socket.socket, method)))
     monkeypatch.setenv("GOOGLE_API_KEY", "synthetic-retirement-key")
     monkeypatch.setenv("GROQ_API_KEY", "synthetic-retirement-key")
     yield
