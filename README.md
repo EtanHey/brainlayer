@@ -5,7 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-17%20tools-green.svg)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-16%20tools-green.svg)](https://modelcontextprotocol.io)
 [![Tests](https://img.shields.io/badge/tests-4%2C386%20Python%20%2B%20890%20Swift-brightgreen.svg)](#testing)
 [![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
@@ -174,7 +174,7 @@ graph LR
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta |
 |---|:---:|:---:|:---:|:---:|
-| **MCP tools** | 17 | 1 | 1 | 0 |
+| **MCP tools** | 16 | 1 | 1 | 0 |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG |
 | **Zero infra** | `pip install` | API key | API key | Docker |
 | **Real-time indexing** | ~1s | No | No | No |
@@ -232,7 +232,7 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - Stale-index regression fixture ([#255](https://github.com/EtanHey/brainlayer/pull/255)) and Deepchecks regression harness ([#259](https://github.com/EtanHey/brainlayer/pull/259)).
 
 **Security**
-- Every Swift `MCPRouter` tool exposed via BrainBar ships `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)) — 11 tools at the time, 17 today.
+- Every Swift `MCPRouter` tool exposed via BrainBar ships `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)) — 11 tools at the time, 16 today.
 
 **Reliability sprint (2026-05-02)** — [PR #251](https://github.com/EtanHey/brainlayer/pull/251), merged
 - Restores the resizable dashboard panel via a floating `NSPanel` (`BrainBarDashboardPanelController`) instead of MenuBarExtra(.window).

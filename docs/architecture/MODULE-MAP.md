@@ -38,7 +38,7 @@ Driver: BrainBar hard-binds to the engine's **source-tree layout** (`<repoRoot>/
 ## Open questions for agreement
 - **A.** CLI/TUI (`cli/`, `cli_new.py`, `dashboard/`) → in brain-engine or root? **RESOLVED (provisional, orc 2026-05-29):** engine = pure library → CLI/TUI to ROOT. Physical move HELD pending Etan final confirm. Does not affect the contract-only turn.
 - **B.** Fix the `chunks_fts` 5-vs-7 drift now (small PR) or fold into the extraction? (Recommend: now — it's a live data-integrity risk.)
-- **C.** Reconcile the 17(Swift)/13(Python) MCP tool sets — which is canonical, what retires?
+- **C.** Reconcile the 16(Swift)/13(Python) MCP tool sets — which is canonical, what retires?
 
 ## Phase-0 close = contract-only deliverables
 1. This `MODULE-MAP.md` (committed to brainlayer repo, after A/B/C agreed).

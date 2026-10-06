@@ -8,7 +8,7 @@ BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-co
 
 ## Key Features
 
-- **17 MCP tools** — served by BrainBar on `/tmp/brainbar.sock`; a session boots into a core palette of 5 (`brain_search`, `brain_store`, `brain_recall`, `brain_expand`, `expand_palette`) and `expand_palette` exposes the rest
+- **16 MCP tools** — served by BrainBar on `/tmp/brainbar.sock`; a session boots into a core palette of 5 (`brain_search`, `brain_store`, `brain_recall`, `brain_expand`, `expand_palette`) and `expand_palette` exposes the rest
 - **Local-first** — SQLite + sqlite-vec, single file, no cloud, no Docker
 - **Hybrid search** — semantic vectors + keyword, merged with Reciprocal Rank Fusion
 - **15-field enrichment** — summary, key facts, tags, importance, intent, entities, sentiment, and more, via Groq/Gemini/MLX/Ollama
