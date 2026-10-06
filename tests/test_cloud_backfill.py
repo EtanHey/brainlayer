@@ -102,6 +102,8 @@ def test_init_sanitizer_redacts_allowlisted_whatsapp_contact_names(tmp_path, mon
     """Confirmed DB contact names should redact even if their text matches a tool allowlist entry."""
     export_dir = tmp_path / "exports"
     monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
+    # This exercises the contact dictionary, independently of the optional NER model.
+    monkeypatch.setenv("BRAINLAYER_SANITIZE_USE_SPACY", "false")
 
     store = VectorStore(tmp_path / "backfill.db")
     try:
