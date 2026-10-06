@@ -151,10 +151,9 @@ jobs:
         run: |
           set -euo pipefail
           for variant in bug head; do
-            source=measured
-            args=()
-            if [[ "$variant" == bug ]]; then source=bug; args=(--expect-red); fi
-            python measured/scripts/ratchet_quiesce.py --source "$source" \
+            args=(--source measured)
+            if [[ "$variant" == bug ]]; then args=(--source bug --expect-red); fi
+            python measured/scripts/ratchet_quiesce.py \
               --namespace "com.brainlayer.ratchettest.${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}" \
               --home "${RUNNER_TEMP}/quiesce-${variant}" --out "${RUNNER_TEMP}/${variant}.json" "${args[@]}"
           done
