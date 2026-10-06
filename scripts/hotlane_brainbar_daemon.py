@@ -24,11 +24,6 @@ import sqlite_vec
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.embeddings import get_embedding_model
-from brainlayer.enrichment_controller import (
-    DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
-    _result_hit_daily_cap,
-    enrich_realtime,
-)
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
 from brainlayer.vector_store import VectorStore
@@ -37,6 +32,7 @@ from brainlayer.writer_telemetry import start_writer_span
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
 DEFAULT_HOTLANE_ENRICH_LIMIT = 5
+DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600  # Legacy CLI compatibility only.
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HOTLANE_EMBED_DEVICE = "cpu"
 MAX_BACKLOG_BATCH = 16
@@ -739,7 +735,7 @@ def _run_split_cycle(
     enrich_limit: int,
     enrich_since_hours: int,
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
-    enrich_fn: Callable[..., object] = enrich_realtime,
+    enrich_fn: Callable[..., object] | None = None,
     candidate_rows_fn: Callable[..., list[EmbedCandidate]] = _candidate_chunk_rows,
     pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows_with_resume,
     write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
@@ -789,22 +785,17 @@ def _run_split_cycle(
                 )
             raise
 
-    if enrich_limit <= 0:
-        return CycleResult(embedded=embedded)
+    _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
+    return CycleResult(embedded=embedded)
 
-    enrich_store = _open_store(vector_store_cls, db_path, readonly=False)
-    try:
-        enrich_result = enrich_fn(store=enrich_store, limit=enrich_limit, since_hours=enrich_since_hours)
-    finally:
-        enrich_store.close()
-    return CycleResult(
-        embedded=embedded,
-        enrich_attempted=int(getattr(enrich_result, "attempted", 0) or 0),
-        enriched=int(getattr(enrich_result, "enriched", 0) or 0),
-        enrich_skipped=int(getattr(enrich_result, "skipped", 0) or 0),
-        enrich_failed=int(getattr(enrich_result, "failed", 0) or 0),
-        enrich_daily_cap_reached=hasattr(enrich_result, "errors") and _result_hit_daily_cap(enrich_result),
-    )
+
+def _warn_retired_enrichment(limit: int, since_hours: int, callback: object) -> None:
+    if limit > 0 or callback is not None:
+        LOGGER.warning(
+            "Hotlane enrichment has been retired; ignoring limit=%d since_hours=%d and any callback",
+            limit,
+            since_hours,
+        )
 
 
 def _default_queue_dir() -> Path:
@@ -843,7 +834,7 @@ def run_cycle(
     hot_embed_fn: Callable[..., bool] = embed_hot_chunk,
     pending_embed_fn: Callable[..., int] = embed_pending_chunks,
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
-    enrich_fn: Callable[..., object] = enrich_realtime,
+    enrich_fn: Callable[..., object] | None = None,
 ) -> CycleResult:
     embedded = 0
     for chunk_id in candidate_chunk_ids_fn(store, limit=recent_limit):
@@ -859,18 +850,8 @@ def run_cycle(
             embed_batch_fn=embed_batch_fn,
         )
 
-    if enrich_limit <= 0:
-        return CycleResult(embedded=embedded)
-
-    enrich_result = enrich_fn(store, limit=enrich_limit, since_hours=enrich_since_hours)
-    return CycleResult(
-        embedded=embedded,
-        enrich_attempted=int(getattr(enrich_result, "attempted", 0) or 0),
-        enriched=int(getattr(enrich_result, "enriched", 0) or 0),
-        enrich_skipped=int(getattr(enrich_result, "skipped", 0) or 0),
-        enrich_failed=int(getattr(enrich_result, "failed", 0) or 0),
-        enrich_daily_cap_reached=hasattr(enrich_result, "errors") and _result_hit_daily_cap(enrich_result),
-    )
+    _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
+    return CycleResult(embedded=embedded)
 
 
 def run(

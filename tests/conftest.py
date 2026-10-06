@@ -195,6 +195,7 @@ def pytest_configure(config):
         "markers",
         "live: mark test as requiring a live production DB (skipped in CI if DB absent)",
     )
+    config.addinivalue_line("markers", "retired_enrichment: forbid cloud construction and sends")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -239,6 +240,7 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
         or request.node.name.startswith("test_brain_enrich_handler_")
         or request.node.name.startswith("test_brain_digest_retired_")
         or "TestStoreAutoEnrich" in request.node.nodeid
+        or request.node.get_closest_marker("retired_enrichment") is not None
     )
     if not retired:
         yield

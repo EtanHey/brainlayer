@@ -26,7 +26,7 @@ def _raise_if_called(message: str):
     return inner
 
 
-def test_hotlane_cycle_runs_enrichment_through_same_writer_store():
+def test_hotlane_cycle_ignores_retired_enrichment_through_same_writer_store():
     hotlane = _load_hotlane_module()
     writer_store = object()
     calls = []
@@ -47,12 +47,9 @@ def test_hotlane_cycle_runs_enrichment_through_same_writer_store():
     )
 
     assert result.embedded == 0
-    assert result.enrich_attempted == 2
-    assert result.enriched == 1
-    assert calls == [
-        ("candidates", writer_store, 5),
-        ("enrich", writer_store, {"limit": 25, "since_hours": 8760}),
-    ]
+    assert result.enrich_attempted == 0
+    assert result.enriched == 0
+    assert calls == [("candidates", writer_store, 5)]
 
 
 def test_hotlane_cycle_can_disable_enrichment():
