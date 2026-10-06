@@ -235,7 +235,7 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
     the guard. The teardown assertion also catches attempts in joined threads.
     """
     retired = (
-        request.node.path.name == "test_cli_enrich.py"
+        request.node.path.name in {"test_cli_enrich.py", "test_retired_controller_batch.py"}
         or request.node.name.startswith("test_brain_enrich_handler_")
         or request.node.name.startswith("test_brain_digest_retired_")
         or "TestStoreAutoEnrich" in request.node.nodeid
