@@ -39,7 +39,7 @@ def test_retirement_guard_works_without_collection_import_side_effects(target):
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-@pytest.mark.parametrize("surface", ["cli", "mcp"])
+@pytest.mark.parametrize("surface", ["cli", "mcp", "palette"])
 @pytest.mark.parametrize(
     "attempt",
     [
@@ -52,6 +52,9 @@ def test_retirement_guard_works_without_collection_import_side_effects(target):
         "precreated_httpx.send(httpx.Request('POST', 'http://retirement.invalid'))",
         "send_precreated_async()",
         "precreated_requests.send(requests.Request('POST', 'http://retirement.invalid').prepare())",
+        "http.client.HTTPConnection('127.0.0.1', 9).request('GET', '/')",
+        "urllib3.PoolManager(retries=False).request('GET', 'http://127.0.0.1:9/')",
+        "requests.adapters.HTTPAdapter().send(requests.Request('GET', 'http://127.0.0.1:9/').prepare())",
     ],
 )
 def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
@@ -59,6 +62,8 @@ def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
     target = (
         "tests/test_cli_enrich.py::test_retired_enrich_is_hidden_and_does_not_resolve_database"
         if surface == "cli"
+        else "tests/test_mcp_palette.py::test_retired_enrich_is_neither_advertised_nor_dispatched[core]"
+        if surface == "palette"
         else "tests/test_enrichment_controller.py::test_brain_enrich_handler_stats_is_retired_without_reading_metadata"
     )
     probe = f"""
@@ -66,6 +71,8 @@ import pytest
 import httpx
 import requests
 import asyncio
+import http.client
+import urllib3
 from concurrent.futures import ThreadPoolExecutor
 
 class Mutation:
@@ -112,6 +119,9 @@ class Mutation:
         if {surface!r} == 'cli':
             from brainlayer import cli as owner
             symbol = 'rprint'
+        elif {surface!r} == 'palette':
+            import brainlayer.mcp as owner
+            symbol = '_error_result'
         else:
             from brainlayer.mcp import enrich_handler as owner
             symbol = '_error_result'
@@ -133,3 +143,76 @@ raise SystemExit(pytest.main([{target!r}, '-q'], plugins=[Mutation()]))
     output = completed.stdout + completed.stderr
     assert completed.returncode == 1, output
     assert "Cloud construction/send attempted in retirement test" in output, output
+
+
+@pytest.mark.parametrize(
+    "missing", ["google.genai.client", "brainlayer.enrichment_controller", "brainlayer.pipeline.enrichment"]
+)
+@pytest.mark.parametrize("attempt", [False, True])
+def test_guard_arms_with_patch_target_missing(missing, attempt):
+    """An absent optional sender cannot disarm the network backstop."""
+    probe = f"""
+import pytest
+import socket
+import sys
+class MissingTarget:
+    def pytest_collection_finish(self, session):
+        sys.modules[{missing!r}] = None
+    def pytest_runtest_call(self, item):
+        if {attempt!r}:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                try:
+                    sock.connect(('127.0.0.1', 9))
+                except Exception:
+                    pass
+raise SystemExit(pytest.main([
+    'tests/test_retirement_factory_guard.py::test_brain_enrich_handler_cold_bootstrap', '-q'
+], plugins=[MissingTarget()]))
+"""
+    completed = subprocess.run([sys.executable, "-c", probe], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == (1 if attempt else 0), output
+    if attempt:
+        assert "Cloud construction/send attempted in retirement test" in output, output
+
+
+@pytest.mark.parametrize("method", ["connect", "connect_ex"])
+@pytest.mark.parametrize("family", ["AF_INET", "AF_INET6"])
+def test_socket_backstop_catches_both_inet_families(method, family):
+    probe = f"""
+import pytest
+import socket
+class InetAttempt:
+    def pytest_runtest_call(self, item):
+        with socket.socket(socket.{family}, socket.SOCK_STREAM) as sock:
+            try:
+                sock.{method}({("127.0.0.1", 9) if family == "AF_INET" else ("::1", 9)!r})
+            except Exception:
+                pass
+raise SystemExit(pytest.main([
+    'tests/test_retirement_factory_guard.py::test_brain_enrich_handler_cold_bootstrap', '-q'
+], plugins=[InetAttempt()]))
+"""
+    completed = subprocess.run([sys.executable, "-c", probe], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 1, output
+    assert "Cloud construction/send attempted in retirement test" in output, output
+
+
+@pytest.mark.parametrize("method", ["connect", "connect_ex"])
+def test_brain_enrich_handler_unix_socket_backstop_passthrough(method):
+    """Private AF_UNIX traffic retains the existing socket guard contract."""
+    import socket
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="bl-guard-") as scratch:
+        address = str(Path(scratch) / "private.sock")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(address)
+            server.listen(1)
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                result = getattr(client, method)(address)
+                assert result in (None, 0)
+                with server.accept()[0] as accepted:
+                    client.sendall(b"synthetic")
+                    assert accepted.recv(9) == b"synthetic"
