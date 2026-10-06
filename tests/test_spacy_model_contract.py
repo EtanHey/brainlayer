@@ -1,10 +1,15 @@
 """Unit regressions for missing configured NER; real-keg proof lives in CI."""
 
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+import yaml
 
 from brainlayer.pipeline.enrichment import build_external_prompt
 from brainlayer.pipeline.sanitize import SanitizeConfig, Sanitizer
@@ -55,16 +60,12 @@ def test_spacy_row_missing_or_incomplete_report_is_red(tmp_path, payload):
         path.write_text(json.dumps(payload))
     probe = SimpleNamespace(
         spacy_report=path,
-        signature_unavailable=None,
         measured_sha="a" * 40,
-        head_sha="a" * 40,
     )
     assert ratchet.row_spacy_model(probe, {}).status == ratchet.RED
 
 
 def test_realtime_missing_ner_never_calls_remote(monkeypatch):
-    from unittest.mock import Mock
-
     from brainlayer import enrichment_controller as controller
 
     monkeypatch.setitem(sys.modules, "spacy", None)
@@ -84,65 +85,38 @@ def test_realtime_missing_ner_never_calls_remote(monkeypatch):
     send.assert_not_called()
 
 
-def test_real_probe_missing_binary_and_bad_wheel_fail(tmp_path):
-    from unittest.mock import patch
-
+def test_real_probe_missing_binary_and_bad_wheel_fail(tmp_path, monkeypatch):
     from scripts.ci_spacy_model import main, probe
 
-    assert probe(tmp_path / "absent-python") is False
+    python = tmp_path / "absent-python"
+    assert probe(python) is False
     wheel = tmp_path / "bad.whl"
     wheel.write_bytes(b"not-a-wheel")
     out = tmp_path / "report.json"
-    with patch.object(
-        sys,
-        "argv",
-        [
-            "probe",
-            "--python",
-            str(tmp_path / "absent-python"),
-            "--fix-sha",
-            "a" * 40,
-            "--candidate-wheel",
-            str(wheel),
-            "--out",
-            str(out),
-        ],
-    ):
-        assert main() == 1
+    argv = ["probe", "--python", str(python), "--fix-sha", "a" * 40]
+    argv += ["--candidate-wheel", str(wheel), "--out", str(out)]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert main() == 1
     assert json.loads(out.read_text())["loaded"] is False
 
 
 @pytest.mark.parametrize("scope", ["published", "candidate"])
 def test_spacy_row_measured_pass_and_failed_published_are_distinct(tmp_path, scope):
     path = tmp_path / "report.json"
-    path.write_text(
-        json.dumps(
-            dict(
-                bug_sha=ratchet.SPACY_BUG_SHA,
-                fix_sha="a" * 40,
-                python="/fixture/keg/bin/python",
-                published_loaded=scope == "published",
-                loaded=True,
-                scope=scope,
-            )
-        )
-    )
+    payload = dict(bug_sha=ratchet.SPACY_BUG_SHA, fix_sha="a" * 40, python="/fixture/keg/bin/python", loaded=True)
+    payload.update(scope=scope, published_loaded=scope == "published")
+    path.write_text(json.dumps(payload))
     probe = SimpleNamespace(spacy_report=path, measured_sha="a" * 40, head_sha="a" * 40)
     row = ratchet.row_spacy_model(probe, {})
     assert row.status == ratchet.GREEN
     assert f"{scope} · published {'PASS' if scope == 'published' else 'FAIL'}" in row.value
     assert ratchet.SPACY_BUG_SHA in row.notes and "a" * 40 in row.value
-    payload = json.loads(path.read_text())
     payload.update(scope="published", published_loaded=False)
     path.write_text(json.dumps(payload))
     assert ratchet.row_spacy_model(probe, {}).status == ratchet.RED
 
 
 def test_spacy_workflow_defaults_to_published_and_opt_in_is_explicit():
-    from pathlib import Path
-
-    import yaml
-
     workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/ratchet.yml").read_text())
     job = workflow["jobs"]["signatures"]
     step = next(s for s in job["steps"] if s.get("id") == "spacy")
@@ -156,3 +130,27 @@ def test_spacy_workflow_defaults_to_published_and_opt_in_is_explicit():
             if s.get("name") == "Hand the signature measurement to the collector"
         )["run"]
     )
+
+
+def test_keg_probe_disables_user_site(monkeypatch):
+    from scripts import ci_spacy_model as model
+
+    monkeypatch.setattr(model, "PROBE", "import site; raise SystemExit(0 if site.ENABLE_USER_SITE is False else 1)")
+    assert model.probe(Path(sys.executable))
+
+
+@pytest.mark.parametrize("pipe_names", [[], ["ner"]])
+def test_optimized_probe_still_checks_ner_and_redaction(tmp_path, pipe_names):
+    from scripts.ci_spacy_model import PROBE
+
+    (tmp_path / "spacy.py").write_text(
+        "from types import SimpleNamespace\n"
+        f"class Model:\n    pipe_names = {pipe_names!r}\n"
+        "    def __call__(self, text): return SimpleNamespace(ents=[])\n"
+        "def load(*args, **kwargs): return Model()\n"
+    )
+    env = dict(
+        os.environ, PYTHONPATH=os.pathsep.join((str(tmp_path), str(Path(__file__).resolve().parents[1] / "src")))
+    )
+    result = subprocess.run([sys.executable, "-O", "-c", PROBE], env=env, capture_output=True, timeout=30)
+    assert result.returncode != 0

@@ -23,10 +23,13 @@ PROBE = """
 import spacy
 from brainlayer.pipeline.sanitize import Sanitizer, SanitizeConfig
 nlp = spacy.load('en_core_web_sm')
-assert 'ner' in nlp.pipe_names
+if 'ner' not in nlp.pipe_names:
+    raise SystemExit('NER component missing')
 result = Sanitizer(SanitizeConfig()).sanitize('John Smith lives in London.')
-assert 'John Smith' not in result.sanitized
-assert any(r.source == 'spacy' for r in result.replacements)
+if 'John Smith' in result.sanitized:
+    raise SystemExit('Person was not redacted')
+if not any(r.source == 'spacy' for r in result.replacements):
+    raise SystemExit('No NER replacement recorded')
 """
 
 
@@ -38,7 +41,7 @@ def probe(python: Path, overlay: Path | None = None) -> bool:
         env["PYTHONPATH"] = os.pathsep.join((str(overlay), str(Path(__file__).resolve().parents[1] / "src")))
     try:
         result = subprocess.run(
-            [str(python), "-c", PROBE],
+            [str(python), "-s", "-c", PROBE],
             env=env,
             cwd=tempfile.gettempdir(),
             capture_output=True,
