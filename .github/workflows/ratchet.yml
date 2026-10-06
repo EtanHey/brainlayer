@@ -142,7 +142,10 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install replay import dependencies (no embedding model)
-        run: pip install apsw sqlite-vec requests rich pydantic numpy
+        run: |
+          python -m venv "${RUNNER_TEMP}/replay-venv"
+          "${RUNNER_TEMP}/replay-venv/bin/python" -m pip install apsw sqlite-vec requests rich pydantic numpy abydos deprecation orjson pyyaml
+          echo "${RUNNER_TEMP}/replay-venv/bin" >> "$GITHUB_PATH"
       - name: Measure bug RED and PR GREEN against real launchd
         id: measure
         env:
