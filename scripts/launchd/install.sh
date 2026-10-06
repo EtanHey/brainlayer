@@ -317,7 +317,7 @@ job_display_name() {
         backup-daily) echo "BrainLayer DB Backup" ;;
         decay) echo "BrainLayer Decay" ;;
         drain) echo "BrainLayer Queue Drain" ;;
-        enrichment) echo "BrainLayer Enrichment" ;;
+        enrich|enrichment) echo "BrainLayer Enrichment" ;;
         health-check) echo "BrainLayer Health Check" ;;
         hotlane-brainbar) echo "BrainLayer Hotlane" ;;
         index) echo "BrainLayer Index" ;;
@@ -1224,6 +1224,7 @@ remove_fleet_watchdog() {
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
+    [ -f "$dst" ] || return 0
     if ! unload_plist "$name"; then
         return 1
     fi
@@ -1239,7 +1240,9 @@ case "${1:-all}" in
         install_plist index
         ;;
     enrich|enrichment)
-        echo "ERROR: enrichment is retired; no service was installed" >&2
+        remove_plist enrichment
+        remove_plist enrich
+        echo "ERROR: enrichment is retired; old services removed; no service was installed" >&2
         exit 1
         ;;
     watch)
@@ -1325,6 +1328,8 @@ case "${1:-all}" in
         install_plist t3-ingest
         ;;
     all)
+        remove_plist enrichment
+        remove_plist enrich
         install_env_runner
         verify_config_file
         verify_gemini_env_file
