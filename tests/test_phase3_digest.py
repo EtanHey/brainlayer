@@ -226,39 +226,25 @@ def test_digest_extracts_action_items(tmp_path):
     assert isinstance(result["questions"], list)
 
 
-def test_digest_content_applies_faceted_enrichment_and_marks_chunk_enriched(tmp_path):
-    """digest_content writes faceted Gemini tags into the chunk enrichment fields."""
+def test_brain_digest_retired_callback_keeps_new_enrichment_fields_empty(tmp_path):
+    """Digest compatibility callbacks cannot generate model metadata anymore."""
     from brainlayer.pipeline.digest import digest_content
 
     store = VectorStore(tmp_path / "test.db")
 
-    def fake_faceted_enrich(*, content, project, title, participants):  # noqa: ARG001
-        return {
-            "topics": ["brainlayer-search-quality", "entity-memory-scope"],
-            "activity": "act:designing",
-            "domains": ["dom:mcp", "dom:python"],
-            "confidence": 0.91,
-            "provider": "gemini",
-            "model": "gemini-2.5-flash-lite",
-        }
+    fake_faceted_enrich = MagicMock(side_effect=AssertionError("retired callback was invoked"))
 
     result = digest_content(
-        content="We decided BrainLayer digest should add faceted enrichment through Gemini.",
+        content="We decided BrainLayer digest should preserve local extraction.",
         store=store,
         embed_fn=_dummy_embed,
         project="brainlayer",
         faceted_enrich_fn=fake_faceted_enrich,
     )
 
-    assert result["tags"] == [
-        "brainlayer-search-quality",
-        "entity-memory-scope",
-        "act:designing",
-        "dom:mcp",
-        "dom:python",
-    ]
-    assert result["enrichment"]["status"] == "enriched"
-    assert result["enrichment"]["confidence"] == 0.91
+    assert result["tags"] == []
+    assert result["enrichment"]["status"] == "retired"
+    fake_faceted_enrich.assert_not_called()
 
     cursor = store.conn.cursor()
     row = list(
@@ -268,11 +254,7 @@ def test_digest_content_applies_faceted_enrichment_and_marks_chunk_enriched(tmp_
         )
     )[0]
 
-    assert row[0] is not None
-    assert "act:designing" in row[0]
-    assert row[1] == "designing"
-    assert row[2] == result["summary"]
-    assert row[3] is not None
+    assert row == (None, None, None, None)
 
 
 # --- Task 3: brain_digest MCP tool schema ---
