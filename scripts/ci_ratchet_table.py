@@ -1753,6 +1753,47 @@ ROW_BUILDERS = (
 )
 
 
+def row_quiesce(report: Path | None, unavailable: str | None, measured_sha: str | None) -> Row:
+    name = "maintenance quiesce: services stay down under a reviving watchdog"
+    method = "real launchd · GitHub macOS runner · real maintenance + fleet-watchdog"
+    notes = "Fix: #1076 (`bc6d690f4331387485678d0247e19e14e6ef8d97`). Ceiling: 0 revivals; supervisor held, both resumed, no hold marker."
+    if report is None:
+        return Row(name, NA, f"n/a — {unavailable}", method, notes)
+    try:
+        data = json.loads(report.read_text())
+        bug, head = data["bug"], data["head"]
+        if not (
+            bug["sha"] == "e59cf87142c88db044dd701cf5ee993267c8d090"
+            and measured_sha
+            and head["sha"] == measured_sha
+            and bug["status"] == "RED"
+            and bug["revived"] is True
+            and head["status"] == "GREEN"
+            and head["revived"] is False
+            and head["held"] is True
+            and head["resume_errors"] == []
+        ):
+            raise ValueError("replay SHA or verdict mismatch")
+        for replay in (bug, head):
+            if not (
+                all(replay[key] is True for key in ("positive_control", "resumed", "marker_removed"))
+                and replay["interval_seconds"] > 0
+                and replay["window_seconds"] >= 2 * replay["interval_seconds"]
+            ):
+                raise ValueError("replay postcondition missing")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return Row(
+            name, RED, f"real launchd RED/GREEN evidence missing or invalid: {type(error).__name__}", method, notes
+        )
+    return Row(
+        name,
+        GREEN,
+        "baseline RED | PR GREEN | Δ fixed | ceiling 0 revivals",
+        method,
+        notes + f" Bug SHA: `{bug['sha']}`; measured at `{head['sha']}` ({head['window_seconds']} s).",
+    )
+
+
 def collect(probe: Probe, corpus: dict) -> list[Row]:
     return [builder(probe, corpus) for builder in ROW_BUILDERS]
 
@@ -2003,6 +2044,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
+    parser.add_argument(
+        "--quiesce-report", type=Path, help="Real macOS launchd RED/GREEN report; missing or invalid is RED"
+    )
+    parser.add_argument("--quiesce-unavailable", help="Explicit reason the macOS quiesce replay was not triggered")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -2032,6 +2077,8 @@ def main(argv: list[str] | None = None) -> int:
         args.fallback_gits_root,
     )
     rows = collect(probe, corpus)
+    if args.quiesce_report or args.quiesce_unavailable:
+        rows.append(row_quiesce(args.quiesce_report, args.quiesce_unavailable, args.measured_sha))
     now = datetime.now(timezone.utc)
     table = render(rows, probe, args.run_url, now)
 
