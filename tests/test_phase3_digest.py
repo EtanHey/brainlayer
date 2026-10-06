@@ -297,7 +297,7 @@ def test_brain_digest_tool_exists():
 
 
 def test_brain_digest_schema_has_required_fields():
-    """brain_digest tool exposes digest fields and mode-based enrich controls."""
+    """brain_digest tool exposes digest fields and local mode controls."""
     from brainlayer.mcp import _full_tool_definitions
 
     tools = _full_tool_definitions()
@@ -307,7 +307,8 @@ def test_brain_digest_schema_has_required_fields():
     assert "title" in props
     assert "participants" in props
     assert "mode" in props
-    assert "limit" in props
+    assert props["mode"]["enum"] == ["digest", "connect"]
+    assert "limit" not in props
 
 
 def test_brain_digest_description_teaches_routing():
@@ -324,7 +325,7 @@ def test_brain_digest_description_teaches_routing():
     assert "knowledge graph" in desc
     assert "digest" in desc
     assert "connect" in desc
-    assert "enrich" in desc
+    assert "enrich" not in desc
 
 
 # --- Task 4: brain_entity MCP tool ---
