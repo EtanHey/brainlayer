@@ -24,7 +24,7 @@ def test_core_profiles_fail_closed(monkeypatch, profile):
 def test_full_profiles_preserve_all_python_tools(profile):
     tools = ToolPalette(profile).expose(_full_tool_definitions())
 
-    assert len(tools) == 13
+    assert len(tools) == 12
     assert tuple(tool.name for tool in tools) == tuple(tool.name for tool in _full_tool_definitions())
 
 
@@ -33,7 +33,7 @@ def test_environment_profile_is_resolved_once(monkeypatch):
     palette = ToolPalette()
     monkeypatch.setenv("BRAINLAYER_MCP_PROFILE", "core")
 
-    assert len(palette.expose(_full_tool_definitions())) == 13
+    assert len(palette.expose(_full_tool_definitions())) == 12
 
 
 def test_python_core_profile_explains_gate_and_both_remedies(monkeypatch):
@@ -76,7 +76,7 @@ def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
         "already_expanded": False,
         "registered_tools": [tool.name for tool in _full_tool_definitions() if tool.name not in CORE_TOOL_NAMES],
     }
-    assert len(asyncio.run(list_tools())) == 13
+    assert len(asyncio.run(list_tools())) == 12
 
     after = asyncio.run(call_tool("brain_tags", {}))
     assert "deprecated" in after.content[0].text
@@ -87,7 +87,7 @@ def test_python_palette_expands_once_and_dispatches_deferred_tools(monkeypatch):
         "already_expanded": True,
         "registered_tools": [],
     }
-    assert len(asyncio.run(list_tools())) == 13
+    assert len(asyncio.run(list_tools())) == 12
 
 
 def test_brain_store_uses_server_owned_session_instead_of_client_argument(monkeypatch):
@@ -142,3 +142,18 @@ def test_server_owned_session_id_falls_back_for_legacy_in_process_client(monkeyp
     monkeypatch.delattr(mcp_module.server, "request_context", raising=False)
 
     assert mcp_module._calling_session_id() == mcp_module._MCP_PROCESS_SESSION_ID
+
+
+@pytest.mark.parametrize("profile", ["core", "full"])
+def test_retired_enrich_is_neither_advertised_nor_dispatched(monkeypatch, profile):
+    from brainlayer.mcp import enrich_handler
+
+    forbidden_db = pytest.fail
+    monkeypatch.setattr(mcp_module, "_tool_palette", ToolPalette(profile))
+    monkeypatch.setattr(
+        enrich_handler, "_get_vector_store", lambda: forbidden_db("retired tool opened DB"), raising=False
+    )
+    assert "brain_enrich" not in {tool.name for tool in _full_tool_definitions()}
+    result = asyncio.run(call_tool("brain_enrich", {"mode": "batch", "phase": "submit"}))
+    assert result.is_error is True
+    assert result.content[0].text == "Unknown tool: brain_enrich"
