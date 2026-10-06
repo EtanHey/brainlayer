@@ -40,7 +40,7 @@ from .enrichment_controller import (
     _record_enrich_cost_usd,
 )
 from .paths import get_db_path
-from .pipeline.cloud_scrub import scrub_for_cloud, scrub_gemini_batch_jsonl
+from .pipeline.cloud_scrub import scrub_for_cloud
 from .pipeline.enrichment import (
     HIGH_VALUE_TYPES,
     build_external_prompt,
@@ -737,86 +737,6 @@ def _get_genai_client():
         sys.exit(1)
 
     return genai.Client(api_key=api_key)
-
-
-def submit_gemini_batch(
-    jsonl_path: Path,
-    model: str = DEFAULT_BATCH_MODEL,
-    store: Optional[VectorStore] = None,
-    max_retries: int = 3,
-    import_mode: str = IMPORT_MODE_AUTO,
-) -> Optional[str]:
-    """Upload JSONL and submit a Gemini batch job. Returns batch job name or None on failure."""
-    _raise_if_enrich_daily_cap_reached()
-    # The export may predate the scrub-before-cloud fix; re-scrub what is on disk.
-    # Raises CloudScrubError (nothing uploaded) if any line cannot be scrubbed.
-    scrub_gemini_batch_jsonl(jsonl_path)
-    client = _get_genai_client()
-
-    # Count chunks in file
-    with open(jsonl_path) as f:
-        chunk_count = sum(1 for _ in f)
-
-    print(f"\nSubmitting batch: {jsonl_path.name} ({chunk_count} chunks)")
-
-    # Upload file
-    print("  Uploading JSONL to File API...")
-    uploaded_file = client.files.upload(
-        file=str(jsonl_path),
-        config={"display_name": f"brainlayer-backfill-{jsonl_path.stem}", "mime_type": "application/json"},
-    )
-    print(f"  Uploaded: {uploaded_file.name}")
-
-    # Create batch job with retry on 429
-    for attempt in range(max_retries):
-        try:
-            print(f"  Creating batch job (model: {model})..." + (f" (retry {attempt})" if attempt else ""))
-            batch_job = client.batches.create(
-                model=model,
-                src=uploaded_file.name,
-                config={"display_name": f"brainlayer-enrichment-{jsonl_path.stem}"},
-            )
-            print(f"  Job created: {batch_job.name} (state: {batch_job.state})")
-
-            # Save checkpoint
-            if store:
-                save_checkpoint(
-                    store,
-                    batch_id=batch_job.name,
-                    backend="gemini",
-                    model=model,
-                    status="submitted",
-                    chunk_count=chunk_count,
-                    jsonl_path=str(jsonl_path),
-                    submitted_at=datetime.now(timezone.utc).isoformat(),
-                    import_mode=import_mode,
-                )
-
-            return batch_job.name
-
-        except Exception as e:
-            err = str(e)
-            if "429" in err and attempt < max_retries - 1:
-                wait = 30 * (2**attempt)  # 30s, 60s, 120s
-                print(f"  429 RESOURCE_EXHAUSTED — waiting {wait}s before retry...")
-                _sleep(wait)
-            else:
-                print(f"  FAILED: {err[:120]}")
-                if store:
-                    save_checkpoint(
-                        store,
-                        batch_id=f"failed-{jsonl_path.stem}",
-                        backend="gemini",
-                        model=model,
-                        status="failed",
-                        chunk_count=chunk_count,
-                        jsonl_path=str(jsonl_path),
-                        error=err[:500],
-                        import_mode=import_mode,
-                    )
-                return None
-
-    return None
 
 
 def poll_gemini_batch(batch_name: str, timeout_hours: float = 25) -> Dict[str, Any]:

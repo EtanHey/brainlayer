@@ -131,36 +131,6 @@ def test_quarantine_is_redacted_in_http_transport(sender, monkeypatch):
     assert "[REDACTED:quarantine]" in sent[0]
 
 
-def test_quarantine_is_redacted_in_batch_upload_and_export(monkeypatch, tmp_path):
-    from brainlayer import cloud_backfill
-
-    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    export = tmp_path / "quarantined.jsonl"
-    lines = [{"request": {"contents": [{"parts": [{"text": text}]}]}} for text in (_payload_with_every_token(), token)]
-    original = "\n".join(json.dumps(line) for line in lines) + "\n"
-    export.write_text(original, encoding="utf-8")
-    uploaded = []
-    client = types.SimpleNamespace(
-        files=types.SimpleNamespace(
-            upload=lambda **kw: (
-                uploaded.append(Path(kw["file"]).read_text()) or types.SimpleNamespace(name="files/fake")
-            )
-        ),
-        batches=types.SimpleNamespace(
-            create=lambda **kw: types.SimpleNamespace(name="batches/fake", state="JOB_STATE_PENDING")
-        ),
-    )
-    monkeypatch.setattr(cloud_backfill, "_raise_if_enrich_daily_cap_reached", lambda: None)
-    monkeypatch.setattr(cloud_backfill, "_get_genai_client", lambda: client)
-
-    assert cloud_backfill.submit_gemini_batch(export, store=None) == "batches/fake"
-    assert len(uploaded) == 1
-    assert token not in uploaded[0]
-    assert "[REDACTED:quarantine]" in uploaded[0]
-    _assert_no_token(uploaded[0], where="quarantined batch upload")
-    assert export.read_text(encoding="utf-8") == uploaded[0]
-
-
 def test_second_cloud_scrub_pass_failure_prevents_send(monkeypatch):
     from brainlayer import enrichment_controller as controller
     from brainlayer.pipeline import cloud_scrub
@@ -478,39 +448,6 @@ def test_cloud_backfill_batch_request_line_scrubs_prompt():
 
     _assert_no_token(json.dumps(line), where="Gemini batch request line")
     assert line["key"] == "chunk-1"
-
-
-def test_cloud_backfill_submit_scrubs_a_pre_fix_export_before_upload(monkeypatch, tmp_path):
-    from brainlayer import cloud_backfill
-
-    export = tmp_path / "batch_000.jsonl"
-    raw_line = {
-        "key": "chunk-1",
-        "request": {"contents": [{"role": "user", "parts": [{"text": _payload_with_every_token()}]}]},
-    }
-    export.write_text(json.dumps(raw_line) + "\n", encoding="utf-8")
-
-    uploaded: list[str] = []
-
-    class _Files:
-        def upload(self, *, file, config=None):
-            uploaded.append(Path(file).read_text(encoding="utf-8"))
-            return types.SimpleNamespace(name="files/fake")
-
-    class _Batches:
-        def create(self, *, model, src, config=None):
-            return types.SimpleNamespace(name="batches/fake", state="JOB_STATE_PENDING")
-
-    monkeypatch.setattr(cloud_backfill, "_raise_if_enrich_daily_cap_reached", lambda: None)
-    monkeypatch.setattr(
-        cloud_backfill, "_get_genai_client", lambda: types.SimpleNamespace(files=_Files(), batches=_Batches())
-    )
-
-    assert cloud_backfill.submit_gemini_batch(export, store=None) == "batches/fake"
-
-    assert len(uploaded) == 1
-    _assert_no_token(uploaded[0], where="uploaded Gemini batch file")
-    assert json.loads(uploaded[0].splitlines()[0])["key"] == "chunk-1"
 
 
 def test_abcde_http_chat_fn_scrubs_prompt(monkeypatch):

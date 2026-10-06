@@ -70,3 +70,9 @@ def test_batch_remote_resume_executors_are_removed(name):
     from brainlayer import cloud_backfill
 
     assert not hasattr(cloud_backfill, name)
+
+
+def test_batch_remote_submission_sender_is_removed():
+    from brainlayer import cloud_backfill
+
+    assert not hasattr(cloud_backfill, "submit_gemini_batch")
