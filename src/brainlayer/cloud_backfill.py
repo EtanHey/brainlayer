@@ -27,7 +27,6 @@ import os
 import sqlite3
 import sys
 import time
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -40,14 +39,10 @@ from .enrichment_controller import (
     _record_enrich_cost_usd,
 )
 from .paths import get_db_path
-from .pipeline.cloud_scrub import scrub_for_cloud
 from .pipeline.enrichment import (
     HIGH_VALUE_TYPES,
-    build_external_prompt,
-    build_prompt,
     parse_enrichment,
 )
-from .pipeline.sanitize import Sanitizer
 from .vector_store import VectorStore
 
 _sleep = time.sleep
@@ -136,25 +131,6 @@ CHECKPOINT_COLUMNS = (
 IMPORT_MODE_AUTO = "auto"
 IMPORT_MODE_DRAIN = "drain"
 IMPORT_MODE_PREVIEW = "preview"
-
-
-def build_batch_request_line(chunk_id: str, prompt: str) -> Dict[str, Any]:
-    """Build a Gemini Batch API request line with thinking disabled.
-
-    thinkingBudget=0 is mandatory for this backfill job class. On February 18,
-    2026, non-zero thinking tokens caused a high-cost incident on
-    gemini-2.5-flash. Centralizing the payload keeps export behavior testable.
-    """
-    return {
-        "key": chunk_id,
-        "request": {
-            "contents": [{"role": "user", "parts": [{"text": scrub_for_cloud(prompt)}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
-        },
-    }
 
 
 def estimate_batch_cost_usd(input_tokens: int, output_tokens: int) -> float:
@@ -536,89 +512,6 @@ def get_backlog_drain_stats(store: Any, *, min_char_count: int = 50) -> Dict[str
 
 
 # ── Export ──────────────────────────────────────────────────────────────
-
-
-def _init_sanitizer(store: VectorStore) -> Sanitizer:
-    """Initialize the sanitizer with name dictionary from the DB.
-
-    AIDEV-NOTE: This is called once at the start of any external export.
-    The sanitizer is THE gate for external API calls — not optional.
-    """
-    sanitizer = Sanitizer.from_env()
-
-    # Build name dictionary from WhatsApp senders in DB
-    known_names = sanitizer.build_name_dictionary(store)
-    if known_names:
-        print(f"  Built name dictionary: {len(known_names)} names from WhatsApp contacts")
-        # Rebuild sanitizer with the full name dictionary
-        new_config = replace(
-            sanitizer.config,
-            confirmed_person_names=frozenset(known_names) | sanitizer.config.confirmed_person_names,
-        )
-        sanitizer = Sanitizer(new_config)
-
-    # Load existing mapping for pseudonym consistency across runs
-    mapping_path = EXPORT_DIR / "pii_mapping.json"
-    sanitizer.load_mapping(mapping_path)
-
-    return sanitizer
-
-
-def export_backlog_drain_chunks(
-    store: VectorStore,
-    max_chunks: int = 0,
-    min_char_count: int = 50,
-    no_sanitize: bool = False,
-) -> List[Path]:
-    """Export realtime-eligible enrichment backlog chunks to Gemini Batch JSONL."""
-    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-    if no_sanitize:
-        print("WARNING: PII sanitization DISABLED — use only for local testing!")
-        sanitizer = None
-    else:
-        print("Initializing PII sanitizer...")
-        sanitizer = _init_sanitizer(store)
-
-    limit = max_chunks if max_chunks > 0 else 200_000
-    rows = store.get_enrichment_candidates(
-        limit=limit,
-        min_content_length=min_char_count,
-        order="oldest",
-    )
-    print(f"Fetched {len(rows)} backlog drain chunks for export")
-
-    jsonl_files = []
-    batch_num = 0
-    total_pii_found = 0
-
-    for i in range(0, len(rows), CHUNKS_PER_JOB):
-        batch = rows[i : i + CHUNKS_PER_JOB]
-        batch_num += 1
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = EXPORT_DIR / f"batch_drain_{ts}_{batch_num:03d}.jsonl"
-
-        with open(filename, "w") as f:
-            for chunk in batch:
-                if sanitizer is not None:
-                    prompt, sanitize_result = build_external_prompt(chunk, sanitizer)
-                    if sanitize_result.pii_detected:
-                        total_pii_found += 1
-                else:
-                    prompt = build_prompt(chunk)
-
-                f.write(json.dumps(build_batch_request_line(chunk["id"], prompt)) + "\n")
-
-        jsonl_files.append(filename)
-        print(f"  Wrote {filename.name} ({len(batch)} chunks)")
-
-    if sanitizer is not None:
-        mapping_path = EXPORT_DIR / "pii_mapping.json"
-        sanitizer.save_mapping(mapping_path)
-        print(f"Mapping saved to: {mapping_path}")
-    print(f"\nPII sanitization: {total_pii_found}/{len(rows)} chunks had PII stripped")
-    print(f"Exported {len(rows)} backlog chunks to {len(jsonl_files)} JSONL files")
-    return jsonl_files
 
 
 # ── Gemini Batch API (google.genai SDK) ────────────────────────────────

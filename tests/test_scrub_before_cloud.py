@@ -441,15 +441,6 @@ def test_digest_faceted_gemini_send_scrubs_prompt(monkeypatch):
         _assert_no_token(prompt, where="digest faceted Gemini prompt")
 
 
-def test_cloud_backfill_batch_request_line_scrubs_prompt():
-    from brainlayer.cloud_backfill import build_batch_request_line
-
-    line = build_batch_request_line("chunk-1", _payload_with_every_token())
-
-    _assert_no_token(json.dumps(line), where="Gemini batch request line")
-    assert line["key"] == "chunk-1"
-
-
 def test_abcde_http_chat_fn_scrubs_prompt(monkeypatch):
     import requests
 
