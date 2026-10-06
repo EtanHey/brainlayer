@@ -3,6 +3,8 @@
 The command harvests a voice-review session, gates each clean decision through
 the KG entity judge, applies only judge-passing decisions through the reversible
 cleanup applier, and writes judge failures back as an ORQI flag batch.
+Judging requires an explicit caller-supplied judge; the CLI can explicitly
+select --no-judge for its existing local workflow.
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from brainlayer.kg_judge import judge_clusters_with_backend
 from brainlayer.kg_session_harvest import harvest_session
 from brainlayer.kg_session_harvest import main as harvest_main
 from brainlayer.paths import get_db_path
@@ -56,6 +57,8 @@ def finish_session(
     apply_func: ApplyFunc | None = None,
 ) -> dict[str, Any]:
     """Run the ORQI session-finish pipeline and return the summary contract."""
+    if not no_judge and judge_func is None:
+        raise RuntimeError("Default KG judging is retired; supply judge_func or explicitly select --no-judge.")
     batch = Path(batch_path)
     decisions = Path(decisions_path)
     resolved_run_id = run_id or _default_run_id(batch, decisions)
@@ -150,27 +153,23 @@ def _judge_clean_decisions(
     if no_judge:
         return items, []
 
+    if judge_func is None:
+        raise RuntimeError("Default KG judging is retired; supply judge_func or explicitly select --no-judge.")
     clusters = _clusters_by_key(batch_path)
     passes = []
     failures = []
-    judge = judge_func or _default_judge
     for item in items:
         key = _item_key(item)
         cluster = clusters.get(key)
         if cluster is None:
             failures.append(item)
             continue
-        verdict = judge(item, cluster)
+        verdict = judge_func(item, cluster)
         if _verdict_passes_item(item, verdict):
             passes.append(item)
         else:
             failures.append(item)
     return passes, failures
-
-
-def _default_judge(item: dict[str, Any], cluster: dict[str, Any]) -> dict[str, Any]:
-    del item
-    return judge_clusters_with_backend([cluster], backend="groq")[0]
 
 
 def _verdict_passes_item(item: dict[str, Any], verdict: dict[str, Any]) -> bool:
