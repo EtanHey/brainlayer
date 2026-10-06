@@ -1352,7 +1352,7 @@ def test_the_table_job_waits_for_the_signature_job_without_depending_on_it_runni
     table standing on the PR -- the same crime as printing an unmeasured number, by omission.
     """
     table = workflow_jobs()["table"]
-    assert set(table["needs"]) == {"gate", "signatures"}
+    assert set(table["needs"]) == {"gate", "signatures", "quiesce"}
     assert "!cancelled()" in table["if"] and "always()" not in table["if"]
 
 
