@@ -1267,3 +1267,22 @@ def test_hung_unload_probe_is_bounded_and_refuses(db, live_guard, monkeypatch):
         scrub_at_rest.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
     assert error.value.detail == "state:com.etanhey.brainlayer-fleet-watchdog"
     assert 0 < timeouts[0] <= 45
+
+
+def test_sigterm_during_live_scrub_restores_watchdog(db, live_guard, monkeypatch):
+    import signal
+
+    from brainlayer import maintenance, scrub_at_rest
+
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def terminate(*args):
+        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+
+    monkeypatch.setattr(scrub_at_rest, "_apply", terminate)
+    with pytest.raises(scrub_at_rest.ScrubAtRestError) as error:
+        scrub_at_rest.scrub_at_rest(db.db_path, allow_live_db=True, expect_rows=live_guard.total)
+    assert isinstance(error.value.__cause__, SystemExit)
+    assert signal.getsignal(signal.SIGTERM) == previous
+    assert live_guard.events[-1] == ("resume", "fleet-watchdog")
+    assert not maintenance._watchdog_hold_path().exists()

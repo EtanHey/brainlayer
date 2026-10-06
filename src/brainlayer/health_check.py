@@ -1286,6 +1286,22 @@ def _run_health_check_locked(
 
     from .job_alerts import active_alerts
 
+    if config.heal:
+        from .maintenance import MaintenanceAbort, recover_fleet_watchdog_hold
+
+        try:
+            recover_fleet_watchdog_hold(
+                path=config.pause_sentinel_path.with_name("fleet-watchdog-hold.json"),
+                command_runner=command_runner,
+                alert_path=config.job_alert_path,
+            )
+        except Exception as exc:
+            if (
+                not isinstance(exc, MaintenanceAbort)
+                or exc.detail != "hold-active:com.etanhey.brainlayer-fleet-watchdog"
+            ):
+                add_issue("watchdog_hold_recovery_failed", "critical", "fleet-watchdog hold recovery failed")
+
     for job, reason in active_alerts(config.job_alert_path).items():
         add_issue(f"job_alert_{job}", "critical", reason)
 

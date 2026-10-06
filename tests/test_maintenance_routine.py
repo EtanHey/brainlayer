@@ -64,10 +64,11 @@ def _config(tmp_path: Path, *, now: dt.datetime):
 
 
 @pytest.fixture(autouse=True)
-def fake_watchdog_hold(monkeypatch):
+def fake_watchdog_hold(monkeypatch, tmp_path):
     from brainlayer import maintenance
 
     monkeypatch.setattr(maintenance, "run_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(maintenance, "PAUSE_SENTINEL_PATH", tmp_path / "pause.sentinel")
 
 
 def test_off_window_gate_aborts_before_touching_queue(tmp_path, monkeypatch):

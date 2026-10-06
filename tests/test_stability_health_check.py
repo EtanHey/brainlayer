@@ -25,6 +25,40 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENRICHMENT_EVENT = '{"kind":"enrichment_update"}\n'
 
 
+@pytest.mark.parametrize("heal", [False, True])
+def test_health_check_recovers_watchdog_hold_only_when_healing(tmp_path, monkeypatch, heal):
+    from brainlayer import maintenance
+
+    calls = []
+    monkeypatch.setattr(maintenance, "recover_fleet_watchdog_hold", lambda **kwargs: calls.append(kwargs))
+    db_path = tmp_path / "fixture.db"
+    _make_db(db_path, total=1, vector_rows=1)
+
+    def runner(args):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pause = tmp_path / "pause.sentinel"
+    alerts = tmp_path / "alerts.json"
+    run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health.json",
+            heal=heal,
+            pause_sentinel_path=pause,
+            job_alert_path=alerts,
+            source_jsonl_globs=[],
+        ),
+        ps_output_fn=lambda: "",
+        socket_request_fn=_ok_canary,
+        command_runner=runner,
+    )
+    assert calls == (
+        [{"path": pause.with_name("fleet-watchdog-hold.json"), "command_runner": runner, "alert_path": alerts}]
+        if heal
+        else []
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
     """Isolate HealthCheckConfig defaults that point at live developer state.
@@ -59,6 +93,7 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(health_check, "_pending_stores_count", _isolated_pending_stores_count)
 
     absent_sentinel = tmp_path_factory.mktemp("hc-sentinel") / "pause.sentinel"
+    monkeypatch.setattr(health_check, "DEFAULT_PAUSE_SENTINEL_PATH", absent_sentinel)
     live_sentinel_default = Path("~/.local/share/brainlayer/pause.sentinel").expanduser()
     real_pause_state = health_check._pause_sentinel_state
 
