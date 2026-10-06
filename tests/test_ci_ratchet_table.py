@@ -3101,7 +3101,9 @@ def test_pre_push_delete_ratchet_runs_real_hook(tmp_path: Path) -> None:
     assert result.status == ratchet.GREEN, result.value
     assert "0 suite starts" in result.value
     assert ratchet.PRE_PUSH_DELETE_BUG_SHA in result.notes
-    assert HEAD in result.notes
+    assert f"measured at `{HEAD}`" in result.notes
+    assert "Fix: #1084" in result.notes
+    assert "Fix SHA" not in result.notes
 
 
 @pytest.mark.parametrize(
@@ -3112,6 +3114,11 @@ def test_pre_push_delete_ratchet_runs_real_hook(tmp_path: Path) -> None:
         (ratchet.DELETE_REF + f"refs/heads/fixture {'b' * 40} refs/heads/fixture {'a' * 40}\n", 1),
         (f"refs/tags/v0.0.0 {'b' * 40} refs/tags/v0.0.0 {'0' * 40}\n", 1),
         ("", 1),
+        (ratchet.DELETE_REF + f"refs/tags/v0.0.0 {'b' * 40} refs/tags/v0.0.0 {'0' * 40}\n", 1),
+        ("refs/heads/fixture\n", 1),
+        (ratchet.DELETE_REF + "refs/heads/fixture\n", 1),
+        (ratchet.DELETE_REF + f"refs/heads/new {'b' * 40} refs/heads/new {'0' * 40}\n", 1),
+        (ratchet.DELETE_REF + f"refs/heads/fixture {'b' * 40} refs/heads/fixture {'a' * 40}", 1),
     ],
 )
 def test_pre_push_delete_only_boundary(refs: str, starts: int) -> None:
@@ -3129,3 +3136,17 @@ def test_pre_push_delete_ratchet_missing_hook_is_red(tmp_path: Path, monkeypatch
     result = ratchet.row_pre_push_delete(probe, {})
     assert result.status == ratchet.RED
     assert "exit 127" in result.value
+
+
+def test_pre_push_delete_row_labels_the_measured_sha(tmp_path: Path) -> None:
+    result = ratchet.row_pre_push_delete(linux_probe(tmp_path, measured_sha="b" * 40), {})
+    assert f"measured at `{'b' * 40}`" in result.notes
+    assert f"measured at `{HEAD}`" not in result.notes
+    assert "Fix: #1084" in result.notes
+
+
+def test_pre_push_delete_missing_bash_is_red(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet.shutil, "which", lambda _name: None)
+    result = ratchet.row_pre_push_delete(linux_probe(tmp_path), {})
+    assert result.status == ratchet.RED
+    assert "bash" in result.value

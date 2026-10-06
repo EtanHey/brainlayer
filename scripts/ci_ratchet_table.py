@@ -1684,6 +1684,9 @@ DELETE_REF = f"(delete) {'0' * 40} refs/heads/fixture {'a' * 40}\n"
 
 def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[str], int]:
     """Execute the checkout's real hook; only its expensive suite is a sentinel."""
+    bash = shutil.which("bash")
+    if bash is None:
+        raise FileNotFoundError("bash binary unavailable for real hook replay")
     with tempfile.TemporaryDirectory(prefix="brainlayer-prepush-") as directory:
         fixture = Path(directory)
         scripts = fixture / "scripts"
@@ -1702,13 +1705,14 @@ def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[
             SUITE_STARTS=str(sentinel),
         )
         result = subprocess.run(
-            ["bash", str(hook.resolve()), "origin", "fixture.invalid"],
+            [bash, str(hook.resolve()), "origin", "fixture.invalid"],
             cwd=fixture,
             input=refs,
             text=True,
             capture_output=True,
             timeout=20,
             env=env,
+            check=False,
         )
         starts = len(sentinel.read_text().splitlines()) if sentinel.exists() else 0
         return result, starts
@@ -1719,7 +1723,7 @@ def row_pre_push_delete(probe: Probe, _corpus: dict) -> Row:
     method = "real checkout hook · delete-only stdin · sentinel suite runner"
     notes = (
         f"Bug SHA: `{PRE_PUSH_DELETE_BUG_SHA}` (RED replay, 2026-10-06). "
-        f"Fix SHA (PR head under test): `{probe.measured_sha or probe.head_sha or 'unread'}`. "
+        f"Fix: #1084; measured at `{probe.measured_sha or probe.head_sha or 'unread'}`. "
         "Ceiling: **0 suite starts**; hook must exit 0 and announce the delete-only skip."
     )
     try:

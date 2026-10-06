@@ -38,7 +38,7 @@ non_tag_refs=0
 tag_name=""
 if [ ! -t 0 ]; then
   # `[ ! -t 0 ]` so a hand-run of this hook does not block reading a terminal.
-  while read -r local_ref local_sha _remote_ref _remote_sha; do
+  while read -r local_ref local_sha _remote_ref _remote_sha || [ -n "${local_ref:-}" ]; do
     [ -z "$local_ref" ] && continue
     case "$local_sha" in
       # An all-zero LOCAL sha is a DELETION: it ships no content, so there is nothing to test.
