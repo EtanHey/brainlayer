@@ -95,6 +95,7 @@ def replay(source, home, mapping):
             }
             if service == "fleet-watchdog":
                 payload["StartInterval"] = INTERVAL
+                payload["ThrottleInterval"] = 1  # launchd defaults to 10 s between starts.
             else:
                 payload["KeepAlive"] = True
             plist = agents / f"{label}.plist"
