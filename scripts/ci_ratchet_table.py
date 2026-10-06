@@ -250,6 +250,7 @@ class Probe:
     search_latency: SearchLatencyMeasurement | None = None
     search_latency_unavailable: str | None = None
     search_latency_problem: str | None = None
+    spacy_report: Path | None = None
 
     @classmethod
     def detect(
@@ -267,6 +268,7 @@ class Probe:
         attestation_unresolved: str | None = None,
         attestations: Path | None = None,
         fallback_gits_root: Path | None = None,
+        spacy_report: Path | None = None,
     ) -> Probe:
         selected = select_wheel(wheel, wheel_glob)
         signature = select_signature(signature_report, signature_unavailable)
@@ -308,6 +310,7 @@ class Probe:
             search_latency=latency.measurement,
             search_latency_unavailable=latency.unavailable,
             search_latency_problem=latency.problem,
+            spacy_report=spacy_report,
             fallback_gits_root=resolved_fallback_root,
             fallback_root_source=fallback_root_source,
         )
@@ -1677,6 +1680,48 @@ def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
     return Row("fallback replay debt", RED, value, method, FALLBACK_NOTES)
 
 
+SPACY_BUG_SHA = "38521b5296eddaaa7d2cdc722119f2622f3456b2"  # v1.5.47
+SPACY_NOTES = (
+    f"Bug `{SPACY_BUG_SHA}` (1.5.47): E050 on the installed M4 keg, 2026-10-06. "
+    "Ceiling: model loads, NER redacts a synthetic person. Pre-release candidate proof stages the "
+    "hash-pinned formula model wheel on PYTHONPATH in a child of the installed keg python; "
+    "it does not prove the tap ships the model. Published result is shown separately. "
+    "After the tap ships it, the same probe measures the untouched published keg."
+)
+
+
+def row_spacy_model(probe: Probe, _corpus: dict) -> Row:
+    name = "keg: spaCy NER model loads"
+    method = "installed keg python · real spaCy/model"
+    if probe.spacy_report is None:
+        if probe.signature_unavailable or (probe.signature is None and not probe.signature_problem):
+            reason = probe.signature_unavailable or SIGNATURE_UNAVAILABLE_DEFAULT
+            return Row(name, NA, f"n/a — {reason}", method, SPACY_NOTES)
+        return Row(name, RED, "macOS job supplied no model report", method, SPACY_NOTES)
+    try:
+        payload = json.loads(probe.spacy_report.read_text())
+        fix = probe.measured_sha or probe.head_sha
+        if (
+            not isinstance(payload, dict)
+            or payload.get("fix_sha") != fix
+            or payload.get("bug_sha") != SPACY_BUG_SHA
+            or payload.get("scope") not in ("candidate", "published")
+            or not payload.get("python")
+            or type(payload.get("published_loaded")) is not bool
+        ):
+            raise ValueError("incomplete report or wrong commit")
+        published = "PASS" if payload["published_loaded"] else "FAIL"
+        value = (
+            f"baseline `{SPACY_BUG_SHA}`: FAIL (E050); fix `{fix}`: "
+            f"{payload['scope']} · published {published} · model/NER "
+            f"{'PASS' if payload.get('loaded') is True else 'FAIL'}"
+        )
+        status = GREEN if payload.get("loaded") is True else RED
+        return Row(name, status, value, method, SPACY_NOTES)
+    except (OSError, ValueError, TypeError):
+        return Row(name, RED, "model report missing, malformed or for a different commit", method, SPACY_NOTES)
+
+
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
 # reader has to see that sha before reading a number measured against it. `baseline attestation`
 # is second for the same reason: it names what the numbers are measured AGAINST.
@@ -1689,6 +1734,7 @@ ROW_BUILDERS = (
     row_search_latency,
     row_idle_cpu,
     row_signature_valid,
+    row_spacy_model,
 )
 
 
@@ -1952,6 +1998,7 @@ def main(argv: list[str] | None = None) -> int:
     attest.add_argument("--main-sha", help="The main commit this run was triggered for (`github.sha` on a push)")
     attest.add_argument("--run-id", type=int, help="`github.run_id`")
     attest.add_argument("--run-attempt", type=int, help="`github.run_attempt`")
+    parser.add_argument("--spacy-report", type=Path, help="Installed-keg model measurement from macOS")
     args = parser.parse_args(argv)
 
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
@@ -1969,6 +2016,7 @@ def main(argv: list[str] | None = None) -> int:
         args.attestation_unresolved,
         args.attestations,
         args.fallback_gits_root,
+        args.spacy_report,
     )
     rows = collect(probe, corpus)
     now = datetime.now(timezone.utc)

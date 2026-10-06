@@ -38,6 +38,10 @@ from typing import Any, Optional
 # Only loaded when use_spacy_ner=True and sanitize() is first called.
 
 
+class PIINERUnavailableError(RuntimeError):
+    """Configured PII NER failed; do not send or persist a partial result."""
+
+
 # ── Types ──────────────────────────────────────────────────────────────
 
 DEFAULT_PERSON_REDACTION_ALLOWLIST = frozenset(
@@ -282,17 +286,19 @@ class Sanitizer:
 
     def _get_nlp(self):
         """Lazy-load spaCy model on first use."""
-        if self._nlp is None and self.config.use_spacy_ner:
+        if not self.config.use_spacy_ner:
+            return None
+        if self._nlp is None:
             try:
                 import spacy
 
                 self._nlp = spacy.load("en_core_web_sm", disable=["parser", "lemmatizer"])
-            except (ImportError, OSError) as e:
-                import sys
-
-                print(f"  spaCy unavailable ({e}), skipping NER layer", file=sys.stderr)
-                self._nlp = False  # Sentinel: tried and failed
-        return self._nlp if self._nlp is not False else None
+            except Exception:
+                # No exception values or chained traceback: loaders can include private paths.
+                raise PIINERUnavailableError(
+                    "PII NER model unavailable; refusing to sanitize with configured NER"
+                ) from None
+        return self._nlp
 
     def _pseudonym(self, name: str) -> str:
         """Get or create a stable pseudonym for a name. Thread-safe."""

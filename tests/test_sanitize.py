@@ -1,6 +1,7 @@
 """Tests for PII sanitization pipeline."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -29,6 +30,7 @@ def default_sanitizer():
     """Sanitizer with test config for PII sanitization."""
     return Sanitizer(
         SanitizeConfig(
+            use_spacy_ner=False,  # Regex/dictionary fixtures must not depend on a model.
             owner_names=("Jane Developer", "jane", "JaneDev", "janedev"),
             owner_emails=("jane@example.com",),
             owner_paths=("/Users/testuser",),
@@ -41,6 +43,7 @@ def full_sanitizer():
     """Sanitizer with known names and all features."""
     return Sanitizer(
         SanitizeConfig(
+            use_spacy_ner=False,  # Regex/dictionary fixtures must not depend on a model.
             owner_names=("Jane Developer", "jane", "JaneDev", "janedev"),
             owner_emails=("jane@example.com",),
             owner_paths=("/Users/testuser",),
@@ -259,6 +262,12 @@ class TestNameDictionary:
         assert result.pii_detected
 
 
+@pytest.fixture
+def ner_sanitizer(default_sanitizer):
+    return Sanitizer(replace(default_sanitizer.config, use_spacy_ner=True))
+
+
+@pytest.mark.skipif(not _spacy_available(), reason="optional real-model unit coverage; CI keg row is mandatory")
 class TestSpacyNER:
     """Test spaCy NER for unknown English names (Layer 3)."""
 
@@ -266,17 +275,17 @@ class TestSpacyNER:
         not _spacy_available(),
         reason="spaCy en_core_web_sm model not installed",
     )
-    def test_unknown_english_name_detected(self, default_sanitizer):
+    def test_unknown_english_name_detected(self, ner_sanitizer):
         """spaCy should catch names not in dictionary or owner list."""
-        result = default_sanitizer.sanitize("John Smith and Michael Johnson discussed the architecture")
+        result = ner_sanitizer.sanitize("John Smith and Michael Johnson discussed the architecture")
         spacy_replacements = [r for r in result.replacements if r.source == "spacy"]
         # At least one PERSON entity should be detected
         assert len(spacy_replacements) >= 1
 
-    def test_code_blocks_skipped(self, default_sanitizer):
+    def test_code_blocks_skipped(self, ner_sanitizer):
         """NER should not run inside code blocks."""
         text = "Outside text. ```python\nclass Johnson:\n    pass\n``` End."
-        result = default_sanitizer.sanitize(text)
+        result = ner_sanitizer.sanitize(text)
         # "Johnson" inside code block should NOT be replaced
         assert "class Johnson" in result.sanitized or "Johnson" in result.sanitized
 
@@ -365,7 +374,7 @@ class TestMappingSerialization:
         assert "david cohen" in data["name_to_pseudonym"]
 
         # Load into fresh sanitizer
-        s2 = Sanitizer(SanitizeConfig(known_names=frozenset({"David Cohen"})))
+        s2 = Sanitizer(SanitizeConfig(known_names=frozenset({"David Cohen"}), use_spacy_ner=False))
         s2.load_mapping(mapping_path)
         r = s2.sanitize("David Cohen returned")
 

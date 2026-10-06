@@ -127,6 +127,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       report: ${{ steps.verify.outputs.report }}
+      spacy_report: ${{ steps.spacy.outputs.report }}
     env:
       HOMEBREW_NO_ANALYTICS: "1"
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -265,6 +266,41 @@ jobs:
             echo "The verifier ran from the BASE commit's checkout, so this PR's own copy of \`scripts/release-verify-signatures.sh\` was **not** exercised here."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Probe the keg spaCy model and staged formula resource
+        id: spacy
+        if: ${{ !cancelled() }}
+        env:
+          FIX_SHA: ${{ github.event.pull_request.head.sha }}
+          CANDIDATE_MODEL: ${{ contains(github.event.pull_request.labels.*.name, 'ratchet:spacy-candidate') }}
+        run: |
+          set -euo pipefail
+          keg="$(brew --prefix brainlayer 2>/dev/null || true)"
+          wheel="${RUNNER_TEMP}/en_core_web_sm-3.8.0-py3-none-any.whl"
+          # Only an explicit pre-release opt-in stages model files. Ordinary PRs test the
+          # untouched published keg, so a missing shipped resource cannot be hidden by an overlay.
+          args=()
+          if [[ "$CANDIDATE_MODEL" == "true" ]]; then
+            url="$(python3 -c "import sys; sys.path.insert(0, 'candidate'); from scripts.ci_spacy_model import MODEL_URL; print(MODEL_URL)")"
+            curl -fL --retry 2 "$url" -o "$wheel" || true
+            args+=(--candidate-wheel "$wheel")
+          fi
+          rc=0
+          python3 candidate/scripts/ci_spacy_model.py --python "${keg}/libexec/venv/bin/python" --fix-sha "$FIX_SHA" --out "${RUNNER_TEMP}/spacy-report.json" ${args[@]+"${args[@]}"} || rc=$?
+          {
+            echo 'report<<RATCHET_EOF'
+            cat "${RUNNER_TEMP}/spacy-report.json"
+            echo
+            echo 'RATCHET_EOF'
+          } >> "$GITHUB_OUTPUT"
+          cat "${RUNNER_TEMP}/spacy-report.json" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
       # The ratchet table fails on RED all by itself, but this job staying green would read as a
       # pass at a glance -- and AGENTS.md is explicit that an invalid `*.so`/`*.dylib` blocks
       # release and deploy. `unmeasured` fails for the same reason: a job that was asked to measure
@@ -337,6 +373,7 @@ jobs:
           GATE_REASON: ${{ needs.gate.outputs.reason }}
           SIGNATURE_RESULT: ${{ needs.signatures.result }}
           SIGNATURE_REPORT: ${{ needs.signatures.outputs.report }}
+          SPACY_REPORT: ${{ needs.signatures.outputs.spacy_report }}
         run: |
           set -euo pipefail
           # $RUNNER_TEMP, never the checkout. These two files landed in the workspace on this
@@ -360,6 +397,11 @@ jobs:
             printf '%s' "$SIGNATURE_REPORT" > "$report_path"
             printf '%s\n%s\n' --signature-report "$report_path" > "$args_path"
           fi
+          if [[ "$GATE_RESULT" != "success" || "$SIGNATURE_RESULT" != "skipped" ]]; then
+            printf '%s\n' "$SPACY_REPORT" > "${RUNNER_TEMP}/spacy-report.json"
+            printf '%s\n%s\n' --spacy-report "${RUNNER_TEMP}/spacy-report.json" >> "$args_path"
+          fi
+
           cat "$args_path"
 
       # The sha the table has to be honest about. Two of them, from two sources on purpose:
@@ -375,6 +417,7 @@ jobs:
       # wt/w14-ci-ratchet-table before the file was on main -- reviewer 79c16541, F2.) What DOES
       # hold, and is the substantive half: neither input below is read from the PR's tree, so the
       # row cannot confirm itself from material the PR controls. Diff-reviewable, not tamper-proof.
+
       - name: Resolve the commit this table must describe
         if: ${{ !cancelled() }}
         env:

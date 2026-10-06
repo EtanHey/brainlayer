@@ -819,6 +819,23 @@ def test_signature_report_and_unavailable_together_is_a_finding(tmp_path: Path) 
     assert selection.problem is not None and "mutually exclusive" in selection.problem
 
 
+def unit_spacy_report(tmp_path: Path, fix_sha: str) -> Path:
+    path = tmp_path / "spacy.json"
+    path.write_text(
+        json.dumps(
+            dict(
+                bug_sha=ratchet.SPACY_BUG_SHA,
+                fix_sha=fix_sha,
+                python="/fixture/keg/bin/python",
+                published_loaded=True,
+                loaded=True,
+                scope="published",
+            )
+        )
+    )
+    return path
+
+
 def test_main_reads_a_measured_report_end_to_end(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(ratchet, "git_tree_dirty", lambda: False)
     wheel = make_wheel(tmp_path, ratchet.git_head() or HEAD)
@@ -826,7 +843,19 @@ def test_main_reads_a_measured_report_end_to_end(tmp_path: Path, capsys, monkeyp
         tmp_path,
         {"status": "measured", "valid": 442, "invalid": 0, "keg": "brainlayer 1.5.11", "runner": "macos-15 · arm64"},
     )
-    assert ratchet.main(["--wheel", str(wheel), "--signature-report", str(report)]) == 0
+    assert (
+        ratchet.main(
+            [
+                "--wheel",
+                str(wheel),
+                "--signature-report",
+                str(report),
+                "--spacy-report",
+                str(unit_spacy_report(tmp_path, ratchet.git_head() or HEAD)),
+            ]
+        )
+        == 0
+    )
     assert "442 valid / 0 invalid" in capsys.readouterr().out
 
 
@@ -1987,7 +2016,9 @@ def test_the_signature_measurement_rides_in_the_attestation(tmp_path: Path, caps
     report = write_report(tmp_path, {"status": "measured", "valid": 442, "invalid": 0, "keg": "brainlayer 1.5.13"})
     argv = attest_argv(tmp_path, make_wheel(tmp_path, HEAD))
     argv = [arg for arg in argv if arg not in ("--signature-unavailable", "main runs do not pay for macOS")]
-    rc = ratchet.main(argv + ["--signature-report", str(report)])
+    rc = ratchet.main(
+        argv + ["--signature-report", str(report), "--spacy-report", str(unit_spacy_report(tmp_path, HEAD))]
+    )
     assert rc == 0, capsys.readouterr().err
     written = json.loads((tmp_path / "out" / "attestation.json").read_text(encoding="utf-8"))
     assert written["rows"]["signature_valid"]["measurement"] == {"valid": 442, "invalid": 0}
