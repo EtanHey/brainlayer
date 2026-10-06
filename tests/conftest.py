@@ -243,6 +243,8 @@ def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
         yield
         return
 
+    request.getfixturevalue("isolate_brainlayer_runtime_paths")
+
     import httpx
     import requests
     from google.genai import client

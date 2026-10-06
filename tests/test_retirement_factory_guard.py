@@ -9,6 +9,36 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.asyncio
+async def test_brain_enrich_handler_cold_bootstrap():
+    """Import the retired handler only after its factory guard has initialized."""
+    from brainlayer.mcp.enrich_handler import _brain_enrich
+
+    result = await _brain_enrich(stats=True)
+    assert result.is_error is True
+    assert "Enrichment has been retired" in result.content[0].text
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "tests/test_cli_enrich.py::test_retired_enrich_is_hidden_and_does_not_resolve_database",
+        "tests/test_retirement_factory_guard.py::test_brain_enrich_handler_cold_bootstrap",
+    ],
+)
+def test_retirement_guard_works_without_collection_import_side_effects(target):
+    """A standalone retired test must arm after synthetic runtime isolation."""
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", target, "-q"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 @pytest.mark.parametrize("surface", ["cli", "mcp"])
 @pytest.mark.parametrize(
     "attempt",
