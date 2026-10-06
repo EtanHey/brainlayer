@@ -56,6 +56,60 @@ def test_cleanup_cannot_pass_while_a_job_remains_loaded(tmp_path):
         replay.cleanup(tmp_path, mapping, command=lambda *args: subprocess.CompletedProcess(args, 0, "loaded", ""))
 
 
+def test_loaded_subject_without_new_watchdog_log_is_not_held(tmp_path, monkeypatch):
+    from itertools import count
+    from types import SimpleNamespace
+
+    import brainlayer
+    from brainlayer import launchd_primitive
+
+    source = tmp_path / "source"
+    script = source / "scripts/launchd/fleet-watchdog.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("# fake watchdog; no launchctl execution\n")
+    home = tmp_path / "fixture-home"
+    log = home / "Library/Logs/brainlayer/fleet-watchdog.log"
+    phase = {"value": "initial"}
+
+    def loaded(service):
+        if service == "fleet-watchdog":
+            return phase["value"] != "held"
+        if phase["value"] == "control-down":
+            phase["value"] = "control-revived"
+            return False
+        return True  # subject unexpectedly remains loaded during the hold
+
+    def fake_launchctl(*args, **kwargs):
+        if args[0] == "bootout":
+            phase["value"] = "control-down"
+            log.parent.mkdir(parents=True)
+            log.write_text("re-bootstrapped positive control\n")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def resume(*args):
+        phase["value"] = "resumed"
+        return []
+
+    maintenance = SimpleNamespace(
+        __file__=str(source / "src/brainlayer/maintenance.py"),
+        PAUSE_SENTINEL_PATH=home / "data/pause.sentinel",
+        _launchd_label=lambda service: service,
+        _service_is_loaded=loaded,
+        _quiesce_services=lambda *args: phase.update(value="held"),
+        _resume_services=resume,
+    )
+    monkeypatch.setattr(brainlayer, "maintenance", maintenance, raising=False)
+    monkeypatch.setattr(launchd_primitive, "is_launchd_label_disabled", lambda _: phase["value"] == "held")
+    monkeypatch.setattr(replay, "launchctl", fake_launchctl)
+    monkeypatch.setattr(replay.sys, "path", list(replay.sys.path))
+    monkeypatch.setattr(replay.time, "monotonic", count().__next__)
+    monkeypatch.setattr(replay.time, "sleep", lambda _: None)
+    report = replay.replay(source, home, replay.labels("com.brainlayer.ratchettest.fake"))
+    assert report["positive_control"] and report["resumed"]
+    assert not report["revived"]  # no new watchdog log beyond the control
+    assert not report["held"]
+
+
 def test_row_binds_both_replays_to_their_shas_and_requires_every_postcondition(tmp_path):
     import json
 
