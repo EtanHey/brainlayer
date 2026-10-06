@@ -195,7 +195,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 17)
+        XCTAssertEqual(tools?.count, 16)
 
         let encodedResponse = try MCPFraming.encodeJSONResponse(response)
         XCTAssertGreaterThan(encodedResponse.count, 8192)
@@ -230,7 +230,7 @@ final class SocketIntegrationTests: XCTestCase {
         let expansion = try readMCPMessage(fd: firstFD)
         XCTAssertEqual((expansion["result"] as? [String: Any])?["expanded"] as? Bool, true)
 
-        XCTAssertEqual(try listedToolNames(on: firstFD, id: 4).count, 17)
+        XCTAssertEqual(try listedToolNames(on: firstFD, id: 4).count, 16)
         XCTAssertEqual(Set(try listedToolNames(on: secondFD, id: 3)), coreNames)
     }
 
@@ -307,7 +307,7 @@ final class SocketIntegrationTests: XCTestCase {
             8192,
             "Claude Desktop's MCPB utility process parses raw extension stdout in 8192-byte chunks"
         )
-        XCTAssertEqual(tools?.count, 17)
+        XCTAssertEqual(tools?.count, 16)
         for tool in tools ?? [] {
             XCTAssertNil(
                 tool["annotations"],
@@ -1576,7 +1576,7 @@ final class SocketIntegrationTests: XCTestCase {
 
         let toolsResponse = try JSONSerialization.jsonObject(with: Data(outputLines[1].utf8)) as? [String: Any]
         let tools = (toolsResponse?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(tools?.count, 17)
+        XCTAssertEqual(tools?.count, 16)
     }
 
     // MARK: - C2: Socket path length validation

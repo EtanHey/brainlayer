@@ -53,7 +53,7 @@ Your agent now has persistent memory. Ask it:
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainBar MCP Server<br/>17 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainBar MCP Server<br/>16 tools"]
     B --> C["Hybrid Search<br/>semantic + keyword (RRF)"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
 

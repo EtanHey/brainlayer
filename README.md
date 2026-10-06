@@ -84,16 +84,16 @@ See [docs/mcp-config.md](docs/mcp-config.md).
 
 </details>
 
-## MCP Tools (17)
+## MCP Tools (16)
 
-The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines 17 tools, and
+The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines 16 tools, and
 every definition carries [ToolAnnotations](https://modelcontextprotocol.io/specification/2025-03-26/server/tools#annotations)
 so agents know which calls are safe to run without confirmation.
 
 **Sessions boot into a core palette of 5.** By default `tools/list` returns `brain_search`,
 `brain_store`, `brain_recall`, `brain_expand`, and `expand_palette` — with short descriptions, to
 keep the boot payload small. Call `expand_palette` (or set `BRAINLAYER_MCP_PROFILE=full` on the
-server) to get all 17 with their full descriptions. Calling a gated tool before expanding returns
+server) to get all 16 with their full descriptions. Calling a gated tool before expanding returns
 an error that tells you to expand.
 
 | Tool | Type | Core | What it does |
@@ -107,7 +107,6 @@ an error that tells you to expand.
 | `brain_tags` | read | | List tags in use with counts; filter by substring. |
 | `brain_digest` | write | | Digest a large raw block (transcript, doc, article) into a searchable chunk and connect its entities into the KG. |
 | `brain_update` | write | | Change an existing chunk's importance or tags. Does not edit content. |
-| `brain_enrich` | write | | Backfill summaries and enrichment metadata on existing chunks. |
 | `brain_subscribe` | write | | Subscribe an agent to live notifications for given tags. |
 | `brain_unsubscribe` | write | | Remove some or all of an agent's tag subscriptions. |
 | `brain_ack` | write | | Acknowledge that an agent processed messages up to a chunk rowid. |
@@ -149,7 +148,7 @@ served by BrainBar, which is the agent transport — new wiring should use the `
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>17 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>16 tools"]
     B --> C["Hybrid Search<br/>vector + FTS5"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
