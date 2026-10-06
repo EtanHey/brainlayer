@@ -19,6 +19,7 @@ import subprocess
 import sys
 import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -444,31 +445,23 @@ def test_groq_ner_send_scrubs_prompt(monkeypatch):
     _assert_no_token(sent[0], where="Groq NER payload")
 
 
-def test_digest_faceted_gemini_send_scrubs_prompt(monkeypatch):
+def test_digest_retired_faceted_helper_never_constructs_or_sends(monkeypatch):
     from brainlayer.pipeline import digest
 
     client = _FakeGeminiClient()
-    fake_genai = types.SimpleNamespace(Client=lambda api_key=None, **kwargs: client)
+    factory = MagicMock(return_value=client)
+    fake_genai = types.SimpleNamespace(Client=factory)
     fake_google = types.ModuleType("google")
     fake_google.genai = fake_genai
     monkeypatch.setitem(sys.modules, "google", fake_google)
     monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
     monkeypatch.setenv("GOOGLE_API_KEY", "test-not-a-key")
-    monkeypatch.setattr(digest.Sanitizer, "from_env", classmethod(lambda cls: object()))
-    monkeypatch.setattr(
-        digest,
-        "build_external_prompt",
-        lambda chunk, sanitizer, prompt_template=None: (
-            _payload_with_every_token(),
-            types.SimpleNamespace(pii_detected=False),
-        ),
+    result = digest._default_faceted_enrich(
+        content=_payload_with_every_token(), project="p", title=None, participants=None
     )
-
-    digest._default_faceted_enrich(content="irrelevant", project="p", title=None, participants=None)
-
-    assert client.models.sent, "digest faceted enrichment never reached the fake client"
-    for prompt in client.models.sent:
-        _assert_no_token(prompt, where="digest faceted Gemini prompt")
+    assert result == {"status": "retired", "reason": "cloud_enrichment_retired"}
+    factory.assert_not_called()
+    assert client.models.sent == []
 
 
 def test_cloud_backfill_batch_request_line_scrubs_prompt():

@@ -1,11 +1,9 @@
-"""Tests for digest-time faceted enrichment."""
+"""Retirement compatibility for digest-time faceted enrichment."""
 
-from brainlayer.pipeline.digest import _build_faceted_gemini_config
+from brainlayer.pipeline.digest import _default_faceted_enrich
 
 
-def test_faceted_gemini_config_disables_thinking():
-    """Flash models must always force thinkingBudget=0."""
-    config = _build_faceted_gemini_config()
-
-    assert config["response_mime_type"] == "application/json"
-    assert config["thinking_config"]["thinking_budget"] == 0
+def test_brain_digest_retired_faceted_compatibility_receipt():
+    """Legacy helper options receive a retirement receipt without a transport."""
+    result = _default_faceted_enrich(content="synthetic content", project=None, title=None, participants=None)
+    assert result == {"status": "retired", "reason": "cloud_enrichment_retired"}
