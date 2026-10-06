@@ -1681,7 +1681,6 @@ def test_realtime_passes_chunk_ids_to_candidates(monkeypatch):
 
 def test_enrichment_plist_has_correct_label():
     import xml.etree.ElementTree as ET
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     tree = ET.parse(plist_path)
@@ -1697,7 +1696,6 @@ def test_enrichment_plist_has_correct_label():
 
 
 def test_enrichment_plist_uses_realtime_mode():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     content = plist_path.read_text()
@@ -1705,7 +1703,6 @@ def test_enrichment_plist_uses_realtime_mode():
 
 
 def _load_enrichment_plist():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
     return plistlib.loads(plist_path.read_bytes())
@@ -1746,7 +1743,6 @@ def test_enrichment_plist_matches_validated_flex_realtime_profile():
 
 
 def test_launchd_installer_supports_enrichment_load_and_unload():
-    from pathlib import Path
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert 'LAUNCH_DIR="$HOME/Library/LaunchAgents"' in install_script
@@ -1757,7 +1753,6 @@ def test_launchd_installer_supports_enrichment_load_and_unload():
 
 
 def test_launchd_installer_enrich_alias_removes_legacy_plist():
-    from pathlib import Path
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert "enrich)" in install_script
@@ -1765,7 +1760,6 @@ def test_launchd_installer_enrich_alias_removes_legacy_plist():
 
 
 def test_launchd_installer_uses_standard_env_file_instead_of_embedding_google_key():
-    from pathlib import Path
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert ".zshrc" not in install_script
@@ -1802,7 +1796,6 @@ def test_realtime_returns_zero_counts_for_no_candidates(monkeypatch):
 
 
 def test_decay_plist_invokes_cli_decay_entrypoint():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.decay.plist"
     content = plist_path.read_text()
@@ -1812,7 +1805,6 @@ def test_decay_plist_invokes_cli_decay_entrypoint():
 
 
 def test_wal_checkpoint_plist_invokes_cli_checkpoint_entrypoint():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.wal-checkpoint.plist"
     content = plist_path.read_text()
