@@ -34,35 +34,6 @@ def _insert_unenriched_chunk(
     )
 
 
-def test_export_unenriched_chunks_disables_thinking(tmp_path, monkeypatch):
-    """Batch export JSONL must force thinkingBudget=0 for every request."""
-    export_dir = tmp_path / "exports"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-
-    store = VectorStore(tmp_path / "backfill.db")
-    try:
-        _insert_unenriched_chunk(
-            store,
-            "chunk-1",
-            "This chunk is long enough to be exported without sanitization in the test fixture.",
-        )
-
-        jsonl_files = cloud_backfill.export_unenriched_chunks(
-            store,
-            max_chunks=1,
-            content_types=["assistant_text"],
-            no_sanitize=True,
-        )
-
-        assert len(jsonl_files) == 1
-        line = json.loads(jsonl_files[0].read_text().splitlines()[0])
-        assert line["key"] == "chunk-1"
-        assert line["request"]["generationConfig"]["responseMimeType"] == "application/json"
-        assert line["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
-    finally:
-        store.close()
-
-
 def test_init_sanitizer_preserves_env_allowlist_when_adding_whatsapp_names(tmp_path, monkeypatch):
     """DB-derived contact names should not discard env-extended redaction allowlist entries."""
     export_dir = tmp_path / "exports"
@@ -290,68 +261,6 @@ def test_get_pending_jobs_is_scoped_to_the_selected_db(tmp_path, monkeypatch):
     finally:
         store_a.close()
         store_b.close()
-
-
-def test_export_unenriched_chunks_includes_legacy_rows_without_summary_v2(tmp_path, monkeypatch):
-    """Legacy enriched rows should be re-exported until summary_v2 is populated."""
-    export_dir = tmp_path / "exports"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-
-    store = VectorStore(tmp_path / "backfill.db")
-    try:
-        cursor = store.conn.cursor()
-        _insert_unenriched_chunk(
-            store,
-            "unenriched",
-            "This chunk is long enough to be exported as a fresh unenriched candidate.",
-        )
-        cursor.execute(
-            """
-            INSERT INTO chunks (
-                id, content, metadata, source_file, project, content_type, char_count,
-                source, sender, summary, enriched_at, summary_v2
-            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', NULL, ?, ?, NULL)
-            """,
-            (
-                "legacy",
-                "This chunk already has a legacy summary but still needs a v2 preview summary generated.",
-                84,
-                "Legacy summary",
-                "2026-04-01T00:00:00+00:00",
-            ),
-        )
-        cursor.execute(
-            """
-            INSERT INTO chunks (
-                id, content, metadata, source_file, project, content_type, char_count,
-                source, sender, summary, enriched_at, summary_v2
-            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', NULL, ?, ?, ?)
-            """,
-            (
-                "already-previewed",
-                "This chunk already has a preview summary and should not be exported again.",
-                72,
-                "Old summary",
-                "2026-04-01T00:00:00+00:00",
-                "Preview summary",
-            ),
-        )
-
-        jsonl_files = cloud_backfill.export_unenriched_chunks(
-            store,
-            max_chunks=10,
-            content_types=["assistant_text"],
-            no_sanitize=True,
-        )
-
-        exported_keys = []
-        for path in jsonl_files:
-            for line in path.read_text().splitlines():
-                exported_keys.append(json.loads(line)["key"])
-
-        assert set(exported_keys) == {"unenriched", "legacy"}
-    finally:
-        store.close()
 
 
 def test_export_backlog_drain_chunks_uses_realtime_eligible_predicate(tmp_path, monkeypatch):
@@ -685,7 +594,7 @@ def test_import_results_keeps_chunk_retryable_when_parse_fails(tmp_path, monkeyp
         store.close()
 
 
-@pytest.mark.parametrize("exporter", ["export_unenriched_chunks", "export_backlog_drain_chunks"])
+@pytest.mark.parametrize("exporter", ["export_backlog_drain_chunks"])
 def test_export_advances_past_quarantined_chunk(exporter, tmp_path, monkeypatch):
     token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", tmp_path / "exports")
