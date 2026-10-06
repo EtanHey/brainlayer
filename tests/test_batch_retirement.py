@@ -76,3 +76,9 @@ def test_batch_remote_submission_sender_is_removed():
     from brainlayer import cloud_backfill
 
     assert not hasattr(cloud_backfill, "submit_gemini_batch")
+
+
+def test_batch_preview_export_producer_is_removed():
+    from brainlayer import cloud_backfill
+
+    assert not hasattr(cloud_backfill, "export_unenriched_chunks")
