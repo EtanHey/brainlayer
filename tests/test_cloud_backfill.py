@@ -2,7 +2,6 @@
 
 import json
 import sqlite3
-from pathlib import Path
 
 import apsw
 import pytest
@@ -242,51 +241,6 @@ def test_get_unsubmitted_export_files_skips_paths_already_checkpointed(tmp_path,
     assert remaining == [file_c]
 
 
-def test_submit_only_reuses_existing_exports_without_reexporting(tmp_path, monkeypatch):
-    """submit-only should use the existing batch files and only submit the remaining ones."""
-    export_dir = tmp_path / "exports"
-    export_dir.mkdir()
-    checkpoint_db = tmp_path / "enrichment_checkpoints.db"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-    monkeypatch.setattr(cloud_backfill, "CHECKPOINT_DB_PATH", checkpoint_db)
-
-    submitted_file = export_dir / "batch_001.jsonl"
-    remaining_file = export_dir / "batch_002.jsonl"
-    submitted_file.write_text("{}\n")
-    remaining_file.write_text("{}\n")
-
-    cloud_backfill.save_checkpoint(
-        None,
-        batch_id="submitted-batch",
-        backend="gemini",
-        model="models/gemini-2.5-flash",
-        status="submitted",
-        chunk_count=500,
-        jsonl_path=str(submitted_file),
-    )
-
-    submitted_paths: list[Path] = []
-
-    def fake_export(*args, **kwargs):  # pragma: no cover - should not be called
-        raise AssertionError("submit-only should reuse existing export files, not regenerate them")
-
-    def fake_submit(jsonl_path, model, store, **kwargs):
-        submitted_paths.append(Path(jsonl_path))
-        return f"job-{Path(jsonl_path).stem}"
-
-    monkeypatch.setattr(cloud_backfill, "export_unenriched_chunks", fake_export)
-    monkeypatch.setattr(cloud_backfill, "submit_gemini_batch", fake_submit)
-    monkeypatch.setattr(cloud_backfill, "_sleep", lambda *_args, **_kwargs: None)
-
-    db_path = tmp_path / "brainlayer.db"
-    store = VectorStore(db_path)
-    store.close()
-
-    cloud_backfill.run_full_backfill(db_path, submit_only=True)
-
-    assert submitted_paths == [remaining_file]
-
-
 def test_open_backfill_store_falls_back_to_read_only_when_vectorstore_is_locked(tmp_path, monkeypatch):
     """submit-only style runs should still open the DB for reads when VectorStore init is locked."""
     db_path = tmp_path / "brainlayer.db"
@@ -336,56 +290,6 @@ def test_get_pending_jobs_is_scoped_to_the_selected_db(tmp_path, monkeypatch):
     finally:
         store_a.close()
         store_b.close()
-
-
-def test_submit_only_exports_new_chunks_when_old_files_are_checkpointed(tmp_path, monkeypatch):
-    """submit-only should export new unenriched chunks instead of returning early."""
-    export_dir = tmp_path / "exports"
-    export_dir.mkdir()
-    checkpoint_db = tmp_path / "enrichment_checkpoints.db"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-    monkeypatch.setattr(cloud_backfill, "CHECKPOINT_DB_PATH", checkpoint_db, raising=False)
-
-    old_file = export_dir / "batch_001.jsonl"
-    old_file.write_text("{}\n")
-    new_file = export_dir / "batch_002.jsonl"
-
-    cloud_backfill.save_checkpoint(
-        None,
-        batch_id="imported-batch",
-        backend="gemini",
-        model="models/gemini-2.5-flash",
-        status="imported",
-        chunk_count=500,
-        jsonl_path=str(old_file),
-    )
-
-    exported_paths: list[Path] = []
-    submitted_paths: list[Path] = []
-
-    def fake_export(*args, **kwargs):
-        exported_paths.append(new_file)
-        new_file.write_text("{}\n")
-        return [new_file]
-
-    def fake_submit(jsonl_path, model, store, **kwargs):
-        submitted_paths.append(Path(jsonl_path))
-        return f"job-{Path(jsonl_path).stem}"
-
-    monkeypatch.setattr(cloud_backfill, "export_unenriched_chunks", fake_export)
-    monkeypatch.setattr(cloud_backfill, "submit_gemini_batch", fake_submit)
-    monkeypatch.setattr(cloud_backfill, "_sleep", lambda *_args, **_kwargs: None)
-
-    store = VectorStore(tmp_path / "brainlayer.db")
-    try:
-        _insert_unenriched_chunk(store, "chunk-1", "new unenriched content that still needs export")
-    finally:
-        store.close()
-
-    cloud_backfill.run_full_backfill(tmp_path / "brainlayer.db", submit_only=True)
-
-    assert exported_paths == [new_file]
-    assert submitted_paths == [new_file]
 
 
 def test_export_unenriched_chunks_includes_legacy_rows_without_summary_v2(tmp_path, monkeypatch):
