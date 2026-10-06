@@ -34,65 +34,6 @@ def _insert_unenriched_chunk(
     )
 
 
-def test_init_sanitizer_preserves_env_allowlist_when_adding_whatsapp_names(tmp_path, monkeypatch):
-    """DB-derived contact names should not discard env-extended redaction allowlist entries."""
-    export_dir = tmp_path / "exports"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-    monkeypatch.setenv("BRAINLAYER_SANITIZE_USE_SPACY", "false")
-    monkeypatch.setenv("BRAINLAYER_REDACTION_ALLOWLIST", "BrainLayerBot")
-
-    store = VectorStore(tmp_path / "backfill.db")
-    try:
-        cursor = store.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source, sender)
-            VALUES (?, ?, '{}', 'whatsapp.jsonl', 'test-project', 'message', ?, 'whatsapp', ?)
-            """,
-            (
-                "contact-person",
-                "John Smith sent a long enough WhatsApp message to populate sanitizer contacts.",
-                70,
-                "John Smith",
-            ),
-        )
-
-        sanitizer = cloud_backfill._init_sanitizer(store)
-        result = sanitizer.sanitize("BrainLayerBot coordinated with John Smith.")
-
-        assert "BrainLayerBot" in sanitizer.config.person_redaction_allowlist
-        assert "BrainLayerBot" in result.sanitized
-        assert "John Smith" not in result.sanitized
-        assert "[PERSON_" in result.sanitized
-    finally:
-        store.close()
-
-
-def test_init_sanitizer_redacts_allowlisted_whatsapp_contact_names(tmp_path, monkeypatch):
-    """Confirmed DB contact names should redact even if their text matches a tool allowlist entry."""
-    export_dir = tmp_path / "exports"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-
-    store = VectorStore(tmp_path / "backfill.db")
-    try:
-        store.conn.cursor().execute(
-            """
-            INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count, source, sender)
-            VALUES ('contact-claude', 'Claude sent a long enough WhatsApp message.', '{}',
-                    'whatsapp.jsonl', 'test-project', 'message', 43, 'whatsapp', 'Claude')
-            """
-        )
-
-        sanitizer = cloud_backfill._init_sanitizer(store)
-        result = sanitizer.sanitize("Claude sent a message.")
-
-        assert "Claude" not in result.sanitized
-        assert "[PERSON_" in result.sanitized
-        assert any(replacement.source == "name_dict" for replacement in result.replacements)
-    finally:
-        store.close()
-
-
 def test_estimate_batch_cost_uses_discounted_batch_rates():
     """Batch usage cost helper should apply the documented 50% discount."""
     cost = cloud_backfill.estimate_batch_cost_usd(1_000_000, 2_000_000)
@@ -261,66 +202,6 @@ def test_get_pending_jobs_is_scoped_to_the_selected_db(tmp_path, monkeypatch):
     finally:
         store_a.close()
         store_b.close()
-
-
-def test_export_backlog_drain_chunks_uses_realtime_eligible_predicate(tmp_path, monkeypatch):
-    """Batch drain export should target only chunks counted by the realtime backlog."""
-    export_dir = tmp_path / "exports"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", export_dir)
-
-    store = VectorStore(tmp_path / "backfill.db")
-    try:
-        cursor = store.conn.cursor()
-        _insert_unenriched_chunk(
-            store,
-            "eligible",
-            "This long assistant chunk should be exported by the backlog drain selector.",
-        )
-        _insert_unenriched_chunk(store, "too-short", "short")
-        cursor.execute(
-            """
-            INSERT INTO chunks (
-                id, content, metadata, source_file, project, content_type, char_count,
-                source, enrich_status
-            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', ?)
-            """,
-            (
-                "terminal-status",
-                "This long chunk already has a terminal enrichment status and must not drain.",
-                74,
-                "failed",
-            ),
-        )
-        cursor.execute(
-            """
-            INSERT INTO chunks (
-                id, content, metadata, source_file, project, content_type, char_count,
-                source, summary, enriched_at, summary_v2
-            ) VALUES (?, ?, '{}', 'test.jsonl', 'test-project', 'assistant_text', ?, 'claude_code', ?, ?, NULL)
-            """,
-            (
-                "legacy-preview",
-                "This legacy row belongs to preview re-enrichment, not backlog drain.",
-                67,
-                "Old summary",
-                "2026-04-01T00:00:00+00:00",
-            ),
-        )
-
-        jsonl_files = cloud_backfill.export_backlog_drain_chunks(
-            store,
-            max_chunks=10,
-            no_sanitize=True,
-        )
-
-        exported_keys = [
-            json.loads(line)["key"] for path in jsonl_files for line in path.read_text(encoding="utf-8").splitlines()
-        ]
-
-        assert exported_keys == ["eligible"]
-        assert [chunk["id"] for chunk in store.get_enrichment_candidates(limit=10)] == ["eligible"]
-    finally:
-        store.close()
 
 
 def test_record_batch_usage_counts_against_enrichment_daily_cap(tmp_path, monkeypatch):
@@ -590,27 +471,5 @@ def test_import_results_keeps_chunk_retryable_when_parse_fails(tmp_path, monkeyp
 
         assert counts == {"success": 0, "failed": 1, "skipped": 0}
         assert row == (None, None, "1.0", None)
-    finally:
-        store.close()
-
-
-@pytest.mark.parametrize("exporter", ["export_backlog_drain_chunks"])
-def test_export_advances_past_quarantined_chunk(exporter, tmp_path, monkeypatch):
-    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    monkeypatch.setattr(cloud_backfill, "EXPORT_DIR", tmp_path / "exports")
-    monkeypatch.setattr(cloud_backfill, "build_prompt", lambda chunk: chunk["content"])
-    store = VectorStore(tmp_path / "backfill.db")
-    try:
-        _insert_unenriched_chunk(store, "quarantined", f"Implement {token} in the deployment helper.")
-        _insert_unenriched_chunk(
-            store, "next", "This ordinary chunk must export after the chunk containing a quarantined identifier."
-        )
-        files = getattr(cloud_backfill, exporter)(store, max_chunks=2, no_sanitize=True)
-        lines = [json.loads(line) for path in files for line in path.read_text().splitlines()]
-        assert {line["key"] for line in lines} == {"quarantined", "next"}
-        prompt = next(line for line in lines if line["key"] == "quarantined")["request"]["contents"][0]["parts"][0][
-            "text"
-        ]
-        assert prompt == "Implement [REDACTED:quarantine] in the deployment helper."
     finally:
         store.close()

@@ -82,3 +82,10 @@ def test_batch_preview_export_producer_is_removed():
     from brainlayer import cloud_backfill
 
     assert not hasattr(cloud_backfill, "export_unenriched_chunks")
+
+
+@pytest.mark.parametrize("name", ["export_backlog_drain_chunks", "_init_sanitizer", "build_batch_request_line"])
+def test_batch_backlog_export_helpers_are_removed(name):
+    from brainlayer import cloud_backfill
+
+    assert not hasattr(cloud_backfill, name)
