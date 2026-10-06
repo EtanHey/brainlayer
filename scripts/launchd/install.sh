@@ -5,11 +5,10 @@
 #   ./scripts/launchd/install.sh              # Install all
 #   ./scripts/launchd/install.sh index        # Install indexing only
 #   ./scripts/launchd/install.sh watch        # Install watcher only
-#   ./scripts/launchd/install.sh enrich       # Install enrichment only
 #   ./scripts/launchd/install.sh drain        # Install queue drain only
 #   ./scripts/launchd/install.sh decay        # Install decay only
-#   ./scripts/launchd/install.sh load enrichment
-#   ./scripts/launchd/install.sh unload enrichment
+#   ./scripts/launchd/install.sh load watch
+#   ./scripts/launchd/install.sh unload watch
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
 #   ./scripts/launchd/install.sh repair-fts   # Install weekly read-only FTS check
 #   ./scripts/launchd/install.sh backup       # Install daily DB backup only
@@ -228,11 +227,11 @@ fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
 launchd_install_usage() {
-    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
+    echo "Usage: $0 [index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load <name>|unload <name>|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
+    index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
@@ -449,7 +448,7 @@ label_disabled_by_operator() {
 
 is_resident_keepalive_job() {
     case "$1" in
-        drain|enrichment|hotlane-brainbar|watch) return 0 ;;
+        drain|hotlane-brainbar|watch) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -470,6 +469,12 @@ record_loaded_keg() {
 
 load_plist() {
     local name="$1"
+    case "$name" in
+        enrich|enrichment)
+            echo "ERROR: enrichment is retired; refusing to load com.brainlayer.$name" >&2
+            return 1
+            ;;
+    esac
     local plist_changed="${2:-0}"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     local label="com.brainlayer.${name}"
@@ -495,7 +500,7 @@ load_plist() {
     fi
 
     case "$name" in
-        hotlane-brainbar|watch|drain|health-check|enrichment)
+        hotlane-brainbar|watch|drain|health-check)
             supervisor_managed=1
             ;;
     esac
@@ -809,10 +814,6 @@ install_plist() {
     install_env_runner || return 1
     install_job_wrapper "$name" || return 1
     verify_config_file || return 1
-
-    if [ "$name" = "enrichment" ] || [ "$name" = "enrich" ]; then
-        verify_gemini_env_file || return 1
-    fi
 
     # XML-escape the interpreter path, then escape sed replacement metacharacters.
     # `&` is legal in a filename but means "the matched placeholder" to sed.
@@ -1237,13 +1238,9 @@ case "${1:-all}" in
     index)
         install_plist index
         ;;
-    enrich)
-        # Legacy alias: install the unified enrichment plist
-        install_plist enrichment
-        remove_plist enrich 2>/dev/null || true
-        ;;
-    enrichment)
-        install_plist enrichment
+    enrich|enrichment)
+        echo "ERROR: enrichment is retired; no service was installed" >&2
+        exit 1
         ;;
     watch)
         install_plist watch
@@ -1252,10 +1249,20 @@ case "${1:-all}" in
         install_plist decay
         ;;
     load)
-        load_plist "${2:-enrichment}"
+        case "${2:-}" in
+            ""|enrich|enrichment)
+                echo "ERROR: load requires an explicit active service name; enrichment is retired" >&2
+                exit 1
+                ;;
+        esac
+        load_plist "$2"
         ;;
     unload)
-        unload_plist "${2:-enrichment}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: unload requires an explicit service name" >&2
+            exit 1
+        fi
+        unload_plist "$2"
         ;;
     checkpoint)
         install_plist wal-checkpoint
@@ -1322,13 +1329,7 @@ case "${1:-all}" in
         verify_config_file
         verify_gemini_env_file
         failures=0
-        enrichment_ok=0
         if ! install_many index t3-ingest drain watch hotlane-brainbar; then
-            failures=1
-        fi
-        if install_plist enrichment; then
-            enrichment_ok=1
-        else
             failures=1
         fi
         if ! install_many decay wal-checkpoint repair-fts; then
@@ -1355,10 +1356,6 @@ case "${1:-all}" in
         fi
         if ! install_fleet_watchdog; then
             failures=1
-        fi
-        # Remove old enrich plist only after the replacement enrichment service loads.
-        if [ "$enrichment_ok" -eq 1 ]; then
-            remove_plist enrich 2>/dev/null || true
         fi
         if [ "$failures" -ne 0 ]; then
             exit 1
@@ -1405,5 +1402,4 @@ esac
 
 echo ""
 echo "Done. Check logs at: $LOG_DIR/"
-echo "Enrichment label: com.brainlayer.enrichment"
 echo "Status: launchctl list | grep brainlayer"
