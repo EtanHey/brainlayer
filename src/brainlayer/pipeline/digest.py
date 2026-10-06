@@ -22,7 +22,7 @@ from ..vector_store import VectorStore
 from .batch_extraction import DEFAULT_SEED_ENTITIES, _dedup_entities, process_chunk, store_extraction_result
 from .cloud_scrub import CloudScrubError, scrub_for_cloud, scrub_llm_output
 from .enrichment import VALID_INTENTS, build_external_prompt
-from .sanitize import Sanitizer
+from .sanitize import PIINERUnavailableError, Sanitizer
 from .secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested
 from .sentiment import analyze_sentiment
 
@@ -318,13 +318,20 @@ def _default_faceted_enrich(
         "metadata": {"title": title, "participants": participants or []},
     }
     sanitizer = Sanitizer.from_env()
-    prompt, sanitize_result = build_external_prompt(
-        chunk,
-        sanitizer,
-        prompt_template=FACETED_DIGEST_PROMPT,
-    )
     try:
+        prompt, sanitize_result = build_external_prompt(
+            chunk,
+            sanitizer,
+            prompt_template=FACETED_DIGEST_PROMPT,
+        )
         prompt = scrub_for_cloud(prompt)
+    except PIINERUnavailableError:
+        return {
+            "status": "failed",
+            "reason": "pii_ner_unavailable",
+            "provider": "gemini",
+            "model": DEFAULT_FACETED_MODEL,
+        }
     except CloudScrubError as exc:
         return {
             "status": "failed",
@@ -508,6 +515,9 @@ def digest_content(
         title=title,
         participants=participants,
     )
+
+    if faceted_result.get("status") == "failed":
+        faceted_result = {**faceted_result, "chunk_id": chunk_id, "stored": True}
 
     merged_tags: List[str] = []
     if _is_successful_faceted_result(faceted_result):
