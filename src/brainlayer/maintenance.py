@@ -14,10 +14,12 @@ import sqlite3
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any, Callable, Mapping, Sequence
 
 import apsw
@@ -32,9 +34,11 @@ from .backup_daily import (
     _recent_verified_backup_for_reuse,
 )
 from .drain import BurnDrainResult, burn_drain_once
-from .launchd_primitive import is_launchd_label_loaded
+from .drive_credentials import _atomic_write
+from .launchd_primitive import is_launchd_label_disabled, is_launchd_label_loaded
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .pipeline.code_intelligence import _pid_is_alive, _pid_start_time
 from .queue_io import get_queue_dir
 from .wal_checkpoint import checkpoint
 
@@ -52,6 +56,8 @@ EXPECTED_WRITER_PATTERNS = (
     "drain_daemon.py",
     "com.brainlayer.",
 )
+QUIESCE_EXIT_TIMEOUT_SECONDS = 45.0
+_WATCHDOG_DISABLED_BEFORE = "_fleet_watchdog_disabled_before"
 MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
 SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
@@ -150,8 +156,10 @@ class MaintenanceConfig:
     backup_reuse_max_age_hours: float = 6
 
 
-def run_command(args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(args), text=True, capture_output=True, check=check)
+def run_command(args: Sequence[str], *, check: bool = True, timeout=None) -> subprocess.CompletedProcess[str]:
+    if timeout is None and args and args[0] == "launchctl":
+        timeout = QUIESCE_EXIT_TIMEOUT_SECONDS
+    return subprocess.run(list(args), text=True, capture_output=True, check=check, timeout=timeout)
 
 
 def _write_log(path: Path, event: dict[str, Any]) -> None:
@@ -411,11 +419,11 @@ def _bootout_service(service: str) -> bool:
     return result.returncode == 0
 
 
-def _service_is_loaded(service: str) -> bool:
+def _service_is_loaded(service: str, *, timeout: float | None = None) -> bool:
     try:
         state = is_launchd_label_loaded(
             _launchd_label(service),
-            command_runner=lambda args: run_command(args, check=False),
+            command_runner=lambda args: run_command(args, check=False, timeout=timeout),
         )
     except Exception as exc:
         raise MaintenanceAbort(
@@ -482,7 +490,159 @@ def _resume_service(repo_root: Path, service: str) -> None:
     run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
+def _wait_for_service_exit(service: str) -> None:
+    deadline = monotonic() + QUIESCE_EXIT_TIMEOUT_SECONDS
+    while _service_is_loaded(service, timeout=max(0.001, deadline - monotonic())):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service}; it remains loaded",
+                detail=f"loaded:{_launchd_label(service)}",
+            )
+        sleep(min(0.1, remaining))
+
+
+def _watchdog_hold_path() -> Path:
+    return PAUSE_SENTINEL_PATH.with_name("fleet-watchdog-hold.json").expanduser()
+
+
+@contextmanager
+def _watchdog_hold_lock(path: Path):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise MaintenanceAbort(
+                "watchdog hold busy", detail=f"hold-active:{_launchd_label('fleet-watchdog')}"
+            ) from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def _watchdog_hold_owner_alive(path: Path) -> bool | None:
+    try:
+        record = json.loads(path.read_text())
+        pid, start = record["pid"], record["pid_start_time"]
+        if path.is_symlink() or type(pid) is not int or pid <= 0 or not isinstance(start, str) or not start:
+            raise ValueError
+        if not _pid_is_alive(pid):
+            return False
+        current = _pid_start_time(pid)
+        if not current:
+            raise ValueError
+        return current == start
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        raise MaintenanceAbort(
+            "watchdog hold state unknown", detail=f"hold-state:{_launchd_label('fleet-watchdog')}"
+        ) from None
+
+
+def _watchdog_recovery_paused(path: Path) -> bool:
+    payload, active, _ = pause_sentinel_state(path.with_name("pause.sentinel"), dt.datetime.now(dt.UTC))
+    return bool(active and pause_applies_to_label(payload, _launchd_label("fleet-watchdog"))) or (
+        "fleet-watchdog" in _maintenance_keep_down_services()
+    )
+
+
+def _recover_watchdog_hold(path: Path, command_runner=None, alert_path: Path | None = None) -> bool:
+    owner_alive = _watchdog_hold_owner_alive(path)
+    if owner_alive is None:
+        return False
+    if owner_alive:
+        raise MaintenanceAbort("watchdog hold owner alive", detail=f"hold-active:{_launchd_label('fleet-watchdog')}")
+    if _watchdog_recovery_paused(path):
+        raise MaintenanceAbort("watchdog recovery paused", detail=f"hold-state:{_launchd_label('fleet-watchdog')}")
+    runner = command_runner or (lambda args: run_command(args, check=False))
+    target = f"gui/{os.getuid()}"
+    label = _launchd_label("fleet-watchdog")
+    plist = Path.home() / "Library/LaunchAgents" / f"{label}.plist"
+    for args in (["launchctl", "enable", f"{target}/{label}"], ["launchctl", "bootstrap", target, str(plist)]):
+        result = runner(args)
+        if getattr(result, "returncode", None) != 0:
+            if args[1] == "bootstrap" and is_launchd_label_loaded(label, command_runner=runner) is True:
+                continue  # An interrupted prior recovery may have already restored it.
+            raise MaintenanceAbort("watchdog recovery failed", detail=f"hold-state:{label}")
+    from .job_alerts import report
+
+    report(
+        "fleet-watchdog-hold", "BrainLayer recovered a stale fleet-watchdog hold; supervisor restored", path=alert_path
+    )
+    path.unlink()
+    return True
+
+
+def recover_fleet_watchdog_hold(
+    *, path: Path | None = None, command_runner=None, alert_path: Path | None = None
+) -> bool:
+    """Recover only a dead/reused owner's hold; a live or unknown owner refuses."""
+    path = path or _watchdog_hold_path()
+    if not path.exists():
+        return False
+    with _watchdog_hold_lock(path):
+        return _recover_watchdog_hold(path, command_runner, alert_path)
+
+
+@contextmanager
+def sigterm_cleanup():
+    """Unwind CLI work on SIGTERM, allowing its finally to restore services."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def terminate(*_):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise SystemExit(143)
+
+    previous = signal.signal(signal.SIGTERM, terminate)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> None:
+    if not services:
+        return
+    path = _watchdog_hold_path()
+    with _watchdog_hold_lock(path):
+        _recover_watchdog_hold(path)
+        disabled = is_launchd_label_disabled(
+            _launchd_label("fleet-watchdog"), command_runner=lambda args: run_command(args, check=False)
+        )
+        if disabled is None:
+            raise MaintenanceAbort(
+                "watchdog disabled state unknown", detail=f"state:{_launchd_label('fleet-watchdog')}"
+            )
+        if not disabled:
+            start = _pid_start_time(os.getpid())
+            if not start:
+                raise MaintenanceAbort(
+                    "watchdog owner unknown", detail=f"hold-state:{_launchd_label('fleet-watchdog')}"
+                )
+            _atomic_write(
+                path, {"pid": os.getpid(), "pid_start_time": start, "started_at": dt.datetime.now(dt.UTC).isoformat()}
+            )
+            fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        booted_out[_WATCHDOG_DISABLED_BEFORE] = disabled
+        if not disabled:
+            try:
+                run_command(
+                    ["launchctl", "disable", f"gui/{os.getuid()}/{_launchd_label('fleet-watchdog')}"], check=True
+                )
+            except Exception:
+                raise MaintenanceAbort(
+                    "watchdog hold failed", detail=f"disable:{_launchd_label('fleet-watchdog')}"
+                ) from None
+    services = ("fleet-watchdog", *(service for service in services if service != "fleet-watchdog"))
     for service in services:
         try:
             booted_out[service] = bool(_bootout_service(service))
@@ -496,6 +656,9 @@ def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> N
                 f"failed to quiesce launchd service {service}; it remains loaded",
                 detail=f"bootout:{_launchd_label(service)}",
             )
+        _wait_for_service_exit(service)
+        if service == "fleet-watchdog" and not disabled:
+            booted_out[service] = True  # An owned hold must restore even an already-absent supervisor.
 
 
 def _clean_git_env() -> dict[str, str]:
@@ -647,7 +810,18 @@ def _resume_services(
 ) -> list[tuple[str, Exception]]:
     failures: list[tuple[str, Exception]] = []
     keep_down = _maintenance_keep_down_services()
+    held = loaded_before is not None and _WATCHDOG_DISABLED_BEFORE in loaded_before
+    if held:
+        services = (*(service for service in services if service != "fleet-watchdog"), "fleet-watchdog")
     for service in services:
+        if service == "fleet-watchdog" and held:
+            if loaded_before[_WATCHDOG_DISABLED_BEFORE]:
+                continue  # Never undo an operator disable.
+            try:
+                run_command(["launchctl", "enable", f"gui/{os.getuid()}/{_launchd_label(service)}"], check=True)
+            except Exception as exc:
+                failures.append((service, exc))
+                continue
         if loaded_before is not None and not loaded_before.get(service, False):
             print(f"maintenance did not boot out service {service}; leaving it down", file=sys.stderr)
             continue
@@ -662,6 +836,8 @@ def _resume_services(
             continue
         try:
             _resume_service(repo_root, service)
+            if service == "fleet-watchdog" and held:
+                _watchdog_hold_path().unlink(missing_ok=True)
         except Exception as exc:
             failures.append((service, exc))
     return failures
@@ -794,6 +970,7 @@ def _serialize_maintenance(func: Callable[..., MaintenanceResult]) -> Callable[.
     return wrapped
 
 
+@sigterm_cleanup()
 def run_coordinated_fts_repair(db_path: Path, *, repo_root: Path | None = None) -> dict[str, int]:
     """Repair the configured DB only after resident writers have been quiesced."""
     with _maintenance_lock(db_path):
@@ -1106,6 +1283,7 @@ def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
     return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the failure; inspect {log_path}"
 
 
+@sigterm_cleanup()
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run safety-gated BrainLayer maintenance.")
     modes = parser.add_mutually_exclusive_group()

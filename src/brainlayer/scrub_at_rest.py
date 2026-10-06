@@ -57,7 +57,7 @@ _QUIESCE_DETAILS = frozenset(
     {"quiesce-services", "brainbar-process-probe", "lsof-writers", "process:BrainBar", "process:BrainBarDaemon"}
     | {
         f"{step}:{maintenance._launchd_label(service)}"
-        for step in ("bootout", "state", "loaded")
+        for step in ("bootout", "state", "loaded", "disable", "hold-active", "hold-state")
         for service in LIVE_SERVICES
     }
 )
@@ -371,6 +371,7 @@ def _quiesced_gates(config):
         ) from _safe_cause(exc)
 
 
+@maintenance.sigterm_cleanup()
 def _guarded_apply(path, batch_size, expect_rows, selected=PROVIDERS):
     if expect_rows is None or expect_rows < 0:
         raise ScrubAtRestError("expected row count required", reason="expected-row-count-required")
