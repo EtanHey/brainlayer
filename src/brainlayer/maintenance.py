@@ -154,6 +154,8 @@ class MaintenanceConfig:
 
 
 def run_command(args: Sequence[str], *, check: bool = True, timeout=None) -> subprocess.CompletedProcess[str]:
+    if timeout is None and args and args[0] == "launchctl":
+        timeout = QUIESCE_EXIT_TIMEOUT_SECONDS
     return subprocess.run(list(args), text=True, capture_output=True, check=check, timeout=timeout)
 
 
