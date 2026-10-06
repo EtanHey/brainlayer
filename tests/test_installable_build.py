@@ -1515,7 +1515,7 @@ def test_launchd_teardown_does_not_create_runtime_roots(tmp_path: Path, action: 
     home.mkdir()
 
     result = subprocess.run(
-        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), action],
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), action, *(["watch"] if action == "unload" else [])],
         env={
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -1547,15 +1547,15 @@ def test_launchd_load_existing_unmarked_install_skips_spotlight_preflight(tmp_pa
     home = tmp_path / "home"
     launch_dir = home / "Library" / "LaunchAgents"
     launch_dir.mkdir(parents=True)
-    (launch_dir / "com.brainlayer.enrichment.plist").write_bytes(
-        plistlib.dumps({"Label": "com.brainlayer.enrichment", "ProgramArguments": ["/usr/bin/true"]})
+    (launch_dir / "com.brainlayer.watch.plist").write_bytes(
+        plistlib.dumps({"Label": "com.brainlayer.watch", "ProgramArguments": ["/usr/bin/true"]})
     )
     legacy_data = home / ".local" / "share" / "brainlayer"
     legacy_data.mkdir(parents=True)
     (legacy_data / "brainlayer.db").touch()
 
     result = subprocess.run(
-        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "load", "enrichment"],
+        [str(REPO_ROOT / "scripts" / "launchd" / "install.sh"), "load", "watch"],
         env={
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -3282,7 +3282,7 @@ def test_launchd_all_does_not_load_backup_jobs_when_wrapper_render_fails(tmp_pat
     assert not any(command.startswith("bootstrap ") and "jsonl-backup.plist" in command for command in commands)
 
 
-def test_launchd_all_preserves_legacy_enrich_when_replacement_batch_fails(tmp_path: Path) -> None:
+def test_launchd_all_never_attempts_enrichment_bootstrap(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     launchctl_log = tmp_path / "launchctl.log"
@@ -3324,11 +3324,12 @@ def test_launchd_all_preserves_legacy_enrich_when_replacement_batch_fails(tmp_pa
 
     commands = launchctl_log.read_text(encoding="utf-8").splitlines()
     assert result.returncode != 0
-    assert "replacement bootstrap failed" in result.stderr
+    assert "replacement bootstrap failed" not in result.stderr
+    assert not any("com.brainlayer.enrichment" in command for command in commands)
     assert not any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
 
 
-def test_launchd_all_removes_legacy_enrich_when_replacement_loads_despite_sibling_failure(
+def test_launchd_all_cleans_legacy_enrich_despite_sibling_failure(
     tmp_path: Path,
 ) -> None:
     fake_bin = tmp_path / "bin"
@@ -3349,6 +3350,9 @@ def test_launchd_all_removes_legacy_enrich_when_replacement_loads_despite_siblin
     fake_launchctl.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir()
+    legacy = home / "Library/LaunchAgents/com.brainlayer.enrich.plist"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("historical legacy plist")
     env_file = tmp_path / "brainlayer.env"
     _write_full_launchd_env(env_file)
 
@@ -3374,6 +3378,7 @@ def test_launchd_all_removes_legacy_enrich_when_replacement_loads_despite_siblin
     assert result.returncode != 0
     assert "repair bootstrap failed" in result.stderr
     assert any(command.startswith("unload ") and "com.brainlayer.enrich.plist" in command for command in commands)
+    assert not legacy.exists()
 
 
 def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
@@ -3424,7 +3429,7 @@ def test_wheel_contains_cli_and_launchd_templates(tmp_path: Path) -> None:
     assert "brainlayer/cli/__init__.py" in listing
     assert "brainlayer/cli_new.py" in listing
     assert "brainlayer/launchd/install.sh" in listing
-    assert "brainlayer/launchd/com.brainlayer.enrichment.plist" in listing
+    assert "brainlayer/launchd/com.brainlayer.enrichment.plist" not in listing
     assert "brainlayer/launchd/com.brainlayer.tier0-watchdog.plist" in listing
     assert "brainlayer/launchd/tier0-watchdog.sh" in listing
     assert "brainlayer/launchd/com.brainlayer.throughput-watchdog.plist" in listing
