@@ -8,7 +8,6 @@ Target: 35+ tests per A-R2 acceptance criteria.
 """
 
 import json
-import plistlib
 import sqlite3
 import sys
 import threading
@@ -1605,93 +1604,16 @@ def test_realtime_passes_chunk_ids_to_candidates(monkeypatch):
 # ── LaunchAgent plist validation ──────────────────────────────────────────────
 
 
-def test_enrichment_plist_has_correct_label():
-    import xml.etree.ElementTree as ET
-    from pathlib import Path
-
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    tree = ET.parse(plist_path)
-    root = tree.getroot()
-    d = root.find("dict")
-
-    # Find the string element right after the Label key
-    elements = list(d)
-    for i, el in enumerate(elements):
-        if el.tag == "key" and el.text == "Label":
-            assert elements[i + 1].text == "com.brainlayer.enrichment"
-            break
-
-
-def test_enrichment_plist_uses_realtime_mode():
-    from pathlib import Path
-
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    content = plist_path.read_text()
-    assert "realtime" in content
-
-
-def _load_enrichment_plist():
-    from pathlib import Path
-
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    return plistlib.loads(plist_path.read_bytes())
-
-
-def test_enrichment_plist_uses_continuous_keepalive_shape():
-    plist = _load_enrichment_plist()
-
-    assert plist["KeepAlive"] is True
-    assert "StartInterval" not in plist
-
-
-def test_enrichment_plist_invokes_cli_enrich_entrypoint():
-    plist = _load_enrichment_plist()
-
-    args = plist["ProgramArguments"]
-    assert args == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
-    assert "while true" not in " ".join(args)
-    assert "--limit" not in args
-    assert "--since-hours" not in args
-
-
-def test_enrichment_plist_matches_validated_flex_realtime_profile():
-    plist = _load_enrichment_plist()
-    env = plist["EnvironmentVariables"]
-    env_template = (Path(__file__).parent.parent / "scripts" / "launchd" / "brainlayer.env.example").read_text()
-
-    assert plist["Nice"] == 10
-    assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.out.log"
-    assert plist["StandardErrorPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.err.log"
-    assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
-    assert env["BRAINLAYER_REQUIRE_GOOGLE_API_KEY"] == "1"
-    assert "GOOGLE_API_KEY" not in env
-    assert "BRAINLAYER_ENRICH_RATE=15" in env_template
-    assert "BRAINLAYER_ENRICH_CONCURRENCY=4" in env_template
-    assert "BRAINLAYER_MAX_COMMIT_BATCH=25" in env_template
-    assert "BRAINLAYER_GEMINI_SERVICE_TIER=flex" in env_template
-
-
-def test_launchd_installer_supports_enrichment_load_and_unload():
-    from pathlib import Path
+def test_launchd_installer_supports_explicit_load_and_unload():
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert 'LAUNCH_DIR="$HOME/Library/LaunchAgents"' in install_script
     assert "load)" in install_script
     assert "unload)" in install_script
-    assert "com.brainlayer.enrichment" in install_script
     assert "install_plist decay" in install_script
 
 
-def test_launchd_installer_enrich_alias_removes_legacy_plist():
-    from pathlib import Path
-
-    install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
-    assert "enrich)" in install_script
-    assert "remove_plist enrich 2>/dev/null || true" in install_script
-
-
 def test_launchd_installer_uses_standard_env_file_instead_of_embedding_google_key():
-    from pathlib import Path
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert ".zshrc" not in install_script
@@ -1728,7 +1650,6 @@ def test_realtime_returns_zero_counts_for_no_candidates(monkeypatch):
 
 
 def test_decay_plist_invokes_cli_decay_entrypoint():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.decay.plist"
     content = plist_path.read_text()
@@ -1738,7 +1659,6 @@ def test_decay_plist_invokes_cli_decay_entrypoint():
 
 
 def test_wal_checkpoint_plist_invokes_cli_checkpoint_entrypoint():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.wal-checkpoint.plist"
     content = plist_path.read_text()

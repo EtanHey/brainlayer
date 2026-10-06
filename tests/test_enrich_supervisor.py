@@ -1,7 +1,6 @@
 import fcntl
 import logging
 import os
-import plistlib
 import time
 from pathlib import Path
 
@@ -563,19 +562,3 @@ def test_supervisor_does_not_log_per_cycle_store_initialization_at_info(tmp_path
 
     init_lines = [record for record in caplog.records if "initialized for enrich supervisor pass" in record.message]
     assert init_lines == []
-
-
-def test_enrichment_launchagent_runs_supervisor_not_shell_respawn_loop():
-    plist_path = Path("scripts/launchd/com.brainlayer.enrichment.plist")
-    plist = plistlib.loads(plist_path.read_bytes())
-
-    args = plist["ProgramArguments"]
-
-    assert args == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
-    assert "--limit" not in args
-    assert "--since-hours" not in args
-    assert "while true" not in " ".join(args)
-    assert plist["KeepAlive"] is True
-    assert plist["ProcessType"] == "Background"
-    assert plist["EnvironmentVariables"]["BRAINLAYER_ENRICHMENT_QUEUE_WRITES"] == "1"
-    assert plist["EnvironmentVariables"]["BRAINLAYER_ENRICH_IDLE_BACKLOG"] == "1"

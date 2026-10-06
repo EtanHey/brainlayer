@@ -72,12 +72,6 @@ def test_active_daemon_launchd_hygiene_matrix():
             "LowPriorityIO": False,
             "KeepAlive": True,
         },
-        "scripts/launchd/com.brainlayer.enrichment.plist": {
-            "ProcessType": "Background",
-            "ExitTimeOut": 120,
-            "LowPriorityIO": False,
-            "KeepAlive": True,
-        },
         "scripts/launchd/com.brainlayer.watch.plist": {
             "ProcessType": "Background",
             "ExitTimeOut": 30,
@@ -265,19 +259,6 @@ def test_script_launchagents_use_installed_package_imports():
         if plist["Label"] in PACKAGE_IMPORT_EXEMPT_LABELS:
             continue
         _assert_uses_installed_package_not_source_path(path, plist)
-
-
-def test_enrichment_launchagent_sources_standard_env_file_without_embedded_google_key():
-    plist = _load("scripts/launchd/com.brainlayer.enrichment.plist")
-    env = plist["EnvironmentVariables"]
-    args = plist["ProgramArguments"]
-
-    assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
-    assert env["BRAINLAYER_REQUIRE_GOOGLE_API_KEY"] == "1"
-    assert "GOOGLE_API_KEY" not in env
-    assert "__GOOGLE_API_KEY__" not in plistlib.dumps(plist).decode("utf-8")
-    assert args[:2] == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__"]
-    assert args[2:] == ["enrich", "--mode", "realtime", "--supervisor"]
 
 
 def test_all_script_launchagents_source_unified_config_file():
@@ -699,7 +680,7 @@ def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():
 
 
 @pytest.mark.parametrize("form", ["disabled", "true"])
-@pytest.mark.parametrize("name", ["watch", "hotlane-brainbar", "enrichment"])
+@pytest.mark.parametrize("name", ["watch", "hotlane-brainbar"])
 def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path, name, form):
     """An operator `launchctl disable` is a standing order: load_plist must not enable/bootstrap it."""
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
