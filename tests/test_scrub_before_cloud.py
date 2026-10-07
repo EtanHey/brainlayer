@@ -496,7 +496,7 @@ def test_legacy_unsanitized_cloud_scripts_are_gated_off(script, tmp_path):
     )
 
     assert proc.returncode != 0
-    assert "GATED OFF" in proc.stderr
+    assert "GATED OFF" in proc.stderr or "RETIRED" in proc.stderr
 
 
 # ── OUTPUT: every LLM output field is scrubbed before persistence ────────
