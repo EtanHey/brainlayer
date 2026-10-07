@@ -695,9 +695,8 @@ struct BrainBarSettingsFooterPresentation {
         if enrichmentOff {
             enrichment = "Enrichment off"
             enrichmentCloud = false
-        } else if config.launchdJobs[.enrichment]?.enabled == true {
-            // The realtime enrichment launchd job invokes enrich_realtime,
-            // which uses Gemini regardless of BACKEND/MODE in the env file.
+        } else if config.enrichmentEnabled {
+            // Legacy enrichment config presentation remains until R10 removes those fields.
             enrichment = "Enrichment → Gemini"
             enrichmentCloud = true
         } else {

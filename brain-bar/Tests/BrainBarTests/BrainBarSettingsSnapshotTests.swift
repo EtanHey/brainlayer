@@ -69,7 +69,6 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
         let store = BrainLayerConfigStore(configURL: configURL)
         try store.save(config)
         let states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [
-            .enrichment: .loaded,
             .hotlane: .unloaded,
             .drain: .running,
             .watch: .probeError("launchctl exited 1"),

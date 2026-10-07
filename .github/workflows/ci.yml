@@ -20,6 +20,7 @@ jobs:
           filters: |
             brain_bar:
               - 'brain-bar/**'
+              - 'scripts/launchd/**'
             launchd:
               - 'scripts/launchd/**'
               - 'src/brainlayer/pause.py'

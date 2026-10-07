@@ -372,12 +372,10 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         let viewModel = BrainBarSettingsViewModel(
             store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [
-                .enrichment: .loaded,
                 .hotlane: .unloaded,
                 .drain: .running,
             ]),
             initialLaunchdStates: [
-                .enrichment: .loaded,
                 .hotlane: .unloaded,
                 .drain: .running,
             ],

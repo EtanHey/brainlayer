@@ -26,7 +26,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(weeklyOnly.showsLock)
 
         config.enrichmentEnabled = false
-        config.launchdJobs[.enrichment]?.enabled = false
         config.launchdJobs[.maintenanceWeekly]?.enabled = false
         let local = BrainBarSettingsFooterPresentation(config: config, watcher: unknown, now: fixedNow)
         XCTAssertTrue(local.locality.contains("Memory on this Mac"))

@@ -17,6 +17,10 @@ final class BrainBarSettingsJobsTests: XCTestCase {
         )
     }
 
+    func testRetiredEnrichmentJobIsAbsent() {
+        XCTAssertFalse(BrainLayerLaunchdJob.allCases.contains { $0.launchdLabel == "com.brainlayer.enrichment" })
+    }
+
     func testEveryJobLabelMatchesShippedPlist() throws {
         for job in BrainLayerLaunchdJob.allCases {
             let plist = try sourceFile("../scripts/launchd/\(job.launchdLabel).plist")
