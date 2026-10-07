@@ -45,3 +45,15 @@ def test_historical_provenance_read_and_payload_helpers_are_local():
 
     for name in ("_get_chunk_readonly", "_previous_assistant_text", "_enrichment_update_payload"):
         assert getattr(enrichment_replay, name).__module__ == "brainlayer.enrichment_replay"
+
+
+def test_historical_hash_and_class_helpers_are_local():
+    from brainlayer import enrichment_replay
+
+    for name in (
+        "is_meta_research",
+        "_is_duplicate_content",
+        "_ensure_content_hash_column",
+        "_backfill_content_hashes",
+    ):
+        assert getattr(enrichment_replay, name).__module__ == "brainlayer.enrichment_replay"
