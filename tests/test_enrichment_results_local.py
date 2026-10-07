@@ -52,3 +52,9 @@ def test_saved_result_parser_lives_outside_the_retired_producer():
 
     assert parse_enrichment.__module__ == "brainlayer.pipeline.enrichment_results"
     assert parse_enrichment('{"summary":"A historical saved result", "tags":["reactjs"]}')["tags"] == ["react"]
+
+
+def test_retired_legacy_enrichment_host_is_absent():
+    import importlib.util
+
+    assert importlib.util.find_spec("brainlayer.pipeline.enrichment") is None

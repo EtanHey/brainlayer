@@ -149,30 +149,32 @@ def test_enrichment_payload_keeps_model_in_metadata_not_chunk_origin(monkeypatch
     assert (payload["enrichment"].get("enrichment_metadata") or {})["enriched_by"] == "gemini-test-model"
 
 
-def test_local_enrichment_pipeline_does_not_stamp_backend_as_chunk_origin():
-    from unittest.mock import MagicMock, patch
+def test_saved_local_result_replay_preserves_chunk_origin(tmp_path):
+    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
+    from brainlayer.vector_store import VectorStore
 
-    from brainlayer.pipeline import enrichment
-
-    store = MagicMock()
-    store.get_context.return_value = {"context": []}
-    chunk = {
-        "id": "chunk-mlx",
-        "content": "content that should be enriched",
-        "content_type": "user_message",
-        "project": "brainlayer",
-        "conversation_id": None,
-        "position": None,
-    }
-
-    with (
-        patch.object(enrichment, "build_prompt", return_value="prompt"),
-        patch.object(enrichment, "call_llm", return_value='{"summary":"ok summary","tags":["test"]}'),
-        patch.object(enrichment, "parse_enrichment", return_value={"summary": "ok summary", "tags": ["test"]}),
-    ):
-        result = enrichment._enrich_one(store, chunk, with_context=False, backend="mlx")
-
-    assert result is True
-    kwargs = store.update_enrichment.call_args.kwargs
-    assert kwargs.get("chunk_origin") in (None, "")
-    assert kwargs["enrichment_model"] == enrichment.MLX_MODEL
+    store = VectorStore(tmp_path / "saved-result.db")
+    try:
+        store.conn.cursor().execute(
+            "INSERT INTO chunks (id, content, metadata, source_file, chunk_origin, char_count, source) "
+            "VALUES ('saved-1', 'Synthetic historical conversation', '{}', 'saved.jsonl', 'claude_code', 80, 'claude_code')"
+        )
+        result = parse_enrichment('{"summary":"Synthetic saved model result", "tags":["reactjs"]}')
+        _apply_enrichment(
+            store,
+            {"id": "saved-1", "content": "Synthetic historical conversation", "source": "claude_code"},
+            result,
+            enrichment_model="historical-model",
+            enrichment_backend="historical-backend",
+        )
+        origin, model, metadata = (
+            store.conn.cursor()
+            .execute("SELECT chunk_origin, enrichment_model, metadata FROM chunks WHERE id='saved-1'")
+            .fetchone()
+        )
+        assert origin == "claude_code"
+        assert model == "historical-model"
+        assert json.loads(metadata)["enriched_by"] == "historical-model"
+    finally:
+        store.close()

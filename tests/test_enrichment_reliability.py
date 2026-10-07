@@ -71,26 +71,6 @@ def test_parse_enrichment_version_stamps_outputs(monkeypatch):
     assert metadata["run_id"] == "test-run"
 
 
-def test_build_prompt_switches_tag_rules_with_env(monkeypatch):
-    from brainlayer.pipeline import enrichment
-
-    chunk = {
-        "content": "BrainLayer React.js tag normalization decision.",
-        "project": "brainlayer",
-        "content_type": "assistant_text",
-    }
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_TAG_MODE", "hybrid")
-    hybrid_prompt = enrichment.build_prompt(chunk)
-    assert "HYBRID TAG MODE" in hybrid_prompt
-    assert "React.js/reactjs/React -> react" in hybrid_prompt
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_TAG_MODE", "taxonomy")
-    taxonomy_prompt = enrichment.build_prompt(chunk)
-    assert "TAXONOMY WHITELIST MODE" in taxonomy_prompt
-    assert "Do NOT invent free-form singleton tags" in taxonomy_prompt
-
-
 def test_parse_enrichment_tag_whitelist_is_forward_only_for_existing_rows(tmp_path, monkeypatch):
     from brainlayer.vector_store import VectorStore
 
