@@ -1,19 +1,13 @@
-"""Tests for the unified Gemini enrichment controller.
-
-Covers realtime/batch routing, content-hash dedup, retry logic, rate limiting,
-telemetry, MCP handler, stats, error handling, idempotency, LaunchAgent plists,
-and CLI integration.
-
-Target: 35+ tests per A-R2 acceptance criteria.
-"""
+"""Historical enrichment replay, audit metadata, and retired interface contracts."""
 
 import json
 import sqlite3
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+# ── Existing realtime tests ──────────────────────────────────────────────────
 
 
 def _candidate(chunk_id: str = "c1", content: str = "x" * 120) -> dict:
@@ -24,41 +18,6 @@ def _candidate(chunk_id: str = "c1", content: str = "x" * 120) -> dict:
         "content_type": "assistant_text",
         "source": "claude_code",
     }
-
-
-def _fake_gemini_client(response_text='{"summary":"sum","tags":["python"]}'):
-    """Create a fake Gemini client that returns the given response text."""
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):
-                return SimpleNamespace(text=response_text)
-
-        def __init__(self):
-            self.models = self._Models()
-
-    return FakeClient()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_enrich_cost_counter(monkeypatch, tmp_path):
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "enrich-cost"))
-
-
-def _patch_realtime_deps(monkeypatch, controller, store, response_text=None):
-    """Common monkeypatching for realtime enrichment tests."""
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-    monkeypatch.setattr(
-        controller,
-        "_get_gemini_client",
-        lambda: _fake_gemini_client(response_text or '{"summary":"sum","tags":["python"]}'),
-    )
-
-
-# ── Existing realtime tests ──────────────────────────────────────────────────
 
 
 def test_enrichment_provenance_columns_are_audit_queryable_but_not_normal_search_payload(tmp_path):

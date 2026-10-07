@@ -118,7 +118,7 @@ def test_get_enrichment_candidates_respects_limit(tmp_path):
 
 
 def test_get_enrichment_candidates_uses_one_candidate_per_content_hash(tmp_path):
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     store = VectorStore(tmp_path / "test.db")
     duplicate_hash = _content_hash("canonical duplicate content")

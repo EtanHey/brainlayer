@@ -6,38 +6,6 @@ import json
 import sqlite3
 
 
-def test_meta_research_enrichment_queue_does_not_stamp_backend(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path))
-    monkeypatch.setattr(controller, "GEMINI_REALTIME_MODEL", "gemini-test-model")
-
-    chunk = {"id": "meta-1", "content": "# research note"}
-    controller._enqueue_meta_research_write(chunk)
-
-    [path] = tmp_path.glob("enrichment-*.jsonl")
-    event = json.loads(path.read_text(encoding="utf-8").strip())
-
-    assert event["chunk_origin"] is None
-
-
-def test_meta_research_batcher_does_not_stamp_backend(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path))
-    monkeypatch.setattr(controller, "GEMINI_REALTIME_MODEL", "gemini-test-model")
-
-    chunk = {"id": "meta-1", "content": "# research note"}
-    batcher = controller._EnrichmentWriteBatcher(max_batch=10)
-    batcher.enqueue(chunk, controller._meta_research_enrichment(chunk), counted_as="skipped")
-    batcher.flush()
-
-    [path] = tmp_path.glob("enrichment-*.jsonl")
-    event = json.loads(path.read_text(encoding="utf-8").strip())
-
-    assert event["chunk_origin"] is None
-
-
 def test_direct_apply_enrichment_stamps_backend_origin(monkeypatch):
     from unittest.mock import MagicMock
 
