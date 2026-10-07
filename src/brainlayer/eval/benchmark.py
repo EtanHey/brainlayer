@@ -8,13 +8,14 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 os.environ.setdefault("IR_DATASETS_HOME", "/tmp/ir_datasets")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
-from ranx import Qrels, Run, compare, evaluate
+if TYPE_CHECKING:
+    from ranx import Qrels, Run
 
 from brainlayer._helpers import _escape_fts5_query
 
@@ -127,6 +128,8 @@ class ReadOnlyBenchmarkStore:
 
 
 def _patch_ranx_run_fallback() -> None:
+    from ranx import Run
+
     global _RANX_RUN_FALLBACK_PATCHED
     if _RANX_RUN_FALLBACK_PATCHED:
         return
@@ -152,6 +155,8 @@ def _patch_ranx_run_fallback() -> None:
 
 
 def _run_from_dict(run_dict: dict[str, dict[str, float]]) -> Run:
+    from ranx import Run
+
     try:
         return Run(run=run_dict)
     except Exception:
@@ -181,6 +186,8 @@ class SearchBenchmark:
         return qrels
 
     def _build_ranx_qrels(self) -> Qrels | None:
+        from ranx import Qrels
+
         try:
             return Qrels.from_dict(self.qrels)
         except Exception:
@@ -205,6 +212,8 @@ class SearchBenchmark:
         return _run_from_dict(run_dict)
 
     def evaluate_pipeline(self, run: Run, metrics: list[str] | None = None) -> dict[str, float]:
+        from ranx import evaluate
+
         metric_list = metrics or DEFAULT_RUN_METRICS
         if self.ranx_qrels is not None:
             try:
@@ -219,6 +228,8 @@ class SearchBenchmark:
         return self._evaluate_without_ranx(run.to_dict(), metric_list)
 
     def compare_pipelines(self, runs: dict[str, Run], metrics: list[str] | None = None) -> str:
+        from ranx import Run, compare
+
         metric_list = metrics or DEFAULT_COMPARE_METRICS
         if self.ranx_qrels is not None:
             try:
