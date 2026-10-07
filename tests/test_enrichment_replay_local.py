@@ -31,3 +31,10 @@ assert replay._derive_chunk_provenance_class({'source':'mcp', 'source_file':'bra
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_saved_result_apply_lives_outside_the_model_controller():
+    from brainlayer.enrichment_replay import _apply_enrichment, _apply_enrichment_impl
+
+    assert _apply_enrichment.__module__ == "brainlayer.enrichment_replay"
+    assert _apply_enrichment_impl.__module__ == "brainlayer.enrichment_replay"

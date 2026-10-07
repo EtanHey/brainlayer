@@ -372,7 +372,7 @@ def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
 def test_apply_enrichment_persists_entities_and_relation_context(tmp_path):
     import json
 
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
 
     store = VectorStore(tmp_path / "test.db")
     try:

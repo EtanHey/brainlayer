@@ -1280,7 +1280,7 @@ def test_meta_research_filter_preserves_real_content():
 
 
 def test_apply_enrichment_calls_update_enrichment_with_all_fields():
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
 
     store = MagicMock()
     chunk = _candidate("c1")
@@ -1335,7 +1335,7 @@ def test_apply_enrichment_calls_update_enrichment_with_all_fields():
 
 
 def test_apply_enrichment_sets_content_hash():
-    from brainlayer.enrichment_controller import _apply_enrichment, _content_hash
+    from brainlayer.enrichment_replay import _apply_enrichment, _content_hash
 
     store = MagicMock()
     cursor = MagicMock()
@@ -1356,7 +1356,7 @@ def test_apply_enrichment_sets_content_hash():
 
 
 def test_apply_enrichment_persists_raw_entities():
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
 
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, raw_entities_json TEXT, content_hash TEXT)")
@@ -1378,7 +1378,7 @@ def test_apply_enrichment_persists_raw_entities():
 
 def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path, monkeypatch):
     from brainlayer import kg_promotion
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
     from brainlayer.vector_store import VectorStore
 
     monkeypatch.setattr(kg_promotion, "_KNOWN_GIVEN_NAME_ALIASES", {"alex": {"אלכס"}})

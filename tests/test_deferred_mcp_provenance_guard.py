@@ -1,7 +1,7 @@
 """Regression guard for deferred MCP queue provenance.
 
 The deferred-MCP provenance rule is intentionally duplicated in
-enrichment_controller.py and provenance_integration.py. These tests fail if
+enrichment_replay.py and provenance_integration.py. These tests fail if
 either copy stops treating source='mcp' + source_file='brainlayer-queue' as
 Etan-authored direct input.
 """
@@ -35,8 +35,8 @@ def _row(source: str, source_file: str) -> dict[str, Any]:
     }
 
 
-def _enrichment_controller_class(source: str, source_file: str) -> str:
-    from brainlayer.enrichment_controller import _derive_chunk_provenance_class
+def _enrichment_replay_class(source: str, source_file: str) -> str:
+    from brainlayer.enrichment_replay import _derive_chunk_provenance_class
 
     return _derive_chunk_provenance_class(_row(source, source_file))
 
@@ -51,14 +51,14 @@ def _provenance_integration_claim(source: str, source_file: str):
 def test_deferred_mcp_queue_rows_classify_as_user_anchored_in_both_paths(source, source_file, expected):
     claim = _provenance_integration_claim(source, source_file)
 
-    assert _enrichment_controller_class(source, source_file) == expected
+    assert _enrichment_replay_class(source, source_file) == expected
     assert claim.provenance_class == expected
     assert claim.user_anchored is (expected != "AGENT-INFERENCE")
 
 
 @pytest.mark.parametrize(("source", "source_file", "_expected"), DIRECT_QUEUE_CASES)
 def test_duplicate_deferred_queue_predicates_stay_logically_in_sync(source, source_file, _expected):
-    controller_class = _enrichment_controller_class(source, source_file)
+    controller_class = _enrichment_replay_class(source, source_file)
     integration_claim = _provenance_integration_claim(source, source_file)
 
     assert integration_claim.provenance_class == controller_class
@@ -66,7 +66,7 @@ def test_duplicate_deferred_queue_predicates_stay_logically_in_sync(source, sour
 
 
 def test_on_disk_deferred_mcp_row_resolves_direct_and_remains_queryable(tmp_path):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
     from brainlayer.provenance_integration import resolve_entity_conflicts
     from brainlayer.vector_store import VectorStore
 
