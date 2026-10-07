@@ -1915,3 +1915,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+def _review_restored_sender(endpoint, payload):
+    transmit = requests.post
+    return transmit(endpoint, json=payload)
