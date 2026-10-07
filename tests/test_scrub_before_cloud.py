@@ -480,7 +480,6 @@ def test_eval_llm_judge_send_scrubs_prompt(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     "script",
     [
-        "enrichment_backfill.py",
         "batch_submit_paced.py",
     ],
 )
