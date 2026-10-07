@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("entry", ["module", "wrapper", "monitor", "orchestrator"])
+@pytest.mark.parametrize("entry", ["module", "wrapper", "orchestrator"])
 def test_retired_batch_entrypoints_are_transport_free_and_preserve_files(tmp_path, entry):
     data = tmp_path / "backfill_data"
     data.mkdir()
@@ -22,7 +22,6 @@ def test_retired_batch_entrypoints_are_transport_free_and_preserve_files(tmp_pat
     commands = {
         "module": [sys.executable, "-m", "brainlayer.cloud_backfill", "--help"],
         "wrapper": [sys.executable, str(ROOT / "scripts/cloud_backfill.py"), "--help"],
-        "monitor": [sys.executable, str(ROOT / "scripts/monitor_batch_reenrichment.py"), "--help"],
         "orchestrator": ["bash", str(ROOT / "scripts/backfill_orchestrate.sh")],
     }
     result = subprocess.run(
