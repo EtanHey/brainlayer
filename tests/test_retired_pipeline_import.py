@@ -41,6 +41,9 @@ assert prompt == "compat|user_message|[OWNER] fixed {{bug}}|SURROUNDING CONTEXT:
 assert result.sanitized == "[OWNER] fixed {bug}"
 assert result.pii_detected is True
 assert len(result.replacements) == 2
+import sys
+for name in ("requests", "brainlayer.pipeline.groq", "google.genai"):
+    assert name not in sys.modules, name
 """
     result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

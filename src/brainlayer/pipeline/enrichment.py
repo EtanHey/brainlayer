@@ -42,16 +42,11 @@ import math
 import os
 import sys
 import threading
-import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-import requests
 
 logger = logging.getLogger(__name__)
 _prompt_signature_emitted = False
 _prompt_signature_lock = threading.Lock()
-_sleep = time.sleep
 
 from ..tag_normalization import (
     enrichment_tag_mode,
@@ -59,23 +54,11 @@ from ..tag_normalization import (
     taxonomy_content_sha,
     taxonomy_git_sha,
 )
-from ..vector_store import VectorStore
 from .cloud_scrub import scrub_llm_output
 from .entity_extraction import normalize_entity_type
-from .groq import (
-    DEFAULT_GROQ_MODEL,
-)
 
 # Thread-local storage for per-thread VectorStore connections.
 # APSW connections are not safe for concurrent use from multiple threads.
-_thread_local = threading.local()
-
-
-def _get_thread_store(db_path: Path) -> VectorStore:
-    """Get or create a thread-local VectorStore instance."""
-    if not hasattr(_thread_local, "store"):
-        _thread_local.store = VectorStore(db_path)
-    return _thread_local.store
 
 
 # AIDEV-NOTE: Uses local LLM only — never sends chunk content to cloud APIs
@@ -105,142 +88,23 @@ def _detect_default_backend() -> str:
 ENRICH_BACKEND = _detect_default_backend()
 
 
-def _enrichment_model_for_backend(backend: Optional[str] = None) -> str:
-    effective = str(backend or ENRICH_BACKEND or "ollama").strip().lower()
-    if _fallback_active and effective != "groq":
-        effective = "ollama" if effective == "mlx" else "mlx"
-    if effective == "groq":
-        return GROQ_MODEL
-    if effective == "mlx":
-        return MLX_MODEL
-    return MODEL
-
-
-OLLAMA_URL = os.environ.get("BRAINLAYER_OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
-OLLAMA_BASE_URL = OLLAMA_URL.rsplit("/api/", 1)[0] if "/api/" in OLLAMA_URL else OLLAMA_URL.rstrip("/")
 # MLX URL: scripts also check MLX_URL for health, so accept both env vars
-MLX_URL = os.environ.get("BRAINLAYER_MLX_URL", os.environ.get("MLX_URL", "http://127.0.0.1:8080/v1/chat/completions"))
-MLX_BASE_URL = MLX_URL.rsplit("/v1/", 1)[0] if "/v1/" in MLX_URL else MLX_URL.rstrip("/")
 MODEL = os.environ.get("BRAINLAYER_ENRICH_MODEL", "glm-4.7-flash")
-MLX_MODEL = os.environ.get("BRAINLAYER_MLX_MODEL", "mlx-community/Qwen2.5-Coder-14B-Instruct-4bit")
 ENRICHMENT_PROMPT_VERSION = os.environ.get("BRAINLAYER_ENRICHMENT_PROMPT_VERSION", "r82-hybrid-taxonomy")
 
 # Groq cloud API (for NON-PRIVATE content only — sanitization enforced in _enrich_one)
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_URL = os.environ.get("BRAINLAYER_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions")
-GROQ_MODEL = os.environ.get("BRAINLAYER_GROQ_MODEL", DEFAULT_GROQ_MODEL)
 # Rate limiting: Groq free tier allows ~30 req/min. 2s delay = ~30/min max.
-GROQ_RATE_LIMIT_DELAY = float(os.environ.get("BRAINLAYER_GROQ_RATE_DELAY", "2.0"))
-_groq_last_call: float = 0.0  # monotonic timestamp of last Groq API call
-_groq_rate_lock = threading.Lock()  # serialize rate-limit checks across threads
 
 # Stall detection: max seconds a single chunk can take before being considered stalled
-STALL_TIMEOUT = int(os.environ.get("BRAINLAYER_STALL_TIMEOUT", "300"))  # 5 minutes default
 # Heartbeat: log progress every N chunks (min 1 to avoid ZeroDivisionError)
-HEARTBEAT_INTERVAL = max(1, int(os.environ.get("BRAINLAYER_HEARTBEAT_INTERVAL", "25")))
 # Retry: per-chunk retry with exponential backoff
-MAX_RETRIES = int(os.environ.get("BRAINLAYER_MAX_RETRIES", "2"))  # 0=no retry, 2=up to 3 attempts
-RETRY_BASE_DELAY = float(os.environ.get("BRAINLAYER_RETRY_BASE_DELAY", "2.0"))  # seconds
-RETRY_MAX_DELAY = float(os.environ.get("BRAINLAYER_RETRY_MAX_DELAY", "30.0"))  # cap
 # Circuit breaker: abort batch after N consecutive failures (backend probably dead)
-CIRCUIT_BREAKER_THRESHOLD = int(os.environ.get("BRAINLAYER_CIRCUIT_BREAKER", "10"))
 # MLX default timeout (shorter than Ollama — MLX should respond faster)
-MLX_DEFAULT_TIMEOUT = int(os.environ.get("BRAINLAYER_MLX_TIMEOUT", "60"))
 # Batch fail ratio: pause if more than this fraction of a batch fails
-BATCH_FAIL_RATIO_THRESHOLD = float(os.environ.get("BRAINLAYER_BATCH_FAIL_RATIO", "0.8"))
 # Health check pause: seconds to wait before retrying after backend detected dead
-HEALTH_CHECK_PAUSE = int(os.environ.get("BRAINLAYER_HEALTH_PAUSE", "15"))
 # MLX restart: allow Python to restart MLX server if it dies
-MLX_AUTO_RESTART = os.environ.get("BRAINLAYER_MLX_AUTO_RESTART", "1") == "1"
-MLX_RESTART_WAIT = int(os.environ.get("BRAINLAYER_MLX_RESTART_WAIT", "60"))
-from ..paths import DEFAULT_DB_PATH as DEFAULT_DB_PATH
 
 # Supabase usage logging — track GLM calls even though they're free
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-
-
-def _sync_stats_to_supabase(store: "VectorStore") -> None:
-    """Sync enrichment stats to Supabase for dashboard visibility. Best-effort."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return
-    try:
-        stats = store.get_enrichment_stats()
-        # Get detailed field counts from DB
-        cursor = store.conn.cursor()
-        total = stats["total_chunks"]
-        has_tags = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE tags IS NOT NULL AND tags != ''"))[0][0]
-        has_summary = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE summary IS NOT NULL AND summary != ''"))[
-            0
-        ][0]
-        has_importance = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE importance IS NOT NULL"))[0][0]
-        has_intent = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE intent IS NOT NULL AND intent != ''"))[0][0]
-        try:
-            has_embeddings = list(cursor.execute("SELECT COUNT(*) FROM chunk_vectors_rowids"))[0][0]
-        except Exception:
-            has_embeddings = 0
-        projects = list(
-            cursor.execute(
-                "SELECT project, COUNT(*) FROM chunks WHERE project IS NOT NULL GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20"
-            )
-        )
-
-        row = {
-            "total_chunks": total,
-            "embedded": has_embeddings,
-            "tagged": has_tags,
-            "summarized": has_summary,
-            "importance_scored": has_importance,
-            "intent_classified": has_intent,
-            "projects": [{"project": p, "chunks": c} for p, c in projects],
-            "by_intent": stats.get("by_intent", {}),
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
-
-        # Upsert — use user_id=null for service-role inserts
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/enrichment_stats",
-            headers={
-                "apikey": SUPABASE_SERVICE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal,resolution=merge-duplicates",
-            },
-            json={**row, "user_id": None},
-            timeout=5,
-        )
-        resp.raise_for_status()
-    except Exception:
-        logger.debug("Supabase stats sync failed (non-critical)", exc_info=True)
-
-
-def _log_glm_usage(prompt_tokens: int, completion_tokens: int, duration_ms: int, model: str = "") -> None:
-    """Log LLM usage to Supabase llm_usage table. Best-effort, never blocks enrichment."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/llm_usage",
-            headers={
-                "apikey": SUPABASE_SERVICE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal",
-            },
-            json={
-                "model": model or MODEL,
-                "source": "enrichment",
-                "input_tokens": prompt_tokens,
-                "output_tokens": completion_tokens,
-                "cost_usd": 0,
-                "tier": "free",
-                "duration_ms": duration_ms,
-            },
-            timeout=2,
-        )
-        resp.raise_for_status()
-    except Exception:
-        pass  # Never let logging failure affect enrichment
 
 
 # High-value content types worth enriching
@@ -539,10 +403,6 @@ def build_external_prompt(
 # Mid-run fallback state — tracks consecutive failures for automatic backend switching.
 # When the primary backend crashes mid-run (e.g., MLX "Abort trap: 6"), the pipeline
 # automatically retries failed chunks on the fallback backend instead of losing the entire batch.
-_consecutive_failures = 0
-_FALLBACK_THRESHOLD = 3  # Switch after 3 consecutive failures
-_fallback_active = False
-_fallback_available: Optional[bool] = None  # None = not checked yet
 
 
 def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
@@ -705,27 +565,3 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.debug("Enrichment result validation failed: %s", e)
         return None
-
-
-def mark_unenrichable(store: VectorStore) -> int:
-    """Tag chunks that are too short for their source as enrich_status='too_short'.
-
-    Uses source-aware thresholds: 15 chars for WhatsApp/Telegram, 50 for everything else.
-    Returns the number of newly tagged chunks.
-    """
-    cursor = store.conn.cursor()
-    # Tag chunks below their source-specific threshold
-    # WhatsApp/Telegram: 15 chars. Everything else: 50 chars.
-    cursor.execute("""
-        UPDATE chunks SET enrich_status = 'too_short', enriched_at = NULL
-        WHERE enriched_at IS NULL
-        AND enrich_status IS NULL
-        AND (
-            (source IN ('whatsapp', 'telegram') AND char_count < 15)
-            OR (source NOT IN ('whatsapp', 'telegram') AND char_count < 50)
-            OR (source IS NULL AND char_count < 50)
-        )
-    """)
-    # apsw doesn't have rowcount, count via separate query
-    tagged = list(cursor.execute("SELECT COUNT(*) FROM chunks WHERE enrich_status = 'too_short'"))[0][0]
-    return tagged
