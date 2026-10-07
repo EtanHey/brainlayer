@@ -1,14 +1,13 @@
 """Tests for brainlayer enrichment and maintenance CLI routing."""
 
 import json
-import os
-import signal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 
 from brainlayer.cli import app
+from tests.retirement_helpers import forbid_enrichment_controller
 
 runner = CliRunner()
 
@@ -23,11 +22,7 @@ def test_cli_enrich_mode_realtime_does_not_call_controller(monkeypatch):
     monkeypatch.setattr("brainlayer.vector_store.VectorStore", lambda path: MagicMock())
     called = {}
 
-    def fake_realtime(store, limit=25, since_hours=24, **kwargs):
-        called.update({"store": store, "limit": limit, "since_hours": since_hours, **kwargs})
-        return SimpleNamespace(mode="realtime", attempted=1, enriched=1, skipped=0, failed=0, errors=[])
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.enrich_realtime", fake_realtime)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--limit", "9", "--since-hours", "12"])
 
@@ -93,20 +88,7 @@ def test_cli_enrich_supervisor_does_not_call_controller(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
-    def fake_supervisor(db_path, limit=0, since_hours=0, stop_event=None):
-        called.update({"db_path": str(db_path), "limit": limit, "since_hours": since_hours, "stop_event": stop_event})
-        return SimpleNamespace(
-            mode="supervisor",
-            cycles=2,
-            attempted=3,
-            enriched=2,
-            skipped=1,
-            failed=0,
-            errors=[],
-            exit_code=0,
-        )
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor"])
 
@@ -118,20 +100,7 @@ def test_cli_enrich_supervisor_rejects_explicit_since_hours(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
-    def fake_supervisor(db_path, limit=0, since_hours=0, stop_event=None):
-        called.update({"limit": limit, "since_hours": since_hours})
-        return SimpleNamespace(
-            mode="supervisor",
-            cycles=1,
-            attempted=0,
-            enriched=0,
-            skipped=0,
-            failed=0,
-            errors=[],
-            exit_code=0,
-        )
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor", "--since-hours", "8760"])
 
@@ -143,21 +112,7 @@ def test_cli_enrich_supervisor_does_not_install_signal_handlers(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
-    def fake_supervisor(db_path, stop_event=None, **kwargs):
-        os.kill(os.getpid(), signal.SIGTERM)
-        called["stop_event_set"] = stop_event.is_set()
-        return SimpleNamespace(
-            mode="supervisor",
-            cycles=1,
-            attempted=1,
-            enriched=1,
-            skipped=0,
-            failed=0,
-            errors=[],
-            exit_code=0,
-        )
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor"])
 

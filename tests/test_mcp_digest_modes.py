@@ -5,6 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.retirement_helpers import forbid_enrichment_controller
+
 
 @pytest.mark.asyncio
 async def test_brain_digest_mode_digest_preserves_current_behavior(monkeypatch):
@@ -34,14 +36,12 @@ async def test_brain_digest_retired_enrich_rejects_before_database_or_producer(m
     from brainlayer.mcp.store_handler import _brain_digest
 
     database = MagicMock(side_effect=AssertionError("retired digest mode opened DB"))
-    producer = MagicMock(side_effect=AssertionError("retired digest mode invoked producer"))
     monkeypatch.setattr("brainlayer.mcp.store_handler._get_vector_store", database)
-    monkeypatch.setattr("brainlayer.enrichment_controller.enrich_realtime", producer)
+    forbid_enrichment_controller(monkeypatch)
     result = await _brain_digest(mode="enrich", **options)
     assert result.is_error is True
     assert "Enrichment has been retired" in result.content[0].text
     database.assert_not_called()
-    producer.assert_not_called()
 
 
 @pytest.mark.asyncio
