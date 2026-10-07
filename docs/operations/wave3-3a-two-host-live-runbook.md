@@ -1,8 +1,12 @@
 # Wave 3a two-host LIVE runbook
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 Status: rehearsal-proven; LIVE execution scheduled for Tuesday 2026-08-11 at 20:00 IDT or later with Etan present.
 
-This runbook is the source-class segment of the Wave 3 maintenance sitting. Execute it on Main first, reconcile and probe Main, then repeat it on M1. Do not begin a host without Etan's explicit go. Keep enrichment off wherever the pause sentinel applies.
+This runbook is the source-class segment of the Wave 3 maintenance sitting. Execute it on Main first, reconcile and probe Main, then repeat it on M1. Do not begin a host without Etan's explicit go. Keep retired enrichment and Gemini loopback jobs off regardless of the pause sentinel.
 
 ## Pinned artifacts and rehearsal measurements
 
@@ -141,7 +145,7 @@ cat "$WAVE3A_RUN_DIR/active-labels.before"
 grep -Fxq 'com.brainlayer.brainbar-daemon' "$WAVE3A_RUN_DIR/active-labels.before"
 ```
 
-Stop auto-restart/watchdog labels first, then all DB writers and scheduled maintenance. Do not start enrichment if it was absent or sentinel-paused.
+Stop auto-restart/watchdog labels first, then all DB writers and scheduled maintenance. Do not start retired enrichment or Gemini loopback jobs.
 
 ```bash
 for label in \
@@ -428,23 +432,13 @@ set -o pipefail
 
 ## 6. Restart exactly the prior active set and probe the real service
 
-Restore labels from the saved inventory, except that enrichment remains skipped when absent before or named by the pause sentinel:
+Restore retained labels from the saved inventory. Always skip retired enrichment and Gemini loopback jobs, even if they were active before maintenance:
 
 ```bash
 while IFS= read -r label; do
-  if [ "$label" = "com.brainlayer.enrichment" ]; then
-    if "$WAVE3A_PYTHON" - "$label" <<'PY'
-import sys
-from datetime import UTC, datetime
-from brainlayer.pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
-label = sys.argv[1]
-payload, active, _stale = pause_sentinel_state(DEFAULT_PAUSE_SENTINEL_PATH, datetime.now(UTC))
-raise SystemExit(0 if active and pause_applies_to_label(payload, label) else 1)
-PY
-    then
-      continue
-    fi
-  fi
+  case "$label" in
+    com.brainlayer.enrichment|com.brainlayer.gemini-loopback) continue ;;
+  esac
   plist="$HOME/Library/LaunchAgents/$label.plist"
   test -f "$plist"
   launchctl bootstrap "gui/$(id -u)" "$plist"
@@ -517,7 +511,7 @@ test ! -e "$WAVE3A_DB-wal"
 test ! -e "$WAVE3A_DB-shm"
 ```
 
-Checkpoint, restart only the prior active labels, and rerun the real-service probes. Record the rollback wall-clock and restored row count in the host table.
+Checkpoint, restart only the prior active retained labels (excluding retired enrichment and Gemini loopback), and rerun the real-service probes. Record the rollback wall-clock and restored row count in the host table.
 
 ## Rehearsal receipt
 
