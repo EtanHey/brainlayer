@@ -51,3 +51,13 @@ def test_new_native_source_cannot_bypass_inventory(tmp_path):
     sites = inventory(tmp_path)
     assert len(sites) == 1 and next(iter(sites.values()))["kind"] == "non_python_source"
     assert fingerprint(sites) != fingerprint({})
+
+
+def test_no_import_python_module_with_custom_method_requires_classification(tmp_path):
+    source = tmp_path / "src/brainlayer/new_sender.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def invoke(client, payload):\n    return client.custom_model_call(payload)")
+    policy = tmp_path / "scripts/retirement_policy.json"
+    policy.parent.mkdir()
+    policy.write_text(json.dumps({"schema_version": 1, "sites": {}}))
+    assert check_policy(tmp_path)["unclassified"]
