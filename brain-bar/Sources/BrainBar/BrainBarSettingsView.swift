@@ -689,21 +689,8 @@ struct BrainBarSettingsFooterPresentation {
             detail = nil
         }
 
-        let enrichment: String
-        let enrichmentCloud: Bool
+        let enrichment = "Enrichment off"
         let enrichmentOff = config.enrichmentIsOff
-        if enrichmentOff {
-            enrichment = "Enrichment off"
-            enrichmentCloud = false
-        } else if config.launchdJobs[.enrichment]?.enabled == true {
-            // The realtime enrichment launchd job invokes enrich_realtime,
-            // which uses Gemini regardless of BACKEND/MODE in the env file.
-            enrichment = "Enrichment → Gemini"
-            enrichmentCloud = true
-        } else {
-            enrichment = "Enrichment unknown"
-            enrichmentCloud = false
-        }
         let driveJobs: [BrainLayerLaunchdJob] = [.backupDaily, .jsonlBackup, .maintenanceWeekly]
         let driveStates = driveJobs.map { config.launchdJobs[$0]?.enabled }
         let backups: String
@@ -721,7 +708,7 @@ struct BrainBarSettingsFooterPresentation {
         }
         locality = "Memory on this Mac · \(enrichment) · \(backups)"
         showsLock = enrichmentOff && backupsOff
-        symbol = showsLock ? "lock" : (enrichmentCloud || driveConfigured ? "icloud" : "questionmark.circle")
+        symbol = showsLock ? "lock" : (driveConfigured ? "icloud" : "questionmark.circle")
     }
 }
 

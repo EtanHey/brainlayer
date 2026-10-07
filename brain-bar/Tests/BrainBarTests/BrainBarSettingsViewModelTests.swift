@@ -4,7 +4,28 @@ import XCTest
 final class BrainBarSettingsViewModelTests: XCTestCase {
     private let fixedNow = Date(timeIntervalSince1970: 1_784_466_000)
 
-    func testFooterQualifiesCloudAndLocalConfiguration() {
+    func testRetiredEnrichmentStaysOffForEnabledLegacyConfig() throws {
+        for jobLine in ["BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=0\n", ""] {
+            var config = try BrainLayerEnvDocument(text: "BRAINLAYER_ENRICH_ENABLED=1\n" + jobLine).config
+            for job in [BrainLayerLaunchdJob.backupDaily, .jsonlBackup, .maintenanceWeekly] {
+                config.launchdJobs[job]?.enabled = false
+            }
+            let footer = BrainBarSettingsFooterPresentation(
+                config: config, watcher: .running(heartbeatAt: fixedNow), now: fixedNow
+            )
+            XCTAssertTrue(config.enrichmentIsOff)
+            XCTAssertTrue(footer.locality.contains("Enrichment off"))
+            XCTAssertFalse(footer.locality.contains("Gemini"))
+            XCTAssertNotEqual(footer.symbol, "icloud")
+            let queue = BrainBarQueueDirectionPresentation.derive(
+                .growing, backlogCount: 42, enrichmentPaused: config.enrichmentIsOff
+            )
+            XCTAssertEqual(queue.label, "Enrichment paused · 42 queued")
+            XCTAssertEqual(queue.tone, .neutral)
+        }
+    }
+
+    func testFooterQualifiesBackupsAndLocalConfiguration() {
         var config = BrainLayerConfig.defaultConfig
         config.enrichmentMode = .local
         config.enrichmentBackend = "mlx"
@@ -13,7 +34,8 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(cloud.state.title, "Watcher running")
         XCTAssertNil(cloud.detail)
         XCTAssertTrue(cloud.locality.contains("Memory on this Mac"))
-        XCTAssertTrue(cloud.locality.contains("Enrichment → Gemini"))
+        XCTAssertTrue(cloud.locality.contains("Enrichment off"))
+        XCTAssertFalse(cloud.locality.contains("Gemini"))
         XCTAssertFalse(cloud.locality.contains("Local enrichment"))
         XCTAssertFalse(cloud.showsLock)
         XCTAssertEqual(cloud.symbol, "icloud")
@@ -26,7 +48,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(weeklyOnly.showsLock)
 
         config.enrichmentEnabled = false
-        config.launchdJobs[.enrichment]?.enabled = false
         config.launchdJobs[.maintenanceWeekly]?.enabled = false
         let local = BrainBarSettingsFooterPresentation(config: config, watcher: unknown, now: fixedNow)
         XCTAssertTrue(local.locality.contains("Memory on this Mac"))
