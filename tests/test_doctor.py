@@ -1983,4 +1983,6 @@ def test_doctor_does_not_expect_retired_enrichment_services(tmp_path, label):
     )
     assert result.ok
     assert not any("com.brainlayer.enrich" in " ".join(args) for args in calls)
-    assert "enrichment_backlog" not in result.to_dict()
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert "enrichment_backlog" in payload
+    assert payload["enrichment_backlog"] is None
