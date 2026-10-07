@@ -30,19 +30,6 @@ from brainlayer.vector_store import VectorStore
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# Progress tracking file
-PROGRESS_FILE = Path(__file__).parent / ".kg_rebuild_progress.json"
-
-
-def load_progress() -> dict:
-    if PROGRESS_FILE.exists():
-        return json.loads(PROGRESS_FILE.read_text())
-    return {"tier1_done": False, "tier2_last_offset": 0, "tier2_processed": 0}
-
-
-def save_progress(progress: dict):
-    PROGRESS_FILE.write_text(json.dumps(progress, indent=2))
-
 
 def extracted_entity_from_groq_payload(ent_data: dict, content: str) -> ExtractedEntity | None:
     text = ent_data.get("text", "")
