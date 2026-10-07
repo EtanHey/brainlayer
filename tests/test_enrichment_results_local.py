@@ -38,3 +38,9 @@ def test_legacy_prompt_template_is_a_local_offline_artifact():
 
     assert "{content}" in ENRICHMENT_PROMPT
     assert "sentiment_label" in ENRICHMENT_PROMPT
+
+
+def test_public_prompt_builder_lives_outside_the_retired_producer():
+    from brainlayer.pipeline import build_external_prompt
+
+    assert build_external_prompt.__module__ == "brainlayer.pipeline.enrichment_prompts"

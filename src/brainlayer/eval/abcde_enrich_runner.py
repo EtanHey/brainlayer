@@ -13,7 +13,7 @@ from threading import Lock
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from brainlayer.eval.abcde_variants import ABCDEVariant
-from brainlayer.pipeline.enrichment import build_external_prompt
+from brainlayer.pipeline.enrichment_prompts import build_external_prompt
 
 # Only 1e-9 USD/tick is physically plausible: 1e-8 implies ~$76/1M tokens and
 # 1e-7 implies ~$765/1M, neither of which exists. See orc gen-7 smoke analysis.
