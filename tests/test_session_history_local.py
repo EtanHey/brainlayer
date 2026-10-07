@@ -36,3 +36,9 @@ assert pathlib.Path(session_history.__file__).resolve().is_relative_to(pathlib.P
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_saved_session_parser_is_a_local_history_helper():
+    from brainlayer.pipeline.session_history import parse_session_enrichment
+
+    assert parse_session_enrichment.__module__ == "brainlayer.pipeline.session_history"

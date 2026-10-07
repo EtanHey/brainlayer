@@ -1,7 +1,8 @@
 """Local reconstruction of historical conversations; no model producers."""
 
+import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..vector_store import VectorStore
 
@@ -131,3 +132,95 @@ def reconstruct_session(store: VectorStore, session_id: str) -> Dict[str, Any]:
         "session_end_time": last_time,
         "duration_seconds": duration_seconds,
     }
+
+
+VALID_INTENTS = [
+    "debugging",
+    "designing",
+    "configuring",
+    "discussing",
+    "deciding",
+    "implementing",
+    "reviewing",
+    "refactoring",
+    "deploying",
+    "testing",
+]
+
+
+VALID_OUTCOMES = ["success", "partial_success", "failure", "abandoned", "ongoing"]
+
+
+def parse_session_enrichment(text: str) -> Optional[Dict[str, Any]]:
+    """Parse LLM's JSON response into session enrichment data."""
+    if not text:
+        return None
+    try:
+        # Find JSON in response (handle LLM wrapping in markdown etc.)
+        match = None
+        for start in range(len(text)):
+            if text[start] == "{":
+                for end in range(len(text) - 1, start, -1):
+                    if text[end] == "}":
+                        try:
+                            match = json.loads(text[start : end + 1])
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                if match:
+                    break
+
+        if not match:
+            return None
+
+        result: Dict[str, Any] = {}
+
+        # Required: session_summary
+        summary = match.get("session_summary", "")
+        if isinstance(summary, str) and len(summary) > 10:
+            result["session_summary"] = summary[:1000]
+        else:
+            return None  # Summary is required
+
+        # Intent
+        intent = match.get("primary_intent", "")
+        if isinstance(intent, str) and intent.lower().strip() in VALID_INTENTS:
+            result["primary_intent"] = intent.lower().strip()
+
+        # Outcome
+        outcome = match.get("outcome", "")
+        if isinstance(outcome, str) and outcome.lower().strip() in VALID_OUTCOMES:
+            result["outcome"] = outcome.lower().strip()
+
+        # Scores
+        for score_field in ("complexity_score", "session_quality_score"):
+            val = match.get(score_field)
+            if isinstance(val, (int, float)):
+                result[score_field] = max(1, min(10, int(val)))
+
+        # JSON array fields
+        for field in ("decisions_made", "corrections", "learnings", "mistakes", "patterns"):
+            val = match.get(field, [])
+            if isinstance(val, list):
+                result[field] = val[:20]  # Cap at 20 items
+
+        # Topic tags
+        tags = match.get("topic_tags", [])
+        if isinstance(tags, list):
+            result["topic_tags"] = [str(t).lower().strip() for t in tags if isinstance(t, str)][:15]
+
+        # Tool usage
+        tool_stats = match.get("tool_usage_stats", [])
+        if isinstance(tool_stats, list):
+            result["tool_usage_stats"] = tool_stats[:20]
+
+        # Narratives
+        for field in ("what_worked", "what_failed"):
+            val = match.get(field)
+            if isinstance(val, str) and val.strip():
+                result[field] = val.strip()[:500]
+
+        return result
+
+    except Exception:
+        return None
