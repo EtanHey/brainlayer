@@ -2,7 +2,6 @@
 
 from .chunk import chunk_content
 from .classify import classify_content
-from .enrichment import build_external_prompt
 from .extract import extract_system_prompts
 from .extract_markdown import (
     classify_by_path,
@@ -42,6 +41,15 @@ __all__ = [
     "SanitizeConfig",
     "SanitizeResult",
     "Replacement",
-    # External enrichment (sanitized)
-    "build_external_prompt",
+    # build_external_prompt remains an explicit lazy import. Including it here
+    # would make star imports load enrichment's transport dependencies.
 ]
+
+
+def __getattr__(name: str):
+    """Resolve the legacy prompt builder only when explicitly requested."""
+    if name == "build_external_prompt":
+        from .enrichment import build_external_prompt
+
+        return build_external_prompt
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
