@@ -84,3 +84,9 @@ def test_legacy_producer_telemetry_and_controls_are_absent():
 
     for name in ("_sync_stats_to_supabase", "_log_glm_usage", "GROQ_API_KEY", "OLLAMA_URL", "MLX_AUTO_RESTART"):
         assert not hasattr(enrichment, name), name
+
+
+def test_legacy_groq_transport_helper_is_absent():
+    import importlib.util
+
+    assert importlib.util.find_spec("brainlayer.pipeline.groq") is None
