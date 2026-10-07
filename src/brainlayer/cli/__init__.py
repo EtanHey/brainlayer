@@ -958,9 +958,6 @@ def health_check_command(
     health_check_label: str = typer.Option(
         "com.brainlayer.health-check", "--health-check-label", help="health-check launchd label."
     ),
-    enrichment_label: str = typer.Option(
-        "com.brainlayer.enrichment", "--enrichment-label", help="enrichment launchd label."
-    ),
     watch_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
         "--watch-plist-path",
@@ -975,11 +972,6 @@ def health_check_command(
         Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
         "--health-check-plist-path",
         help="health-check LaunchAgent plist path.",
-    ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-        help="enrichment LaunchAgent plist path.",
     ),
     source_jsonl_globs: list[str] | None = typer.Option(
         None,
@@ -1045,11 +1037,9 @@ def health_check_command(
             watch_label=watch_label,
             drain_label=drain_label,
             health_check_label=health_check_label,
-            enrichment_label=enrichment_label,
             watch_plist_path=watch_plist_path.expanduser(),
             drain_plist_path=drain_plist_path.expanduser(),
             health_check_plist_path=health_check_plist_path.expanduser(),
-            enrichment_plist_path=enrichment_plist_path.expanduser(),
             source_jsonl_globs=source_jsonl_globs
             if source_jsonl_globs is not None
             else HealthCheckConfig().source_jsonl_globs,
