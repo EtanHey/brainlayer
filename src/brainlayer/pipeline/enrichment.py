@@ -30,6 +30,12 @@ AIDEV-NOTE: Two prompt paths exist:
      cloud_backfill.py and any future external backend MUST use build_external_prompt().
 """
 
+if __name__ == "__main__":
+    import sys
+
+    print("Cloud enrichment has been retired. Local checkpoint replay remains available.", file=sys.stderr)
+    raise SystemExit(2)
+
 import json
 import logging
 import math
@@ -1475,69 +1481,3 @@ def run_enrichment(
         _sync_stats_to_supabase(store)
     finally:
         store.close()
-
-
-if __name__ == "__main__":
-    import argparse
-
-    from brainlayer.parent_death import install_parent_death_watcher
-
-    install_parent_death_watcher()
-
-    parser = argparse.ArgumentParser(description="Enrich BrainLayer chunks with LLM metadata")
-    parser.add_argument("--batch-size", type=int, default=50)
-    parser.add_argument("--max", type=int, default=0, help="Max chunks to process (0=unlimited)")
-    parser.add_argument(
-        "--parallel",
-        type=int,
-        default=1,
-        help="Concurrent workers (1=sequential, 3=recommended for MLX)",
-    )
-    parser.add_argument("--no-context", action="store_true", help="Skip surrounding context")
-    parser.add_argument(
-        "--backend",
-        type=str,
-        choices=["ollama", "mlx", "groq"],
-        default=None,
-        help="LLM backend (default: auto-detect). groq sends to cloud with sanitization.",
-    )
-    parser.add_argument(
-        "--recent",
-        type=int,
-        default=None,
-        metavar="HOURS",
-        help="Only enrich chunks from the last N hours (on-demand mode)",
-    )
-    parser.add_argument("--stats", action="store_true", help="Show enrichment stats and exit")
-    parser.add_argument("--db", type=str, default=None, help="Database path")
-    args = parser.parse_args()
-
-    db = Path(args.db) if args.db else None
-
-    if args.stats:
-        store = VectorStore(db or DEFAULT_DB_PATH)
-        stats = store.get_enrichment_stats()
-        print(f"Total chunks:  {stats['total_chunks']:,}")
-        print(f"Skipped:       {stats['skipped']:,} (too short)")
-        print(f"Enrichable:    {stats['enrichable']:,}")
-        print(f"Enriched:      {stats['enriched']:,} ({stats['percent']}%)")
-        print(f"Remaining:     {stats['remaining']:,}")
-        if stats["by_intent"]:
-            print(f"Intent: {stats['by_intent']}")
-        store.close()
-    else:
-        # Set backend via env var if specified on CLI (affects module-level detection)
-        if args.backend:
-            os.environ["BRAINLAYER_ENRICH_BACKEND"] = args.backend
-            import brainlayer.pipeline.enrichment as _self
-
-            _self.ENRICH_BACKEND = args.backend
-
-        run_enrichment(
-            db_path=db,
-            batch_size=args.batch_size,
-            max_chunks=args.max,
-            with_context=not args.no_context,
-            parallel=args.parallel,
-            since_hours=args.recent,
-        )
