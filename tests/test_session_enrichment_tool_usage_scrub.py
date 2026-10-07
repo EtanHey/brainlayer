@@ -170,8 +170,8 @@ def test_tool_usage_stats_scrub_failure_writes_nothing(tmp_path, monkeypatch):
     assert count == 0
 
 
-def test_enrich_session_end_to_end_redacts_tool_usage_stats(tmp_path):
-    from brainlayer.pipeline.session_enrichment import enrich_session
+def test_saved_session_result_replay_redacts_tool_usage_stats(tmp_path):
+    from brainlayer.pipeline.session_enrichment import parse_session_enrichment
     from brainlayer.vector_store import VectorStore
 
     response = json.dumps(
@@ -187,12 +187,22 @@ def test_enrich_session_end_to_end_redacts_tool_usage_stats(tmp_path):
             "VALUES ('c1', ?, '{}', '/p/sess-9.jsonl', 'user_message', '2026-09-28T00:00:00Z', 80)",
             ("user: please fix the watcher bug that drops lines on rotate, thanks a lot " * 2,),
         )
-        record = enrich_session(store, "sess-9", lambda prompt: response, project="p")
+        enrichment = parse_session_enrichment(response)
+        assert enrichment is not None
+        store.upsert_session_enrichment({"session_id": "sess-9", **enrichment})
+        record = store.get_session_enrichment("sess-9")
+        rows = list(
+            store.conn.cursor().execute(
+                "SELECT session_id FROM session_enrichments_fts WHERE session_enrichments_fts MATCH ?",
+                ("watcher",),
+            )
+        )
+        assert rows == [("sess-9",)]
     finally:
         store.close()
 
     assert record is not None
-    _assert_no_token(json.dumps(record, default=str), where="enrich_session record")
+    _assert_no_token(json.dumps(record, default=str), where="saved session replay record")
     assert record["tool_usage_stats"][0] == {"tool": "Bash [REDACTED:groq]", "count": 5}
 
 
