@@ -1,5 +1,9 @@
 # Session-level enrichment architecture for BrainLayer
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../../enrichment.md).
+
 BrainLayer's next evolution should treat sessions as first-class analytical units with a hybrid flat-column/JSON schema, a tiered processing pipeline that routes sessions by size between Gemini Flash and local map-reduce, and a corrections-as-entities subsystem where user corrections graduate into reusable rules through spaced-repetition-inspired confidence scoring. This design draws on proven patterns from Zep's temporal knowledge graph, Mem0's AUDN memory loop, and Cognee's DataPoint model — adapted for SQLite with sqlite-vec and FTS5. The result: **268K chunks across 800+ sessions become a searchable knowledge base** that captures not just what happened, but what was learned, what failed, and what rules emerged.
 
 ---
