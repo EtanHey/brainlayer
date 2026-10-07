@@ -686,24 +686,6 @@ def test_enrich_local_is_disabled():
         controller.enrich_local(MagicMock(), limit=1)
 
 
-def test_enrich_batch_returns_early_for_no_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    # _get_gemini_client should never be reached when there are no candidates
-    monkeypatch.setattr(
-        controller, "_get_gemini_client", lambda: (_ for _ in ()).throw(AssertionError("should not be called"))
-    )
-
-    result = controller.enrich_batch(store, limit=100)
-
-    store.get_enrichment_candidates.assert_called_once_with(limit=100, chunk_ids=None)
-    assert result.mode == "batch"
-    assert result.enriched == 0
-
-
 # ── Content-hash dedup tests ─────────────────────────────────────────────────
 
 
@@ -1098,33 +1080,6 @@ def test_realtime_rate_limit_acquires_token_per_chunk(monkeypatch):
     controller.enrich_realtime(store, limit=3, rate_per_second=2.0)
 
     assert acquires == [1, 1, 1]
-
-
-def test_batch_rate_limit_uses_batch_setting(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-
-    observed = {}
-
-    class FakeLimiter:
-        def acquire(self, n=1):
-            observed.setdefault("acquires", []).append(n)
-
-    monkeypatch.setitem(controller.RATE_LIMITS, "batch", 1.25)
-
-    def fake_get_store_rate_limiter(*args, **kwargs):
-        observed["rate"] = kwargs["rate_per_second"]
-        return FakeLimiter()
-
-    monkeypatch.setattr(controller, "_get_store_rate_limiter", fake_get_store_rate_limiter)
-
-    controller.enrich_batch(store, limit=1)
-
-    assert observed["rate"] == 1.25
-    assert observed["acquires"] == [1]
 
 
 def test_realtime_rate_zero_disables_limiter(monkeypatch):
@@ -1630,35 +1585,6 @@ async def test_enrich_stats_returns_correct_structure():
 
 
 # ── Batch mode tests ─────────────────────────────────────────────────────────
-
-
-def test_enrich_batch_processes_candidates_with_gemini(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-
-    result = controller.enrich_batch(store, limit=10)
-
-    assert result.mode == "batch"
-    assert result.attempted == 2
-    assert result.enriched == 2
-
-
-def test_enrich_batch_graceful_when_no_gemini_key(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: (_ for _ in ()).throw(RuntimeError("no key")))
-
-    result = controller.enrich_batch(store, limit=5)
-
-    assert result.mode == "batch"
-    assert result.enriched == 0
-    assert any("No Gemini client" in e for e in result.errors)
 
 
 # ── Realtime chunk_ids filter test ────────────────────────────────────────────

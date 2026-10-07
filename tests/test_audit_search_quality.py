@@ -2,7 +2,8 @@
 
 Issue 1: hybrid_search has no KG signal in fused ranking
 Issue 2: MCP entity_type enum doesn't match canonical ENTITY_TYPES
-Issue 3: enrich_batch returns enriched=0 without processing
+Batch enrichment is retired; its no-store/no-factory contract is covered by
+test_retired_controller_batch.py (all phases, empty and nonempty candidates).
 """
 
 
@@ -132,57 +133,3 @@ class TestEntityTypeEnumAlignment:
         assert sorted(mcp_enum) == sorted(self.BRAIN_ENTITY_TYPES), (
             f"MCP brain_entity entity_type enum {mcp_enum} does not match expected taxonomy {self.BRAIN_ENTITY_TYPES}"
         )
-
-
-class TestEnrichBatchNotStub:
-    """enrich_batch must actually process chunks, not just count and return 0."""
-
-    def test_enrich_batch_processes_candidates(self, tmp_path, monkeypatch):
-        """enrich_batch should attempt to enrich unenriched chunks, not return enriched=0."""
-        from brainlayer import enrichment_controller
-        from brainlayer.vector_store import VectorStore
-
-        db_path = tmp_path / "test.db"
-        store = VectorStore(db_path)
-
-        # Insert an unenriched chunk directly (char_count >= 50 required by get_enrichment_candidates)
-        content = "This is test content that should be enriched with summary and tags for quality improvement"
-        cursor = store.conn.cursor()
-        cursor.execute(
-            """INSERT INTO chunks (id, content, metadata, source_file, project, content_type, char_count)
-               VALUES (?, ?, '{}', 'test.py', 'test', 'note', ?)""",
-            ("unenriched-1", content, len(content)),
-        )
-
-        # Mock Gemini client to avoid real API calls
-        mock_enrichment = {
-            "summary": "Test content for enrichment",
-            "tags": ["test"],
-            "importance": 5,
-            "intent": "testing",
-        }
-
-        def mock_get_gemini_client():
-            class MockClient:
-                class models:
-                    @staticmethod
-                    def generate_content(model, contents, config):
-                        import json
-
-                        class MockResponse:
-                            text = json.dumps(mock_enrichment)
-
-                        return MockResponse()
-
-            return MockClient()
-
-        monkeypatch.setattr(enrichment_controller, "_get_gemini_client", mock_get_gemini_client)
-        monkeypatch.setattr(enrichment_controller, "AUTO_ENRICH_ENABLED", True)
-
-        result = enrichment_controller.enrich_batch(store, limit=10)
-        assert result.enriched > 0 or result.attempted > 0, (
-            f"enrich_batch returned enriched={result.enriched}, attempted={result.attempted}. "
-            "It should process unenriched chunks, not be a stub."
-        )
-
-        store.close()
