@@ -37,6 +37,18 @@ def isolate_native_view_row(monkeypatch):
             "not native proof",
         ),
     )
+    # Other table unit fixtures do not run a native watcher/consumer. Its real proof is separate.
+    monkeypatch.setattr(
+        ratchet,
+        "row_watcher_heartbeat",
+        lambda *_: ratchet.Row(
+            "Watcher heartbeat freshness and recovery",
+            ratchet.GREEN,
+            "isolated unit fixture",
+            "unit fixture",
+            "not native proof",
+        ),
+    )
 
 
 def _clean_git_env() -> dict[str, str]:
