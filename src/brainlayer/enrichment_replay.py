@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -427,3 +428,95 @@ def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> s
         params,
     ).fetchone()
     return str(row[0]) if row and row[0] else None
+
+
+_META_RESEARCH_PATTERNS = [
+    re.compile(r"brain_search\s*\(", re.IGNORECASE),
+    re.compile(r"brain_search query=", re.IGNORECASE),
+    re.compile(r"search results? for ['\"]", re.IGNORECASE),
+    re.compile(r"Query \d+ for ['\"].*['\"] (degraded|scored|returned)", re.IGNORECASE),
+    re.compile(r"(eval|baseline|pilot) score:?\s*\d+(?:[./]\d+)*/5", re.IGNORECASE),
+    re.compile(r"Grade:?\s*\d/5", re.IGNORECASE),
+    re.compile(r"\[BrainLayer (auto|deep)\] Memories matching", re.IGNORECASE),
+    re.compile(r"['\"]?additionalContext['\"]?\s*:", re.IGNORECASE),
+]
+
+
+def is_meta_research(content: str) -> bool:
+    if not content:
+        return False
+    return any(pattern.search(content) for pattern in _META_RESEARCH_PATTERNS)
+
+
+def _is_duplicate_content(store, content: str) -> bool:
+    """Check if content with the same hash already exists and is enriched.
+
+    Returns True if a chunk with identical content hash exists and has been enriched,
+    meaning re-enriching would be a no-op.
+    """
+    content_h = _content_hash(content)
+    try:
+        cursor = store._read_cursor()
+        row = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE content_hash = ? AND enriched_at IS NOT NULL AND summary IS NOT NULL",
+            (content_h,),
+        ).fetchone()
+        return row[0] > 0 if row else False
+    except Exception:
+        # content_hash column may not exist yet — fall back to no dedup
+        return False
+
+
+def _ensure_content_hash_column(store) -> bool:
+    """Ensure the content_hash column exists on chunks table. Returns True if it exists."""
+    cursor = store.conn.cursor()
+    try:
+        cursor.execute("SELECT content_hash FROM chunks LIMIT 0")
+    except Exception:
+        try:
+            cursor.execute("ALTER TABLE chunks ADD COLUMN content_hash TEXT")
+        except Exception:
+            return False
+
+    try:
+        indexes = list(cursor.execute("PRAGMA index_list(chunks)"))
+        has_content_hash_index = False
+        for row in indexes:
+            index_name = row[1]
+            is_unique = bool(row[2])
+            quoted_name = index_name.replace('"', '""')
+            columns = [info[2] for info in cursor.execute(f'PRAGMA index_info("{quoted_name}")')]
+            if "content_hash" not in columns:
+                continue
+            if is_unique:
+                cursor.execute(f'DROP INDEX IF EXISTS "{quoted_name}"')
+                continue
+            has_content_hash_index = True
+
+        if not has_content_hash_index:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_hash ON chunks(content_hash)")
+    except Exception:
+        pass
+
+    return True
+
+
+def _backfill_content_hashes(store, limit: int = 1000) -> int:
+    """Backfill content_hash for chunks that don't have one yet. Returns count updated."""
+    try:
+        cursor = store.conn.cursor()
+        rows = list(
+            cursor.execute(
+                "SELECT id, content FROM chunks WHERE content_hash IS NULL LIMIT ?",
+                (limit,),
+            )
+        )
+        count = 0
+        for chunk_id, content in rows:
+            if content:
+                h = _content_hash(content)
+                cursor.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk_id))
+                count += 1
+        return count
+    except Exception:
+        return 0
