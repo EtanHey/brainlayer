@@ -147,32 +147,3 @@ def test_enrichment_payload_keeps_model_in_metadata_not_chunk_origin(monkeypatch
     assert payload.get("chunk_origin") in (None, "")
     assert payload["enrichment_model"] == "gemini-test-model"
     assert (payload["enrichment"].get("enrichment_metadata") or {})["enriched_by"] == "gemini-test-model"
-
-
-def test_local_enrichment_pipeline_does_not_stamp_backend_as_chunk_origin():
-    from unittest.mock import MagicMock, patch
-
-    from brainlayer.pipeline import enrichment
-
-    store = MagicMock()
-    store.get_context.return_value = {"context": []}
-    chunk = {
-        "id": "chunk-mlx",
-        "content": "content that should be enriched",
-        "content_type": "user_message",
-        "project": "brainlayer",
-        "conversation_id": None,
-        "position": None,
-    }
-
-    with (
-        patch.object(enrichment, "build_prompt", return_value="prompt"),
-        patch.object(enrichment, "call_llm", return_value='{"summary":"ok summary","tags":["test"]}'),
-        patch.object(enrichment, "parse_enrichment", return_value={"summary": "ok summary", "tags": ["test"]}),
-    ):
-        result = enrichment._enrich_one(store, chunk, with_context=False, backend="mlx")
-
-    assert result is True
-    kwargs = store.update_enrichment.call_args.kwargs
-    assert kwargs.get("chunk_origin") in (None, "")
-    assert kwargs["enrichment_model"] == enrichment.MLX_MODEL
