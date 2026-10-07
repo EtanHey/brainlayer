@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import logging
 import os
-import random
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from .pipeline.cloud_scrub import CloudScrubError, scrub_for_cloud
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.write_queue import WriteQueue
 
@@ -161,85 +157,6 @@ def get_unsubmitted_export_files(*args, **kwargs):
 # ── Gemini client ──────────────────────────────────────────────────────────────
 
 
-GEMINI_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {"type": "string"},
-        "tags": {"type": "array", "items": {"type": "string"}},
-        "importance": {"type": "number"},
-        "intent": {"type": "string"},
-        "primary_symbols": {"type": "array", "items": {"type": "string"}},
-        "resolved_query": {"type": "string"},
-        "key_facts": {"type": "array", "items": {"type": "string"}},
-        "resolved_queries": {"type": "array", "items": {"type": "string"}},
-        "epistemic_level": {"type": "string"},
-        "version_scope": {"type": "string"},
-        "debt_impact": {"type": "string"},
-        "external_deps": {"type": "array", "items": {"type": "string"}},
-        "entities": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "type": {
-                        "type": "string",
-                        "enum": [
-                            "person",
-                            "agent",
-                            "company",
-                            "project",
-                            "technology",
-                            "tool",
-                            "concept",
-                            "topic",
-                            "source",
-                        ],
-                    },
-                    "entity_subtype": {
-                        "type": "string",
-                        "enum": ["channel", "podcast", "brand", "newsletter"],
-                    },
-                    "relation": {"type": "string"},
-                },
-                "required": ["name", "type"],
-            },
-        },
-        "sentiment_label": {"type": "string"},
-        "sentiment_score": {"type": "number"},
-        "sentiment_signals": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": [
-        "summary",
-        "tags",
-        "importance",
-        "intent",
-        "entities",
-        "sentiment_label",
-        "sentiment_score",
-        "sentiment_signals",
-    ],
-}
-
-
-def _build_gemini_config() -> dict[str, Any]:
-    return {
-        "response_mime_type": "application/json",
-        "response_schema": GEMINI_RESPONSE_SCHEMA,
-        "thinking_config": {"thinking_budget": 0},
-        "http_options": _build_gemini_http_options(),
-    }
-
-
-def _build_gemini_http_options(timeout_ms: int | None = None) -> dict[str, Any]:
-    http_options: dict[str, Any] = {
-        "extra_body": {"serviceTier": _get_gemini_service_tier()},
-    }
-    if timeout_ms is not None:
-        http_options["timeout"] = timeout_ms
-    return http_options
-
-
 # ── Entity extraction via Gemini ───────────────────────────────────────────────
 
 GEMINI_EXTRACTION_MODEL = os.environ.get("BRAINLAYER_GEMINI_EXTRACTION_MODEL", "gemini-2.5-flash-lite")
@@ -282,104 +199,9 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
 # The content_hash contract lives in ONE place. A second implementation of this
 # function -- even a byte-identical one -- is precisely how four hash schemes got
 # into the column, so the UPDATE paths below import it rather than redefine it.
-from .chunk_write import canonical_content_hash as _content_hash  # noqa: E402
-
-
-def _normalize_chunk_tags(tags: Any) -> list[str]:
-    if isinstance(tags, str):
-        try:
-            decoded = json.loads(tags)
-        except json.JSONDecodeError:
-            decoded = [tags]
-        else:
-            tags = decoded
-    if isinstance(tags, list):
-        return [str(tag) for tag in tags if str(tag).strip()]
-    return []
-
-
-def _mark_meta_research(store, chunk: dict[str, Any]) -> None:
-    cursor = store.conn.cursor()
-    now = datetime.now(timezone.utc).isoformat()
-    tags = _normalize_chunk_tags(chunk.get("tags"))
-    if "meta-research" not in tags:
-        tags.append("meta-research")
-    cursor.execute(
-        "UPDATE chunks SET tags = ?, summary = NULL, enriched_at = ? WHERE id = ?",
-        (json.dumps(tags), now, chunk["id"]),
-    )
-    content = chunk.get("content", "")
-    if content:
-        try:
-            cursor.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (_content_hash(content), chunk["id"]))
-        except Exception:
-            pass
-
-
-def _mark_duplicate_content(store, chunk: dict[str, Any]) -> None:
-    cursor = store.conn.cursor()
-    now = datetime.now(timezone.utc).isoformat()
-    content = chunk.get("content", "")
-    content_hash = _content_hash(content) if content else None
-    if content_hash:
-        cursor.execute(
-            "UPDATE chunks SET enriched_at = ?, enrich_status = 'duplicate', content_hash = ? WHERE id = ?",
-            (now, content_hash, chunk["id"]),
-        )
-    else:
-        cursor.execute(
-            "UPDATE chunks SET enriched_at = ?, enrich_status = 'duplicate' WHERE id = ?",
-            (now, chunk["id"]),
-        )
 
 
 # ── Retry / apply helpers ──────────────────────────────────────────────────────
-
-
-def _retry_with_backoff(
-    fn,
-    max_retries: int = 12,
-    base_delay: float = 1.0,
-    max_delay: float = 120.0,
-    retryable_errors: tuple = (Exception,),
-):
-    """Retry transient failures with exponential backoff and capped jitter."""
-    for attempt in range(max_retries + 1):
-        try:
-            return fn()
-        except retryable_errors as exc:
-            if isinstance(exc, (EnrichmentDailyCapReached, CloudScrubError)) or _is_monthly_spending_cap_error(exc):
-                raise
-            if attempt >= max_retries:
-                raise
-            delay = min(base_delay * (2**attempt), max_delay)
-            jitter = random.uniform(0, delay * 0.5)
-            sleep_for = min(delay + jitter, max_delay)
-            logger.warning(
-                "Retrying enrichment call after error %s (attempt %d/%d) in %.2fs",
-                exc,
-                attempt + 2,
-                max_retries + 1,
-                sleep_for,
-            )
-            _sleep(sleep_for)
-
-
-def _generate_content_with_rate_limit(
-    client, model: str, prompt: str, config: dict[str, Any], limiter: TokenBucket | None
-):
-    # Scrub before anything else: a scrub failure must never reach the network.
-    prompt = scrub_for_cloud(prompt)
-    _raise_if_enrich_daily_cap_reached()
-    if limiter is not None:
-        limiter.acquire()
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=config,
-    )
-    _record_enrich_response_usage(response)
-    return response
 
 
 def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] | None:
@@ -390,62 +212,6 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
 # ── Axiom telemetry ────────────────────────────────────────────────────────────
 
 _DATASET_ENRICHMENT = "brainlayer-enrichment"
-
-
-def _emit_enrichment_event(event: dict[str, Any]) -> bool:
-    """Emit a single enrichment telemetry event to Axiom."""
-    try:
-        from .telemetry import emit
-
-        return emit(_DATASET_ENRICHMENT, event)
-    except Exception:
-        return False
-
-
-def _emit_enrichment_start(mode: str, limit: int) -> bool:
-    if mode == "realtime":
-        try:
-            os.write(
-                2,
-                b"ENRICHMENT_RUNTIME_LOADED mode=realtime prompt=r81 truncation=8000 split=4800/3200 rubrics=epistemic_level,debt_impact,sentiment_label\n",
-            )
-        except OSError as exc:
-            logger.debug("ENRICHMENT_RUNTIME_LOADED emit failed: %s", exc)
-    return _emit_enrichment_event(
-        {
-            "_type": "start",
-            "mode": mode,
-            "limit": limit,
-            "pid": os.getpid(),
-            "hostname": os.uname().nodename,
-        }
-    )
-
-
-def _emit_enrichment_complete(result: EnrichmentResult, duration_ms: float) -> bool:
-    return _emit_enrichment_event(
-        {
-            "_type": "complete",
-            "mode": result.mode,
-            "attempted": result.attempted,
-            "enriched": result.enriched,
-            "skipped": result.skipped,
-            "failed": result.failed,
-            "duration_ms": round(duration_ms, 1),
-            "error_count": len(result.errors),
-        }
-    )
-
-
-def _emit_enrichment_error(mode: str, chunk_id: str, error: str) -> bool:
-    return _emit_enrichment_event(
-        {
-            "_type": "error",
-            "mode": mode,
-            "chunk_id": chunk_id,
-            "error": error[:300],
-        }
-    )
 
 
 # ── Enrichment modes ───────────────────────────────────────────────────────────
