@@ -404,16 +404,14 @@ def test_session_enrichment_persists_redacted_fields(tmp_path):
     _assert_no_token(json.dumps([list(map(str, r)) for r in fts_rows]), where="session enrichment FTS")
 
 
-def test_digest_faceted_output_is_scrubbed():
-    from brainlayer.pipeline.digest import _parse_faceted_enrichment
+def test_retained_output_scrubber_redacts_nested_tag_metadata():
+    from brainlayer.pipeline.cloud_scrub import scrub_llm_output
 
     t = FAKE_TOKENS
-    parsed = _parse_faceted_enrichment(
-        json.dumps({"topics": [t["github"]], "activity": "act:build", "domains": [f"dom:{t['google']}"]})
-    )
+    parsed = scrub_llm_output({"topics": [t["github"]], "activity": "act:build", "domains": [f"dom:{t['google']}"]})
 
     assert parsed is not None
-    _assert_no_token(json.dumps(parsed), where="digest faceted output")
+    _assert_no_token(json.dumps(parsed), where="nested tag metadata")
 
 
 def test_groq_ner_output_is_scrubbed():

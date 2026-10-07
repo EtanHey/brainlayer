@@ -18,7 +18,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..vector_store import VectorStore
 from .batch_extraction import DEFAULT_SEED_ENTITIES, _dedup_entities, process_chunk, store_extraction_result
-from .cloud_scrub import scrub_llm_output
 from .secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested
 from .sentiment import analyze_sentiment
 
@@ -186,67 +185,6 @@ def _classify_confidence(entities: list) -> Dict[str, int]:
         else:
             low += 1
     return {"high_confidence": high, "needs_review": needs_review, "low_confidence": low}
-
-
-def _parse_faceted_enrichment(text: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Parse digest faceted-tag enrichment output."""
-    if not text:
-        return None
-
-    try:
-        payload = json_like = None
-        for start in range(len(text)):
-            if text[start] != "{":
-                continue
-            for end in range(len(text) - 1, start, -1):
-                if text[end] != "}":
-                    continue
-                try:
-                    import json
-
-                    json_like = json.loads(text[start : end + 1])
-                    break
-                except Exception:
-                    continue
-            if json_like:
-                payload = json_like
-                break
-
-        if not payload:
-            return None
-        payload = scrub_llm_output(payload)
-
-        topics = payload.get("topics", [])
-        if not isinstance(topics, list):
-            return None
-        clean_topics = [str(topic).strip().lower() for topic in topics if isinstance(topic, str) and topic.strip()][:3]
-
-        activity = payload.get("activity")
-        if not isinstance(activity, str) or not activity.startswith("act:"):
-            return None
-        activity = activity.strip().lower()
-
-        domains = payload.get("domains", [])
-        if not isinstance(domains, list):
-            return None
-        clean_domains = [
-            str(domain).strip().lower()
-            for domain in domains
-            if isinstance(domain, str) and domain.strip().startswith("dom:")
-        ][:3]
-
-        confidence = payload.get("confidence", 0.0)
-        if not isinstance(confidence, (int, float)):
-            confidence = 0.0
-
-        return {
-            "topics": clean_topics,
-            "activity": activity,
-            "domains": clean_domains,
-            "confidence": max(0.0, min(1.0, float(confidence))),
-        }
-    except Exception:
-        return None
 
 
 def _default_faceted_enrich(**_legacy_options: Any) -> Dict[str, Any]:
