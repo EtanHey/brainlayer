@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from scripts.ci_ratchet_table import GREEN, NA, RED, row_watcher_heartbeat
-from scripts.watcher_heartbeat_ratchet import ROOT, SOURCES, digest, process_declaration, store_content
+from scripts.watcher_heartbeat_ratchet import CASES, ROOT, SOURCES, digest, process_declaration, store_content
 
 HEAD = "a" * 40
 
@@ -214,4 +214,10 @@ def test_unreadable_git_identity_fails_closed(tmp_path, evidence, monkeypatch):
         raise RuntimeError("Git identity unavailable")
 
     monkeypatch.setattr("scripts.brainbar_source_identity.source_identity", unavailable)
+    assert verdict(tmp_path, evidence) == RED
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_each_required_consumer_case_must_be_present(tmp_path, evidence, name):
+    evidence["cases"] = [c for c in evidence["cases"] if c["name"] != name]
     assert verdict(tmp_path, evidence) == RED
