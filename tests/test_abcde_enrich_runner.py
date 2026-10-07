@@ -18,7 +18,7 @@ from brainlayer.eval.abcde_enrich_runner import (
     run_batch,
     usage_to_usd,
 )
-from brainlayer.eval.abcde_variants import ABCDE_VARIANTS_BY_ID
+from brainlayer.eval.abcde_variants import ABCDE_VARIANTS_BY_ID, select_variants
 from brainlayer.eval.enrichment_graders import REQUIRED_ENRICHMENT_KEYS, validate_schema_gate
 from brainlayer.eval.enrichment_judge import build_judge_request
 from scripts import run_abcde_enrich as abcde_driver
@@ -247,7 +247,7 @@ def test_make_http_chat_fn_deepseek_base_url_and_model(monkeypatch):
 
 
 def test_driver_variants_filter_selects_requested_ids_in_registry_order():
-    selected = abcde_driver.select_variants("E,A,C")
+    selected = select_variants("E,A,C")
 
     assert [variant.id for variant in selected] == ["A", "C", "E"]
 

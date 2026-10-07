@@ -130,5 +130,25 @@ def _optional_string(raw: dict[str, Any], key: str) -> str | None:
     return value
 
 
+def select_variants(variant_filter: str | None = None) -> list:
+    """Filter ABCDE variants by comma-separated ids while preserving registry order."""
+    if not variant_filter:
+        return list(ABCDE_VARIANTS)
+
+    requested = {item.strip().upper() for item in variant_filter.split(",") if item.strip()}
+    if not requested:
+        return list(ABCDE_VARIANTS)
+
+    available = {variant.id for variant in ABCDE_VARIANTS}
+    unknown = sorted(requested - available)
+    if unknown:
+        raise SystemExit(f"Unknown variant id(s): {','.join(unknown)}")
+
+    selected = [variant for variant in ABCDE_VARIANTS if variant.id in requested]
+    if not selected:
+        raise SystemExit("No variants selected.")
+    return selected
+
+
 ABCDE_VARIANTS = load_abcde_variants()
 ABCDE_VARIANTS_BY_ID = {variant.id: variant for variant in ABCDE_VARIANTS}
