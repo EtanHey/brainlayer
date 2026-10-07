@@ -115,21 +115,6 @@ def test_quarantine_is_redacted_before_gemini_send(position, monkeypatch):
     assert client.models.sent == [expected]
 
 
-@pytest.mark.parametrize("sender", ["call_glm", "call_mlx"])
-def test_quarantine_is_redacted_in_http_transport(sender, monkeypatch):
-    from brainlayer.pipeline import enrichment
-
-    monkeypatch.setattr(enrichment, "GROQ_API_KEY", "test-not-a-key")
-    sent = _capture_requests_post(monkeypatch, enrichment.requests)
-    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-    getattr(enrichment, sender)(token)
-
-    assert len(sent) == 1
-    assert token not in sent[0]
-    assert "[REDACTED:quarantine]" in sent[0]
-
-
 def test_second_cloud_scrub_pass_failure_prevents_send(monkeypatch):
     from brainlayer import enrichment_controller as controller
     from brainlayer.pipeline import cloud_scrub
@@ -346,29 +331,6 @@ def test_retry_wrapper_does_not_retry_a_scrub_failure(monkeypatch):
     assert len(calls) == 1
 
 
-class _FakeHttpResponse:
-    status_code = 200
-    headers: dict = {}
-    text = ""
-
-    def json(self):
-        return {"choices": [{"message": {"content": '{"summary": "fine summary"}'}}], "usage": {}}
-
-    def raise_for_status(self):
-        return None
-
-
-def _capture_requests_post(monkeypatch, target):
-    sent: list[str] = []
-
-    def _post(url, *, headers=None, json=None, timeout=None, **kwargs):
-        sent.append(__import__("json").dumps(json))
-        return _FakeHttpResponse()
-
-    monkeypatch.setattr(target, "post", _post)
-    return sent
-
-
 def test_groq_ner_sender_is_removed():
     from brainlayer.pipeline import kg_extraction_groq
 
@@ -573,3 +535,12 @@ def test_groq_ner_output_is_scrubbed():
 
     assert parsed and parsed[0]["chunk_id"] == "chunk-1"
     _assert_no_token(json.dumps(parsed), where="Groq NER output")
+
+
+def test_retained_input_scrubber_redacts_quarantined_tokens():
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    token = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    result = scrub_for_cloud(token)
+    assert token not in result
+    assert "[REDACTED:quarantine]" in result

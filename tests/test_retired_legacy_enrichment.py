@@ -70,3 +70,10 @@ def test_legacy_groq_sender_is_absent():
     from brainlayer.pipeline import enrichment
 
     assert not hasattr(enrichment, "call_groq")
+
+
+def test_legacy_http_model_senders_are_absent():
+    from brainlayer.pipeline import enrichment
+
+    assert not hasattr(enrichment, "call_glm")
+    assert not hasattr(enrichment, "call_mlx")
