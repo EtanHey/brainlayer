@@ -93,6 +93,7 @@ def valid():
         "native": {
             "status": "PASS",
             "tests": 3,
+            "skipped": 0,
             "product_sha256": "a" * 64,
             "guard_sha256": "b" * 64,
             "events": [{"kind": "native.connect", "phase": "control"}],
@@ -127,6 +128,9 @@ def test_complete_report_validates():
         (("native", "status"), "SKIP"),
         (("native", "events"), []),
         (("native", "tests"), 0),
+        (("native", "skipped"), 1),
+        (("native", "skipped"), None),
+        (("native", "skipped"), False),
     ],
 )
 def test_invalid_receipt_fails(path, value):

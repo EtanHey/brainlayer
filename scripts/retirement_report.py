@@ -145,6 +145,7 @@ def validate(report, expected_sha, now=None):
         )
     native = report["native"]
     need(native["status"] == "PASS" and native["tests"] == 3, "native matrix incomplete")
+    need(type(native.get("skipped")) is int and native["skipped"] == 0, "native matrix skipped a required test")
     need(
         identity(native["product_sha256"], 64) and identity(native["guard_sha256"], 64), "native artifacts unidentified"
     )

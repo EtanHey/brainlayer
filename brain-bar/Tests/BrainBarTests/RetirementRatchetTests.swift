@@ -10,6 +10,8 @@ final class RetirementRatchetTests: XCTestCase {
     }
 
     func testNativeNetworkBoundaryIsArmed() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["RETIREMENT_NATIVE_BOUNDARY"] == "1",
+                          "Requires the retirement native boundary harness")
         XCTAssertEqual(ProcessInfo.processInfo.environment["RETIREMENT_NATIVE_BOUNDARY"], "1")
         setenv("RETIREMENT_PHASE", "control", 1)
         defer { setenv("RETIREMENT_PHASE", "candidate", 1) }
@@ -31,6 +33,8 @@ final class RetirementRatchetTests: XCTestCase {
     }
 
     func testEveryPaletteRejectsRetiredDispatch() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["RETIREMENT_NATIVE_BOUNDARY"] == "1",
+                          "Requires the retirement native boundary harness")
         for profile in ["core", "full", "operator"] {
             let router = MCPRouter(profile: profile)
             _ = call(router, "expand_palette", [:])
