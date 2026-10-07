@@ -6,7 +6,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var config: BrainLayerConfig
     @Published var pendingPlainAPIKey = ""
     @Published var onePasswordReference: String
-    @Published var backendDraft: String
     @Published var errorMessage: String?
     /// Show log's sentence when the job has no log yet (Codex #1062 r1 B1); nil after a log opens.
     @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
@@ -121,12 +120,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let document = try store.loadDocument()
             config = document.config
             onePasswordReference = document.config.googleAPIKey.opReference
-            backendDraft = document.config.enrichmentBackend
         } catch {
             configReadSucceeded = false
             config = .defaultConfig
             onePasswordReference = BrainLayerConfig.defaultConfig.googleAPIKey.opReference
-            backendDraft = BrainLayerConfig.defaultConfig.enrichmentBackend
             errorMessage = error.localizedDescription
         }
         applyLaunchdStates(
@@ -177,41 +174,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func revealBackup(_ row: BrainBarBackupScheduleRow) { row.reveal(using: workspace) }
     func copyBackupPath(_ row: BrainBarBackupScheduleRow) { row.copyPath(using: workspace) }
 
-    func setEnrichmentEnabled(_ enabled: Bool) {
-        updateConfig { $0.enrichmentEnabled = enabled }
-    }
-
     func setSystemEnabled(_ enabled: Bool) {
         updateConfig { $0.systemEnabled = enabled }
-    }
-
-    func setEnrichmentMode(_ mode: BrainLayerEnrichmentMode) {
-        updateConfig { $0.enrichmentMode = mode }
-    }
-
-    func setEnrichmentProvider(_ provider: BrainLayerEnrichmentProvider) {
-        guard provider.isWiredToday else {
-            recordValidationFailure(
-                "\(provider.title) cannot be activated because its runtime integration is unavailable."
-            )
-            return
-        }
-        updateConfig { nextConfig in
-            nextConfig.enrichmentProvider = provider
-            if provider == .gemini,
-               nextConfig.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                nextConfig.enrichmentBackend = "gemini"
-            }
-        }
-    }
-
-    func commitBackendDraft() {
-        let backend = backendDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard backend != config.enrichmentBackend else {
-            backendDraft = config.enrichmentBackend
-            return
-        }
-        updateConfig { $0.enrichmentBackend = backend }
     }
 
     func storePlainAPIKey() {
@@ -400,9 +364,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
             if !preservingDrafts || onePasswordReference == previous.googleAPIKey.opReference {
                 onePasswordReference = loaded.googleAPIKey.opReference
             }
-            if !preservingDrafts || backendDraft == previous.enrichmentBackend {
-                backendDraft = loaded.enrichmentBackend
-            }
             applyLaunchdStates(launchdObservations.mapValues(\.loadState))
             errorMessage = nil
             if !preservingDrafts { lastSaveReceipt = nil }
@@ -482,7 +443,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
             activeRuntimeObservation = runtimeStatusProvider.sample()
             config = nextConfig
             onePasswordReference = nextConfig.googleAPIKey.opReference
-            backendDraft = nextConfig.enrichmentBackend
             errorMessage = nil
             previousConfigForLastSaveReceipt = previousConfig
             lastSaveReceipt = BrainLayerSettingsSaveReceipt(
@@ -536,7 +496,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
         persistedConfig: BrainLayerConfig
     ) {
         config = persistedConfig
-        backendDraft = persistedConfig.enrichmentBackend
         onePasswordReference = persistedConfig.googleAPIKey.opReference
         errorMessage = nil
         activeRuntimeObservation = runtimeStatusProvider.sample()
@@ -577,14 +536,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
         to configured: BrainLayerConfig
     ) -> [BrainLayerSettingsService] {
         var requirements: [BrainLayerSettingsService] = []
-        if previous.googleAPIKey != configured.googleAPIKey ||
-            previous.enrichmentEnabled != configured.enrichmentEnabled ||
-            previous.enrichmentMode != configured.enrichmentMode ||
-            previous.enrichmentProvider != configured.enrichmentProvider ||
-            previous.enrichmentBackend != configured.enrichmentBackend ||
-            previous.tuningValues != configured.tuningValues {
-            requirements.append(.enrichment)
-        }
         if previous.systemEnabled != configured.systemEnabled {
             requirements.append(.systemJobs)
         }
@@ -624,7 +575,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             }
         }
 
-        let hasRuntimeConfigRequirement = requirements.contains(.enrichment) || requirements.contains(.systemJobs)
+        let hasRuntimeConfigRequirement = requirements.contains(.systemJobs)
         guard hasRuntimeConfigRequirement else { return .observed }
         switch activeRuntimeObservation {
         case let .observed(values):
