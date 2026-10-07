@@ -2566,6 +2566,17 @@
         "target": "from types import MappingProxyType"
       }
     },
+    "110f54fff02c3f43a51a10756078da3e7292b1c9366b17876a179ab70653495a": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "7488b6dedda322485eb3de47d69b39bdf3cd0782c4a03b6118db406cdd0712be",
+        "call_sha256": "8058853a01547215468ceb8652964d4821f79273f307bd4d8f44df328511a258",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "import asyncio"
+      }
+    },
     "112ccce5b5de6bdf870b5c1ed71bfa5035ebaf328292d1e07ebd5ec1154ab055": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/job_lifecycle_health.py <module>",
       "site": {
@@ -5333,6 +5344,17 @@
         "target": "import sqlite3"
       }
     },
+    "22651d7a8adb035eb8d24c561d4c937637e82683394cf1f0ad0107f85bb8ddaf": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "c8bbe7e194cd28b4eca716819efe8e65976bdcab894cccd4c35d14a9d14fdad2",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from typer.testing import CliRunner"
+      }
+    },
     "228d9c3f0dc6afbc60abb22983b3261711a22bc143f981b9baa8e68d6d31ad2f": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/classify-all.py <module>",
       "site": {
@@ -6259,17 +6281,6 @@
         "target": "from time import sleep as _sleep"
       }
     },
-    "283fa6963d79ecc6941d7bec2f92cc24e8cb9cbbdb091c3132bf11f1809f0e46": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "fb0a1565f6b3f0c0b725138009fcda0f36d19f0bbbdfb283ec6fea035c928e32",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.vector_store import VectorStore"
-      }
-    },
     "2847a6a8b80defd788b34566cef34742f89f2f572ab7db16514fdb7156b87c72": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/build_qrels.py <module>",
       "site": {
@@ -6290,6 +6301,17 @@
         "owner": "<module>.enrich_projects",
         "path": "src/brainlayer/pipeline/code_intelligence.py",
         "target": "from ..paths import get_db_path"
+      }
+    },
+    "288d3e07c32c66ec070b108980d011cc9c8db0575f30c11b104d44b1189cbcb2": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "ddaf66ec5d87c9da9dc8bd7a22c98d4bea8c6b5167625a29b61a97785fd093f0",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.mcp.enrich_handler import _brain_enrich"
       }
     },
     "2890c970f88f302d14628bb61ba6f2d0ca469ed53e7d8e1e862f8daf0bb89157": {
@@ -7053,17 +7075,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/observability_surface.py",
         "target": "from typing import Any"
-      }
-    },
-    "2d32735eb10029a5fee03794a0189635133b9fd8f78a40003aff91b48c36cb2f": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "ddaf66ec5d87c9da9dc8bd7a22c98d4bea8c6b5167625a29b61a97785fd093f0",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.mcp.enrich_handler import _brain_enrich"
       }
     },
     "2d37e72e315afa29b42ad20ded0a08855f14a7cb2b43e86a2512f25cb34ef4ca": {
@@ -11335,6 +11346,17 @@
         "target": "from scripts.retirement_source import source_scan"
       }
     },
+    "47cc79866e0d7d2b1bbde2ff408c840b970dcd472a4e05afe133f60e293c4650": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "fb0a1565f6b3f0c0b725138009fcda0f36d19f0bbbdfb283ec6fea035c928e32",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.vector_store import VectorStore"
+      }
+    },
     "47d9d9aff6ba7480cd48bcae7266901d2dfbfc3ef57601f93bb6268e82b2939f": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -14528,6 +14550,17 @@
         "target": "import os"
       }
     },
+    "5bee09f0e8c257791d8fc9efddeee1f9314c50d528dbe36d2bb905d96e3ba030": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "7488b6dedda322485eb3de47d69b39bdf3cd0782c4a03b6118db406cdd0712be",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "import json"
+      }
+    },
     "5bff3a105d4b659bc684a747d59e2429148bcf2ffd5d58437ffd2ee530379383": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -15570,6 +15603,17 @@
         "owner": "<module>.main",
         "path": "hooks/brainlayer-session-start.py",
         "target": "from dedup_coordination import register_chunks"
+      }
+    },
+    "6223926d127751e0442e3e19478d3cb9822201e0efc7a75fbc76b9634ab8ebda": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "548b4e2745f3c8453c8c80f98a704dea2518fd5fe54d948ef19e6818bdc74f9c",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.launchd import hotlane_brainbar_daemon as hotlane"
       }
     },
     "62260405d41ef834a5685d24ffa664ef83ea8df733e3ccc307fe8a1051727315": {
@@ -17939,17 +17983,6 @@
         "target": "import math"
       }
     },
-    "71e06b192d2f817ab0d49f7b8c35c49682f61e94f8378f63143c372c1c5133ef": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "548b4e2745f3c8453c8c80f98a704dea2518fd5fe54d948ef19e6818bdc74f9c",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.launchd import hotlane_brainbar_daemon as hotlane"
-      }
-    },
     "71e73e1c7c528c758f48195e4e1a9ffb0dd30c3dd20ce140ecb3f2f608eb93cc": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.watch_backfill",
       "site": {
@@ -18583,17 +18616,6 @@
         "owner": "<module>",
         "path": "scripts/pre-label.py",
         "target": "from pathlib import Path"
-      }
-    },
-    "75d6b3d8d8f19aa19c474c901fc7e9fc54fa17803d0c4d3ced8586483fcdc3e9": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "990b97e34ca9023f97f7ca77540395ae30adf3e9ba7eb12c04279e10964b2c4a",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.cli import app"
       }
     },
     "75e58260c8735bbb9697b43194e5166a80bcba0b50230b087f5dae0802740f11": {
@@ -22176,17 +22198,6 @@
         "target": "from __future__ import annotations"
       }
     },
-    "8c66dd865dc7632d87a846a51b2e3c8ceb66d9061bd964e33e40555974a301f2": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "3e3fb8a19d1ef454a00958e314d9ba73c3a6dd4a628b315f43867bd99364864f",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.watcher_bridge import create_flush_callback"
-      }
-    },
     "8c72d919e113ea34ff84b89621cb980f7a2adae5ef439839453ecfab878aac60": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/telemetry.py <module>",
       "site": {
@@ -23108,6 +23119,17 @@
         "owner": "<module>.verify_jsonl_bundle",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "subprocess.run"
+      }
+    },
+    "9347944a173b811ee1d3f6fc8920874cb897eac6bc545860857bb8cc52c01db4": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "ccd6b022eafaf52cca85a0ac100e267604e61249de81219f5d2f13c9e8187b3d",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.drain import drain_once"
       }
     },
     "9347e8718c94530272eb10b7fab4ad9302b599b00ed7bd496e011e38a8cdd97b": {
@@ -30101,17 +30123,6 @@
         "target": "import json"
       }
     },
-    "c321cb6aeb96add798dc3a8b2cd4a28bb68d48b297b7ca09356a5e88756f8dde": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "ccd6b022eafaf52cca85a0ac100e267604e61249de81219f5d2f13c9e8187b3d",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.drain import drain_once"
-      }
-    },
     "c32c7617239b22bdfc5dbaa15ca6fdf830df76006f10d02b089d2cfd5141f851": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/t3_provenance.py <module>",
       "site": {
@@ -30373,6 +30384,17 @@
         "target": "platform.system"
       }
     },
+    "c47815a32dca32778469bd87262db098e98ebd4ea172fb3581bb2c2b2d5d40d1": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "3e3fb8a19d1ef454a00958e314d9ba73c3a6dd4a628b315f43867bd99364864f",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.watcher_bridge import create_flush_callback"
+      }
+    },
     "c48146466f27f20cefc2d9c7410c77661f4e0cea3daf4f23fc619710c4420d2a": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>",
       "site": {
@@ -30514,17 +30536,6 @@
         "owner": "<module>",
         "path": "scripts/wal_checkpoint.py",
         "target": "from pathlib import Path"
-      }
-    },
-    "c5604eb2c3413a22fb8731fa3ceb44fa3faa91f350e2659e852bcab677504e40": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "ba4cd4c269de929d2571de52da51d3e84a373994c3292dee853ae374b33f17c1",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from brainlayer.enrichment_replay import _apply_enrichment"
       }
     },
     "c567eb17488950ce1bfcd9f5e359fa1e94f0bdbd0d567508b9dc3b6bd4bcfc87": {
@@ -31421,17 +31432,6 @@
         "owner": "<module>",
         "path": "scripts/ci/run_with_deadline.py",
         "target": "import re"
-      }
-    },
-    "caba4ca0952505a1950297f7585474415894d3ee51221bad84db9041ffc37496": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "86175cabb951934867b67fc0451348b5b98f3da305b7b9e865fce85cf12ab8bf",
-        "call_sha256": "8058853a01547215468ceb8652964d4821f79273f307bd4d8f44df328511a258",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "import asyncio"
       }
     },
     "cabfc14b1f6e3707d52b55226d73511533ce40dcbe993253699140592c5fc4b4": {
@@ -32487,6 +32487,17 @@
         "owner": "<module>._metadata",
         "path": "scripts/check_observability_golden_inputs.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "d19a0af80fce3188a983d89c35b93da5bda90b3eac623e32d29caafae18f812e": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "ba4cd4c269de929d2571de52da51d3e84a373994c3292dee853ae374b33f17c1",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.enrichment_replay import _apply_enrichment"
       }
     },
     "d1a1cb3103a2ec7875be01a27ee13ab939b6a68c5634863711238a517cc5c13a": {
@@ -34171,17 +34182,6 @@
         "target": "import re"
       }
     },
-    "dde192d7ae9c68052469cb6afb39abc89f59b96e301cacf8df923c880970c75e": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "86175cabb951934867b67fc0451348b5b98f3da305b7b9e865fce85cf12ab8bf",
-        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "import json"
-      }
-    },
     "dde9f64421b3aa19a29a5cc2db8c02a9c67d6c68d7640d7404699412eae417cd": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/extract.py <module>",
       "site": {
@@ -34378,17 +34378,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/index_completeness.py",
         "target": "from __future__ import annotations"
-      }
-    },
-    "df41d6f386130fe254f91651402f6662c4b71d9d7c0d002264a8d7f9aa8936c9": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
-      "site": {
-        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
-        "call_sha256": "c8bbe7e194cd28b4eca716819efe8e65976bdcab894cccd4c35d14a9d14fdad2",
-        "kind": "import_binding",
-        "owner": "<module>.installed_surfaces",
-        "path": "scripts/retirement_surfaces.py",
-        "target": "from typer.testing import CliRunner"
       }
     },
     "df5462ae467f03f11fa10ed2cdcf4abf726465c37c94679e9ab6bf6eb34f69ad": {
@@ -37804,6 +37793,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/correction_detection.py",
         "target": "re.compile"
+      }
+    },
+    "f797333f065e056c5c63f3a6271ef8b62f2e5ecd71ce781ea6b510a80193a05d": {
+      "non_cloud_purpose": "Private installed retirement fixture: real library MCP error field and brainbar-store hotlane trigger",
+      "site": {
+        "body_sha256": "3e735484348707e455c5c959b5ff433c22bffd05d7097ef0a18931102739a9e8",
+        "call_sha256": "990b97e34ca9023f97f7ca77540395ae30adf3e9ba7eb12c04279e10964b2c4a",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.cli import app"
       }
     },
     "f7a0822691df09cfcb7c18345ad4c3b900aeb003f4e723161dd2e517b38565d6": {

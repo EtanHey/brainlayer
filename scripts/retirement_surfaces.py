@@ -27,14 +27,14 @@ def installed_surfaces(home):
     surfaces.append("cli-retirement")
     for options in ({"mode": "realtime"}, {"mode": "batch", "phase": "submit"}, {"stats": True}):
         result = asyncio.run(_brain_enrich(**options))
-        require(result.isError and "retired" in str(result.content), "Library MCP shim failed")
+        require(result.is_error and "retired" in str(result.content), "Library MCP shim failed")
     surfaces.append("library-mcp-retirement")
     path = home / "surfaces.db"
     store = VectorStore(path)
     try:
         store.conn.execute(
             "INSERT INTO chunks (id,content,metadata,source_file,source,created_at) "
-            "VALUES ('r11-hot','R11 local embedding and historical result fixture','{}','fixture','mcp','2099-01-01')"
+            "VALUES ('r11-hot','R11 local embedding and historical result fixture','{}','brainbar-store','mcp','2099-01-01')"
         )
 
         def retired_callback(*args, **kwargs):
