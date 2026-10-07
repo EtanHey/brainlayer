@@ -57,3 +57,7 @@ def test_brain_digest_retired_facets_keep_local_persistence(legacy_settings, tmp
         assert store.conn.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (result["digest_id"],)).fetchone()
     finally:
         store.close()
+
+
+def test_dead_faceted_parser_is_absent():
+    assert not hasattr(digest, "_parse_faceted_enrichment")

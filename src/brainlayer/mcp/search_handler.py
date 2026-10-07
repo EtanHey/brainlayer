@@ -2569,7 +2569,7 @@ async def _session_summary(session_id: str):
             return [
                 TextContent(
                     type="text",
-                    text=f"No enrichment data for session '{session_id[:8]}...'. Run 'brainlayer enrich-sessions' first.",
+                    text=f"No saved summary for session '{session_id[:8]}...'. Session enrichment has been retired.",
                 )
             ]
         parts = [f"## Session Summary: {session_id[:8]}...\n"]
