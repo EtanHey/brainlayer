@@ -52,7 +52,9 @@ def test_documented_wave3_restore_skips_retired_job_even_without_pause(tmp_path,
         "WAVE3A_RUN_DIR": str(tmp_path),
         "WAVE3A_PYTHON": str(python_stub),
     }
-    result = subprocess.run(["/bin/bash", "-e", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10)
+    result = subprocess.run(
+        ["/bin/bash", "-e", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10
+    )
     assert result.returncode == 0, result.stderr
     recorded = calls.read_text()
     assert "brainbar-daemon.plist" in recorded
