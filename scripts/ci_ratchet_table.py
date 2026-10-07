@@ -1794,6 +1794,28 @@ def row_quiesce(report: Path | None, unavailable: str | None, measured_sha: str 
     )
 
 
+def row_retirement(report: Path | None, measured_sha: str | None) -> Row:
+    from scripts.retirement_report import validate
+
+    name = "no cloud model call reachable anywhere"
+    method = "immutable installed wheel (default + dev) + AST source + actual native BrainBar"
+    notes = "Synthetic private fixtures; SDK absence gated on merged R10b. Exact-head candidate proof, not deployment."
+    try:
+        if report is None:
+            raise ValueError("required retirement report missing")
+        values = validate(json.loads(report.read_text()), measured_sha)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return Row(name, RED, f"global absence unproved: {error}", method, notes)
+    return Row(
+        name,
+        GREEN,
+        f"{values['source_files']} source files; {values['installed_modules']} installed imports; "
+        f"{values['native_tests']} native tests; wheel `{values['wheel_sha256'][:12]}`; 0 candidate attempts",
+        method,
+        notes,
+    )
+
+
 def collect(probe: Probe, corpus: dict) -> list[Row]:
     return [builder(probe, corpus) for builder in ROW_BUILDERS]
 
@@ -2048,6 +2070,9 @@ def main(argv: list[str] | None = None) -> int:
         "--quiesce-report", type=Path, help="Real macOS launchd RED/GREEN report; missing or invalid is RED"
     )
     parser.add_argument("--quiesce-unavailable", help="Explicit reason the macOS quiesce replay was not triggered")
+    parser.add_argument(
+        "--retirement-report", type=Path, help="Required exact-head installed/native global model absence receipt"
+    )
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -2079,6 +2104,8 @@ def main(argv: list[str] | None = None) -> int:
     rows = collect(probe, corpus)
     if args.quiesce_report or args.quiesce_unavailable:
         rows.append(row_quiesce(args.quiesce_report, args.quiesce_unavailable, args.measured_sha))
+    if args.retirement_report or args.measured_sha:
+        rows.append(row_retirement(args.retirement_report, args.measured_sha))
     now = datetime.now(timezone.utc)
     table = render(rows, probe, args.run_url, now)
 
