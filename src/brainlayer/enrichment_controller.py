@@ -1,9 +1,4 @@
-"""Unified enrichment controller for Gemini-backed realtime and batch modes.
-
-Replaces scattered enrichment scripts with a single controller:
-  - realtime: Gemini 2.5 Flash-Lite, single chunk, <600ms target
-  - batch: Gemini backlog processing, thinkingBudget=0
-"""
+"""Retiring legacy producers; historical replay lives in enrichment_replay."""
 
 from __future__ import annotations
 
@@ -434,6 +429,7 @@ def run_enrich_supervisor(
     Each pass opens and closes its own store so enrichment cannot pin a writer,
     reader transaction, or WAL checkpoint across supervisor cycles.
     """
+    raise RuntimeError("Cloud enrichment has been retired. Local checkpoint replay remains available.")
     from .vector_store import VectorStore
 
     if vector_store_cls is None:
@@ -856,26 +852,6 @@ def _get_store_rate_limiter(
         return limiter
 
 
-def _get_gemini_client():
-    """Create Gemini client. Uses regional endpoint when GOOGLE_CLOUD_REGION is set."""
-    try:
-        from google import genai
-    except ImportError:
-        raise RuntimeError("google-genai package not installed. Install with: pip install google-genai")
-
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_GENERATIVE_AI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY not set")
-
-    # Regional endpoint reduces latency from 11-12s (global) to 0.7s.
-    # Set GOOGLE_CLOUD_REGION=us-central1 (or europe-west1, etc.) to enable.
-    region = os.environ.get("GOOGLE_CLOUD_REGION")
-    http_options: dict[str, Any] = {"retry_options": {"attempts": 1}}
-    if region:
-        http_options.update({"api_version": "v1beta", "url": f"https://{region}-aiplatform.googleapis.com"})
-    return genai.Client(api_key=api_key, http_options=http_options)
-
-
 GEMINI_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -966,6 +942,7 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
     Rate-limited by BRAINLAYER_ENRICH_RATE (default 5.0 req/s = 300 RPM).
     Timeout: 30 seconds per call.
     """
+    raise RuntimeError("Cloud enrichment has been retired. Local checkpoint replay remains available.")
     try:
         client = _get_gemini_client()
     except RuntimeError:
@@ -1153,6 +1130,7 @@ def enrich_single(store, chunk_id: str, max_retries: int = 2) -> dict[str, Any] 
 
     Returns the parsed enrichment dict on success, None on failure.
     """
+    raise RuntimeError("Cloud enrichment has been retired. Local checkpoint replay remains available.")
     if not AUTO_ENRICH_ENABLED:
         return None
 
@@ -1303,6 +1281,7 @@ def enrich_realtime(
     chunk_ids: list[str] | None = None,
 ) -> EnrichmentResult:
     """Enrich recent chunks via Gemini 2.5 Flash-Lite API."""
+    raise RuntimeError("Cloud enrichment has been retired. Local checkpoint replay remains available.")
     if rate_per_second is None:
         rate_per_second = RATE_LIMITS["realtime"]
 
