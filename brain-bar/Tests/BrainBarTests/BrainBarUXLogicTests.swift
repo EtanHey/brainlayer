@@ -4,7 +4,7 @@ import SwiftUI
 @testable import BrainBar
 
 final class BrainBarUXLogicTests: XCTestCase {
-    func testPipelineIndicatorsCanShowIndexingAndEnrichingLiveAtTheSameTime() {
+    func testPipelineIndicatorsKeepRetiredEnrichmentIdleDuringLocalWrites() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -30,10 +30,10 @@ final class BrainBarUXLogicTests: XCTestCase {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(indicators.indexing.status, .live)
-        XCTAssertEqual(indicators.enriching.status, .live)
+        XCTAssertEqual(indicators.enriching.status, .idle)
     }
 
-    func testPipelineIndicatorsShowQueuedEnrichmentWithoutRecentCompletions() {
+    func testPipelineIndicatorsKeepHistoricalMetadataDebtIdle() {
         let stats = DashboardStats(
             chunkCount: 120,
             enrichedChunkCount: 100,
@@ -56,7 +56,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats)
 
         XCTAssertEqual(indicators.indexing.status, .idle)
-        XCTAssertEqual(indicators.enriching.status, .queued)
+        XCTAssertEqual(indicators.enriching.status, .idle)
     }
 
     func testPipelineStateIsIdleForPendingBacklogWhenEnrichmentIsOff() {
@@ -186,7 +186,7 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         XCTAssertEqual(summary.ingress.status, .live)
         XCTAssertEqual(summary.queue.status, .stable)
-        XCTAssertEqual(summary.enrichment.status, .live)
+        XCTAssertEqual(summary.enrichment.status, .idle)
         XCTAssertEqual(summary.windowLabel, "Last 1h")
     }
 
@@ -734,12 +734,12 @@ final class BrainBarUXLogicTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .idle)
-        XCTAssertEqual(summary.queue.status, .draining)
-        XCTAssertEqual(summary.enrichment.status, .recent)
+        XCTAssertEqual(summary.queue.status, .stable)
+        XCTAssertEqual(summary.enrichment.status, .idle)
         XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)")
     }
 
-    func testDashboardFlowSummaryLabelsRightEdgeEnrichmentBurstAsBacklogDrain() {
+    func testDashboardFlowSummaryPreservesHistoricalCompletionBuckets() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 100_000,
@@ -758,10 +758,10 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
-        XCTAssertEqual(summary.enrichment.sparklineLabel, "Successful enrichment completions over Last 1h")
+        XCTAssertEqual(summary.enrichment.sparklineLabel, "Historical enrichment completions over Last 1h")
         XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
         let formattedCount = DashboardMetricFormatter.integerString(2_055)
-        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: \(formattedCount) enriched in latest 15m")
+        XCTAssertEqual(summary.enrichment.statusText, "Enrichment retired")
         XCTAssertEqual(summary.enrichment.volumeText, "\(formattedCount) in 1h")
     }
 

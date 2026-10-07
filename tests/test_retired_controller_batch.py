@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.retired_enrichment
+
 
 @pytest.mark.parametrize("phase", ["run", "submit", "poll", "import"])
 @pytest.mark.parametrize("candidates", [[], [{"id": "synthetic-existing", "content": "Synthetic historical content"}]])
