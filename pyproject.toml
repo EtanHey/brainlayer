@@ -1,7 +1,7 @@
 [project]
 name = "brainlayer"
 version = "1.5.48"
-description = "Persistent memory MCP server for AI agents — 16 tools, semantic search, knowledge graph, on-device SQLite"
+description = "Persistent local memory for AI agents — 16 BrainBar MCP tools, semantic search, knowledge graph, SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
 authors = [{name = "Etan Heyman"}]
@@ -30,7 +30,7 @@ dependencies = [
     "numpy>=1.22,<3.0",  # For sentence-transformers
     "scikit-learn>=1.0.0",  # K-means for cluster-based sampling
     "spacy>=3.7,<4.0",  # NER for PII sanitization (en_core_web_sm model)
-    "requests>=2.28.0",  # HTTP calls to Ollama for enrichment
+    "requests>=2.28.0",  # HTTP clients for backups and retained local utilities
     "idna>=2.5,<4",  # Imported through requests by backup and hook entrypoints
     "google-api-python-client>=2.0.0",  # Daily DB backup upload to Google Drive
     "google-auth>=2.0.0",  # OAuth refresh for Google Drive backups
@@ -52,7 +52,7 @@ classifiers = [
 
 [project.optional-dependencies]
 cloud = [
-    "google-genai>=1.0.0",  # Gemini Batch API for cloud backfill (new SDK)
+    "google-genai>=1.0.0",  # Compatibility dependency until retained SDK imports retire
 ]
 brain = [
     "igraph>=0.11.0",  # Graph operations + Leiden via leidenalg
@@ -122,6 +122,7 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 asyncio_mode = "auto"
 pythonpath = ["src"]
 markers = [
+    "retired_enrichment: retirement tests that forbid cloud-client construction and inet sends",
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
     "embedding_model: tests that deliberately load a real embedding model (deselected by scripts/run_tests.sh)",
     "timeout: maximum duration for an individual test",
