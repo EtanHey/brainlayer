@@ -266,3 +266,164 @@ def _apply_enrichment(
         telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
         raise
     telemetry_span.finish("commit" if owns_transaction else "completed")
+
+
+def _with_enriched_by(enrichment: dict[str, Any], model: str | None) -> dict[str, Any]:
+    stamped = dict(enrichment)
+    name = str(model or "").strip()
+    if not name:
+        return stamped
+    meta = dict(stamped.get("enrichment_metadata") or {})
+    meta["enriched_by"] = name
+    stamped["enrichment_metadata"] = meta
+    return stamped
+
+
+def _enrichment_update_payload(
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None | object = None,
+) -> dict[str, Any]:
+    content = chunk.get("content", "")
+    provenance_class = _derive_chunk_provenance_class(chunk, content)
+    model = str(GEMINI_REALTIME_MODEL or "").strip()
+    stamped = _with_enriched_by(scrub_llm_output(enrichment), model)
+    # chunk_origin is ingest provenance. Ignore any enrichment-provided origin.
+    _ = chunk_origin
+    return {
+        "chunk_id": chunk["id"],
+        "enrichment": stamped,
+        "content_hash": _content_hash(content) if content else None,
+        "entities": stamped.get("entities", []),
+        "chunk_origin": None,
+        "provenance_class": provenance_class,
+        "enrichment_model": model or GEMINI_REALTIME_MODEL,
+        "enrichment_backend": _current_enrichment_backend(),
+        "enrichment_version": (stamped.get("enrichment_metadata") or {}).get("prompt_version"),
+    }
+
+
+def _get_chunk_readonly(store, chunk_id: str) -> dict[str, Any] | None:
+    if not hasattr(store, "_read_cursor"):
+        chunk = store.get_chunk(chunk_id)
+        if chunk is None:
+            return None
+        chunk = dict(chunk)
+        chunk.setdefault("prev_assistant_text", None)
+        return chunk
+
+    cursor = store._read_cursor()
+    cols = _chunk_columns(cursor)
+
+    def chunk_expr(col: str, fallback: str = "NULL") -> str:
+        return col if col in cols else f"{fallback} AS {col}"
+
+    row = cursor.execute(
+        f"""SELECT id, content, {chunk_expr("metadata")}, {chunk_expr("source_file")},
+                  {chunk_expr("project")}, {chunk_expr("content_type")}, {chunk_expr("sender")},
+                  {chunk_expr("value_type")}, {chunk_expr("tags")}, {chunk_expr("importance")},
+                  {chunk_expr("created_at")}, {chunk_expr("summary")}, {chunk_expr("superseded_by")},
+                  {chunk_expr("aggregated_into")}, {chunk_expr("archived_at")}, {chunk_expr("source")},
+                  {chunk_expr("conversation_id")}, {chunk_expr("position")}
+           FROM chunks WHERE id = ?""",
+        (chunk_id,),
+    ).fetchone()
+    if not row:
+        return None
+    chunk = {
+        "id": row[0],
+        "content": row[1],
+        "metadata": row[2],
+        "source_file": row[3],
+        "project": row[4],
+        "content_type": row[5],
+        "sender": row[6],
+        "value_type": row[7],
+        "tags": row[8],
+        "importance": row[9],
+        "created_at": row[10],
+        "summary": row[11],
+        "superseded_by": row[12],
+        "aggregated_into": row[13],
+        "archived_at": row[14],
+        "source": row[15],
+        "conversation_id": row[16],
+        "position": row[17],
+    }
+    chunk["prev_assistant_text"] = _previous_assistant_text(cursor, cols, chunk)
+    return chunk
+
+
+def _chunk_columns(cursor) -> set[str]:
+    return {str(row[1]) for row in cursor.execute("PRAGMA table_info(chunks)")}
+
+
+def _previous_assistant_text(cursor, cols: set[str], chunk: dict[str, Any]) -> str | None:
+    if "created_at" not in cols or "content" not in cols:
+        return None
+    created_at = str(chunk.get("created_at") or "").strip()
+    if not created_at:
+        return None
+
+    assistant_filters: list[str] = []
+    if "content_type" in cols:
+        assistant_filters.append("content_type = 'assistant_text'")
+    if "sender" in cols:
+        assistant_filters.append("lower(sender) = 'assistant'")
+    if not assistant_filters:
+        return None
+
+    scope_filters: list[str] = []
+    params: list[Any] = [chunk["id"]]
+    position = chunk.get("position")
+    position_filter = ""
+    try:
+        position_value = int(position) if position is not None else None
+    except (TypeError, ValueError):
+        position_value = None
+    if "position" in cols and position_value is not None:
+        created_at_filter = """
+          AND (
+              julianday(created_at) < julianday(?)
+              OR (
+                  julianday(created_at) = julianday(?)
+                  AND position IS NOT NULL
+                  AND position < ?
+              )
+          )
+        """
+        params.extend([created_at, created_at, position_value])
+        position_filter = ", position DESC"
+    else:
+        created_at_filter = "AND julianday(created_at) < julianday(?)"
+        params.append(created_at)
+    conversation_id = str(chunk.get("conversation_id") or "").strip()
+    source_file = str(chunk.get("source_file") or "").strip()
+    if "conversation_id" in cols and conversation_id:
+        scope_filters.append("conversation_id = ?")
+        params.append(conversation_id)
+    elif "source_file" in cols and "project" in cols and source_file and str(chunk.get("project") or "").strip():
+        scope_filters.append("source_file = ?")
+        params.append(source_file)
+        scope_filters.append("project = ?")
+        params.append(str(chunk.get("project") or "").strip())
+    else:
+        return None
+
+    scope_clause = f" AND {' AND '.join(scope_filters)}" if scope_filters else ""
+    row = cursor.execute(
+        f"""
+        SELECT content
+        FROM chunks
+        WHERE id != ?
+          {created_at_filter}
+          AND ({" OR ".join(assistant_filters)})
+          AND content IS NOT NULL
+          {scope_clause}
+        ORDER BY julianday(created_at) DESC, created_at DESC{position_filter}
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None

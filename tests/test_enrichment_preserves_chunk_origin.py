@@ -135,7 +135,7 @@ def test_update_enrichment_does_not_fill_unknown_chunk_origin():
 
 
 def test_enrichment_payload_keeps_model_in_metadata_not_chunk_origin(monkeypatch):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     monkeypatch.setattr(controller, "GEMINI_REALTIME_MODEL", "gemini-test-model")
 
