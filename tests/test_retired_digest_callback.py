@@ -2,8 +2,12 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from brainlayer.pipeline.digest import digest_content
 from brainlayer.vector_store import VectorStore
+
+pytestmark = pytest.mark.retired_enrichment
 
 
 def test_brain_digest_retired_callback_keeps_historical_metadata_and_new_local_content(tmp_path):
