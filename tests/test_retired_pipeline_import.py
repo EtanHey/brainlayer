@@ -32,7 +32,7 @@ def test_legacy_external_prompt_import_keeps_four_argument_result():
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     code = r"""
 from brainlayer.pipeline import build_external_prompt, Sanitizer, SanitizeConfig
-from brainlayer.pipeline.enrichment import build_external_prompt as original
+from brainlayer.pipeline.enrichment_prompts import build_external_prompt as original
 assert build_external_prompt is original
 sanitizer = Sanitizer(SanitizeConfig(owner_names=("Jane Developer",), use_spacy_ner=False))
 prompt, result = build_external_prompt(

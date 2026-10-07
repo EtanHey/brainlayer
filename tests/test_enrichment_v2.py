@@ -84,7 +84,7 @@ def test_prompt_signature_swallow_oserror_and_logs_debug(monkeypatch):
 
 
 def test_build_external_prompt_uses_v2_truncation():
-    from brainlayer.pipeline.enrichment import build_external_prompt
+    from brainlayer.pipeline.enrichment_prompts import build_external_prompt
 
     head = "A" * 4800
     middle = "B" * 1200

@@ -6,6 +6,7 @@ This module contains no model transport or producer entry point.
 import logging
 import os
 import threading
+from typing import Any, Dict, List, Optional
 
 from ..tag_normalization import enrichment_tag_mode
 
@@ -160,3 +161,77 @@ def _emit_prompt_signature_once() -> None:
             )
         except OSError as exc:
             logger.debug("ENRICHMENT_PROMPT_LOADED emit failed: %s", exc)
+
+
+def build_external_prompt(
+    chunk: Dict[str, Any],
+    sanitizer: "Sanitizer",
+    context_chunks: Optional[List[Dict[str, Any]]] = None,
+    prompt_template: Optional[str] = None,
+) -> tuple[str, "SanitizeResult"]:
+    """Build enrichment prompt with MANDATORY PII sanitization for external APIs.
+
+    AIDEV-NOTE: This is THE function for sending content to any external LLM
+    (Gemini, Groq, etc). Sanitization is not optional — it's coupled into
+    the function signature. You cannot call this without a Sanitizer.
+
+    Args:
+        chunk: Chunk dict with at least 'content', 'project', 'content_type'.
+        sanitizer: A Sanitizer instance (from Sanitizer.from_env() or custom).
+        context_chunks: Optional surrounding chunks for enrichment context.
+
+    Returns:
+        Tuple of (prompt_string, sanitize_result). The prompt uses sanitized
+        content. The result tracks what was replaced (for audit/mapping).
+    """
+
+    if context_chunks is None:
+        context_chunks = []
+
+    content = chunk["content"]
+    # Truncate very long chunks to preserve both early and late facts.
+    if len(content) > 8000:
+        head = content[:4800]
+        tail = content[-3200:]
+        content = head + "\n[...truncated middle...]\n" + tail
+
+    # Sanitize the main content
+    metadata = {
+        "source": chunk.get("source"),
+        "sender": chunk.get("sender"),
+        "project": chunk.get("project"),
+    }
+    result = sanitizer.sanitize(content, metadata)
+    sanitized_content = result.sanitized
+
+    # Sanitize context chunks too — merge their replacements into the main result
+    context_section = ""
+    if context_chunks:
+        ctx_parts = []
+        for ctx in context_chunks[:3]:
+            ctx_content = ctx["content"][:1000]
+            ctx_result = sanitizer.sanitize(ctx_content)
+            # Merge context PII replacements into main result for full audit trail
+            result.replacements.extend(ctx_result.replacements)
+            if ctx_result.pii_detected:
+                result.pii_detected = True
+            ctx_parts.append(f"[{ctx.get('content_type', '?')}] {ctx_result.sanitized}")
+        context_section = "SURROUNDING CONTEXT:\n" + "\n---\n".join(ctx_parts)
+
+    # Escape braces for str.format()
+    safe_content = sanitized_content.replace("{", "{{").replace("}", "}}")
+    if context_section:
+        context_section = context_section.replace("{", "{{").replace("}", "}}")
+
+    template = prompt_template or ENRICHMENT_PROMPT
+    _emit_prompt_signature_once()
+
+    prompt = template.format(
+        project=chunk.get("project", "unknown"),
+        content_type=chunk.get("content_type", "unknown"),
+        content=safe_content,
+        context_section=context_section,
+        tag_rules=_tag_rules_for_prompt(),
+    )
+
+    return prompt, result
