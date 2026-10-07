@@ -84,36 +84,6 @@ class TestCallLlmFallback:
         assert enrichment._fallback_active is True
 
 
-class TestRunEnrichmentResetsState:
-    """Test that run_enrichment resets fallback state."""
-
-    def test_resets_fallback_state(self):
-        """run_enrichment resets all fallback state at start."""
-        enrichment._consecutive_failures = 5
-        enrichment._fallback_active = True
-        enrichment._fallback_available = True
-
-        with patch.object(enrichment, "VectorStore") as mock_vs:
-            mock_store = mock_vs.return_value
-            mock_store.get_enrichment_stats.return_value = {
-                "enriched": 0,
-                "enrichable": 0,
-                "remaining": 0,
-                "skipped": 0,
-                "percent": "0",
-                "total_chunks": 0,
-                "by_intent": {},
-            }
-            try:
-                enrichment.run_enrichment(max_chunks=0, batch_size=1)
-            except Exception:
-                pass  # Will fail on backend check, that's fine
-
-        assert enrichment._consecutive_failures == 0
-        assert enrichment._fallback_active is False
-        assert enrichment._fallback_available is None
-
-
 class TestCheckFallbackAvailable:
     """Test fallback availability detection."""
 

@@ -31,3 +31,11 @@ runpy.run_module('brainlayer.pipeline.enrichment', run_name='__main__')
     assert result.returncode == 2, result.stdout + result.stderr
     assert "enrichment has been retired" in result.stderr
     assert "AssertionError" not in result.stderr
+
+
+def test_legacy_runner_is_absent_and_saved_parser_remains_available():
+    from brainlayer.pipeline import enrichment
+
+    assert not hasattr(enrichment, "run_enrichment")
+    saved = enrichment.parse_enrichment('{"summary":"Historical saved result stays readable", "importance":7}')
+    assert saved["summary"] == "Historical saved result stays readable"
