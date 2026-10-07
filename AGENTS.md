@@ -118,7 +118,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 - Do not route mandatory reviews to Bugbot or Greptile.
 
 ## Known Issues
-- DB locking during enrichment.
+- Historical enrichment writer contention is retired; keep SQLite write/lock safety.
 - WAL can grow to 4.7GB.
 
 <!-- IDENTITY: brainlayer, owner=EtanHey, purpose=the fleet's memory — see the letter at the top of this file -->
@@ -209,7 +209,6 @@ pip install -e ".[dev]"
 brainlayer index
 brainlayer setup
 brainlayer search "how did I implement authentication"
-brainlayer enrich
 ```
 - Lint/format: `ruff check src/ tests/ && ruff format src/ tests/`
 - Pre-push: suites are queued via golems' heavy-suite lock; `GOLEMS_HEAVY_FORCE=1` is the human
@@ -239,7 +238,7 @@ brainlayer enrich
 
 ## Pipeline Overview
 - Extract -> Classify -> Chunk -> Embed -> Index
-- Post-processing: Enrichment, Brain Graph, Obsidian export
+- Post-processing: local Brain Graph and Obsidian export; historical enrichment metadata remains readable
 - Storage: `~/.local/share/brainlayer/brainlayer.db` (canonical path; measured 2026-09-06 at
   16.5 GB / 817,238 chunks — it grows, so re-measure rather than quoting this figure back)
 - DB path resolved by `paths.py:get_db_path()` — env var override or canonical path
@@ -296,12 +295,10 @@ brainlayer enrich
   pattern broader than it. Deployment-scoped patterns naming one project or repo are not reported as
   overreach. Etan rules on that env file; agents do not edit it.
 - Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.
-- **Scrub before any cloud LLM, and scrub what comes back.** `src/brainlayer/pipeline/cloud_scrub.py` is the one
-  chokepoint: every remote-LLM send passes `scrub_for_cloud` (Gemini realtime/batch, Groq enrichment/NER,
-  digest, eval senders), and every LLM output field passes `scrub_llm_output` before it is persisted
-  (`parse_enrichment`, `update_enrichment`, the queue drain, session enrichments). Both fail closed:
-  a scrub that raises means nothing is sent or written. A new cloud caller that skips it is a leak —
-  the PII `Sanitizer` does not look for credentials.
+- **LLM enrichment producers are retired.** Existing parsed metadata, local replay, and output
+  scrubbing remain compatibility contracts. Keep fail-closed credential/output scrubbing and
+  the public local PII `Sanitizer`; do not add a model sender or route around retirement.
+  History: [enrichment retirement](docs/enrichment.md).
 - MCP search uses a fixed-size readonly WAL `VectorStore` pool in `src/brainlayer/mcp/_shared.py`. `BRAINLAYER_READ_POOL_SIZE` defaults to 8, or 4 on detected Apple M1; M1 machines can keep the lower override explicitly. Checkout beyond the fixed pool blocks up to `BRAINLAYER_READ_BUSY_TIMEOUT_MS`, and startup rejects `pool_size * BRAINLAYER_READ_CACHE_KB` above about 768MB.
 
 <!-- ARCHITECTURE: classification preserves ai_code/stack_trace/user_message verbatim; skips noise; AST-aware chunking via tree-sitter; never split stack traces -->
@@ -310,13 +307,15 @@ brainlayer enrich
 - Skip/summarize: `noise` (skip), `build_log` (summarize), `dir_listing` (structure only)
 - Chunking: AST-aware (tree-sitter); never split stack traces; mask large tool output
 
-<!-- ARCHITECTURE: enrichment_controller.enrich_realtime uses Gemini only; BRAINLAYER_ENRICH_BACKEND selects the separate pipeline/enrichment.py backend -->
-## Enrichment
-- `enrichment_controller.enrich_realtime` uses Gemini 2.5 Flash-Lite through `_get_gemini_client`; it does **not** read `BRAINLAYER_ENRICH_BACKEND` or fall back to Groq/Ollama. `enrich_single` also uses Gemini.
-- The separate `pipeline/enrichment.py` backend selection reads `BRAINLAYER_ENRICH_BACKEND`; do not infer that it changes the realtime path.
-- Realtime rate is configurable via `BRAINLAYER_ENRICH_RATE` (default 5.0 req/s = 300 RPM; see `enrichment_controller.py:RATE_LIMITS`).
-- Operational state at the 2026-09-23 P0 handoff: enrichment is deliberately paused. This release metadata change does not resume it.
-- Adds 15 metadata fields (summary, key_facts, tags, importance, intent, primary_symbols, resolved_queries, epistemic_level, version_scope, debt_impact, external_deps, entities, sentiment_label, sentiment_score, sentiment_signals); session enrichment captures decisions/corrections
+<!-- ARCHITECTURE: LLM enrichment retired; historical metadata and local KG retained -->
+## Enrichment (retired)
+- LLM chunk/session enrichment and provider activation are retired.
+- Existing metadata and session analysis remain readable. Local indexing, search, digest, KG,
+  offline prompt emission/collection, and checkpoint replay remain available.
+- History: [enrichment retirement](docs/enrichment.md).
+- **Release gate:** retain `GOOGLE_API_KEY`, `BRAINLAYER_REQUIRE_GOOGLE_API_KEY`, and env-run's
+  exit-78 compatibility gate until the release re-renders installed hotlane plists. Preserve
+  its documentation in [Configuration](docs/configuration.md). Do not resume retired jobs.
 
 <!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 16 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
 ## Interfaces
@@ -426,12 +425,12 @@ brainlayer enrich
   (moved from `~/.local/share/brainlayer/logs/watch.{log,err}` by `3dca26a2`, 2026-05-18;
   the old files are frozen at that date and are NOT a health signal)
 - Socket: `/tmp/brainlayer.sock`
-- Enrichment lock: `/tmp/brainlayer-enrichment.lock`
+- Historical enrichment lock: `/tmp/brainlayer-enrichment.lock` (legacy cleanup/safety only)
 - Session dedup: `/tmp/brainlayer_session_*.json`
 
-<!-- ANTI-PATTERNS: never run bulk ops while enrichment is writing; never delete from chunks while FTS trigger active on large datasets; always stop workers + checkpoint WAL first -->
+<!-- ANTI-PATTERNS: quiesce writers before bulk ops; preserve legacy enrichment stop checks; checkpoint WAL first -->
 ## Bulk DB Operations (SAFETY)
-1. **Stop enrichment workers first** — never run bulk ops while enrichment is writing (causes WAL bloat + potential freeze)
+1. **Quiesce all writers first** — preserve checks for older installed enrichment jobs, but never resume the retired service. Concurrent bulk writes can cause WAL bloat or freezes.
 2. **Checkpoint WAL** before and after: `PRAGMA wal_checkpoint(FULL)`
 3. **Batch deletes** in 5-10K chunks, checkpoint every 3 batches
 

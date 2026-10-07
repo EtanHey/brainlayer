@@ -45,8 +45,8 @@ from .wal_checkpoint import checkpoint
 PAUSE_SENTINEL_PATH = DEFAULT_PAUSE_SENTINEL_PATH
 
 MAINTENANCE_DATASET = "brainlayer-maintenance"
-DEFAULT_SERVICES = ("watch", "enrichment", "index", "drain")
-REFEED_SERVICES = ("watch", "enrichment", "index")
+DEFAULT_SERVICES = ("watch", "index", "drain")
+REFEED_SERVICES = ("watch", "index")
 EXPECTED_WRITER_PATTERNS = (
     "BrainBar",
     "brainlayer watch",
@@ -458,26 +458,9 @@ def _launchd_dir_for_resume(repo_root: Path) -> Path:
     return get_launchd_dir()
 
 
-def _verify_enrichment_template_flex_backend(repo_root_or_launchd_dir: Path) -> None:
-    launchd_dir = _as_launchd_dir(repo_root_or_launchd_dir)
-    env_template_path = launchd_dir / "brainlayer.env.example"
-    if not env_template_path.exists():
-        raise MaintenanceAbort(f"BrainLayer env template not found: {env_template_path}")
-    env_template = env_template_path.read_text(encoding="utf-8")
-    service_tier = None
-    for raw_line in env_template.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        line = line.removeprefix("export ").strip()
-        key, separator, value = line.partition("=")
-        if separator and key.strip() == "BRAINLAYER_GEMINI_SERVICE_TIER":
-            service_tier = value.strip().strip("'\"").lower()
-    if service_tier != "flex":
-        raise MaintenanceAbort("BrainLayer env template no longer uses Gemini Flex backend")
-
-
 def _resume_service(repo_root: Path, service: str) -> None:
+    if service in {"enrich", "enrichment"}:
+        raise MaintenanceAbort(f"service {service} is retired; refusing to resume")
     if service in {"brainbar", "brainbar-daemon", "fleet-watchdog"}:
         # These already-installed jobs have no normal install.sh service option
         # (or own a different namespace). Restore their existing configuration.
@@ -485,8 +468,6 @@ def _resume_service(repo_root: Path, service: str) -> None:
         run_command(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], check=True)
         return
     launchd_dir = _launchd_dir_for_resume(repo_root)
-    if service == "enrichment":
-        _verify_enrichment_template_flex_backend(launchd_dir)
     run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
@@ -814,6 +795,9 @@ def _resume_services(
     if held:
         services = (*(service for service in services if service != "fleet-watchdog"), "fleet-watchdog")
     for service in services:
+        if service in {"enrich", "enrichment"}:
+            print(f"service {service} is retired; leaving it down", file=sys.stderr)
+            continue
         if service == "fleet-watchdog" and held:
             if loaded_before[_WATCHDOG_DISABLED_BEFORE]:
                 continue  # Never undo an operator disable.
