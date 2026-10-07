@@ -306,3 +306,10 @@ def test_service_controls_reject_retired_labels_before_side_effects(monkeypatch,
     assert "retired" in result.output
     assert commands == []
     assert sentinel.read_text() == original
+
+
+def test_health_cli_does_not_offer_retired_enrichment_controls():
+    result = CliRunner().invoke(app, ["health-check", "--help"])
+    assert result.exit_code == 0
+    assert "--enrichment-label" not in result.output
+    assert "--enrichment-plist-path" not in result.output

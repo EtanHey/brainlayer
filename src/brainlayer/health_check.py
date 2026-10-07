@@ -43,6 +43,7 @@ from .pause import (
     pause_sentinel_state,
     queue_contains_only_enrichment,
 )
+from .retired_services import RETIRED_ENRICHMENT_LABELS
 from .socket_hygiene import refuse_production_brainbar_socket
 from .watcher import default_watch_roots
 
@@ -79,19 +80,6 @@ MISSING_EMBEDDINGS_SQL = """
       AND c.archived_at IS NULL
       AND c.superseded_by IS NULL
       AND c.aggregated_into IS NULL
-"""
-
-ENRICHMENT_BACKLOG_SQL = """
-    SELECT COUNT(*)
-    FROM chunks
-    WHERE enriched_at IS NULL
-      AND enrich_status IS NULL
-      AND COALESCE(char_count, length(content), 0) >= 50
-      AND content IS NOT NULL
-      AND content != ''
-      AND archived_at IS NULL
-      AND superseded_by IS NULL
-      AND aggregated_into IS NULL
 """
 
 
@@ -132,7 +120,6 @@ class HealthCheckConfig:
     watch_label: str = DEFAULT_WATCH_LABEL
     drain_label: str = DEFAULT_DRAIN_LABEL
     health_check_label: str = DEFAULT_HEALTH_CHECK_LABEL
-    enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
     observability_label: str = DEFAULT_OBSERVABILITY_LABEL
     index_label: str = DEFAULT_INDEX_LABEL
     watch_plist_path: Path = field(
@@ -143,9 +130,6 @@ class HealthCheckConfig:
     )
     health_check_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist").expanduser()
-    )
-    enrichment_plist_path: Path = field(
-        default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist").expanduser()
     )
     offsets_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/offsets.json").expanduser())
     watcher_health_path: Path = field(
@@ -295,16 +279,22 @@ def _launchd_target(label: str) -> str:
 
 
 def _launchd_label_loaded(label: str, command_runner: CommandRunner) -> bool | None:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return None
     return is_launchd_label_loaded(label, command_runner=command_runner)
 
 
 def _kickstart(label: str, command_runner: CommandRunner) -> str:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return f"retired:{label}"
     target = _launchd_target(label)
     command_runner(["launchctl", "kickstart", "-k", target])
     return f"kickstart:{label}"
 
 
 def _launchd_process_state(label: str, command_runner: CommandRunner) -> tuple[int, str] | None:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return None
     launchd_result = command_runner(["launchctl", "print", _launchd_target(label)])
     if _command_returncode(launchd_result) != 0:
         return None
@@ -327,6 +317,8 @@ def _state_is_uninterruptible(process_state: str) -> bool:
 
 
 def _bootstrap_if_absent(label: str, plist_path: Path, command_runner: CommandRunner) -> str:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return f"retired:{label}"
     loaded = _launchd_label_loaded(label, command_runner)
     if loaded is True:
         return f"loaded:{label}"
@@ -476,12 +468,11 @@ def _same_lock_holder_ticks(state: dict[str, Any], lock_holder: LockHolder | Non
 def _known_lock_holder_labels(config: HealthCheckConfig) -> tuple[str, ...]:
     labels = [
         config.index_label,
-        config.enrichment_label,
         config.watch_label,
         config.drain_label,
         config.hotlane_label,
     ]
-    return tuple(dict.fromkeys(label for label in labels if label))
+    return tuple(dict.fromkeys(label for label in labels if label and label not in RETIRED_ENRICHMENT_LABELS))
 
 
 def _launchd_print_mentions_pid(stdout: str, pid: int) -> bool:
@@ -499,7 +490,6 @@ def _command_implies_lock_holder_label(command: str, config: HealthCheckConfig) 
         parts = command.split()
     commands = {
         "index": config.index_label,
-        "enrich": config.enrichment_label,
         "watch": config.watch_label,
         "drain": config.drain_label,
     }
@@ -565,21 +555,6 @@ def count_missing_embeddings(
         db_path,
         MISSING_EMBEDDINGS_SQL,
         stage="missing_embeddings",
-        deadline_at=deadline_at,
-        monotonic_fn=monotonic_fn,
-    )
-
-
-def _enrichment_backlog(
-    db_path: Path,
-    *,
-    deadline_at: float | None = None,
-    monotonic_fn: Callable[[], float] = time.monotonic,
-) -> int:
-    return _read_only_count(
-        db_path,
-        ENRICHMENT_BACKLOG_SQL,
-        stage="enrichment_backlog",
         deadline_at=deadline_at,
         monotonic_fn=monotonic_fn,
     )
@@ -736,7 +711,7 @@ def _apply_heals(
         "observability_unloaded",
     }
     for issue_code, (label, plist_path) in issue_labels.items():
-        if label == config.enrichment_label:
+        if label in RETIRED_ENRICHMENT_LABELS:
             continue
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
@@ -1203,8 +1178,6 @@ def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
         return config.drain_plist_path
     if label == config.health_check_label:
         return config.health_check_plist_path
-    if label == config.enrichment_label:
-        return config.enrichment_plist_path
     if label == config.index_label:
         return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
     if label == config.hotlane_label:
@@ -1501,10 +1474,12 @@ def _run_health_check_locked(
         (config.watch_label, "watch_unloaded", "watch launchd label is not loaded"),
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
         (config.health_check_label, "health_check_unloaded", "health-check launchd label is not loaded"),
-        (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
         (config.observability_label, "observability_unloaded", "observability launchd label is not loaded"),
     ):
         if not label:
+            continue
+        if label in RETIRED_ENRICHMENT_LABELS:
+            add_issue("retired_service_config", "critical", f"retired launchd label configured: {label}")
             continue
         loaded = _launchd_label_loaded(label, command_runner)
         if issue_code == "drain_unloaded":
@@ -1513,8 +1488,7 @@ def _run_health_check_locked(
             if pause_active and pause_applies_to_label(pause_payload, label):
                 continue
             add_issue(issue_code, "critical", message)
-            if label != config.enrichment_label:
-                heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
+            heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
     if slow_result := deadline_reached("launchd_status"):
         return slow_result
 
@@ -1611,37 +1585,11 @@ def _run_health_check_locked(
     drain_total = drain_health.get("drained_total")
     previous_drain_total = state.get("drain_drained_total")
     drain_starved = _drain_health_has_sqlite_busy_signal(drain_health)
-    try:
-        enrichment_backlog = _enrichment_backlog(
-            config.db_path,
-            deadline_at=deadline_at,
-            monotonic_fn=monotonic_fn,
-        )
-    except HealthCheckDeadlineExceeded as exc:
-        return finish_slow("enrichment_backlog", str(exc))
-    except sqlite3.OperationalError as exc:
-        if "interrupted" in str(exc).lower():
-            return finish_slow("enrichment_backlog", "health-check deadline interrupted enrichment_backlog")
-        enrichment_backlog = 0
-        add_issue(
-            "enrichment_backlog_count_failed",
-            "critical",
-            f"could not count enrichment backlog: {exc}",
-        )
-    except Exception as exc:
-        enrichment_backlog = 0
-        add_issue(
-            "enrichment_backlog_count_failed",
-            "critical",
-            f"could not count enrichment backlog: {exc}",
-        )
-    if slow_result := deadline_reached("enrichment_backlog"):
-        return slow_result
     drain_liveness_issue = check_drain_liveness(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
         queue_count=queue_count + pending_stores_count,
-        enrichment_backlog=enrichment_backlog,
+        enrichment_backlog=0,
         drain_health=drain_health,
         now=now,
         stale_seconds=config.drain_liveness_stale_seconds,
