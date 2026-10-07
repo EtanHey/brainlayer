@@ -116,7 +116,7 @@ def test_pause_and_resume_record_labels_and_call_launchctl(monkeypatch, tmp_path
     assert any(command[:2] == ["launchctl", "bootstrap"] for command in commands)
 
 
-def test_pause_defaults_to_enrichment_without_stopping_ingestion_daemons(monkeypatch, tmp_path):
+def test_pause_requires_explicit_active_labels_without_stopping_ingestion_daemons(monkeypatch, tmp_path):
     commands: list[list[str]] = []
     monkeypatch.setattr("brainlayer.cli._run_launchctl", lambda args: commands.append(args) or 0)
 
@@ -125,9 +125,11 @@ def test_pause_defaults_to_enrichment_without_stopping_ingestion_daemons(monkeyp
         ["pause", "--pause-sentinel-path", str(tmp_path / "pause.sentinel"), "--ttl-seconds", "60"],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
+    assert "--label" in result.output
+    assert not (tmp_path / "pause.sentinel").exists()
     booted_out = [command[-1].rsplit("/", 1)[-1] for command in commands if command[:2] == ["launchctl", "bootout"]]
-    assert booted_out == ["com.brainlayer.enrichment"]
+    assert booted_out == []
 
 
 def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
@@ -146,8 +148,6 @@ def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
             str(tmp_path / "health.plist"),
             "--hotlane-plist-path",
             str(tmp_path / "hotlane.plist"),
-            "--enrichment-plist-path",
-            str(tmp_path / "enrichment.plist"),
         ],
     )
 
@@ -157,7 +157,7 @@ def test_reconcile_launchd_bootstraps_all_mode_a_labels(monkeypatch, tmp_path):
     assert "com.brainlayer.drain" in command_text
     assert "com.brainlayer.health-check" in command_text
     assert "com.brainlayer.hotlane-brainbar" in command_text
-    assert "com.brainlayer.enrichment" in command_text
+    assert "com.brainlayer.enrichment" not in command_text
 
 
 def test_deploy_kickstarts_runtime_daemons_and_does_not_restart_brainbar(monkeypatch, tmp_path):
@@ -182,12 +182,12 @@ def test_deploy_kickstarts_runtime_daemons_and_does_not_restart_brainbar(monkeyp
     command_text = "\n".join(" ".join(command) for command in commands)
     for label in (
         "com.mcplayer.brainlayer-proxy",
-        "com.brainlayer.enrichment",
         "com.brainlayer.drain",
         "com.brainlayer.watch",
     ):
         assert ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"] in commands
         assert label in recorded
+    assert "com.brainlayer.enrichment" not in command_text
     assert "com.brainlayer.brainbar" not in command_text
     assert "com.brainlayer.brainbar-daemon" not in command_text
 
@@ -212,6 +212,7 @@ def test_deploy_flags_brainbar_changes_without_restart(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "BrainBar source changed; rebuild BrainBar manually" in result.output
     command_text = "\n".join(" ".join(command) for command in commands)
+    assert "com.brainlayer.enrichment" not in command_text
     assert "com.brainlayer.brainbar" not in command_text
     assert "com.brainlayer.brainbar-daemon" not in command_text
 
@@ -266,8 +267,6 @@ def test_reconcile_launchd_attempts_remaining_labels_when_one_bootstrap_fails(mo
             str(tmp_path / "health.plist"),
             "--hotlane-plist-path",
             str(tmp_path / "hotlane.plist"),
-            "--enrichment-plist-path",
-            str(tmp_path / "enrichment.plist"),
         ],
     )
 
@@ -277,5 +276,33 @@ def test_reconcile_launchd_attempts_remaining_labels_when_one_bootstrap_fails(mo
     assert "com.brainlayer.drain" in command_text
     assert "com.brainlayer.health-check" in command_text
     assert "com.brainlayer.hotlane-brainbar" in command_text
-    assert "com.brainlayer.enrichment" in command_text
+    assert "com.brainlayer.enrichment" not in command_text
     assert "failed to reconcile launchd label com.brainlayer.watch" in result.output
+
+
+import pytest
+
+
+@pytest.mark.parametrize("label", ["com.brainlayer.enrich", "com.brainlayer.enrichment"])
+@pytest.mark.parametrize("action", ["pause", "deploy", "resume", "reconcile-launchd"])
+def test_service_controls_reject_retired_labels_before_side_effects(monkeypatch, tmp_path, action, label):
+    commands = []
+    monkeypatch.setattr("brainlayer.cli._run_launchctl", lambda args: commands.append(args) or 0)
+    monkeypatch.setattr("brainlayer.cli._brainbar_changed_for_deploy", lambda *_: False)
+    sentinel = tmp_path / "pause.sentinel"
+    original = json.dumps({"labels": [label]})
+    sentinel.write_text(original)
+    args = [action]
+    if action in {"pause", "resume"}:
+        args += ["--pause-sentinel-path", str(sentinel)]
+    if action == "deploy":
+        args += ["--provenance-dir", str(tmp_path / "provenance")]
+    if action in {"pause", "deploy"}:
+        args += ["--label", label]
+    if action == "reconcile-launchd":
+        args += ["--watch-label", label]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 1, result.output
+    assert "retired" in result.output
+    assert commands == []
+    assert sentinel.read_text() == original

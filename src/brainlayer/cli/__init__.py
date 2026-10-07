@@ -34,6 +34,7 @@ from rich.table import Table
 from .. import __version__
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
+from ..retired_services import RETIRED_ENRICHMENT_LABELS
 
 app = typer.Typer(
     name="brainlayer",
@@ -172,7 +173,6 @@ def _plist_for_launchd_label(
     drain: Path,
     health_check: Path,
     hotlane: Path | None = None,
-    enrichment: Path | None = None,
 ) -> Path:
     if label == "com.brainlayer.watch":
         return watch.expanduser()
@@ -182,20 +182,27 @@ def _plist_for_launchd_label(
         return health_check.expanduser()
     if label == "com.brainlayer.hotlane-brainbar" and hotlane is not None:
         return hotlane.expanduser()
-    if label == "com.brainlayer.enrichment" and enrichment is not None:
-        return enrichment.expanduser()
     return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
+
+
+def _reject_retired_labels(labels: list[str]) -> None:
+    retired = sorted(set(labels) & RETIRED_ENRICHMENT_LABELS)
+    if retired:
+        typer.echo(f"enrichment services are retired: {','.join(retired)}", err=True)
+        raise typer.Exit(1)
 
 
 def _bootstrap_label(label: str, plist_path: Path) -> None:
     from ..launchd_primitive import install_and_verify_launchagent
 
+    _reject_retired_labels([label])
     install_and_verify_launchagent(label, plist_path, command_runner=_run_launchctl)
 
 
 def _bootstrap_labels_or_exit(label_plist_pairs: list[tuple[str, Path]], *, action: str) -> None:
     from ..launchd_primitive import LaunchdVerificationError
 
+    _reject_retired_labels([label for label, _path in label_plist_pairs])
     failures: list[LaunchdVerificationError] = []
     for label, plist_path in label_plist_pairs:
         if not label:
@@ -248,7 +255,7 @@ def sandbox_stop_command(
 
 
 def _default_pause_labels() -> list[str]:
-    return ["com.brainlayer.enrichment"]
+    return []
 
 
 @app.command("pause")
@@ -263,6 +270,10 @@ def pause_command(
 ) -> None:
     """Record an intentional pause and bootout BrainLayer launchd labels."""
     selected_labels = labels or _default_pause_labels()
+    if not selected_labels:
+        typer.echo("pause requires an explicit active service --label", err=True)
+        raise typer.Exit(1)
+    _reject_retired_labels(selected_labels)
     now = datetime.now(UTC)
     resolved = pause_sentinel_path.expanduser()
     resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -306,10 +317,6 @@ def resume_command(
         Path("~/Library/LaunchAgents/com.brainlayer.hotlane-brainbar.plist"),
         "--hotlane-plist-path",
     ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-    ),
 ) -> None:
     """Remove an intentional pause and bootstrap recorded launchd labels."""
     resolved = pause_sentinel_path.expanduser()
@@ -329,7 +336,6 @@ def resume_command(
                     drain=drain_plist_path,
                     health_check=health_check_plist_path,
                     hotlane=hotlane_plist_path,
-                    enrichment=enrichment_plist_path,
                 ),
             )
             for label in selected_labels
@@ -349,7 +355,6 @@ def reconcile_launchd_command(
     drain_label: str = typer.Option("com.brainlayer.drain", "--drain-label"),
     health_check_label: str = typer.Option("com.brainlayer.health-check", "--health-check-label"),
     hotlane_label: str = typer.Option("com.brainlayer.hotlane-brainbar", "--hotlane-label"),
-    enrichment_label: str = typer.Option("com.brainlayer.enrichment", "--enrichment-label"),
     watch_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
         "--watch-plist-path",
@@ -366,10 +371,6 @@ def reconcile_launchd_command(
         Path("~/Library/LaunchAgents/com.brainlayer.hotlane-brainbar.plist"),
         "--hotlane-plist-path",
     ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-    ),
 ) -> None:
     """Bootstrap BrainLayer launchd labels if absent."""
     _bootstrap_labels_or_exit(
@@ -377,7 +378,6 @@ def reconcile_launchd_command(
             (watch_label, watch_plist_path),
             (drain_label, drain_plist_path),
             (hotlane_label, hotlane_plist_path),
-            (enrichment_label, enrichment_plist_path),
             (health_check_label, health_check_plist_path),
         ],
         action="reconcile",
@@ -388,7 +388,6 @@ def reconcile_launchd_command(
 def _default_deploy_labels() -> list[str]:
     return [
         "com.mcplayer.brainlayer-proxy",
-        "com.brainlayer.enrichment",
         "com.brainlayer.drain",
         "com.brainlayer.watch",
     ]
@@ -398,14 +397,11 @@ def _deploy_plist_for_label(
     label: str,
     *,
     proxy: Path,
-    enrichment: Path,
     drain: Path,
     watch: Path,
 ) -> Path:
     if label == "com.mcplayer.brainlayer-proxy":
         return proxy.expanduser()
-    if label == "com.brainlayer.enrichment":
-        return enrichment.expanduser()
     if label == "com.brainlayer.drain":
         return drain.expanduser()
     if label == "com.brainlayer.watch":
@@ -416,6 +412,7 @@ def _deploy_plist_for_label(
 def _kickstart_label_or_raise(label: str) -> None:
     from ..launchd_primitive import LaunchdCommandError, verify_launchd_label_loaded
 
+    _reject_retired_labels([label])
     command = ["launchctl", "kickstart", "-k", _launchd_target(label)]
     result = _run_launchctl(command)
     returncode = _launchctl_returncode(result)
@@ -477,10 +474,6 @@ def deploy_command(
         Path("~/Library/LaunchAgents/com.mcplayer.brainlayer-proxy.plist"),
         "--proxy-plist-path",
     ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-    ),
     drain_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.drain.plist"),
         "--drain-plist-path",
@@ -495,6 +488,7 @@ def deploy_command(
     from ..launchd_primitive import LaunchdVerificationError
 
     selected_labels = labels or _default_deploy_labels()
+    _reject_retired_labels(selected_labels)
     resolved_provenance_dir = (provenance_dir or default_deploy_provenance_dir()).expanduser()
     brainbar_changed = _brainbar_changed_for_deploy(resolved_provenance_dir)
     failures: list[LaunchdVerificationError | DeployProvenanceError] = []
@@ -503,7 +497,6 @@ def deploy_command(
         plist_path = _deploy_plist_for_label(
             label,
             proxy=proxy_plist_path,
-            enrichment=enrichment_plist_path,
             drain=drain_plist_path,
             watch=watch_plist_path,
         )
