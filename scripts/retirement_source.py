@@ -40,6 +40,15 @@ MODEL_URL = re.compile(
     r"[a-z0-9.-]+\.endpoints\.huggingface\.cloud)(?::\d+)?(?=[/?#\s'\"]|$)",
     re.I,
 )
+# Only executable dynamic imports count; quoted examples and comments are tokens.
+ES_CODE_TOKEN = re.compile(
+    r"//[^\n]*|/\*[\s\S]*?\*/|"
+    r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|"
+    r"(?P<model_import>\bimport\s*\(\s*(?P<quote>['\"])(?:"
+    r"openai|@google/(?:genai|generative-ai)|@anthropic-ai/sdk)(?P=quote)\s*\))|[{}`]",
+    re.S,
+)
+ES_TEMPLATE_TOKEN = re.compile(r"\\[\s\S]|`|\$\{")
 ROOTS = ("src", "scripts", "hooks", "brain-bar/Sources", "dashboard")
 EXTENSIONS = {".py", ".swift", ".sh", ".js", ".ts", ".tsx", ".mjs", ".c", ".h", ".cpp", ".m", ".mm"}
 
@@ -111,6 +120,31 @@ def python_findings(text: str, module: str) -> list[dict]:
     return sorted(unique.values(), key=lambda row: (row["line"], row["target"]))
 
 
+def es_dynamic_findings(text: str) -> list[dict]:
+    findings, frames, position = [], [], 0
+    while position < len(text):
+        in_template = bool(frames) and frames[-1] is None
+        match = (ES_TEMPLATE_TOKEN if in_template else ES_CODE_TOKEN).search(text, position)
+        if match is None:
+            break
+        position = match.end()
+        token = match.group()
+        if in_template:
+            if token == "`":
+                frames.pop()
+            elif token == "${":
+                frames.append(1)
+        elif token == "`":
+            frames.append(None)
+        elif frames and token in {"{", "}"}:
+            frames[-1] += 1 if token == "{" else -1
+            if frames[-1] == 0:
+                frames.pop()
+        elif match.group("model_import"):
+            findings.append({"line": text.count("\n", 0, match.start()) + 1, "target": "model transport syntax"})
+    return findings
+
+
 def source_scan(root: Path) -> dict:
     inventory, findings, errors = {}, [], []
     for directory in ROOTS:
@@ -126,6 +160,8 @@ def source_scan(root: Path) -> dict:
                 data = path.read_bytes()
                 inventory[relative] = hashlib.sha256(data).hexdigest()
                 text = data.decode()
+                if path.suffix in {".js", ".ts", ".tsx", ".mjs"}:
+                    findings.extend({"path": relative, **row} for row in es_dynamic_findings(text))
                 if path.suffix == ".py":
                     module = relative.removeprefix("src/").removesuffix(".py").replace("/", ".")
                     findings.extend({"path": relative, **row} for row in python_findings(text, module))

@@ -106,3 +106,69 @@ def test_native_model_sender_restoration_is_detected(tmp_path):
     path.parent.mkdir(parents=True)
     path.write_text('client.generateContent("fixture")')
     assert source_scan(tmp_path)["findings"]
+
+
+@pytest.fixture(params=["js", "ts", "mjs"])
+def es_source_fixture(tmp_path, request):
+    for relative in ("src/brainlayer/__init__.py", "brain-bar/Sources/Probe.swift"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    path = tmp_path / f"dashboard/probe.{request.param}"
+    path.parent.mkdir()
+    return tmp_path, path
+
+
+@pytest.mark.parametrize("sdk", ["openai", "@google/genai", "@google/generative-ai", "@anthropic-ai/sdk"])
+@pytest.mark.parametrize(
+    "form",
+    [
+        "import('{sdk}')",
+        'await import("{sdk}")',
+        "await import \t( \t'{sdk}' \t)",
+        "import(\n'{sdk}'\n)",
+        "`text ${{await import('{sdk}')}}`",
+    ],
+)
+def test_dynamic_es_model_sdk_import_is_detected(es_source_fixture, sdk, form):
+    root, path = es_source_fixture
+    path.write_text(form.format(sdk=sdk))
+    report = source_scan(root)
+    assert not report["errors"], report["errors"]
+    assert report["findings"] == [
+        {"path": path.relative_to(root).as_posix(), "line": 1, "target": "model transport syntax"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "const help = \"await import('openai')\";",
+        "const help = 'await import(\"@anthropic-ai/sdk\")';",
+        "const help = `await import('openai')`;",
+        "const help = `await import('openai') ${local}`;",
+        "const help = `${\"await import('openai')\"}`;",
+        "const help = `\\${await import('openai')}`;",
+        "// await import('openai')",
+        '/*\nawait import("@anthropic-ai/sdk")\n*/',
+        "import helper from './local-helper';",
+        "await import('./local-helper');",
+        "require('./local-helper');",
+    ],
+)
+def test_harmless_es_strings_comments_and_local_imports_are_preserved(es_source_fixture, code):
+    root, path = es_source_fixture
+    path.write_text(code)
+    report = source_scan(root)
+    assert not report["errors"] and not report["findings"], report
+
+
+@pytest.mark.parametrize("sdk", ["openai", "@google/genai", "@google/generative-ai", "@anthropic-ai/sdk"])
+def test_static_es_model_sdk_control_is_armed(es_source_fixture, sdk):
+    root, path = es_source_fixture
+    path.write_text(f"import sdk from '{sdk}';")
+    report = source_scan(root)
+    assert not report["errors"], report["errors"]
+    assert report["findings"] == [
+        {"path": path.relative_to(root).as_posix(), "line": 1, "target": "model transport syntax"}
+    ]
