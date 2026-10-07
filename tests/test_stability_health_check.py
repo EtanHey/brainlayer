@@ -947,7 +947,7 @@ def test_frozen_drain_quota_blocker_does_not_wedge_lock_holder(tmp_path, monkeyp
     )
 
     issue_codes = [issue.code for issue in result.issues]
-    assert "drain_liveness_quota_blocked" in issue_codes
+    assert "drain_liveness_quota_blocked" not in issue_codes
     assert "drain_liveness_stalled" not in issue_codes
     assert "lock_holder_wedge" not in issue_codes
 
@@ -981,11 +981,11 @@ def test_pending_store_backlog_read_failure_is_reported(tmp_path, monkeypatch):
     assert "pending_stores_count_failed" in [issue.code for issue in result.issues]
 
 
-def test_enrichment_backlog_query_failure_is_reported(tmp_path, monkeypatch):
+def test_health_does_not_count_retired_producer_backlog(tmp_path, monkeypatch):
     def fail_enrichment_backlog(_path):
         raise sqlite3.OperationalError("enrichment backlog unavailable")
 
-    monkeypatch.setattr(health_check, "_enrichment_backlog", fail_enrichment_backlog)
+    monkeypatch.setattr(health_check, "_enrichment_backlog", fail_enrichment_backlog, raising=False)
 
     result, _holder_pid = _run_frozen_drain_liveness_scenario(
         tmp_path,
@@ -994,7 +994,12 @@ def test_enrichment_backlog_query_failure_is_reported(tmp_path, monkeypatch):
         pending_store_count=0,
     )
 
-    assert "enrichment_backlog_count_failed" in [issue.code for issue in result.issues]
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert set(payload) == set(compat["health_keys"])
+    codes = {issue["code"] for issue in payload["issues"]}
+    assert codes.isdisjoint(compat["removed_codes"])
+    assert codes.isdisjoint(compat["renamed_codes"])
 
 
 @pytest.mark.parametrize(
@@ -1529,7 +1534,8 @@ def test_health_check_never_bootstraps_absent_enrichment(tmp_path):
         now_fn=lambda: datetime(2026, 6, 21, 10, 0, tzinfo=UTC),
     )
 
-    assert "enrichment_unloaded" in [issue.code for issue in result.issues]
+    assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
+    assert not any("com.brainlayer.enrichment" in " ".join(command) for command in commands)
     assert not any(
         "com.brainlayer.enrichment" in " ".join(command) and command[:2] == ["launchctl", "bootstrap"]
         for command in commands
@@ -1782,7 +1788,7 @@ def _capture_queue_notifications(monkeypatch) -> list[tuple[str, str]]:
         health_check,
         "_log_health_event",
         lambda condition, message, **_kwargs: notifications.append(
-            ("BrainLayer queue backlog" if condition in {"queue_backlog", "enrichment_backlog"} else condition, message)
+            ("BrainLayer queue backlog" if condition == "queue_backlog" else condition, message)
         ),
     )
     return notifications
@@ -1799,12 +1805,13 @@ def test_pause_aware_heal_decision_blocks_only_an_entirely_paused_enrichment_que
     }
 
     def explanation():
-        return health_check._paused_enrichment_queue_explanation(
-            queue_dir, 1, pause_payload=pause_payload, pause_active=True
-        )
+        return health_check._legacy_queue_hold_explanation(queue_dir, 1, pause_payload=pause_payload, pause_active=True)
 
     reason = explanation()
-    assert reason == "enrichment lane paused since 2026-08-04; drain restart would be a no-op"
+    assert (
+        reason
+        == "historical metadata updates held by maintenance sentinel since 2026-08-04; drain restart would be a no-op"
+    )
 
     queue_file.write_text('{"kind":"store_memory"}\n', encoding="utf-8")
     assert explanation() is None
@@ -1845,7 +1852,7 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
 
     queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
     assert "heal=skipped" in queue_issue.message and "heal_failures=85" in queue_issue.message
-    assert "enrichment lane paused since 2026-08-04" in queue_issue.message
+    assert "historical metadata updates held by maintenance sentinel since 2026-08-04" in queue_issue.message
     assert "drain restart would be a no-op" in queue_issue.message
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
@@ -2267,3 +2274,18 @@ def test_malformed_canary_content_fails_closed_as_retrieval_failure(tmp_path, re
     assert result.canary_ok is False
     assert result.canary_status == "retrieval_failed"
     assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
+
+
+@pytest.mark.parametrize("label", ["com.brainlayer.enrich", "com.brainlayer.enrichment"])
+def test_health_helpers_refuse_retired_labels_even_with_stale_configuration(label, tmp_path):
+    commands = []
+
+    def runner(args):
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert health_check._kickstart(label, runner) == f"retired:{label}"
+    assert health_check._bootstrap_if_absent(label, tmp_path / "stale.plist", runner) == f"retired:{label}"
+    assert health_check._launchd_label_loaded(label, runner) is None
+    assert health_check._launchd_process_state(label, runner) is None
+    assert commands == []
