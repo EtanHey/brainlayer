@@ -136,6 +136,7 @@ def es_dynamic_findings(text: str) -> list[dict]:
     findings, frames, parens, braces, position = [], [], [], [], 0
     regex_allowed, previous, before_previous = True, None, None
     function_pending = class_pending = function_body = None
+    statement_start, label_pending, body_depths = True, False, []
     while position < len(text):
         in_template = bool(frames) and frames[-1] is None
         match = (ES_TEMPLATE_TOKEN.search if in_template else ES_CODE_TOKEN.match)(text, position)
@@ -150,6 +151,7 @@ def es_dynamic_findings(text: str) -> list[dict]:
             elif token == "${":
                 frames.append(1)
                 regex_allowed, previous = True, "${"
+            statement_start, label_pending = False, False
             continue
         if match.group("trivia"):
             continue
@@ -158,7 +160,9 @@ def es_dynamic_findings(text: str) -> list[dict]:
             if literal:
                 position, regex_allowed = literal.end(), False
                 before_previous, previous = previous, "literal"
+                statement_start, label_pending = False, False
                 continue
+        was_statement_start, statement_start = statement_start, False
         if match.group("model_import"):
             findings.append({"line": text.count("\n", 0, match.start()) + 1, "target": "model transport syntax"})
             parens.append((False, None))
@@ -168,37 +172,46 @@ def es_dynamic_findings(text: str) -> list[dict]:
         elif token == "`":
             frames.append(None)
         elif token == "(":
-            parens.append(
-                (previous if previous in {"if", "while", "for", "with", "switch", "catch"} else False, function_pending)
+            # Keyword member calls end a value; only control conditions start a statement.
+            control = (
+                previous
+                if previous in {"if", "while", "for", "with", "switch", "catch"} and before_previous != "."
+                else False
             )
+            parens.append((control, function_pending))
             function_pending, regex_allowed = None, True
         elif token == ")":
             control, body = parens.pop() if parens else (False, None)
-            regex_allowed = bool(control)
+            regex_allowed = statement_start = bool(control)
             function_body = None if body is None else (body, len(parens))
         elif token == "{":
             if frames:
                 frames[-1] += 1
-            block = regex_allowed and previous == ")" or previous in {"else", "do", "try", "finally"}
+            block = (
+                was_statement_start or regex_allowed and previous == ")" or previous in {"else", "do", "try", "finally"}
+            )
+            body = previous == "=>"
             if class_pending is not None and class_pending[1:] == (len(parens), len(braces)):
-                block, class_pending = class_pending[0], None
+                block, class_pending, body = class_pending[0], None, True
             if function_body is not None and function_body[1] == len(parens):
-                block, function_body = function_body[0], None
+                block, function_body, body = function_body[0], None, True
             braces.append(block)
-            regex_allowed = True
+            # Function/arrow expression bodies contain statements but still end a value.
+            body_depths.append(len(parens) if block or body else None)
+            statement_start, regex_allowed = block or body, True
         elif token == "}":
             if frames:
                 frames[-1] -= 1
                 if frames[-1] == 0:
                     frames.pop()
                     continue
-            regex_allowed = braces.pop() if braces else False
+            regex_allowed = statement_start = braces.pop() if braces else False
+            if body_depths:
+                body_depths.pop()
         elif match.group("word"):
-            statement = (
-                previous in {None, ";", "}", "export", "default"}
-                or (previous == "{" and bool(braces) and braces[-1])
-                or (previous == "async" and before_previous in {None, ";", "}", "export", "default"})
-            )
+            statement = was_statement_start or previous in {"export", "default"}
+            label_pending = was_statement_start
+            statement_start = statement and token == "async"
             if token == "function":
                 function_pending = statement
             elif token == "class":
@@ -210,6 +223,14 @@ def es_dynamic_findings(text: str) -> list[dict]:
             )
         else:
             regex_allowed = token in "=(:,[!~?+-*/%&|^<>;" or token == "=>"
+            statement_start = (
+                token == ":"
+                and label_pending
+                or token == ";"
+                and (not parens or bool(body_depths) and body_depths[-1] == len(parens))
+            )
+        if not match.group("word") and token != ":":
+            label_pending = False
         before_previous, previous = previous, token
     return findings
 
