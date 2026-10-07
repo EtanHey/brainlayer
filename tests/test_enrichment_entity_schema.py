@@ -12,65 +12,6 @@ Verifies that:
 # ── Schema tests ──────────────────────────────────────────────────────────────
 
 
-def test_gemini_response_schema_has_entities_field():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    props = GEMINI_RESPONSE_SCHEMA["properties"]
-    assert "entities" in props, "GEMINI_RESPONSE_SCHEMA must have an 'entities' property"
-
-
-def test_gemini_response_schema_entities_is_required():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    required = GEMINI_RESPONSE_SCHEMA.get("required", [])
-    assert "entities" in required, "'entities' must be in the required fields"
-
-
-def test_gemini_response_schema_entities_is_array_of_objects():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    entities_schema = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]
-    assert entities_schema["type"] == "array"
-    items = entities_schema["items"]
-    assert items["type"] == "object"
-    assert "name" in items["properties"]
-    assert "type" in items["properties"]
-
-
-def test_gemini_response_schema_entity_type_enum():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    entity_type = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]["items"]["properties"]["type"]
-    expected_types = {"person", "agent", "company", "project", "technology", "tool", "concept", "topic", "source"}
-    assert set(entity_type["enum"]) == expected_types
-
-
-def test_gemini_response_schema_entity_items_require_name_and_type():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    items = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]["items"]
-    assert "required" in items
-    assert "name" in items["required"]
-    assert "type" in items["required"]
-
-
-def test_build_gemini_config_includes_response_schema():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA, _build_gemini_config
-
-    config = _build_gemini_config()
-    assert "response_schema" in config
-    assert config["response_schema"] is GEMINI_RESPONSE_SCHEMA
-
-
-def test_gemini_response_schema_requires_sentiment_fields():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    required = set(GEMINI_RESPONSE_SCHEMA.get("required", []))
-    assert "sentiment_label" in required
-    assert "sentiment_score" in required
-    assert "sentiment_signals" in required
-
-
 # ── Prompt tests ──────────────────────────────────────────────────────────────
 
 

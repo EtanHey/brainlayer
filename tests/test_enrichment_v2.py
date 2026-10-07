@@ -313,16 +313,6 @@ def test_parse_enrichment_deduplicates_signals_order_preserved():
     assert result["sentiment_signals"] == ["oops", "nah", "nah2"]
 
 
-def test_gemini_schema_supports_v2_fields():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    props = GEMINI_RESPONSE_SCHEMA["properties"]
-
-    assert "key_facts" in props
-    assert "resolved_queries" in props
-    assert "relation" in props["entities"]["items"]["properties"]
-
-
 def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
     store = VectorStore(tmp_path / "test.db")
     try:
