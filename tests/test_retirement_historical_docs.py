@@ -33,6 +33,15 @@ def test_documented_wave3_restore_skips_retired_job_even_without_pause(tmp_path,
     binaries = tmp_path / "bin"
     binaries.mkdir()
     calls = tmp_path / "calls"
+    calls.write_text("")
+    # The runbook targets macOS; GNU tail on Linux runners has no -r option.
+    tail = binaries / "tail"
+    tail.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = "-r" ] || exit 2\n'
+        "awk '{ rows[NR] = $0 } END { for (i = NR; i > 0; i--) print rows[i] }' \"$2\"\n"
+    )
+    tail.chmod(0o700)
     launcher = binaries / "launchctl"
     launcher.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
     launcher.chmod(0o700)
