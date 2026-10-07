@@ -12,7 +12,7 @@ from brainlayer.eval.abcde_variants import (
     VARIANT_IDS,
     load_abcde_variants,
 )
-from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 from scripts.generate_abcde_variants import (
     SHELF_SECTION,
     assert_freeze_integrity,
