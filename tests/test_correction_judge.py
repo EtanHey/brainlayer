@@ -5,6 +5,8 @@ import inspect
 
 import pytest
 
+pytestmark = pytest.mark.retired_enrichment
+
 
 @pytest.mark.parametrize("backend", [None, "gemini", "groq", "local"])
 def test_correction_judge_factory_is_retired(monkeypatch, backend):
