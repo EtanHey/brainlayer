@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from brainlayer.vector_store import VectorStore
+from tests.retirement_helpers import forbid_enrichment_controller
 
 # ── enrich_single unit tests ────────────────────────────────────
 
@@ -34,7 +35,6 @@ class TestStoreAutoEnrich:
         """The owned thread embeds and flushes without invoking a model producer."""
         from brainlayer.mcp import store_handler
 
-        enriched_ids = []
         flushed = []
         original_flush = store_handler._flush_pending_stores
 
@@ -44,14 +44,7 @@ class TestStoreAutoEnrich:
 
         monkeypatch.setattr(store_handler, "_flush_pending_stores", tracking_flush)
 
-        def mock_enrich_single(bg_store, cid):
-            enriched_ids.append(cid)
-            return {"summary": "enriched"}
-
-        monkeypatch.setattr(
-            "brainlayer.enrichment_controller.enrich_single",
-            mock_enrich_single,
-        )
+        forbid_enrichment_controller(monkeypatch)
 
         db_path = tmp_path / "test.db"
         test_store = VectorStore(db_path)
@@ -85,7 +78,6 @@ class TestStoreAutoEnrich:
         started_threads[0].join(timeout=5.0)
         assert not started_threads[0].is_alive()
 
-        assert enriched_ids == []
         assert len(flushed) == 1
         assert Path(flushed[0]) == db_path
         assert test_store.conn.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone()
@@ -96,16 +88,7 @@ class TestStoreAutoEnrich:
         """The stored receipt and local vector do not depend on a cloud producer."""
         from brainlayer.mcp import store_handler
 
-        calls = []
-
-        def mock_enrich_single(bg_store, cid):
-            calls.append(cid)
-            raise RuntimeError("Gemini exploded")
-
-        monkeypatch.setattr(
-            "brainlayer.enrichment_controller.enrich_single",
-            mock_enrich_single,
-        )
+        forbid_enrichment_controller(monkeypatch)
 
         db_path = tmp_path / "test.db"
         test_store = VectorStore(db_path)
@@ -140,7 +123,6 @@ class TestStoreAutoEnrich:
         started_threads[0].join(timeout=5.0)
         assert not started_threads[0].is_alive()
 
-        assert calls == []
         assert test_store.conn.execute(
             "SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (structured["chunk_id"],)
         ).fetchone()

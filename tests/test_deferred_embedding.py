@@ -812,7 +812,6 @@ class TestMCPStoreDeferred:
                 patch("brainlayer.mcp.store_handler._get_vector_store", return_value=tmp_store),
                 patch("brainlayer.mcp.store_handler._get_embedding_model", return_value=FastModel()),
                 patch("brainlayer.mcp.store_handler._normalize_project_name", return_value="test"),
-                patch("brainlayer.enrichment_controller.enrich_single", return_value={"summary": "skipped"}),
             ):
                 _content, structured = await _store_new(
                     content="g7 hot mcp lane searchable",

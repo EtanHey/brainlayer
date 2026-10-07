@@ -4,6 +4,7 @@ from typing import List
 from unittest.mock import MagicMock
 
 from brainlayer.vector_store import VectorStore
+from tests.retirement_helpers import forbid_enrichment_controller
 
 
 def _dummy_embed(text):  # noqa: ARG001
@@ -133,8 +134,7 @@ def test_brain_digest_retired_ner_persists_seed_people_for_lookup(tmp_path, monk
     """Local participant seeds persist with evidence and no implicit model call."""
     from brainlayer.pipeline.digest import digest_content, entity_lookup
 
-    cloud_extraction = MagicMock(side_effect=AssertionError("digest attempted implicit cloud NER"))
-    monkeypatch.setattr("brainlayer.enrichment_controller.call_gemini_for_extraction", cloud_extraction)
+    forbid_enrichment_controller(monkeypatch)
 
     store = VectorStore(tmp_path / "test.db")
     content = (
@@ -156,7 +156,6 @@ def test_brain_digest_retired_ner_persists_seed_people_for_lookup(tmp_path, monk
     assert found is not None
     assert found["name"] == "Person Alpha"
     assert found["evidence"]
-    cloud_extraction.assert_not_called()
 
 
 def test_digest_content_applies_sentiment(tmp_path):
