@@ -60,7 +60,7 @@ from ..tag_normalization import (
     taxonomy_git_sha,
 )
 from ..vector_store import VectorStore
-from .cloud_scrub import scrub_for_cloud, scrub_llm_output
+from .cloud_scrub import scrub_llm_output
 from .entity_extraction import normalize_entity_type
 from .groq import (
     DEFAULT_GROQ_MODEL,
@@ -534,77 +534,6 @@ def build_external_prompt(
     )
 
     return prompt, result
-
-
-def call_glm(prompt: str, timeout: int = 240) -> Optional[str]:
-    """Call local GLM via Ollama HTTP API. Logs usage to Supabase."""
-    # BRAINLAYER_OLLAMA_URL can point at any host, so scrub like a cloud send.
-    prompt = scrub_for_cloud(prompt)
-    try:
-        start_ms = int(time.time() * 1000)
-        resp = requests.post(
-            OLLAMA_URL,
-            json={"model": MODEL, "prompt": prompt, "stream": False, "think": False},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        duration_ms = int(time.time() * 1000) - start_ms
-
-        # Extract token counts from Ollama response
-        prompt_tokens = data.get("prompt_eval_count", 0) or 0
-        completion_tokens = data.get("eval_count", 0) or 0
-
-        # Log to Supabase (best-effort)
-        _log_glm_usage(prompt_tokens, completion_tokens, duration_ms)
-
-        return data.get("response", "")
-    except Exception as e:
-        print(f"  GLM error: {e}", file=sys.stderr)
-        return None
-
-
-def call_mlx(prompt: str, timeout: int = MLX_DEFAULT_TIMEOUT) -> Optional[str]:
-    """Call local MLX server via OpenAI-compatible API. Logs usage to Supabase."""
-    # BRAINLAYER_MLX_URL can point at any host, so scrub like a cloud send.
-    prompt = scrub_for_cloud(prompt)
-    try:
-        start_ms = int(time.time() * 1000)
-        resp = requests.post(
-            MLX_URL,
-            json={
-                "model": MLX_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-            },
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        duration_ms = int(time.time() * 1000) - start_ms
-
-        # Extract token counts from OpenAI-compatible response
-        usage = data.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-
-        # Log to Supabase (best-effort) — use MLX model name, not Ollama's
-        _log_glm_usage(prompt_tokens, completion_tokens, duration_ms, model=f"mlx:{MLX_MODEL}")
-
-        # Extract response text
-        choices = data.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        print(f"  MLX connection error (server dead?): {e}", file=sys.stderr)
-        return None
-    except requests.exceptions.Timeout as e:
-        print(f"  MLX timeout ({timeout}s): {e}", file=sys.stderr)
-        return None
-    except Exception as e:
-        print(f"  MLX error: {e}", file=sys.stderr)
-        return None
 
 
 # Mid-run fallback state — tracks consecutive failures for automatic backend switching.

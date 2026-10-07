@@ -220,40 +220,6 @@ def test_llm_ner_output_is_scrubbed_before_it_can_be_persisted():
     _assert_clean(blob, "NER output")
 
 
-def _capture_post(monkeypatch, module):
-    sent: list[str] = []
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"response": "{}", "choices": [{"message": {"content": "{}"}}], "usage": {}}
-
-    def _post(url, *, json=None, timeout=None, headers=None, **kwargs):
-        sent.append(__import__("json").dumps(json))
-        return _Resp()
-
-    monkeypatch.setattr(module.requests, "post", _post)
-    return sent
-
-
-@pytest.mark.parametrize("sender", ["call_glm", "call_mlx"])
-def test_local_llm_senders_scrub_because_their_url_can_be_remote(monkeypatch, sender):
-    """N2: BRAINLAYER_OLLAMA_URL / BRAINLAYER_MLX_URL are env-overridable to any host."""
-    from brainlayer.pipeline import enrichment
-
-    sent = _capture_post(monkeypatch, enrichment)
-    monkeypatch.setattr(enrichment, "_log_glm_usage", lambda *args, **kwargs: None)
-
-    getattr(enrichment, sender)(_text())
-
-    assert sent, f"{sender} never reached the fake transport"
-    _assert_clean(sent[0], f"{sender} payload")
-
-
 def test_longitudinal_analyzer_has_one_scrubbed_loopback_call_site():
     from pathlib import Path
 
@@ -326,3 +292,9 @@ def test_drain_store_scrubs_event_metadata_values(store):
     _assert_clean(json.dumps(metadata), "drain store metadata")
     assert metadata["count"] == 3
     assert metadata["secret_scrub_redactions"] == ["google", "supabase"]
+
+
+def test_retained_input_scrubber_redacts_every_secret_shape():
+    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
+
+    _assert_clean(scrub_for_cloud(_text()), "retained input scrub")
