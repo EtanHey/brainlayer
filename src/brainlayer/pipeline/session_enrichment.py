@@ -21,7 +21,7 @@ CLI:
 
 import json
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..vector_store import VectorStore
 from .enrichment_tiers import T1_T2_SOURCES
@@ -396,79 +396,3 @@ def list_sessions_for_enrichment(
         already_enriched.add(sid)
 
     return sessions
-
-
-def enrich_session(
-    store: VectorStore,
-    session_id: str,
-    call_llm_fn: Callable[[str], Optional[str]],
-    project: Optional[str] = None,
-    embed_fn: Optional[Callable[[str], List[float]]] = None,
-    model_name: str = "",
-) -> Optional[Dict[str, Any]]:
-    """Enrich a single session with LLM analysis.
-
-    Args:
-        store: VectorStore instance.
-        session_id: Session to enrich.
-        call_llm_fn: Function that takes a prompt string and returns LLM response.
-        project: Optional project name override.
-        embed_fn: Optional embedding function for session summary.
-        model_name: Name of the model used for enrichment tracking.
-
-    Returns:
-        Enrichment dict on success, None on failure.
-    """
-    # Step 1: Reconstruct conversation
-    session_data = reconstruct_session(store, session_id)
-    if not session_data["chunks"]:
-        return None
-
-    conversation = session_data["conversation"]
-    if not conversation or len(conversation) < 50:
-        return None
-
-    # Determine project from chunks if not provided
-    if not project:
-        # Try to get project from session_context
-        ctx = store.get_session_context(session_id)
-        if ctx:
-            project = ctx.get("project", "")
-
-    # Step 2: Build prompt and call LLM
-    prompt = build_session_prompt(conversation, project or "unknown")
-    response = call_llm_fn(prompt)
-
-    # Step 3: Parse response
-    enrichment = parse_session_enrichment(response)
-    if not enrichment:
-        return None
-
-    # Step 4: Add session metadata from reconstruction
-    enrichment["session_id"] = session_id
-    enrichment["file_path"] = session_data["chunks"][0].get("source_file") if session_data["chunks"] else None
-    enrichment["message_count"] = session_data["message_count"]
-    enrichment["user_message_count"] = session_data["user_message_count"]
-    enrichment["assistant_message_count"] = session_data["assistant_message_count"]
-    enrichment["tool_call_count"] = session_data["tool_call_count"]
-    enrichment["session_start_time"] = session_data["session_start_time"]
-    enrichment["session_end_time"] = session_data["session_end_time"]
-    enrichment["duration_seconds"] = session_data["duration_seconds"]
-    enrichment["enrichment_model"] = model_name
-    enrichment["enrichment_version"] = "1.0"
-
-    # Step 5: Generate summary embedding if embed_fn provided
-    if embed_fn and enrichment.get("session_summary"):
-        try:
-            from ..vector_store import serialize_f32
-
-            embedding = embed_fn(enrichment["session_summary"])
-            enrichment["summary_embedding"] = serialize_f32(embedding)
-        except Exception:
-            pass  # Don't fail enrichment over embedding issues
-
-    # Step 6: Store in database
-    store.upsert_session_enrichment(enrichment)
-
-    # Return the stored version (with JSON fields properly deserialized)
-    return store.get_session_enrichment(session_id)
