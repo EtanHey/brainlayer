@@ -403,23 +403,6 @@ verify_gemini_env_file() {
         echo "ERROR: $BRAINLAYER_ENV_FILE did not provide GOOGLE_API_KEY"
         return 1
     fi
-
-    if ! BRAINLAYER_ENV_FILE="$BRAINLAYER_ENV_FILE" /bin/sh -c '
-        set -a
-        . "$BRAINLAYER_ENV_FILE"
-        set +a
-        for key in BRAINLAYER_ENRICH_ENABLED BRAINLAYER_ENRICH_MODE BRAINLAYER_ENRICH_PROVIDER BRAINLAYER_ENRICH_BACKEND BRAINLAYER_ENRICH_RATE BRAINLAYER_ENRICH_CONCURRENCY BRAINLAYER_MAX_COMMIT_BATCH BRAINLAYER_GEMINI_SERVICE_TIER; do
-            eval "value=\${$key:-}"
-            if [ -z "$value" ]; then
-                echo "missing $key" >&2
-                exit 1
-            fi
-        done
-    ' >/dev/null; then
-        echo "ERROR: $BRAINLAYER_ENV_FILE is missing required enrichment config keys"
-        echo "Run 'brainlayer init' or create it from scripts/launchd/brainlayer.env.example"
-        return 1
-    fi
 }
 
 verify_config_file() {
@@ -1228,8 +1211,7 @@ remove_plist() {
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     if [ ! -f "$dst" ]; then
         local domain="gui/$UID/com.brainlayer.$name"
-        launchctl print "$domain" >/dev/null 2>&1 || return 0
-        if ! launchctl bootout "$domain" || ! unload_plist "$name" --wait-only; then
+        if launchctl print "$domain" >/dev/null 2>&1 && { ! launchctl bootout "$domain" || ! unload_plist "$name" --wait-only; }; then
             echo "ERROR: could not retire $domain without a plist; refusing to remove its executable" >&2
             return 1
         fi

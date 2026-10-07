@@ -39,7 +39,7 @@ def test_retirement_guard_works_without_collection_import_side_effects(target):
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-@pytest.mark.parametrize("surface", ["cli", "mcp", "palette"])
+@pytest.mark.parametrize("surface", ["cli", "mcp", "palette", "marked"])
 @pytest.mark.parametrize(
     "attempt",
     [
@@ -60,7 +60,9 @@ def test_retirement_guard_works_without_collection_import_side_effects(target):
 def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
     """Run the real R1 tests with the reviewer's swallowed-exception mutation."""
     target = (
-        "tests/test_cli_enrich.py::test_retired_enrich_is_hidden_and_does_not_resolve_database"
+        "tests/test_retirement_factory_guard.py::test_brain_enrich_handler_cold_bootstrap"
+        if surface in {"marked", "unmarked"}
+        else "tests/test_cli_enrich.py::test_retired_enrich_is_hidden_and_does_not_resolve_database"
         if surface == "cli"
         else "tests/test_mcp_palette.py::test_retired_enrich_is_neither_advertised_nor_dispatched[core]"
         if surface == "palette"
@@ -100,6 +102,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 class Mutation:
     def pytest_collection_finish(self, session):
+        if {surface!r} in ('marked', 'unmarked'):
+            for item in session.items:
+                item.name = 'test_retirement_marker_target'
+                if {surface!r} == 'marked':
+                    item.add_marker('retired_enrichment')
         # Conftest isolates config before these imports. Capture SDK aliases
         # before the guard is armed, and make an absent guard network-safe.
         global Client, AsyncClient, controller, enrichment, precreated_httpx, precreated_requests, send_precreated_async
@@ -165,14 +172,23 @@ class Mutation:
             return response
         monkeypatch.setattr(owner, symbol, after_response)
 
-raise SystemExit(pytest.main([{target!r}, '-q'], plugins=[Mutation()]))
+raise SystemExit(pytest.main([{target!r}, '-q', '-s'], plugins=[Mutation()]))
 """
     completed = subprocess.run(
         [sys.executable, "-c", probe], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60, check=False
     )
     output = completed.stdout + completed.stderr
-    assert completed.returncode == 1, output
-    assert "Cloud construction/send attempted in retirement test" in output, output
+    assert completed.returncode == (0 if surface == "unmarked" else 1), output
+    expected = "UNMARKED_OK" if surface == "unmarked" else "Cloud construction/send attempted in retirement test"
+    assert expected in output, output
+
+
+def test_unmarked_retirement_target_keeps_offline_transport():
+    test_caught_cloud_attempt_fails_retirement_test(
+        "unmarked",
+        "assert precreated_httpx.send(httpx.Request('POST', 'http://retirement.invalid')).status_code == 200;"
+        " print('UNMARKED_OK')",
+    )
 
 
 @pytest.mark.parametrize(
