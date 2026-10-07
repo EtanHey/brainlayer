@@ -26,6 +26,7 @@ def _raise_if_called(message: str):
     return inner
 
 
+@pytest.mark.retired_enrichment
 def test_hotlane_cycle_ignores_retired_enrichment_through_same_writer_store():
     hotlane = _load_hotlane_module()
     writer_store = object()
@@ -1114,6 +1115,7 @@ def test_split_cycle_embeds_all_hot_candidates_before_writer_revalidation(tmp_pa
     assert result.embedded == 1
 
 
+@pytest.mark.retired_enrichment
 def test_hotlane_run_keeps_retired_enrichment_zero_after_failed_cycle():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []

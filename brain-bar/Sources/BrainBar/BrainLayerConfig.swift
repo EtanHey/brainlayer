@@ -1,47 +1,5 @@
 import Foundation
 
-enum BrainLayerEnrichmentMode: String, CaseIterable, Identifiable, Sendable {
-    case remote
-    case local
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .remote: "Remote"
-        case .local: "Local"
-        }
-    }
-}
-
-enum BrainLayerEnrichmentProvider: String, CaseIterable, Identifiable, Sendable {
-    case gemini
-    case openai
-    case anthropic
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .gemini: "Gemini"
-        case .openai: "OpenAI"
-        case .anthropic: "Anthropic"
-        }
-    }
-
-    var isWiredToday: Bool {
-        self == .gemini
-    }
-
-    static var selectableCases: [BrainLayerEnrichmentProvider] {
-        allCases.filter(\.isWiredToday)
-    }
-
-    var unavailableReason: String? {
-        isWiredToday ? nil : "Runtime integration is not available in this build."
-    }
-}
-
 enum BrainLayerGoogleAPIKey: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     enum Kind: Equatable {
         case missing
@@ -183,11 +141,6 @@ struct BrainLayerLaunchdJobSetting: Equatable, Sendable {
 struct BrainLayerConfig: Equatable, Sendable {
     var googleAPIKey: BrainLayerGoogleAPIKey
     var systemEnabled: Bool
-    var enrichmentEnabled: Bool
-    var enrichmentMode: BrainLayerEnrichmentMode
-    var enrichmentProvider: BrainLayerEnrichmentProvider
-    var enrichmentBackend: String
-    var tuningValues: [String: String]
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
 
     var enrichmentIsOff: Bool {
@@ -197,11 +150,6 @@ struct BrainLayerConfig: Equatable, Sendable {
     static let defaultConfig = BrainLayerConfig(
         googleAPIKey: .missing,
         systemEnabled: true,
-        enrichmentEnabled: true,
-        enrichmentMode: .remote,
-        enrichmentProvider: .gemini,
-        enrichmentBackend: "gemini",
-        tuningValues: BrainLayerEnvDocument.tuningDefaults,
         launchdJobs: Dictionary(
             uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
                 ($0, BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown))
@@ -212,11 +160,6 @@ struct BrainLayerConfig: Equatable, Sendable {
     func persistedValuesEqual(to other: BrainLayerConfig) -> Bool {
         googleAPIKey == other.googleAPIKey &&
             systemEnabled == other.systemEnabled &&
-            enrichmentEnabled == other.enrichmentEnabled &&
-            enrichmentMode == other.enrichmentMode &&
-            enrichmentProvider == other.enrichmentProvider &&
-            enrichmentBackend == other.enrichmentBackend &&
-            tuningValues == other.tuningValues &&
             Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
             Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
     }
@@ -234,41 +177,11 @@ enum BrainLayerConfigValidationResult: Equatable, Sendable {
     }
 }
 
-enum BrainLayerConfigValidator {
-    static func validate(
-        _ config: BrainLayerConfig,
-        previousConfig: BrainLayerConfig? = nil
-    ) -> BrainLayerConfigValidationResult {
-        let activatesUnavailableProvider = previousConfig == nil ||
-            previousConfig?.enrichmentProvider != config.enrichmentProvider ||
-            (previousConfig?.enrichmentEnabled == false && config.enrichmentEnabled)
-        if config.enrichmentEnabled,
-           config.enrichmentProvider.unavailableReason != nil,
-           activatesUnavailableProvider {
-            return .failed(
-                "\(config.enrichmentProvider.title) cannot be activated because its runtime integration is unavailable."
-            )
-        }
-        if config.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .failed("Enrichment backend is required.")
-        }
-        return .passed
-    }
-}
-
 struct BrainLayerActiveRuntimeValues: Equatable, Sendable {
     let systemEnabled: Bool
-    let enrichmentEnabled: Bool
-    let enrichmentMode: BrainLayerEnrichmentMode
-    let enrichmentProvider: BrainLayerEnrichmentProvider
-    let enrichmentBackend: String
 
     init(config: BrainLayerConfig) {
         systemEnabled = config.systemEnabled
-        enrichmentEnabled = config.enrichmentEnabled
-        enrichmentMode = config.enrichmentMode
-        enrichmentProvider = config.enrichmentProvider
-        enrichmentBackend = config.enrichmentBackend
     }
 
     func matches(_ config: BrainLayerConfig) -> Bool {
@@ -276,8 +189,7 @@ struct BrainLayerActiveRuntimeValues: Equatable, Sendable {
     }
 
     var summary: String {
-        "\(enrichmentEnabled ? "Enrichment on" : "Enrichment off") · " +
-            "\(enrichmentMode.title) · \(enrichmentProvider.title) · \(enrichmentBackend)"
+        "BrainLayer jobs \(systemEnabled ? "on" : "off")"
     }
 }
 
@@ -310,13 +222,11 @@ struct StaticBrainLayerActiveRuntimeProvider: BrainLayerActiveRuntimeSampling {
 }
 
 enum BrainLayerSettingsService: Equatable, Hashable, Sendable {
-    case enrichment
     case systemJobs
     case launchdJob(BrainLayerLaunchdJob)
 
     var title: String {
         switch self {
-        case .enrichment: "Enrichment service"
         case .systemJobs: "BrainLayer jobs"
         case let .launchdJob(job): job.launchdLabel
         }
@@ -408,27 +318,10 @@ struct BrainLayerEnvDocument {
         return output.joined(separator: "\n") + "\n"
     }
 
-    static let tuningDefaults: [String: String] = [
-        "BRAINLAYER_ENRICH_RATE": "15",
-        "BRAINLAYER_ENRICH_CONCURRENCY": "4",
-        "BRAINLAYER_MAX_COMMIT_BATCH": "25",
-        "BRAINLAYER_GEMINI_SERVICE_TIER": "flex",
-        "BRAINLAYER_DISABLED_SLEEP_SECONDS": "3600",
-    ]
-
     private static let managedKeyOrder: [String] = [
         "GOOGLE_API_KEY",
         "GOOGLE_GENERATIVE_AI_API_KEY",
         "BRAINLAYER_SYSTEM_ENABLED",
-        "BRAINLAYER_ENRICH_ENABLED",
-        "BRAINLAYER_ENRICH_MODE",
-        "BRAINLAYER_ENRICH_PROVIDER",
-        "BRAINLAYER_ENRICH_BACKEND",
-        "BRAINLAYER_ENRICH_RATE",
-        "BRAINLAYER_ENRICH_CONCURRENCY",
-        "BRAINLAYER_MAX_COMMIT_BATCH",
-        "BRAINLAYER_GEMINI_SERVICE_TIER",
-        "BRAINLAYER_DISABLED_SLEEP_SECONDS",
         "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED",
         "BRAINLAYER_LAUNCHD_DECAY_ENABLED",
         "BRAINLAYER_LAUNCHD_DRAIN_ENABLED",
@@ -442,14 +335,6 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_LAUNCHD_WAL_CHECKPOINT_ENABLED",
     ]
 
-    private static let tuningKeyOrder: [String] = [
-        "BRAINLAYER_ENRICH_RATE",
-        "BRAINLAYER_ENRICH_CONCURRENCY",
-        "BRAINLAYER_MAX_COMMIT_BATCH",
-        "BRAINLAYER_GEMINI_SERVICE_TIER",
-        "BRAINLAYER_DISABLED_SLEEP_SECONDS",
-    ]
-
     private static func managedValues(
         for config: BrainLayerConfig,
         includeLegacyGoogleKey: Bool
@@ -457,16 +342,9 @@ struct BrainLayerEnvDocument {
         var values: [String: String] = [
             "GOOGLE_API_KEY": config.googleAPIKey.renderedValue,
             "BRAINLAYER_SYSTEM_ENABLED": config.systemEnabled ? "1" : "0",
-            "BRAINLAYER_ENRICH_ENABLED": config.enrichmentEnabled ? "1" : "0",
-            "BRAINLAYER_ENRICH_MODE": config.enrichmentMode.rawValue,
-            "BRAINLAYER_ENRICH_PROVIDER": config.enrichmentProvider.rawValue,
-            "BRAINLAYER_ENRICH_BACKEND": config.enrichmentBackend,
         ]
         if includeLegacyGoogleKey {
             values["GOOGLE_GENERATIVE_AI_API_KEY"] = ""
-        }
-        for key in tuningKeyOrder {
-            values[key] = config.tuningValues[key] ?? tuningDefaults[key] ?? ""
         }
         for job in BrainLayerLaunchdJob.allCases {
             values[job.configKey] = config.launchdJobs[job]?.enabled == false ? "0" : "1"
@@ -483,24 +361,6 @@ struct BrainLayerEnvDocument {
         }
         if let raw = assignments["BRAINLAYER_SYSTEM_ENABLED"] {
             config.systemEnabled = !isFalse(raw)
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_ENABLED"] {
-            config.enrichmentEnabled = !isFalse(raw)
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_MODE"],
-           let mode = BrainLayerEnrichmentMode(rawValue: normalized(raw)) {
-            config.enrichmentMode = mode
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_PROVIDER"],
-           let provider = BrainLayerEnrichmentProvider(rawValue: normalized(raw)) {
-            config.enrichmentProvider = provider
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_BACKEND"], !normalized(raw).isEmpty {
-            config.enrichmentBackend = normalized(raw)
-        }
-        for key in tuningKeyOrder {
-            guard let raw = assignments[key] else { continue }
-            config.tuningValues[key] = raw
         }
         for job in BrainLayerLaunchdJob.allCases {
             guard let raw = assignments[job.configKey] else { continue }
