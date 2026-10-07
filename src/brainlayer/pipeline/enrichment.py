@@ -50,9 +50,6 @@ _prompt_signature_lock = threading.Lock()
 
 from ..tag_normalization import (
     enrichment_tag_mode,
-    normalize_enrichment_tag_values,
-    taxonomy_content_sha,
-    taxonomy_git_sha,
 )
 from .cloud_scrub import scrub_llm_output
 from .entity_extraction import normalize_entity_type
@@ -68,29 +65,7 @@ from .entity_extraction import normalize_entity_type
 # Override with BRAINLAYER_ENRICH_BACKEND=ollama|mlx
 
 
-def _detect_default_backend() -> str:
-    """Auto-detect the best enrichment backend for this platform.
-
-    arm64 Mac → mlx (native Apple Silicon, no Docker overhead)
-    Everything else → ollama (universal, works everywhere)
-    """
-    import platform
-
-    explicit = os.environ.get("BRAINLAYER_ENRICH_BACKEND")
-    if explicit:
-        return explicit
-
-    if platform.machine() == "arm64" and platform.system() == "Darwin":
-        return "mlx"
-    return "ollama"
-
-
-ENRICH_BACKEND = _detect_default_backend()
-
-
 # MLX URL: scripts also check MLX_URL for health, so accept both env vars
-MODEL = os.environ.get("BRAINLAYER_ENRICH_MODEL", "glm-4.7-flash")
-ENRICHMENT_PROMPT_VERSION = os.environ.get("BRAINLAYER_ENRICHMENT_PROMPT_VERSION", "r82-hybrid-taxonomy")
 
 # Groq cloud API (for NON-PRIVATE content only — sanitization enforced in _enrich_one)
 # Rate limiting: Groq free tier allows ~30 req/min. 2s delay = ~30/min max.
@@ -108,38 +83,8 @@ ENRICHMENT_PROMPT_VERSION = os.environ.get("BRAINLAYER_ENRICHMENT_PROMPT_VERSION
 
 
 # High-value content types worth enriching
-HIGH_VALUE_TYPES = ["ai_code", "stack_trace", "user_message", "assistant_text"]
 
 # Fixed tag taxonomy for coding conversations
-VALID_INTENTS = [
-    "debugging",
-    "designing",
-    "configuring",
-    "discussing",
-    "deciding",
-    "implementing",
-    "reviewing",
-]
-VALID_EPISTEMIC = ["hypothesis", "substantiated", "validated"]
-VALID_DEBT_IMPACT = ["introduction", "resolution", "none"]
-VALID_SENTIMENTS = ["frustration", "confusion", "positive", "satisfaction", "neutral"]
-
-
-def normalize_enrichment_tags(tags: Any, *, limit: int = 10) -> list[str]:
-    return normalize_enrichment_tag_values(tags, limit=limit)
-
-
-def enrichment_version_metadata(*, model: str | None = None, backend: str | None = None) -> dict[str, str]:
-    return {
-        "prompt_version": ENRICHMENT_PROMPT_VERSION,
-        "taxonomy_git_sha": taxonomy_git_sha(),
-        "taxonomy_content_sha": taxonomy_content_sha(),
-        "tag_mode": enrichment_tag_mode(),
-        "model": model or os.environ.get("BRAINLAYER_ENRICHMENT_MODEL_STAMP", MODEL),
-        "enriched_by": model or os.environ.get("BRAINLAYER_ENRICHMENT_MODEL_STAMP", MODEL),
-        "backend": backend or os.environ.get("BRAINLAYER_ENRICHMENT_BACKEND_STAMP", ENRICH_BACKEND),
-        "run_id": os.environ.get("BRAINLAYER_ENRICHMENT_RUN_ID", f"pid-{os.getpid()}"),
-    }
 
 
 def _tag_rules_for_prompt() -> str:
@@ -565,3 +510,16 @@ def parse_enrichment(text: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.debug("Enrichment result validation failed: %s", e)
         return None
+
+
+from .enrichment_results import ENRICH_BACKEND as ENRICH_BACKEND
+from .enrichment_results import ENRICHMENT_PROMPT_VERSION as ENRICHMENT_PROMPT_VERSION
+from .enrichment_results import HIGH_VALUE_TYPES as HIGH_VALUE_TYPES
+from .enrichment_results import MODEL as MODEL
+from .enrichment_results import VALID_DEBT_IMPACT as VALID_DEBT_IMPACT
+from .enrichment_results import VALID_EPISTEMIC as VALID_EPISTEMIC
+from .enrichment_results import VALID_INTENTS as VALID_INTENTS
+from .enrichment_results import VALID_SENTIMENTS as VALID_SENTIMENTS
+from .enrichment_results import _detect_default_backend as _detect_default_backend
+from .enrichment_results import enrichment_version_metadata as enrichment_version_metadata
+from .enrichment_results import normalize_enrichment_tags as normalize_enrichment_tags

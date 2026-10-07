@@ -18,7 +18,7 @@ class TestBackendAutoDetection:
 
     def test_explicit_env_overrides_detection(self):
         """BRAINLAYER_ENRICH_BACKEND env var overrides auto-detection."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         with patch.dict(os.environ, {"BRAINLAYER_ENRICH_BACKEND": "ollama"}):
             assert _detect_default_backend() == "ollama"
@@ -28,7 +28,7 @@ class TestBackendAutoDetection:
 
     def test_arm64_darwin_defaults_mlx(self):
         """arm64 macOS defaults to MLX."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         env = {k: v for k, v in os.environ.items() if k != "BRAINLAYER_ENRICH_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
@@ -38,7 +38,7 @@ class TestBackendAutoDetection:
 
     def test_x86_defaults_ollama(self):
         """x86_64 defaults to Ollama."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         env = {k: v for k, v in os.environ.items() if k != "BRAINLAYER_ENRICH_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
@@ -47,7 +47,7 @@ class TestBackendAutoDetection:
 
     def test_linux_defaults_ollama(self):
         """Linux defaults to Ollama regardless of arch."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         env = {k: v for k, v in os.environ.items() if k != "BRAINLAYER_ENRICH_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
