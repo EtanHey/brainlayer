@@ -35,6 +35,19 @@ HEAD = "a" * 40
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 
+def retirement_receipt(tmp_path, sha):
+    from tests.test_retirement_report import valid
+
+    report = valid()
+    report["source_sha"] = report["source"]["sha"] = sha
+    report["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+    for profile in report["profiles"]:
+        profile["source_sha"] = sha
+    path = tmp_path / "retirement-unit-receipt.json"
+    path.write_text(json.dumps(report))
+    return path
+
+
 def make_wheel(tmp_path: Path, stamp: str | None) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     wheel = tmp_path / "brainlayer-0.0.0-py3-none-any.whl"
@@ -523,7 +536,21 @@ def test_main_is_green_on_the_commit_it_was_triggered_for(tmp_path: Path, capsys
     head = ratchet.git_head()
     assert head is not None
     wheel = make_wheel(tmp_path, head)
-    assert ratchet.main(["--wheel", str(wheel), "--measured-sha", head, "--pr-head-sha", head]) == 0
+    assert (
+        ratchet.main(
+            [
+                "--wheel",
+                str(wheel),
+                "--measured-sha",
+                head,
+                "--pr-head-sha",
+                head,
+                "--retirement-report",
+                str(retirement_receipt(tmp_path, head)),
+            ]
+        )
+        == 0
+    )
     assert f"measured `{head[:12]}` == PR head" in capsys.readouterr().out
 
 
@@ -1352,7 +1379,7 @@ def test_the_table_job_waits_for_the_signature_job_without_depending_on_it_runni
     table standing on the PR -- the same crime as printing an unmeasured number, by omission.
     """
     table = workflow_jobs()["table"]
-    assert set(table["needs"]) == {"gate", "signatures", "quiesce"}
+    assert set(table["needs"]) == {"gate", "signatures", "quiesce", "retirement"}
     assert "!cancelled()" in table["if"] and "always()" not in table["if"]
 
 
@@ -2062,7 +2089,12 @@ def test_the_gate_no_longer_compares_against_a_number_the_pr_wrote(tmp_path: Pat
     measured = write_attestation(
         tmp_path, attestation_dict(main_sha="5" * 40, measured={"latency_baseline_ms.p50": 5000.0})
     )
-    assert ratchet.main(argv + ["--attestation", str(measured)]) == 0
+    assert (
+        ratchet.main(
+            argv + ["--attestation", str(measured), "--retirement-report", str(retirement_receipt(tmp_path, HEAD))]
+        )
+        == 0
+    )
     assert "moved to values measured by main" in capsys.readouterr().out
 
 
@@ -2070,7 +2102,12 @@ def test_main_reads_an_attestation_end_to_end(tmp_path: Path, capsys, monkeypatc
     pin_main_checkout(monkeypatch)
     path = write_attestation(tmp_path, attestation_dict(main_sha="5" * 40))
     argv = ["--wheel", str(make_wheel(tmp_path, HEAD)), "--measured-sha", HEAD, "--pr-head-sha", HEAD]
-    assert ratchet.main(argv + ["--attestation", str(path)]) == 0
+    assert (
+        ratchet.main(
+            argv + ["--attestation", str(path), "--retirement-report", str(retirement_receipt(tmp_path, HEAD))]
+        )
+        == 0
+    )
     assert "matches the main attestation" in capsys.readouterr().out
     assert ratchet.main(argv + ["--attestation-unresolved", "artifact expired"]) == 1
     assert "artifact expired" in capsys.readouterr().err

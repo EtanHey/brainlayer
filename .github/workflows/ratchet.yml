@@ -350,12 +350,50 @@ jobs:
           fi
           exit 1
 
+  retirement:
+    name: global model retirement (installed + native)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build immutable wheel and exercise private installed/native fixtures
+        run: |
+          set -euo pipefail
+          python scripts/retirement_run.py \
+            --source "$GITHUB_WORKSPACE" \
+            --sha "${{ github.event.pull_request.head.sha }}" \
+            --dependency-ref "${{ github.event.pull_request.base.sha }}" \
+            --work "${RUNNER_TEMP}/retirement-work" \
+            --out "${RUNNER_TEMP}/retirement-report.json"
+      - name: Always publish the retirement outcome and raw fixture evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: global-model-retirement
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/retirement-report.json
+            ${{ runner.temp }}/retirement-work/*-probe.json
+            ${{ runner.temp }}/retirement-work/*-events.jsonl
+            ${{ runner.temp }}/retirement-work/*-cli.log
+            ${{ runner.temp }}/retirement-work/*-probe.log
+            ${{ runner.temp }}/retirement-work/native-tests.log
+            ${{ runner.temp }}/retirement-work/native-build.log
+            ${{ runner.temp }}/retirement-work/build.log
+
   table:
     name: ratchet table
     # `needs` ORDERS these; the job-level `if` is what keeps the table unconditional. A skipped
     # `signatures` job would otherwise skip `table` too, leaving the previous commit's table
     # standing on the PR -- the same crime as printing an unmeasured number, committed by omission.
-    needs: [gate, signatures, quiesce]
+    needs: [gate, signatures, quiesce, retirement]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -600,6 +638,13 @@ jobs:
       #   - it does NOT run when this job was CANCELLED, because `always()` is true for cancelled
       #     jobs, and a superseded run reaching the comment step could PATCH a stale table over the
       #     newer run's.
+      - name: Read exact-head retirement outcome
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: global-model-retirement
+          path: ${{ runner.temp }}/retirement
+
       - name: Collect ratchet rows
         id: collect
         if: ${{ !cancelled() }}
@@ -607,6 +652,7 @@ jobs:
           QUIESCE_REPORT: ${{ needs.quiesce.outputs.report }}
           QUIESCE_RESULT: ${{ needs.quiesce.result }}
           QUIESCE_GATE: ${{ needs.gate.outputs.quiesce }}
+          RETIREMENT_RESULT: ${{ needs.retirement.result }}
         run: |
           set -euo pipefail
           # One arg per line, read back as an array: the gate's reason is free prose and must never
@@ -648,6 +694,10 @@ jobs:
           # green -- a false green in the ratchet itself. The collector now fails closed and reports
           # RED for either case. rc is captured without `set +e` so a real crash still cannot pass.
           rc=0
+          if [[ "$RETIREMENT_RESULT" != success ]]; then
+            mkdir -p "${RUNNER_TEMP}/retirement"
+            printf '{}' > "${RUNNER_TEMP}/retirement/retirement-report.json"
+          fi
           QUIESCE_ARGS=(--quiesce-unavailable 'macOS replay trigger-gated: no affected path or ratchet:quiesce label')
           if [[ "$QUIESCE_GATE" != false ]]; then
             printf '%s' "$QUIESCE_REPORT" > "${RUNNER_TEMP}/quiesce.json"
@@ -661,6 +711,7 @@ jobs:
             "${ATTESTATION_ARGS[@]}" \
             "${SIGNATURE_ARGS[@]}" \
             "${QUIESCE_ARGS[@]}" \
+            --retirement-report "${RUNNER_TEMP}/retirement/retirement-report.json" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --out "${RUNNER_TEMP}/ratchet.md" || rc=$?
           if [[ ! -s "${RUNNER_TEMP}/ratchet.md" ]]; then
