@@ -424,36 +424,6 @@ def test_digest_retired_faceted_helper_never_constructs_or_sends(monkeypatch):
     assert client.models.sent == []
 
 
-def test_eval_llm_judge_send_scrubs_prompt(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-    from brainlayer.eval import enrichment_llm_judge as judge
-
-    client = _FakeGeminiClient()
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: client)
-    monkeypatch.setattr(judge, "_read_jsonl", lambda path: [])
-    monkeypatch.setattr(
-        judge,
-        "build_pair_requests",
-        lambda *args, **kwargs: [{"chunk_id": "chunk-1", "label_to_system": {}}],
-    )
-    monkeypatch.setattr(judge, "_build_prompt", lambda request: _payload_with_every_token())
-    monkeypatch.setattr(judge, "parse_judge_response", lambda text: None)
-
-    try:
-        judge.run_judge(
-            tmp_path / "s.jsonl",
-            tmp_path / "l.jsonl",
-            tmp_path / "f.jsonl",
-            tmp_path / "out.jsonl",
-            tmp_path / "summary.json",
-        )
-    except Exception:
-        pass  # summary shaping of the fake row is not under test; the send is.
-
-    assert len(client.models.sent) == 1
-    _assert_no_token(client.models.sent[0], where="eval judge prompt")
-
-
 # ── OUTPUT: every LLM output field is scrubbed before persistence ────────
 
 

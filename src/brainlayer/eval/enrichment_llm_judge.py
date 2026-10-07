@@ -1,14 +1,9 @@
-"""LLM judge for local-vs-Flex BrainLayer enrichment artifacts."""
+"""Offline blinded requests, response parsing and aggregation for saved artifacts."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import random
-import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -32,7 +27,6 @@ FIELD_RUBRIC = {
     "sentiment": "Sentiment label/score/signals faithfully capture operator affect without over-reading.",
 }
 
-DEFAULT_JUDGE_MODEL = os.environ.get("BRAINLAYER_JUDGE_MODEL", "gemini-2.5-flash")
 
 JUDGE_PROMPT = """You are judging BrainLayer enrichment quality.
 
@@ -70,14 +64,6 @@ Return strict JSON only:
   "overall": {{"A": 1-5, "B": 1-5, "winner": "A|B|tie", "reason": "short reason"}}
 }}
 """
-
-
-@dataclass(frozen=True)
-class JudgeRunConfig:
-    model: str = DEFAULT_JUDGE_MODEL
-    seed: int = 20260615
-    limit: int | None = None
-    sleep_seconds: float = 0.0
 
 
 def build_pair_requests(
@@ -143,111 +129,6 @@ def aggregate_judgments(judgments: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "fields": {field: _finalize_metric(metric) for field, metric in fields.items()},
         "overall": _finalize_metric(overall),
     }
-
-
-def run_judge(
-    selection_jsonl: str | Path,
-    local_jsonl: str | Path,
-    flex_jsonl: str | Path,
-    output_jsonl: str | Path,
-    summary_json: str | Path,
-    *,
-    config: JudgeRunConfig | None = None,
-) -> dict[str, Any]:
-    config = config or JudgeRunConfig()
-    selection_rows = _read_jsonl(selection_jsonl)
-    if config.limit is not None:
-        selection_rows = selection_rows[: config.limit]
-    local_rows = _rows_by_chunk_id(_read_jsonl(local_jsonl))
-    flex_rows = _rows_by_chunk_id(_read_jsonl(flex_jsonl))
-    requests = build_pair_requests(selection_rows, local_rows, flex_rows, seed=config.seed)
-
-    from brainlayer.enrichment_controller import _build_gemini_http_options, _get_gemini_client
-    from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
-
-    client = _get_gemini_client()
-    config_body = {
-        "response_mime_type": "application/json",
-        "temperature": 0,
-        "http_options": _build_gemini_http_options(timeout_ms=120_000),
-    }
-    output_path = Path(output_jsonl)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    judgments: list[dict[str, Any]] = []
-    with output_path.open("w", encoding="utf-8") as handle:
-        for request in requests:
-            started = time.monotonic()
-            prompt = _build_prompt(request)
-            error = None
-            raw_response = ""
-            parsed: dict[str, Any] | None = None
-            try:
-                response = client.models.generate_content(
-                    model=config.model,
-                    contents=scrub_for_cloud(prompt),
-                    config=config_body,
-                )
-                raw_response = getattr(response, "text", "") or ""
-                parsed = parse_judge_response(raw_response)
-            except Exception as exc:  # noqa: BLE001
-                error = str(exc)
-            row = {
-                "chunk_id": request["chunk_id"],
-                "judge_model": config.model,
-                "latency_seconds": round(time.monotonic() - started, 3),
-                "label_to_system": request["label_to_system"],
-                "field_scores": parsed.get("field_scores") if parsed else None,
-                "overall": parsed.get("overall") if parsed else None,
-                "raw_response": raw_response,
-                "error": error,
-            }
-            handle.write(json.dumps(row, sort_keys=True) + "\n")
-            if error is None and parsed is not None:
-                judgments.append(row)
-            if config.sleep_seconds > 0:
-                time.sleep(config.sleep_seconds)
-
-    summary = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "judge_model": config.model,
-        "requested": len(requests),
-        "succeeded": len(judgments),
-        "failed": len(requests) - len(judgments),
-        "aggregation": aggregate_judgments(judgments),
-        "verdict": _verdict(aggregate_judgments(judgments)),
-    }
-    Path(summary_json).parent.mkdir(parents=True, exist_ok=True)
-    Path(summary_json).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return summary
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LLM judge for local-vs-Flex enrichment artifacts")
-    parser.add_argument("--selection", required=True)
-    parser.add_argument("--local", required=True)
-    parser.add_argument("--flex", required=True)
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--summary", required=True)
-    parser.add_argument("--model", default=DEFAULT_JUDGE_MODEL)
-    parser.add_argument("--seed", type=int, default=20260615)
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--sleep-seconds", type=float, default=0.0)
-    args = parser.parse_args(argv)
-    summary = run_judge(
-        args.selection,
-        args.local,
-        args.flex,
-        args.out,
-        args.summary,
-        config=JudgeRunConfig(
-            model=args.model,
-            seed=args.seed,
-            limit=args.limit,
-            sleep_seconds=args.sleep_seconds,
-        ),
-    )
-    print(json.dumps(summary, sort_keys=True))
-    return 0 if summary["failed"] == 0 else 2
 
 
 def _build_prompt(request: Mapping[str, Any]) -> str:
@@ -360,7 +241,3 @@ def _read_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
 def _rows_by_chunk_id(rows: Iterable[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
     return {str(row["chunk_id"]): row for row in rows}
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
