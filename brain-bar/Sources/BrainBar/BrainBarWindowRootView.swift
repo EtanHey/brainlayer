@@ -146,11 +146,11 @@ struct BrainBarQueueDirectionPresentation: Equatable {
     let symbol: String
     let tone: BrainBarQueueDirectionTone
 
-    static func derive(_ status: DashboardQueueStatus, backlogCount: Int = 0, enrichmentPaused: Bool? = nil) -> Self {
-        if status != .unavailable, enrichmentPaused == true, backlogCount > 0 {
+    static func derive(_ status: DashboardQueueStatus, backlogCount: Int = 0) -> Self {
+        if status != .unavailable, backlogCount > 0 {
             return Self(
-                label: "Enrichment paused · \(DashboardMetricFormatter.integerString(backlogCount)) queued",
-                symbol: "pause.circle", tone: .neutral
+                label: "Enrichment retired · \(DashboardMetricFormatter.integerString(backlogCount)) unenriched",
+                symbol: "archivebox", tone: .neutral
             )
         }
         return switch status {
@@ -177,7 +177,6 @@ private struct BrainBarDashboardContent: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
-    var enrichmentPausedOverride: Bool? = nil
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -192,8 +191,7 @@ private struct BrainBarDashboardContent: View {
                 referenceNow: referenceNow,
                 calendar: calendar,
                 locale: locale,
-                panelState: panelState ?? standalonePanelState,
-                enrichmentPausedOverride: enrichmentPausedOverride
+                panelState: panelState ?? standalonePanelState
             )
         }
     }
@@ -847,7 +845,6 @@ private struct BrainBarDashboardView: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     @ObservedObject var panelState: BrainBarDashboardPanelState
-    var enrichmentPausedOverride: Bool? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.brainBarDriveAuth) private var driveAuth
@@ -1119,11 +1116,9 @@ private struct BrainBarDashboardView: View {
 
     private var statusStrip: some View {
         let status = onePagePresentation.status
-        let enrichmentPaused = enrichmentPausedOverride ?? observedEnrichmentPaused
         let queueDirection = BrainBarQueueDirectionPresentation.derive(
             flowSummary.queue.status,
-            backlogCount: flowSummary.queue.backlogCount,
-            enrichmentPaused: enrichmentPaused
+            backlogCount: flowSummary.queue.backlogCount
         )
         let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
@@ -1222,13 +1217,7 @@ private struct BrainBarDashboardView: View {
         }
     }
 
-    private var observedEnrichmentPaused: Bool? {
-#if BRAINBAR_UI
-        (try? BrainLayerConfigStore().loadDocument().config).map(\.enrichmentIsOff)
-#else
-        nil
-#endif
-    }
+
 
     @ViewBuilder
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
@@ -3260,7 +3249,6 @@ enum BrainBarDashboardPreview {
         calendar: Calendar = goldenCalendar,
         locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil,
-        enrichmentPausedOverride: Bool? = false,
         disablesAnimations: Bool = true
     ) -> AnyView {
         let dashboard =
@@ -3274,8 +3262,7 @@ enum BrainBarDashboardPreview {
                     referenceNow: now,
                     calendar: calendar,
                     locale: locale,
-                    panelState: panelState,
-                    enrichmentPausedOverride: enrichmentPausedOverride
+                    panelState: panelState
                 )
             }
             .environment(\.colorScheme, .dark)
