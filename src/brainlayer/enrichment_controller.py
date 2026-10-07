@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import random
-import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -248,17 +247,6 @@ _STORE_OPERATION_LOCK = threading.Lock()
 _STORE_OPERATION_CONDITION = threading.Condition(_STORE_OPERATION_LOCK)
 _STORE_CLOSING: set[str] = set()
 _ENRICH_COST_LOCK = threading.Lock()
-
-_META_RESEARCH_PATTERNS = [
-    re.compile(r"brain_search\s*\(", re.IGNORECASE),
-    re.compile(r"brain_search query=", re.IGNORECASE),
-    re.compile(r"search results? for ['\"]", re.IGNORECASE),
-    re.compile(r"Query \d+ for ['\"].*['\"] (degraded|scored|returned)", re.IGNORECASE),
-    re.compile(r"(eval|baseline|pilot) score:?\s*\d+(?:[./]\d+)*/5", re.IGNORECASE),
-    re.compile(r"Grade:?\s*\d/5", re.IGNORECASE),
-    re.compile(r"\[BrainLayer (auto|deep)\] Memories matching", re.IGNORECASE),
-    re.compile(r"['\"]?additionalContext['\"]?\s*:", re.IGNORECASE),
-]
 
 
 @dataclass
@@ -1011,65 +999,6 @@ def call_gemini_for_extraction(prompt: str) -> Optional[str]:
 from .chunk_write import canonical_content_hash as _content_hash  # noqa: E402
 
 
-def is_meta_research(content: str) -> bool:
-    if not content:
-        return False
-    return any(pattern.search(content) for pattern in _META_RESEARCH_PATTERNS)
-
-
-def _is_duplicate_content(store, content: str) -> bool:
-    """Check if content with the same hash already exists and is enriched.
-
-    Returns True if a chunk with identical content hash exists and has been enriched,
-    meaning re-enriching would be a no-op.
-    """
-    content_h = _content_hash(content)
-    try:
-        cursor = store._read_cursor()
-        row = cursor.execute(
-            "SELECT COUNT(*) FROM chunks WHERE content_hash = ? AND enriched_at IS NOT NULL AND summary IS NOT NULL",
-            (content_h,),
-        ).fetchone()
-        return row[0] > 0 if row else False
-    except Exception:
-        # content_hash column may not exist yet — fall back to no dedup
-        return False
-
-
-def _ensure_content_hash_column(store) -> bool:
-    """Ensure the content_hash column exists on chunks table. Returns True if it exists."""
-    cursor = store.conn.cursor()
-    try:
-        cursor.execute("SELECT content_hash FROM chunks LIMIT 0")
-    except Exception:
-        try:
-            cursor.execute("ALTER TABLE chunks ADD COLUMN content_hash TEXT")
-        except Exception:
-            return False
-
-    try:
-        indexes = list(cursor.execute("PRAGMA index_list(chunks)"))
-        has_content_hash_index = False
-        for row in indexes:
-            index_name = row[1]
-            is_unique = bool(row[2])
-            quoted_name = index_name.replace('"', '""')
-            columns = [info[2] for info in cursor.execute(f'PRAGMA index_info("{quoted_name}")')]
-            if "content_hash" not in columns:
-                continue
-            if is_unique:
-                cursor.execute(f'DROP INDEX IF EXISTS "{quoted_name}"')
-                continue
-            has_content_hash_index = True
-
-        if not has_content_hash_index:
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_content_hash ON chunks(content_hash)")
-    except Exception:
-        pass
-
-    return True
-
-
 def _normalize_chunk_tags(tags: Any) -> list[str]:
     if isinstance(tags, str):
         try:
@@ -1116,27 +1045,6 @@ def _mark_duplicate_content(store, chunk: dict[str, Any]) -> None:
             "UPDATE chunks SET enriched_at = ?, enrich_status = 'duplicate' WHERE id = ?",
             (now, chunk["id"]),
         )
-
-
-def _backfill_content_hashes(store, limit: int = 1000) -> int:
-    """Backfill content_hash for chunks that don't have one yet. Returns count updated."""
-    try:
-        cursor = store.conn.cursor()
-        rows = list(
-            cursor.execute(
-                "SELECT id, content FROM chunks WHERE content_hash IS NULL LIMIT ?",
-                (limit,),
-            )
-        )
-        count = 0
-        for chunk_id, content in rows:
-            if content:
-                h = _content_hash(content)
-                cursor.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk_id))
-                count += 1
-        return count
-    except Exception:
-        return 0
 
 
 # ── Retry / apply helpers ──────────────────────────────────────────────────────
@@ -1522,17 +1430,21 @@ def enrich_local(
 
 from .enrichment_replay import _apply_enrichment as _apply_enrichment
 from .enrichment_replay import _apply_enrichment_impl as _apply_enrichment_impl
+from .enrichment_replay import _backfill_content_hashes as _backfill_content_hashes
 from .enrichment_replay import _chunk_columns as _chunk_columns
 from .enrichment_replay import _current_auto_supersede_dry_run as _current_auto_supersede_dry_run
 from .enrichment_replay import _current_enrichment_backend as _current_enrichment_backend
 from .enrichment_replay import _derive_chunk_provenance_class as _derive_chunk_provenance_class
 from .enrichment_replay import _enrichment_update_payload as _enrichment_update_payload
+from .enrichment_replay import _ensure_content_hash_column as _ensure_content_hash_column
 from .enrichment_replay import _ensure_provenance_class_column as _ensure_provenance_class_column
 from .enrichment_replay import _ensure_raw_entities_json_column as _ensure_raw_entities_json_column
 from .enrichment_replay import _entity_name_from_payload as _entity_name_from_payload
 from .enrichment_replay import _get_chunk_readonly as _get_chunk_readonly
 from .enrichment_replay import _get_gemini_service_tier as _get_gemini_service_tier
+from .enrichment_replay import _is_duplicate_content as _is_duplicate_content
 from .enrichment_replay import _maybe_auto_supersede_ingested_chunk as _maybe_auto_supersede_ingested_chunk
 from .enrichment_replay import _previous_assistant_text as _previous_assistant_text
 from .enrichment_replay import _savepoint as _savepoint
 from .enrichment_replay import _with_enriched_by as _with_enriched_by
+from .enrichment_replay import is_meta_research as is_meta_research

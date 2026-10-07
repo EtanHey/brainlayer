@@ -57,3 +57,13 @@ def test_historical_hash_and_class_helpers_are_local():
         "_backfill_content_hashes",
     ):
         assert getattr(enrichment_replay, name).__module__ == "brainlayer.enrichment_replay"
+
+
+def test_controller_has_no_duplicate_historical_hash_helpers():
+    import ast
+
+    source = Path(__file__).resolve().parents[1] / "src/brainlayer/enrichment_controller.py"
+    names = {node.name for node in ast.parse(source.read_text()).body if isinstance(node, ast.FunctionDef)}
+    assert names.isdisjoint(
+        {"is_meta_research", "_is_duplicate_content", "_ensure_content_hash_column", "_backfill_content_hashes"}
+    )
