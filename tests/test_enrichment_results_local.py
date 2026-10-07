@@ -17,10 +17,11 @@ def local_import(name, globals=None, locals=None, fromlist=(), level=0):
         raise AssertionError(f'Saved-result helper imported transport: {name}')
     return original_import(name, globals, locals, fromlist, level)
 builtins.__import__ = local_import
-from brainlayer.pipeline.enrichment_results import HIGH_VALUE_TYPES, normalize_enrichment_tags, enrichment_version_metadata
+from brainlayer.pipeline.enrichment_results import HIGH_VALUE_TYPES, normalize_enrichment_tags, enrichment_version_metadata, parse_enrichment
 assert HIGH_VALUE_TYPES == ['ai_code', 'stack_trace', 'user_message', 'assistant_text']
 assert normalize_enrichment_tags(['React.js', 'reactjs']) == ['react']
 assert enrichment_version_metadata()['prompt_version']
+assert parse_enrichment('{"summary":"Saved local response","tags":["reactjs"]}')['tags'] == ['react']
 """
     result = subprocess.run(
         [sys.executable, "-I", "-c", code, str(root / "src")],
@@ -44,3 +45,10 @@ def test_public_prompt_builder_lives_outside_the_retired_producer():
     from brainlayer.pipeline import build_external_prompt
 
     assert build_external_prompt.__module__ == "brainlayer.pipeline.enrichment_prompts"
+
+
+def test_saved_result_parser_lives_outside_the_retired_producer():
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
+
+    assert parse_enrichment.__module__ == "brainlayer.pipeline.enrichment_results"
+    assert parse_enrichment('{"summary":"A historical saved result", "tags":["reactjs"]}')["tags"] == ["react"]

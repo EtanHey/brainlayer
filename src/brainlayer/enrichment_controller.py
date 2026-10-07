@@ -25,8 +25,8 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 from .pipeline.cloud_scrub import CloudScrubError, scrub_for_cloud, scrub_llm_output
-from .pipeline.enrichment import parse_enrichment
 from .pipeline.enrichment_prompts import build_external_prompt
+from .pipeline.enrichment_results import parse_enrichment
 from .pipeline.rate_limiter import TokenBucket
 from .pipeline.sanitize import Sanitizer
 from .pipeline.write_queue import WriteQueue
