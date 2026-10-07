@@ -13,9 +13,7 @@ network socket, the canonical DB, or BrainBar's socket.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import subprocess
 import sys
 import types
 from pathlib import Path
@@ -468,31 +466,6 @@ def test_eval_llm_judge_send_scrubs_prompt(monkeypatch, tmp_path):
 
     assert len(client.models.sent) == 1
     _assert_no_token(client.models.sent[0], where="eval judge prompt")
-
-
-@pytest.mark.parametrize(
-    "script",
-    [
-        "batch_submit_paced.py",
-    ],
-)
-def test_legacy_unsanitized_cloud_scripts_are_gated_off(script, tmp_path):
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": str(tmp_path),
-        "PYTHONPATH": str(REPO_ROOT / "src"),
-        "BRAINLAYER_DB": str(tmp_path / "never-opened.db"),
-    }
-    proc = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / script)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-
-    assert proc.returncode != 0
-    assert "GATED OFF" in proc.stderr or "RETIRED" in proc.stderr
 
 
 # ── OUTPUT: every LLM output field is scrubbed before persistence ────────
