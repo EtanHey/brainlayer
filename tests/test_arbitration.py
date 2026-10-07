@@ -485,7 +485,7 @@ def test_drain_preserve_failure_before_apply_is_best_effort(tmp_path, monkeypatc
     )
 
     assert json.loads(queue_path.read_text(encoding="utf-8")) == enrichment_event
-    assert "drain could not preserve paused enrichment" in log_path.read_text(encoding="utf-8")
+    assert "drain could not preserve held historical metadata updates" in log_path.read_text(encoding="utf-8")
 
 
 def test_burn_drain_preserve_failure_before_apply_is_best_effort(tmp_path, monkeypatch):
@@ -521,7 +521,7 @@ def test_burn_drain_preserve_failure_before_apply_is_best_effort(tmp_path, monke
 
     assert result.applied_events == 0
     assert json.loads(queue_path.read_text(encoding="utf-8")) == enrichment_event
-    assert "burn drain could not preserve paused enrichment" in log_path.read_text(encoding="utf-8")
+    assert "burn drain could not preserve held historical metadata updates" in log_path.read_text(encoding="utf-8")
 
 
 def test_paused_misnamed_enrichment_file_does_not_starve_later_ingestion(tmp_path, monkeypatch):
