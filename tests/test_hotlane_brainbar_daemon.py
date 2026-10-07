@@ -26,7 +26,7 @@ def _raise_if_called(message: str):
     return inner
 
 
-def test_hotlane_cycle_runs_enrichment_through_same_writer_store():
+def test_hotlane_cycle_ignores_retired_enrichment_through_same_writer_store():
     hotlane = _load_hotlane_module()
     writer_store = object()
     calls = []
@@ -47,12 +47,9 @@ def test_hotlane_cycle_runs_enrichment_through_same_writer_store():
     )
 
     assert result.embedded == 0
-    assert result.enrich_attempted == 2
-    assert result.enriched == 1
-    assert calls == [
-        ("candidates", writer_store, 5),
-        ("enrich", writer_store, {"limit": 25, "since_hours": 8760}),
-    ]
+    assert result.enrich_attempted == 0
+    assert result.enriched == 0
+    assert calls == [("candidates", writer_store, 5)]
 
 
 def test_hotlane_cycle_can_disable_enrichment():
@@ -1117,7 +1114,7 @@ def test_split_cycle_embeds_all_hot_candidates_before_writer_revalidation(tmp_pa
     assert result.embedded == 1
 
 
-def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
+def test_hotlane_run_keeps_retired_enrichment_zero_after_failed_cycle():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []
 
@@ -1128,7 +1125,7 @@ def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
     def fake_cycle(**kwargs):
         scheduled_enrich_limits.append(kwargs["enrich_limit"])
         if len(scheduled_enrich_limits) == 1:
-            raise RuntimeError("gemini transient failure")
+            raise RuntimeError("local embedding transient failure")
         return hotlane.CycleResult()
 
     hotlane.run(
@@ -1150,7 +1147,7 @@ def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
         max_cycles=2,
     )
 
-    assert scheduled_enrich_limits == [25, 0]
+    assert scheduled_enrich_limits == [0, 0]
 
 
 def test_hotlane_run_requests_cpu_embedding_device_by_default():
@@ -1197,7 +1194,7 @@ def test_hotlane_run_preserves_positional_only_model_factory():
     )
 
 
-def test_hotlane_run_disables_enrichment_after_daily_cap():
+def test_hotlane_run_ignores_legacy_daily_cap_diagnostics():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []
 
@@ -1230,7 +1227,7 @@ def test_hotlane_run_disables_enrichment_after_daily_cap():
         max_cycles=2,
     )
 
-    assert scheduled_enrich_limits == [25, 0]
+    assert scheduled_enrich_limits == [0, 0]
 
 
 def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
@@ -1355,7 +1352,7 @@ def test_hotlane_run_logs_high_priority_backpressure_once_per_blocked_state(tmp_
     yield_logs = [
         record
         for record in caplog.records
-        if record.getMessage() == "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
+        if record.getMessage() == "durable high-priority queue has backlog; suppressing hot embedding"
     ]
     assert len(yield_logs) == 2
     assert len(cycle_calls) == 2
