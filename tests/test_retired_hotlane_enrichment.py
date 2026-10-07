@@ -7,6 +7,8 @@ import pytest
 
 from brainlayer.vector_store import VectorStore
 
+pytestmark = pytest.mark.retired_enrichment
+
 
 @pytest.mark.parametrize("split", [False, True])
 def test_hotlane_retired_enrichment_preserves_local_vectors(tmp_path, caplog, split):
