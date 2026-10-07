@@ -17,28 +17,33 @@ exec their service command. API keys stay out of rendered LaunchAgent plists.
 |----------|---------|-------------|
 | `BRAINLAYER_DB` | `~/.local/share/brainlayer/brainlayer.db` | Database file path. Set to override the default location. |
 
-### Enrichment
+### Launchd environment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BRAINLAYER_SYSTEM_ENABLED` | `1` | Global launchd gate. Set to `0`/`false`/`off` to disable launchd-managed BrainLayer jobs. |
-| `BRAINLAYER_ENRICH_ENABLED` | `1` | Realtime enrichment gate. The launchd enrichment service sleeps/exits disabled when false. |
-| `BRAINLAYER_ENRICH_MODE` | `remote` | Enrichment mode seam: `remote` for provider-backed enrichment, `local` for local model backends. |
-| `BRAINLAYER_ENRICH_PROVIDER` | `gemini` | Provider selection seam. Gemini is wired today; other providers should coordinate on this key. |
-| `BRAINLAYER_ENRICH_BACKEND` | `gemini` in config file, auto-detect elsewhere | Backend key. Local flows historically use `mlx`, `ollama`, or `groq`; the unified config uses `gemini` for the remote Gemini path. |
-| `BRAINLAYER_ENRICH_MODEL` | `glm-4.7-flash` | Ollama model name for enrichment |
-| `BRAINLAYER_MLX_MODEL` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | MLX model identifier |
-| `BRAINLAYER_OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
-| `BRAINLAYER_MLX_URL` | `http://127.0.0.1:8080/v1/chat/completions` | MLX server endpoint |
-| `GOOGLE_API_KEY` | empty | Google AI API key used by realtime Gemini enrichment. Prefer a 1Password `op read` reference in the config file. |
-| `BRAINLAYER_ENV_FILE` | `~/.config/brainlayer/brainlayer.env` | Override path for the config file that launchd templates source. |
-| `BRAINLAYER_ENRICH_RATE` | `5.0` | Realtime enrichment rate, requests/second (`5.0` = 300 RPM). The packaged launchd jobs override it to `15`. |
-| `BRAINLAYER_ENRICH_CONCURRENCY` | `4` | Realtime Gemini enrichment concurrency used by launchd jobs. |
-| `BRAINLAYER_MAX_COMMIT_BATCH` | `25` | Max enrichment write batch used by launchd jobs. |
-| `BRAINLAYER_GEMINI_SERVICE_TIER` | `flex` | Gemini service tier used by launchd jobs. |
-| `BRAINLAYER_DISABLED_SLEEP_SECONDS` | `3600` | Sleep duration for disabled KeepAlive jobs to avoid tight launchd restart loops. Use `0` in tests. |
-| `BRAINLAYER_STALL_TIMEOUT` | `300` | Seconds before killing a stuck enrichment chunk |
-| `BRAINLAYER_HEARTBEAT_INTERVAL` | `25` | Log progress every N chunks during enrichment |
+| `BRAINLAYER_ENV_FILE` | `~/.config/brainlayer/brainlayer.env` | Override the config file sourced by launchd templates. |
+| `BRAINLAYER_DISABLED_SLEEP_SECONDS` | `3600` | Sleep duration for disabled KeepAlive jobs to avoid restart loops. Use `0` in tests. |
+
+### Enrichment (retired)
+
+LLM chunk and session enrichment is retired. Provider, backend, model, concurrency,
+and rate controls are no longer activation instructions.
+History: [retirement details](enrichment.md).
+
+### Google credential compatibility gate
+
+Older installed hotlane plists can still set `BRAINLAYER_REQUIRE_GOOGLE_API_KEY=1`.
+The installed `brainlayer-env-run.sh` then exits **78** before exec if neither a
+`GOOGLE_API_KEY`/`GOOGLE_GENERATIVE_AI_API_KEY` value nor a Google key declaration
+in the env file is present. Keep the 1Password-backed `GOOGLE_API_KEY` configuration,
+the require-key flag, and this exit-78 gate until the release re-renders the installed
+hotlane plists. Retirement alone does not authorize deleting or bypassing them.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOOGLE_API_KEY` | empty | Retained Google key configuration for the installed-hotlane compatibility gate. Prefer a 1Password `op read` reference. |
+| `BRAINLAYER_REQUIRE_GOOGLE_API_KEY` | `0` in env-run | When an installed plist sets `1`, require Google key configuration before executing its command. |
 
 ### Launchd Toggles
 
@@ -47,7 +52,6 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 
 | Variable | Default | Controls |
 |----------|---------|----------|
-| `BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED` | `1` | `com.brainlayer.enrichment` |
 | `BRAINLAYER_LAUNCHD_HOTLANE_ENABLED` | `1` | Gates `com.brainlayer.hotlane-brainbar`. |
 | `BRAINLAYER_LAUNCHD_DECAY_ENABLED` | `1` | `com.brainlayer.decay` |
 | `BRAINLAYER_LAUNCHD_DRAIN_ENABLED` | `1` | `com.brainlayer.drain` |
@@ -83,7 +87,7 @@ BrainLayer reads from these locations by default:
 | Claude Code conversations | `~/.claude/projects/` |
 | Deduplicated system prompts | `~/.local/share/brainlayer/prompts/` |
 | Daemon socket | `/tmp/brainlayer.sock` |
-| Enrichment lock | `/tmp/brainlayer-enrichment.lock` |
+| Historical enrichment lock | `/tmp/brainlayer-enrichment.lock` (legacy safety/cleanup only) |
 
 ## Config File
 
@@ -98,20 +102,12 @@ Secure 1Password-backed form:
 ```bash
 GOOGLE_API_KEY="$(op read 'op://Private/Google AI/Gemini API key')"
 BRAINLAYER_SYSTEM_ENABLED=1
-BRAINLAYER_ENRICH_ENABLED=1
-BRAINLAYER_ENRICH_MODE=remote
-BRAINLAYER_ENRICH_PROVIDER=gemini
-BRAINLAYER_ENRICH_BACKEND=gemini
-BRAINLAYER_ENRICH_RATE=15
-BRAINLAYER_ENRICH_CONCURRENCY=4
-BRAINLAYER_MAX_COMMIT_BATCH=25
-BRAINLAYER_GEMINI_SERVICE_TIER=flex
 ```
 
 Plaintext Google keys are intentionally not supported in generated BrainLayer
-env files. Manual configs should keep the same tuning keys as the 1Password
-form. See
-`scripts/launchd/brainlayer.env.example` for the full schema and launchd job gates.
+env files. Existing configs retain the credential reference for the compatibility
+gate; it does not enable the retired enrichment feature. See
+`scripts/launchd/brainlayer.env.example` for the packaged schema and launchd job gates.
 
 ## Scheduled Tasks (macOS)
 
@@ -120,7 +116,6 @@ BrainLayer includes launchd plist templates for automated operation:
 | Service | Schedule | Description |
 |---------|----------|-------------|
 | `com.brainlayer.index` | Nightly | Incremental indexing of new conversations |
-| `com.brainlayer.enrichment` | KeepAlive supervisor | Run realtime Gemini enrichment against recent chunks |
 | `com.brainlayer.watch` | KeepAlive watcher | Watch and queue new conversation writes |
 | `com.brainlayer.drain` | Queue/WatchPaths trigger | Drain queued writes as the single writer |
 | `com.brainlayer.decay` | Weekly | Refresh decay metadata |
@@ -135,17 +130,15 @@ Weekly maintenance waits up to two hours for an in-flight daily DB backup. A rec
 
 Scheduled FTS row-count checks use a read-only connection and do not acquire the maintenance writer lock. Full FTS rebuilds require an explicit offline database copy path.
 
-Manual install and control:
+Install the remaining packaged agents with:
 
 ```bash
-brainlayer setup --google-api-key-op-ref "op://Private/Google AI/Gemini API key"
-bash scripts/launchd/install.sh enrichment
-bash scripts/launchd/install.sh unload enrichment
-bash scripts/launchd/install.sh load enrichment
+brainlayer setup
+brainlayer setup --launchd
 ```
 
-Use `brainlayer setup --launchd --google-api-key-op-ref ...` to render and load
-all packaged launchd agents in one step.
+Keep existing Google key configuration until the release re-renders installed
+hotlane plists. Do not install, load, or resume the retired enrichment service.
 
 The install-managed plists in `scripts/launchd/` render without embedding
 `GOOGLE_API_KEY`. Their ProgramArguments call the installed
