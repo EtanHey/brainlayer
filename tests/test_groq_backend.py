@@ -208,56 +208,6 @@ class TestGroqBackendSelection:
 # ── Privacy enforcement ────────────────────────────────────────────────
 
 
-class TestGroqPrivacy:
-    """Test that Groq backend enforces sanitization (no raw PII to cloud)."""
-
-    def test_enrich_one_uses_external_prompt_for_groq(self):
-        """When backend=groq, _enrich_one uses build_external_prompt with Sanitizer."""
-        store = MagicMock()
-        store.get_context.return_value = {"context": []}
-        chunk = {
-            "id": "test-chunk-groq-1",
-            "content": "Etan fixed the bug in auth.py",
-            "content_type": "user_message",
-            "project": "test",
-        }
-
-        with (
-            patch.object(
-                enrichment,
-                "build_external_prompt",
-                return_value=("sanitized prompt", MagicMock()),
-            ) as mock_ext_prompt,
-            patch.object(enrichment, "call_llm", return_value='{"summary":"ok","tags":["test"]}'),
-            patch.object(enrichment, "parse_enrichment", return_value={"summary": "ok", "tags": ["test"]}),
-        ):
-            result = enrichment._enrich_one(store, chunk, with_context=False, backend="groq")
-
-        assert result is True
-        mock_ext_prompt.assert_called_once()
-
-    def test_enrich_one_uses_local_prompt_for_mlx(self):
-        """When backend=mlx, _enrich_one uses build_prompt (no sanitization)."""
-        store = MagicMock()
-        store.get_context.return_value = {"context": []}
-        chunk = {
-            "id": "test-chunk-mlx-1",
-            "content": "test content",
-            "content_type": "user_message",
-            "project": "test",
-        }
-
-        with (
-            patch.object(enrichment, "build_prompt", return_value="local prompt") as mock_local_prompt,
-            patch.object(enrichment, "call_llm", return_value='{"summary":"ok","tags":["test"]}'),
-            patch.object(enrichment, "parse_enrichment", return_value={"summary": "ok", "tags": ["test"]}),
-        ):
-            result = enrichment._enrich_one(store, chunk, with_context=False, backend="mlx")
-
-        assert result is True
-        mock_local_prompt.assert_called_once()
-
-
 # ── Config constants ──────────────────────────────────────────────────
 
 

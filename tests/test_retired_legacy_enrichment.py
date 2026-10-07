@@ -45,3 +45,9 @@ def test_legacy_batch_producer_is_absent():
     from brainlayer.pipeline import enrichment
 
     assert not hasattr(enrichment, "enrich_batch")
+
+
+def test_legacy_single_chunk_producer_is_absent():
+    from brainlayer.pipeline import enrichment
+
+    assert not hasattr(enrichment, "_enrich_one")

@@ -1,8 +1,5 @@
 """Tests for enrichment reliability — retry, circuit breaker, timeout config."""
 
-import time
-from unittest.mock import MagicMock, patch
-
 from brainlayer.pipeline import enrichment
 
 
@@ -201,117 +198,6 @@ def test_store_memory_uses_lowercase_value_type():
             )
         finally:
             vector_store.close()
-
-
-class TestRetryWithBackoff:
-    """Per-chunk retry with exponential backoff."""
-
-    def test_success_on_first_attempt_no_retry(self):
-        """Successful LLM call doesn't trigger retry."""
-        store = MagicMock()
-        store.get_context.return_value = {"context": []}
-        chunk = {"id": "test-chunk-001", "content": "test", "content_type": "user_message"}
-
-        with (
-            patch.object(enrichment, "call_llm", return_value='{"summary":"ok","tags":["test"]}'),
-            patch.object(enrichment, "parse_enrichment", return_value={"summary": "ok", "tags": ["test"]}),
-            patch.object(enrichment, "MAX_RETRIES", 2),
-        ):
-            result = enrichment._enrich_one(store, chunk, with_context=False)
-
-        assert result is True
-
-    def test_retry_on_llm_failure(self):
-        """Failed LLM call retries up to MAX_RETRIES times."""
-        store = MagicMock()
-        chunk = {"id": "test-chunk-002", "content": "test", "content_type": "user_message"}
-
-        call_count = 0
-
-        def mock_call_llm(prompt, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                return None  # Fail first 2 attempts
-            return '{"summary":"recovered","tags":["test"]}'
-
-        with (
-            patch.object(enrichment, "call_llm", side_effect=mock_call_llm),
-            patch.object(
-                enrichment,
-                "parse_enrichment",
-                side_effect=lambda r: {"summary": "recovered", "tags": ["test"]} if r else None,
-            ),
-            patch.object(enrichment, "MAX_RETRIES", 2),
-            patch.object(enrichment, "RETRY_BASE_DELAY", 0.01),  # Fast for tests
-            patch.object(enrichment, "RETRY_MAX_DELAY", 0.05),
-        ):
-            result = enrichment._enrich_one(store, chunk, with_context=False)
-
-        assert result is True
-        assert call_count == 3  # Initial + 2 retries
-
-    def test_all_retries_exhausted(self):
-        """Returns False after all retry attempts fail."""
-        store = MagicMock()
-        chunk = {"id": "test-chunk-003", "content": "test", "content_type": "user_message"}
-
-        with (
-            patch.object(enrichment, "call_llm", return_value=None),
-            patch.object(enrichment, "MAX_RETRIES", 1),
-            patch.object(enrichment, "RETRY_BASE_DELAY", 0.01),
-            patch.object(enrichment, "RETRY_MAX_DELAY", 0.05),
-        ):
-            result = enrichment._enrich_one(store, chunk, with_context=False)
-
-        assert result is False
-
-    def test_no_retry_when_max_retries_zero(self):
-        """MAX_RETRIES=0 means no retries, single attempt only."""
-        store = MagicMock()
-        chunk = {"id": "test-chunk-004", "content": "test", "content_type": "user_message"}
-        call_count = 0
-
-        def mock_call(prompt, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            return None
-
-        with (
-            patch.object(enrichment, "call_llm", side_effect=mock_call),
-            patch.object(enrichment, "MAX_RETRIES", 0),
-        ):
-            result = enrichment._enrich_one(store, chunk, with_context=False)
-
-        assert result is False
-        assert call_count == 1
-
-    def test_backoff_increases_delay(self):
-        """Verify backoff delay increases between retries."""
-        store = MagicMock()
-        chunk = {"id": "test-chunk-005", "content": "test", "content_type": "user_message"}
-        delays = []
-
-        original_sleep = time.sleep
-
-        def mock_sleep(duration):
-            delays.append(duration)
-            # Don't actually sleep in tests
-
-        with (
-            patch.object(enrichment, "call_llm", return_value=None),
-            patch.object(enrichment, "MAX_RETRIES", 3),
-            patch.object(enrichment, "RETRY_BASE_DELAY", 1.0),
-            patch.object(enrichment, "RETRY_MAX_DELAY", 100.0),
-            patch.object(enrichment, "_sleep", side_effect=mock_sleep),
-        ):
-            enrichment._enrich_one(store, chunk, with_context=False)
-
-        assert len(delays) == 3  # 3 retry sleeps
-        # Delays should generally increase (base * 2^attempt + jitter)
-        # With jitter it's not strictly monotonic, but base increases: 1, 2, 4
-        assert delays[0] < 3.0  # ~1.0 + up to 0.3 jitter
-        assert delays[1] < 5.0  # ~2.0 + up to 0.6 jitter
 
 
 class TestMLXTimeout:

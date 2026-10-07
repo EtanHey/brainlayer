@@ -10,7 +10,7 @@ Tests cover:
 
 import os
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestBackendAutoDetection:
@@ -93,75 +93,6 @@ class TestCallLlmBackendOverride:
             mock_glm.assert_called_once()
         finally:
             enrichment.ENRICH_BACKEND = original
-
-
-class TestStallDetection:
-    """Test enrichment stall detection and heartbeat logging."""
-
-    @patch("brainlayer.pipeline.enrichment.call_llm")
-    def test_stall_logged_when_slow(self, mock_llm, capsys):
-        """Stall warning is printed when chunk takes too long."""
-        from brainlayer.pipeline import enrichment
-        from brainlayer.pipeline.enrichment import _enrich_one
-
-        # Make call_llm "take" a long time by manipulating time
-        original_timeout = enrichment.STALL_TIMEOUT
-        enrichment.STALL_TIMEOUT = 0  # Any duration triggers stall
-
-        mock_llm.return_value = '{"summary":"test summary","tags":["test"],"importance":5,"intent":"debugging"}'
-
-        mock_store = MagicMock()
-        mock_store.get_context.return_value = {"context": []}
-        mock_store.update_enrichment.return_value = None
-
-        chunk = {
-            "id": "test-chunk-123",
-            "content": "test content",
-            "project": "test",
-            "content_type": "user_message",
-            "conversation_id": None,
-            "position": None,
-            "char_count": 100,
-        }
-
-        try:
-            result = _enrich_one(mock_store, chunk, with_context=False)
-            assert result is True  # Should still succeed
-            captured = capsys.readouterr()
-            assert "STALL" in captured.err
-        finally:
-            enrichment.STALL_TIMEOUT = original_timeout
-
-    @patch("brainlayer.pipeline.enrichment.call_llm")
-    def test_no_stall_when_fast(self, mock_llm, capsys):
-        """No stall warning when chunk processes quickly."""
-        from brainlayer.pipeline import enrichment
-        from brainlayer.pipeline.enrichment import _enrich_one
-
-        original_timeout = enrichment.STALL_TIMEOUT
-        enrichment.STALL_TIMEOUT = 9999  # Very high threshold
-
-        mock_llm.return_value = '{"summary":"test summary","tags":["test"],"importance":5,"intent":"debugging"}'
-
-        mock_store = MagicMock()
-        mock_store.get_context.return_value = {"context": []}
-
-        chunk = {
-            "id": "test-chunk-fast",
-            "content": "test content",
-            "project": "test",
-            "content_type": "user_message",
-            "conversation_id": None,
-            "position": None,
-            "char_count": 50,
-        }
-
-        try:
-            _enrich_one(mock_store, chunk, with_context=False)
-            captured = capsys.readouterr()
-            assert "STALL" not in captured.err
-        finally:
-            enrichment.STALL_TIMEOUT = original_timeout
 
 
 class TestCurrentContextFix:
