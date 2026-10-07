@@ -12,7 +12,10 @@ from brainlayer.import_sweep import _child_env
 
 ROOT = Path(os.environ.get("BRAINLAYER_IMPORT_SWEEP_SOURCE_ROOT", Path(__file__).resolve().parents[1])).resolve()
 REMOVED_SCRIPTS = ("cloud_stream.py",)
-TRIMMED = {"cloud_stream.py": {"run_stream", "main"}}
+TRIMMED = {
+    "cloud_stream.py": {"run_stream", "main"},
+    "enrichment_pilot.py": {"call_gemini", "main", "analyze_results", "write_report"},
+}
 BLOCKED_SCRIPTS = (
     "cloud_stream.py",
     "enrichment_pilot.py",
