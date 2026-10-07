@@ -2382,13 +2382,15 @@ def analyze_evolution(
 
     Loads messages from WhatsApp, Claude, Instagram, and Gemini,
     batches them by time period, analyzes each batch with LLM,
-    and generates evolution analysis with weighted master guide.
+    and generates evolution analysis with weighted master guide. The Ollama
+    endpoint must be loopback; proxies and redirects are refused.
     """
     try:
-        from ..pipeline.longitudinal_analyzer import run_full_analysis
+        from ..pipeline.longitudinal_analyzer import loopback_ollama_url, run_full_analysis
         from ..pipeline.time_batcher import create_time_batches, format_batches_summary
         from ..pipeline.unified_timeline import UnifiedTimeline
 
+        loopback_ollama_url()
         rprint("[bold blue]זיכרון[/] - Longitudinal Style Analysis\n")
 
         # Create unified timeline
