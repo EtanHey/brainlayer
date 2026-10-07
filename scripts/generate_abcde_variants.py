@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_PROMPT_PATH = REPO_ROOT / "src/brainlayer/pipeline/enrichment.py"
+PRODUCTION_PROMPT_PATH = REPO_ROOT / "src/brainlayer/pipeline/enrichment_prompts.py"
 DEFAULT_REGISTRY_PATH = REPO_ROOT / "src/brainlayer/eval/abcde_variants.yaml"
 ORCHESTRATOR_ROOT = REPO_ROOT.parent / "orchestrator"
 SHELF_SECTION = "Enrichment Prompt (copy-paste into pipeline)"

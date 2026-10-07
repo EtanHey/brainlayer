@@ -105,7 +105,7 @@ def test_build_external_prompt_uses_v2_truncation():
 
 
 def test_parse_enrichment_extracts_v2_fields_and_entity_relation():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -139,7 +139,7 @@ def test_parse_enrichment_extracts_v2_fields_and_entity_relation():
 
 
 def test_parse_enrichment_keeps_legacy_resolved_query_when_plural_missing():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -159,7 +159,7 @@ def test_parse_enrichment_keeps_legacy_resolved_query_when_plural_missing():
 
 
 def test_parse_enrichment_extracts_sentiment_fields():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -180,7 +180,7 @@ def test_parse_enrichment_extracts_sentiment_fields():
 
 
 def test_parse_enrichment_rejects_invalid_sentiment_label():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -199,7 +199,7 @@ def test_parse_enrichment_rejects_invalid_sentiment_label():
 
 
 def test_parse_enrichment_skips_missing_sentiment_fields():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -217,7 +217,7 @@ def test_parse_enrichment_skips_missing_sentiment_fields():
 
 
 def test_parse_enrichment_rejects_boolean_sentiment_score():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -236,7 +236,7 @@ def test_parse_enrichment_rejects_boolean_sentiment_score():
 
 
 def test_parse_enrichment_rejects_non_finite_sentiment_score():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = """
     {
@@ -255,7 +255,7 @@ def test_parse_enrichment_rejects_non_finite_sentiment_score():
 
 
 def test_parse_enrichment_rejects_overflowing_integer_sentiment_score():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -274,7 +274,7 @@ def test_parse_enrichment_rejects_overflowing_integer_sentiment_score():
 
 
 def test_parse_enrichment_normalizes_label_lowercase():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -291,7 +291,7 @@ def test_parse_enrichment_normalizes_label_lowercase():
 
 
 def test_parse_enrichment_clamps_score_bounds():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     high = json.dumps(
         {
@@ -320,7 +320,7 @@ def test_parse_enrichment_clamps_score_bounds():
 
 
 def test_parse_enrichment_deduplicates_signals_order_preserved():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {

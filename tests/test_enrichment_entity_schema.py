@@ -133,7 +133,7 @@ def test_enrichment_prompt_keeps_epistemic_debt_and_sentiment_rubrics():
 def test_parse_enrichment_extracts_valid_entities():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -158,7 +158,7 @@ def test_parse_enrichment_extracts_valid_entities():
 def test_parse_enrichment_rejects_invalid_entity_type():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -183,7 +183,7 @@ def test_parse_enrichment_rejects_invalid_entity_type():
 def test_parse_enrichment_normalizes_entity_type_aliases_and_source_subtypes():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -208,7 +208,7 @@ def test_parse_enrichment_normalizes_entity_type_aliases_and_source_subtypes():
 def test_parse_enrichment_rejects_entities_missing_name():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -230,7 +230,7 @@ def test_parse_enrichment_rejects_entities_missing_name():
 def test_parse_enrichment_handles_missing_entities_gracefully():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -249,7 +249,7 @@ def test_parse_enrichment_handles_missing_entities_gracefully():
 def test_parse_enrichment_caps_entities_at_20():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -268,7 +268,7 @@ def test_parse_enrichment_caps_entities_at_20():
 def test_parse_enrichment_normalizes_entity_type_case():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -291,7 +291,7 @@ def test_parse_enrichment_normalizes_entity_type_case():
 def test_parse_enrichment_strips_entity_name_whitespace():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -312,7 +312,7 @@ def test_parse_enrichment_strips_entity_name_whitespace():
 def test_parse_enrichment_handles_null_entities():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -331,7 +331,7 @@ def test_parse_enrichment_handles_null_entities():
 def test_parse_enrichment_handles_non_list_entities():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {

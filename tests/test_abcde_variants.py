@@ -158,3 +158,9 @@ def test_offline_variant_filter_preserves_registry_order_and_rejects_unknown():
     assert [variant.id for variant in select_variants("")] == ["A", "B", "C", "D", "E"]
     with pytest.raises(SystemExit, match="Unknown variant"):
         select_variants("Z")
+
+
+def test_offline_generator_reads_the_retained_legacy_template():
+    from scripts.generate_abcde_variants import PRODUCTION_PROMPT_PATH, extract_python_string_constant
+
+    assert extract_python_string_constant(PRODUCTION_PROMPT_PATH, "ENRICHMENT_PROMPT") == ENRICHMENT_PROMPT
