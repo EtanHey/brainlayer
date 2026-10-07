@@ -18,19 +18,6 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertEqual(rendered.components(separatedBy: "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=").count, 2)
     }
 
-    func testProviderAvailabilityOnlyExposesRuntimeWiredChoices() {
-        XCTAssertEqual(BrainLayerEnrichmentProvider.selectableCases, [.gemini])
-        XCTAssertNil(BrainLayerEnrichmentProvider.gemini.unavailableReason)
-        XCTAssertEqual(
-            BrainLayerEnrichmentProvider.openai.unavailableReason,
-            "Runtime integration is not available in this build."
-        )
-        XCTAssertEqual(
-            BrainLayerEnrichmentProvider.anthropic.unavailableReason,
-            "Runtime integration is not available in this build."
-        )
-    }
-
     func testLaunchctlProbeDistinguishesMissingJobFromProbeFailure() {
         let missing = BrainLayerLaunchdStatusProvider(
             commandRunner: { _ in
@@ -93,10 +80,6 @@ final class BrainLayerConfigTests: XCTestCase {
 
         XCTAssertEqual(document.config.googleAPIKey.kind, .plainPresent)
         XCTAssertEqual(document.config.googleAPIKey.displayText, "Stored in config file")
-        XCTAssertEqual(document.config.enrichmentEnabled, false)
-        XCTAssertEqual(document.config.enrichmentMode, .local)
-        XCTAssertEqual(document.config.enrichmentProvider, .gemini)
-        XCTAssertEqual(document.config.enrichmentBackend, "ollama")
         XCTAssertEqual(document.config.launchdJobs[.drain]?.enabled, false)
         XCTAssertFalse(document.config.googleAPIKey.displayText.contains("plain-secret"))
     }
@@ -146,9 +129,6 @@ final class BrainLayerConfigTests: XCTestCase {
 
         document.update { config in
             config.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
-            config.enrichmentEnabled = false
-            config.enrichmentMode = .local
-            config.enrichmentBackend = "mlx"
             config.launchdJobs[.drain]?.enabled = false
         }
 
@@ -156,9 +136,9 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertTrue(rendered.contains("# keep this"))
         XCTAssertTrue(rendered.contains("CUSTOM_FLAG=keep"))
         XCTAssertTrue(rendered.contains("GOOGLE_API_KEY=\"$(op read 'op://Private/Google AI/Gemini API key')\""))
-        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_ENABLED=0"))
-        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_MODE=local"))
-        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_BACKEND=mlx"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_ENABLED=1"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_MODE=remote"))
+        XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_BACKEND=gemini"))
         XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_RATE=99"))
         XCTAssertTrue(rendered.contains("BRAINLAYER_ENRICH_CONCURRENCY=7"))
         XCTAssertTrue(rendered.contains("BRAINLAYER_MAX_COMMIT_BATCH=88"))
@@ -198,55 +178,57 @@ final class BrainLayerConfigTests: XCTestCase {
         try store.save(BrainLayerConfig.defaultConfig)
 
         let content = try String(contentsOf: configURL, encoding: .utf8)
-        XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_ENABLED=1"))
-        XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_MODE=remote"))
-        XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_PROVIDER=gemini"))
-        XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_BACKEND=gemini"))
+        XCTAssertFalse(content.contains("BRAINLAYER_ENRICH_ENABLED="))
+        XCTAssertFalse(content.contains("BRAINLAYER_ENRICH_MODE="))
+        XCTAssertFalse(content.contains("BRAINLAYER_ENRICH_PROVIDER="))
+        XCTAssertFalse(content.contains("BRAINLAYER_ENRICH_BACKEND="))
         XCTAssertFalse(content.contains("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED="))
         XCTAssertTrue(content.contains("BRAINLAYER_LAUNCHD_DRAIN_ENABLED=1"))
     }
 
-    func testValidatorRejectsUnavailableProviderAndEmptyBackend() {
-        var unsupported = BrainLayerConfig.defaultConfig
-        unsupported.enrichmentProvider = .openai
-        XCTAssertEqual(
-            BrainLayerConfigValidator.validate(unsupported),
-            .failed("OpenAI cannot be activated because its runtime integration is unavailable.")
-        )
-
-        var missingBackend = BrainLayerConfig.defaultConfig
-        missingBackend.enrichmentBackend = "   "
-        XCTAssertEqual(
-            BrainLayerConfigValidator.validate(missingBackend),
-            .failed("Enrichment backend is required.")
-        )
+    func testLegacyEnrichmentKeysAndGoogleKeyRoundTripWithoutRewriting() throws {
+        let legacy = """
+        # existing enrichment configuration
+        BRAINLAYER_ENRICH_ENABLED=1
+        BRAINLAYER_ENRICH_MODE=remote
+        BRAINLAYER_ENRICH_PROVIDER=unsupported-legacy-provider
+        BRAINLAYER_ENRICH_BACKEND='legacy backend'
+        BRAINLAYER_ENRICH_RATE=99
+        BRAINLAYER_ENRICH_CONCURRENCY=7
+        BRAINLAYER_MAX_COMMIT_BATCH=88
+        BRAINLAYER_GEMINI_SERVICE_TIER=standard
+        BRAINLAYER_DISABLED_SLEEP_SECONDS=42
+        BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=0
+        """
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent("legacy.env")
+        let store = BrainLayerConfigStore(configURL: configURL)
+        for google in ["GOOGLE_API_KEY='synthetic-fixture-key'", "GOOGLE_API_KEY=\"$(op read 'op://Fixture/Google/key')\""] {
+            try (google + "\n" + legacy + "\nBRAINLAYER_SYSTEM_ENABLED=1\n").write(to: configURL, atomically: true, encoding: .utf8)
+            var config = try store.loadDocument().config
+            config.systemEnabled = false
+            try store.save(config)
+            let rendered = try String(contentsOf: configURL, encoding: .utf8)
+            for line in (google + "\n" + legacy).split(separator: "\n") {
+                XCTAssertTrue(rendered.split(separator: "\n").contains(line), String(line))
+            }
+            let reloaded = try BrainLayerEnvDocument(text: rendered).config
+            XCTAssertEqual(reloaded.googleAPIKey, config.googleAPIKey)
+            XCTAssertFalse(reloaded.systemEnabled)
+            XCTAssertTrue(reloaded.persistedValuesEqual(to: config))
+        }
     }
 
-    func testValidatorAllowsEditingAnExistingUnavailableProviderButRejectsActivatingOne() {
-        var existingUnsupported = BrainLayerConfig.defaultConfig
-        existingUnsupported.enrichmentProvider = .openai
-        existingUnsupported.enrichmentBackend = "openai"
-
-        var unrelatedEdit = existingUnsupported
-        unrelatedEdit.systemEnabled = false
-        XCTAssertEqual(
-            BrainLayerConfigValidator.validate(unrelatedEdit, previousConfig: existingUnsupported),
-            .passed
-        )
-
-        var disabled = existingUnsupported
-        disabled.enrichmentEnabled = false
-        XCTAssertEqual(
-            BrainLayerConfigValidator.validate(disabled, previousConfig: existingUnsupported),
-            .passed
-        )
-
-        var activation = BrainLayerConfig.defaultConfig
-        activation.enrichmentProvider = .openai
-        activation.enrichmentBackend = "openai"
-        XCTAssertEqual(
-            BrainLayerConfigValidator.validate(activation, previousConfig: .defaultConfig),
-            .failed("OpenAI cannot be activated because its runtime integration is unavailable.")
-        )
+    func testNewConfigDoesNotCreateEnrichmentSettings() {
+        let rendered = BrainLayerEnvDocument(config: .defaultConfig).rendered()
+        for key in ["BRAINLAYER_ENRICH_ENABLED", "BRAINLAYER_ENRICH_MODE", "BRAINLAYER_ENRICH_PROVIDER", "BRAINLAYER_ENRICH_BACKEND",
+                    "BRAINLAYER_ENRICH_RATE", "BRAINLAYER_ENRICH_CONCURRENCY", "BRAINLAYER_MAX_COMMIT_BATCH",
+                    "BRAINLAYER_GEMINI_SERVICE_TIER", "BRAINLAYER_DISABLED_SLEEP_SECONDS", "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED"] {
+            XCTAssertFalse(rendered.contains(key + "="), key)
+        }
+        XCTAssertTrue(rendered.contains("GOOGLE_API_KEY="))
     }
+
 }
