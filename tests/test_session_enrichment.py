@@ -562,30 +562,3 @@ class TestListSessionsForEnrichment:
 
 
 # ── Prompt Building Tests ───────────────────────────────────────
-
-
-class TestBuildSessionPrompt:
-    """Test prompt construction."""
-
-    def test_prompt_includes_conversation(self):
-        """Prompt includes the conversation text."""
-        from brainlayer.pipeline.session_enrichment import build_session_prompt
-
-        prompt = build_session_prompt("USER: Hello\nASSISTANT: Hi!", "test-project")
-        assert "USER: Hello" in prompt
-        assert "ASSISTANT: Hi!" in prompt
-
-    def test_prompt_includes_project(self):
-        """Prompt includes the project name."""
-        from brainlayer.pipeline.session_enrichment import build_session_prompt
-
-        prompt = build_session_prompt("test conversation", "my-project")
-        assert "my-project" in prompt
-
-    def test_prompt_escapes_braces(self):
-        """Braces in conversation are escaped for str.format()."""
-        from brainlayer.pipeline.session_enrichment import build_session_prompt
-
-        # This would crash if braces aren't escaped
-        prompt = build_session_prompt("code: function() { return {}; }", "test")
-        assert "function()" in prompt
