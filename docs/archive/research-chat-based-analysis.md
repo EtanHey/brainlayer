@@ -1,5 +1,9 @@
 # Deep Research: Chat-Based Style Analysis
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 *For: extraction design, user tagging, fallback strategies, prompt enrichment*
 
 ---

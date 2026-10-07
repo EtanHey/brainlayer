@@ -740,9 +740,9 @@ def test_resume_service_uses_configured_launchd_dir_for_packaged_installs(tmp_pa
     monkeypatch.setenv("BRAINLAYER_LAUNCHD_DIR", str(launchd_dir))
     monkeypatch.setattr(maintenance, "run_command", lambda args, **_kwargs: commands.append(list(args)))
 
-    maintenance._resume_service(tmp_path / "site-packages", "enrichment")
+    maintenance._resume_service(tmp_path / "site-packages", "watch")
 
-    assert commands == [[str(launchd_dir / "install.sh"), "enrichment"]]
+    assert commands == [[str(launchd_dir / "install.sh"), "watch"]]
 
 
 def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_path, monkeypatch):
@@ -761,7 +761,7 @@ def test_maintenance_resume_attempts_all_services_after_mid_resume_failure(tmp_p
 
     def fail_mid_resume(_repo_root: Path, service: str) -> None:
         resumed.append(service)
-        if service == "enrichment":
+        if service == "index":
             raise RuntimeError("bootstrap I/O error")
 
     monkeypatch.setattr(maintenance, "_resume_service", fail_mid_resume)
@@ -813,7 +813,7 @@ def test_maintenance_resumes_successful_bootout_even_after_stale_loaded_probe(tm
     expected_events.extend([("bootout", "fleet-watchdog"), ("probe", "fleet-watchdog")])
     expected_events.extend(("bootout", service) for service in expected_services)
     assert events == expected_events
-    assert resumed == ["enrichment", "index", "drain", "fleet-watchdog"]
+    assert resumed == ["index", "drain", "fleet-watchdog"]
     assert "maintenance did not boot out service watch; leaving it down" in capsys.readouterr().err
 
 
@@ -863,7 +863,7 @@ def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_pa
 
     def fail_mid_resume(_repo_root: Path, service: str) -> None:
         resumed.append(service)
-        if service == "enrichment":
+        if service == "index":
             raise RuntimeError("bootstrap I/O error")
 
     monkeypatch.setattr(maintenance, "_resume_service", fail_mid_resume)
@@ -872,64 +872,11 @@ def test_maintenance_body_error_reports_resume_failures_as_exception_note(tmp_pa
         maintenance.run_maintenance("light", config=config)
 
     assert resumed == [*maintenance.DEFAULT_SERVICES, "fleet-watchdog"]
-    assert "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in exc_info.value.reason
+    assert "failed to resume 1 launchd service: index: bootstrap I/O error" in exc_info.value.reason
     assert any(
-        "failed to resume 1 launchd service: enrichment: bootstrap I/O error" in note
+        "failed to resume 1 launchd service: index: bootstrap I/O error" in note
         for note in getattr(exc_info.value, "__notes__", [])
     )
-
-
-def test_enrichment_template_flex_validation_parses_active_env_lines(tmp_path):
-    from brainlayer.maintenance import _verify_enrichment_template_flex_backend
-
-    launchd_dir = tmp_path / "scripts" / "launchd"
-    launchd_dir.mkdir(parents=True)
-    template = launchd_dir / "brainlayer.env.example"
-    template.write_text(
-        "\n".join(
-            [
-                "# BRAINLAYER_GEMINI_SERVICE_TIER=standard",
-                "export BRAINLAYER_GEMINI_SERVICE_TIER = 'FLEX'",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    _verify_enrichment_template_flex_backend(tmp_path)
-
-
-def test_enrichment_template_flex_validation_uses_last_active_assignment(tmp_path):
-    from brainlayer.maintenance import _verify_enrichment_template_flex_backend
-
-    launchd_dir = tmp_path / "scripts" / "launchd"
-    launchd_dir.mkdir(parents=True)
-    template = launchd_dir / "brainlayer.env.example"
-    template.write_text(
-        "\n".join(
-            [
-                "BRAINLAYER_GEMINI_SERVICE_TIER=standard",
-                "BRAINLAYER_GEMINI_SERVICE_TIER=flex",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    _verify_enrichment_template_flex_backend(tmp_path)
-
-
-def test_enrichment_template_flex_validation_rejects_missing_or_commented_flex(tmp_path):
-    from brainlayer.maintenance import MaintenanceAbort, _verify_enrichment_template_flex_backend
-
-    with pytest.raises(MaintenanceAbort, match="env template not found"):
-        _verify_enrichment_template_flex_backend(tmp_path)
-
-    launchd_dir = tmp_path / "scripts" / "launchd"
-    launchd_dir.mkdir(parents=True)
-    template = launchd_dir / "brainlayer.env.example"
-    template.write_text("# BRAINLAYER_GEMINI_SERVICE_TIER=flex\n", encoding="utf-8")
-
-    with pytest.raises(MaintenanceAbort, match="no longer uses Gemini Flex"):
-        _verify_enrichment_template_flex_backend(tmp_path)
 
 
 def _latency_clock(ticks):
@@ -1018,3 +965,17 @@ def test_nonpathological_warm_latency_does_not_abort(tmp_path, monkeypatch, late
     ticks = iter(t for i in range(5) for t in (i, i + latency_ms / 1000))
     monkeypatch.setattr(maintenance.time, "perf_counter", _latency_clock(ticks))
     assert maintenance._verify_search_latency(path) == pytest.approx(latency_ms)
+
+
+@pytest.mark.parametrize("service", ["enrich", "enrichment"])
+def test_maintenance_defaults_and_explicit_resume_cannot_activate_retired_services(tmp_path, monkeypatch, service):
+    from brainlayer import maintenance
+
+    assert service not in maintenance.DEFAULT_SERVICES
+    assert service not in maintenance.REFEED_SERVICES
+    commands = []
+    monkeypatch.setenv("BRAINLAYER_LAUNCHD_DIR", str(tmp_path))
+    monkeypatch.setattr(maintenance, "run_command", lambda args, **kw: commands.append(args))
+    with pytest.raises(maintenance.MaintenanceAbort, match="retired"):
+        maintenance._resume_service(tmp_path, service)
+    assert commands == []
