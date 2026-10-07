@@ -431,20 +431,6 @@ def test_digest_faceted_gemini_send_scrubs_prompt(monkeypatch):
         _assert_no_token(prompt, where="digest faceted Gemini prompt")
 
 
-def test_abcde_http_chat_fn_scrubs_prompt(monkeypatch):
-    import requests
-
-    from brainlayer.eval.abcde_enrich_runner import make_http_chat_fn
-
-    sent = _capture_requests_post(monkeypatch, requests)
-    chat = make_http_chat_fn(base_url="https://llm.invalid/v1", api_key="test-not-a-key")
-
-    chat("model-x", _payload_with_every_token(), {})
-
-    assert len(sent) == 1
-    _assert_no_token(sent[0], where="ABCDE chat payload")
-
-
 def test_eval_llm_judge_send_scrubs_prompt(monkeypatch, tmp_path):
     from brainlayer import enrichment_controller as controller
     from brainlayer.eval import enrichment_llm_judge as judge

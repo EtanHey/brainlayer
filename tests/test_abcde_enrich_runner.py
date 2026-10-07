@@ -14,14 +14,12 @@ from brainlayer.eval.abcde_enrich_runner import (
     Usage,
     enrich_one,
     judge_row,
-    make_http_chat_fn,
     run_batch,
     usage_to_usd,
 )
 from brainlayer.eval.abcde_variants import ABCDE_VARIANTS_BY_ID, select_variants
 from brainlayer.eval.enrichment_graders import REQUIRED_ENRICHMENT_KEYS, validate_schema_gate
 from brainlayer.eval.enrichment_judge import build_judge_request
-from scripts import run_abcde_enrich as abcde_driver
 
 
 class FakeSanitizer:
@@ -189,75 +187,10 @@ def test_judge_row_shape_is_consumable_by_judge():
     assert row["prompt_hash"] == variant.prompt_hash
 
 
-def test_make_http_chat_fn_model_override_ignores_variant_model(monkeypatch):
-    captured: dict = {}
-
-    class FakeResponse:
-        status_code = 200
-        text = "{}"
-
-        def json(self):
-            return {"choices": [{"message": {"content": "{}"}}]}
-
-    def fake_post(url, headers, json, timeout):
-        captured["payload"] = json
-        return FakeResponse()
-
-    monkeypatch.setattr("requests.post", fake_post)
-    variant = ABCDE_VARIANTS_BY_ID["A"]
-    chat_fn = make_http_chat_fn(
-        base_url="https://example.test/v1",
-        api_key="test-key",
-        model_override="grok-x",
-    )
-
-    status, _body = chat_fn(variant.model, "prompt", {"temperature": 0})
-
-    assert status == 200
-    assert captured["payload"]["model"] == "grok-x"
-
-
-def test_make_http_chat_fn_deepseek_base_url_and_model(monkeypatch):
-    captured: dict = {}
-
-    class FakeResponse:
-        status_code = 200
-        text = "{}"
-
-        def json(self):
-            return {"choices": [{"message": {"content": "{}"}}]}
-
-    def fake_post(url, headers, json, timeout):
-        captured["url"] = url
-        captured["payload"] = json
-        return FakeResponse()
-
-    monkeypatch.setattr("requests.post", fake_post)
-    chat_fn = make_http_chat_fn(
-        base_url="https://api.deepseek.com",
-        api_key="test-key",
-        model_override="deepseek-v4-flash",
-    )
-
-    status, _body = chat_fn("ignored-variant-model", "prompt", {"temperature": 0})
-
-    assert status == 200
-    assert captured["url"] == "https://api.deepseek.com/chat/completions"
-    assert captured["payload"]["model"] == "deepseek-v4-flash"
-
-
-def test_driver_variants_filter_selects_requested_ids_in_registry_order():
+def test_offline_variants_filter_selects_requested_ids_in_registry_order():
     selected = select_variants("E,A,C")
 
     assert [variant.id for variant in selected] == ["A", "C", "E"]
-
-
-def test_driver_resolve_api_key_reads_deepseek_env(monkeypatch):
-    monkeypatch.delenv("XAI_API_KEY", raising=False)
-    monkeypatch.delenv("GROK_API_KEY", raising=False)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "  deepseek-test-key  ")
-
-    assert abcde_driver.resolve_api_key() == "deepseek-test-key"
 
 
 def test_run_batch_writes_rows_and_aggregates(tmp_path):
