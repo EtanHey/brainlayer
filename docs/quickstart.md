@@ -10,7 +10,6 @@ pip install brainlayer
 
 ```bash
 pip install "brainlayer[brain]"     # Brain graph visualization (Leiden + UMAP)
-pip install "brainlayer[cloud]"     # Cloud backfill (Gemini Batch API)
 pip install "brainlayer[youtube]"   # YouTube transcript indexing
 pip install "brainlayer[ast]"       # AST-aware code chunking (tree-sitter)
 pip install "brainlayer[kg]"        # GliNER entity extraction (209M params, EN+HE)
@@ -22,12 +21,16 @@ pip install "brainlayer[style]"     # ChromaDB vector store (alternative backend
 Run the interactive wizard:
 
 ```bash
-brainlayer setup --google-api-key-op-ref "op://Private/Google AI/Gemini API key"
+brainlayer setup
 brainlayer init
 ```
 
 On macOS, add `--launchd` to the `brainlayer setup` command to install the
 packaged launchd agents.
+
+For existing installed hotlane jobs, retain the 1Password-backed `GOOGLE_API_KEY`
+and `BRAINLAYER_REQUIRE_GOOGLE_API_KEY` gate until the release re-renders their plists.
+See [Configuration](configuration.md) for the env-run exit-78 compatibility gate.
 
 This will:
 
@@ -97,15 +100,11 @@ Add to `.vscode/mcp.json`:
 }
 ```
 
-## Enrich (Optional)
+## Enrichment (retired)
 
-Add structured metadata to your indexed content using a local LLM:
-
-```bash
-brainlayer enrich
-```
-
-This adds summary, tags, importance scores, intent classification, and more to each chunk. See [Enrichment](enrichment.md) for details.
+LLM chunk and session enrichment is retired. Indexing, `brain_search`, and the local
+knowledge graph remain available, and existing metadata remains readable.
+History: [retirement details](enrichment.md).
 
 ## Verify
 
@@ -120,8 +119,6 @@ brainlayer search "auth"      # Test a search
 brainlayer init               # Interactive setup wizard
 brainlayer index              # Index new conversations
 brainlayer search "query"     # Semantic + keyword search
-brainlayer enrich             # Run LLM enrichment on new chunks
-brainlayer enrich-sessions    # Session-level analysis
 brainlayer stats              # Database statistics
 brainlayer brain-export       # Generate brain graph JSON
 brainlayer export-obsidian    # Export to Obsidian vault

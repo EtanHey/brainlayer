@@ -114,7 +114,6 @@ final class DesignTokensTests: XCTestCase {
     func testPipelineStatesMapToGlassStateThemes() {
         XCTAssertEqual(PipelineState.idle.stateTheme, .idle)
         XCTAssertEqual(PipelineState.indexing.stateTheme, .loading)
-        XCTAssertEqual(PipelineState.enriching.stateTheme, .active)
         XCTAssertEqual(PipelineState.degraded.stateTheme, .degraded)
 
         XCTAssertEqual(PipelineIndicatorStatus.live.stateTheme, .active)
