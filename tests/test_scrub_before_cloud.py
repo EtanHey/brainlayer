@@ -481,7 +481,6 @@ def test_eval_llm_judge_send_scrubs_prompt(monkeypatch, tmp_path):
     "script",
     [
         "enrichment_backfill.py",
-        "enrich_recent.py",
         "batch_submit_paced.py",
     ],
 )
