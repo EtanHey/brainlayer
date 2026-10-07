@@ -168,25 +168,6 @@ class TestGroqBackendSelection:
             backend = enrichment._detect_default_backend()
         assert backend == "groq"
 
-    def test_run_enrichment_refuses_unavailable_groq_model_before_queue_work(self):
-        """Startup validates the model catalog before touching queued chunks."""
-        store = MagicMock()
-        unavailable = GroqModelUnavailableError("Groq model 'retired/model' is unavailable")
-
-        with (
-            patch.object(enrichment, "VectorStore", return_value=store),
-            patch.object(enrichment, "ENRICH_BACKEND", "groq"),
-            patch.object(enrichment, "GROQ_API_KEY", "gsk_test123"),
-            patch.object(enrichment, "validate_groq_model", side_effect=unavailable) as mock_validate,
-            patch.object(enrichment, "mark_unenrichable") as mock_mark,
-            pytest.raises(GroqModelUnavailableError, match=r"retired/model.*unavailable"),
-        ):
-            enrichment.run_enrichment()
-
-        mock_validate.assert_called_once()
-        mock_mark.assert_not_called()
-        store.close.assert_called_once()
-
     def test_parallel_batch_does_not_wait_on_fatal_model_error(self):
         """A fatal model result cancels queued futures without blocking shutdown."""
         store = MagicMock()

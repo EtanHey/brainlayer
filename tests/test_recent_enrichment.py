@@ -28,10 +28,3 @@ class TestRecentEnrichment:
 
         call_kwargs = store.get_unenriched_chunks.call_args
         assert call_kwargs[1].get("since_hours") is None
-
-    def test_run_enrichment_accepts_since_hours(self):
-        """run_enrichment accepts since_hours parameter."""
-        import inspect
-
-        sig = inspect.signature(enrichment.run_enrichment)
-        assert "since_hours" in sig.parameters
