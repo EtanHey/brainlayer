@@ -36,7 +36,6 @@ SUPPRESSIBLE_CODES = frozenset(
         "brain_search_canary_failed",
         "drain_no_progress",
         "drain_unloaded",
-        "enrichment_unloaded",
         "health_check_unloaded",
         "hotlane_backlog_disabled",
         "hotlane_dead",
