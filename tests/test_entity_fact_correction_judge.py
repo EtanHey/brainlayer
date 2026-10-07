@@ -87,7 +87,7 @@ def test_refresh_entity_facts_supersedes_conflicting_active_fact(tmp_path):
     assert row == ("superseded", "BrainLayer uses sqlite-vec.")
 
 
-def test_refresh_entity_facts_uses_factory_judge_by_default(tmp_path, monkeypatch):
+def test_refresh_entity_facts_keeps_conflicts_without_implicit_judge(tmp_path, monkeypatch):
     import brainlayer.correction_judge as correction_judge
 
     store = VectorStore(tmp_path / "test.db")
@@ -111,12 +111,22 @@ def test_refresh_entity_facts_uses_factory_judge_by_default(tmp_path, monkeypatc
     store.link_entity_chunk(entity_id, "corrected-backend", relevance=0.95, context="corrected backend")
 
     judge = SupersedeJudge()
-    monkeypatch.setattr(correction_judge, "get_correction_judge", lambda *, store=None: judge)
+    factory_calls = []
+
+    def factory(*, store=None):
+        factory_calls.append(store)
+        return judge
+
+    monkeypatch.setattr(correction_judge, "get_correction_judge", factory)
 
     store.refresh_entity_facts(entity_id)
 
-    assert [fact["fact_text"] for fact in store.get_entity_facts(entity_id)] == ["BrainLayer uses sqlite-vec."]
-    assert len(judge.calls) == 1
+    assert {fact["fact_text"] for fact in store.get_entity_facts(entity_id)} == {
+        "BrainLayer uses ChromaDB.",
+        "BrainLayer uses sqlite-vec.",
+    }
+    assert factory_calls == []
+    assert judge.calls == []
 
 
 def test_brain_entity_shows_corrected_fact_without_reactivating_stale_fact(tmp_path, monkeypatch):
