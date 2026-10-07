@@ -337,6 +337,7 @@ def test_groq_ner_sender_is_removed():
     assert not hasattr(kg_extraction_groq, "call_groq_ner")
 
 
+@pytest.mark.retired_enrichment
 def test_digest_retired_faceted_helper_never_constructs_or_sends(monkeypatch):
     from brainlayer.pipeline import digest
 

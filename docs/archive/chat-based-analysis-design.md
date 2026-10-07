@@ -1,5 +1,9 @@
 # Chat-Based Analysis Design
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 ## Overview
 
 Extend the longitudinal analysis to group by chat first, then optionally by time. Add relationship tags so the model understands *who* you're speaking with, not just *when* and *what*.
