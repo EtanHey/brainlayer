@@ -17,7 +17,7 @@ import apsw
 
 from .enrichment_controller import _apply_enrichment
 from .paths import get_db_path
-from .pipeline.enrichment import (
+from .pipeline.enrichment_results import (
     HIGH_VALUE_TYPES,
     parse_enrichment,
 )

@@ -20,7 +20,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from brainlayer.eval.enrichment_graders import validate_schema_gate
 from brainlayer.paths import get_db_path
-from brainlayer.pipeline.enrichment import parse_enrichment
+from brainlayer.pipeline.enrichment_results import parse_enrichment
 
 ENRICHMENT_COLUMNS = (
     "summary",
