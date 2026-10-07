@@ -319,3 +319,12 @@ def test_failed_badge_publish_removes_prior_calm_document(tmp_path: Path, monkey
     assert "jsonl_backup_attempt_missing" in issue_codes
     assert "badge_state_write_failed" in issue_codes
     assert not output.exists(), "A prior calm document would suppress the live failed-write alert."
+
+
+def test_retired_service_json_codes_are_not_suppressible():
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    assert SUPPRESSIBLE_CODES.isdisjoint(compat["removed_codes"])
+    unreleased = (Path(__file__).parents[1] / "CHANGELOG.md").read_text().split("## [Unreleased]", 1)[1]
+    unreleased = unreleased.split("\n## [", 1)[0]
+    for code in [*compat["removed_codes"], *compat["renamed_codes"], *compat["renamed_codes"].values()]:
+        assert f"`{code}`" in unreleased

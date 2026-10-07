@@ -1,7 +1,8 @@
 #!/bin/sh
-# BrainLayer fleet watchdog -- re-bootstraps any com.brainlayer.* LaunchAgent that got
-# booted out (e.g. a nightly maintenance pause that never resumed, leaving capture,
-# drain and enrichment dead for ~24h). Idempotent; safe to run every 5 minutes.
+# BrainLayer fleet watchdog -- re-bootstraps active com.brainlayer.* LaunchAgents
+# that were booted out (for example, after maintenance missed resume).
+# Watch and drain keep capture moving; retired enrichment labels stay down.
+# Idempotent; safe to run every 5 minutes.
 # Authored by camprClaude (M1 worker) 2026-06-25; adopted into the repo 2026-09-03 (w11b).
 #
 # LABEL NAMESPACE: this job runs as com.etanhey.brainlayer-fleet-watchdog, NOT
@@ -25,9 +26,9 @@
 #   2. the pause sentinel at ~/.local/share/brainlayer/pause.sentinel -- the AUTOMATED
 #      signal. `brainlayer.maintenance` pauses services with a BARE bootout and no
 #      `launchctl disable` (maintenance.py:_bootout_service), so mid-maintenance a label is
-#      absent-and-not-disabled: exactly the state this loop reverses. Reviving enrichment or
-#      drain mid-bulk-op is what AGENTS.md forbids ("Stop enrichment workers first") and how
-#      the 4.7GB WAL happens. So a label named by an unexpired sentinel is left down, the way
+#      absent-and-not-disabled: exactly the state this loop reverses. Reviving watch or
+#      drain mid-bulk-op breaks the maintenance writer-quiescence boundary and can grow the
+#      WAL. So a label named by an unexpired sentinel is left down, the way
 #      maintenance.py:_resume_services does it.
 # Both checks fail CLOSED: an unreadable `print-disabled`, or a sentinel that exists but does
 # not parse, means nothing is revived this tick. With no readable stop-signal an operator or

@@ -21,8 +21,7 @@ enum BrainBarRenderHarness {
         case unreadable
         case stale
         case staleDocument
-        case pausedGrowing
-        case runningGrowing
+        case retiredMetadata
         case loading
         case queueDraining
         case queueBacklogged
@@ -32,7 +31,7 @@ enum BrainBarRenderHarness {
 
         var detailsStates: [Bool] {
             switch self {
-            case .loading, .stale, .pausedGrowing, .runningGrowing,
+            case .loading, .stale, .retiredMetadata,
                  .attentionCollapsed, .attentionExpanded, .queueDraining, .queueBacklogged,
                  .receiptUnavailable, .receiptFailed:
                 [false]
@@ -48,7 +47,7 @@ enum BrainBarRenderHarness {
             case .queueDraining, .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 [("default", 960)]
             case .readable, .attentionCollapsed, .attentionExpanded, .unreadable, .stale,
-                 .staleDocument, .pausedGrowing, .runningGrowing, .loading:
+                 .staleDocument, .retiredMetadata, .loading:
                 BrainBarRenderHarness.breakpoints
             }
         }
@@ -59,7 +58,7 @@ enum BrainBarRenderHarness {
                 .loading
             case .stale:
                 .stale
-            case .attentionCollapsed, .attentionExpanded, .staleDocument, .pausedGrowing, .runningGrowing:
+            case .attentionCollapsed, .attentionExpanded, .staleDocument, .retiredMetadata:
                 .live
             case .queueDraining:
                 .queueDraining
@@ -76,7 +75,7 @@ enum BrainBarRenderHarness {
             switch self {
             case .staleDocument:
                 BrainBarDashboardFixture.staleObservabilityResult
-            case .readable, .stale, .pausedGrowing, .runningGrowing,
+            case .readable, .stale, .retiredMetadata,
                  .attentionCollapsed, .attentionExpanded, .loading, .queueDraining,
                  .queueBacklogged, .receiptUnavailable, .receiptFailed, .vectorAt100:
                 BrainBarDashboardFixture.readableObservabilityResult
@@ -457,8 +456,7 @@ enum BrainBarRenderHarness {
                 initialMaintenanceEvidence: evidence ?? .unread
             )
             if scenario.receipt {
-                viewModel.backendDraft = "mlx"
-                viewModel.commitBackendDraft()
+                viewModel.setSystemEnabled(false)
                 guard viewModel.lastSaveReceipt != nil else {
                     throw Failure("Settings receipt fixture did not produce a save receipt")
                 }
@@ -521,7 +519,7 @@ enum BrainBarRenderHarness {
         panelState.attentionExpanded = scenario == .attentionExpanded || scenario == .stale
         panelState.signalCoverageExpanded = scenario == .vectorAt100 || (scenario == .readable && detailsExpanded)
         let collector: StatsCollector
-        if scenario == .pausedGrowing || scenario == .runningGrowing {
+        if scenario == .retiredMetadata {
             collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.growingQueueStats)
         } else if scenario == .vectorAt100 {
             collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.vectorAt100Stats)
@@ -550,8 +548,7 @@ enum BrainBarRenderHarness {
             receiptStore: receipts,
             observabilityResult: scenario.observabilityResult,
             now: BrainBarDashboardFixture.fetchedAt,
-            panelState: panelState,
-            enrichmentPausedOverride: scenario == .pausedGrowing ? true : false
+            panelState: panelState
         )
         // The XCTest renderer owns dashboard-<breakpoint>.png. Include the CLI
         // state in every filename so the two producers cannot overwrite each other.

@@ -9,6 +9,8 @@ from brainlayer.pipeline.batch_extraction import process_chunk
 from brainlayer.pipeline.digest import digest_connect, digest_content
 from brainlayer.vector_store import VectorStore
 
+pytestmark = pytest.mark.retired_enrichment
+
 TEXT = "Person Alpha chose BrainLayer. TODO: write local tests. Why keep local embeddings?"
 SEEDS = {"person": ["Person Alpha"], "project": ["BrainLayer"]}
 
