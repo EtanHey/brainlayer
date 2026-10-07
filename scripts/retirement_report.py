@@ -28,6 +28,10 @@ def validate(report, expected_sha, now=None):
     need(report.get("source_sha") == expected_sha, "stale/wrong source head")
     need(report.get("failures") == [], "failure ledger missing or nonempty")
     need(identity(report.get("dependency_sha"), 40), "R10b dependency gate not armed")
+    need(
+        report.get("dependency_resolution") == "merge-base" and bool(report.get("dependency_ref")),
+        "dependency reference resolution missing",
+    )
     need(report.get("dependency_is_ancestor") is True, "R10b is not in the measured source")
     timestamp = datetime.fromisoformat(report["timestamp_utc"])
     need(timestamp.tzinfo is not None, "timestamp is not timezone-aware")

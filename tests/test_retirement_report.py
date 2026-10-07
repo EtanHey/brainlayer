@@ -80,6 +80,8 @@ def valid():
         "timestamp_utc": NOW.isoformat(),
         "failures": [],
         "dependency_sha": "e" * 40,
+        "dependency_ref": "origin/main",
+        "dependency_resolution": "merge-base",
         "dependency_is_ancestor": True,
         "source": {
             "sha": SHA,
@@ -112,6 +114,8 @@ def test_complete_report_validates():
         (("status",), "PENDING_R10B"),
         (("source_sha",), "b" * 40),
         (("dependency_is_ancestor",), False),
+        (("dependency_resolution",), None),
+        (("dependency_ref",), None),
         (("failures",), ["timeout"]),
         (("timestamp_utc",), "2026-10-06T00:00:00+00:00"),
         (("timestamp_utc",), "2026-10-08T00:00:00+00:00"),

@@ -30,7 +30,7 @@ def test_workflow_has_unconditional_failure_handoff():
     native = jobs["retirement"]
     assert native["runs-on"] == "macos-15"
     command = next(step["run"] for step in native["steps"] if "retirement_run.py" in step.get("run", ""))
-    assert "--dependency-sha" in command and "pull_request.head.sha" in command
+    assert "--dependency-ref" in command and "pull_request.base.sha" in command and "pull_request.head.sha" in command
     upload = next(step for step in native["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
     assert "!cancelled()" in upload["if"] and upload["with"]["if-no-files-found"] == "error"
     collect = next(step for step in jobs["table"]["steps"] if step.get("name") == "Collect ratchet rows")
@@ -41,3 +41,10 @@ def test_workflow_has_unconditional_failure_handoff():
 def test_repository_transport_sites_are_explicitly_classified():
     report = check_policy(Path(__file__).resolve().parents[1])
     assert report["sites"] and not report["unclassified"], report["unclassified"]
+
+
+def test_repository_policy_generator_is_current():
+    from scripts.retirement_policy_generate import render
+
+    root = Path(__file__).resolve().parents[1]
+    assert render(root) == (root / "scripts/retirement_policy.json").read_text()

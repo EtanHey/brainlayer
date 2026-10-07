@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.retirement_artifact import build_wheel, command, install_profile, private_env, snapshot  # noqa: E402
 from scripts.retirement_inventory import check_policy  # noqa: E402
+from scripts.retirement_policy_generate import render  # noqa: E402
 from scripts.retirement_source import source_scan  # noqa: E402
 
 
@@ -20,6 +21,15 @@ def sandbox_command(args):
     if platform.system() != "Darwin" or not Path("/usr/bin/sandbox-exec").is_file():
         raise RuntimeError("Real macOS OS network boundary unavailable")
     return ["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)(deny network*)", *args]
+
+
+def resolve_dependency(repo, sha, ref, env):
+    if not ref or ref.startswith("-"):
+        raise ValueError("Dependency reference must be an explicit Git tag/base reference")
+    base = subprocess.check_output(["git", "merge-base", sha, ref], cwd=repo, env=env, text=True).strip()
+    if len(base) != 40 or any(c not in "0123456789abcdef" for c in base):
+        raise ValueError("Dependency merge-base is not a full commit identity")
+    return base
 
 
 def probe_profile(profile, wheel, source_sha, dependency_sha, work, harness):
@@ -109,14 +119,18 @@ def main(argv=None):
     parser.add_argument("--sha", required=True)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--dependency-sha", help="Merged R10b dependency commit; enables mandatory SDK absence")
+    parser.add_argument(
+        "--dependency-ref", help="Git tag/base reference; resolve its merge-base and require SDK absence"
+    )
     args = parser.parse_args(argv)
     report = {
         "schema_version": 1,
         "scope": "no cloud model call reachable anywhere",
         "status": "FAIL",
         "source_sha": args.sha,
-        "dependency_sha": args.dependency_sha,
+        "dependency_sha": None,
+        "dependency_ref": args.dependency_ref,
+        "dependency_resolution": "merge-base",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "profiles": [],
         "failures": [],
@@ -126,11 +140,12 @@ def main(argv=None):
         if work.is_relative_to(source_root) or work.exists():
             raise ValueError("Use a fresh scratch work directory outside the checkout")
         work.mkdir(parents=True)
-        if args.dependency_sha:
-            if len(args.dependency_sha) != 40:
-                raise ValueError("Dependency identity must be full SHA")
+        if args.dependency_ref:
+            report["dependency_sha"] = resolve_dependency(
+                source_root, args.sha, args.dependency_ref, private_env(work / "build-home")
+            )
             command(
-                ["git", "merge-base", "--is-ancestor", args.dependency_sha, args.sha],
+                ["git", "merge-base", "--is-ancestor", report["dependency_sha"], args.sha],
                 source_root,
                 private_env(work / "build-home"),
                 work / "dependency.log",
@@ -149,12 +164,14 @@ def main(argv=None):
         report["transport_inventory"] = check_policy(snapshot_root)
         if report["transport_inventory"]["unclassified"]:
             raise ValueError("Unclassified transport/dynamic source site")
+        if (snapshot_root / "scripts/retirement_policy.json").read_text() != render(snapshot_root):
+            raise ValueError("Closed transport policy is stale; explicit purpose review/regeneration required")
         report["wheel"] = build_wheel(snapshot_root, work, args.sha)
         for name in ("default", "dev"):
             profile = install_profile(Path(report["wheel"]["path"]), name, work)
             report["profiles"].append(
                 probe_profile(
-                    profile, report["wheel"], args.sha, args.dependency_sha, work, Path(__file__).parent.resolve()
+                    profile, report["wheel"], args.sha, report["dependency_sha"], work, Path(__file__).parent.resolve()
                 )
             )
         from scripts.retirement_native import native_probe
@@ -165,7 +182,7 @@ def main(argv=None):
             data = str(path.readlink()).encode() if path.is_symlink() else path.read_bytes()
             if hashlib.sha256(data).hexdigest() != expected:
                 raise ValueError("Build changed tracked source: " + filename)
-        report["status"] = "PASS" if args.dependency_sha else "PENDING_R10B"
+        report["status"] = "PASS" if report["dependency_sha"] else "PENDING_R10B"
         if report["status"] == "PASS":
             from scripts.retirement_report import validate
 

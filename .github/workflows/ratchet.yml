@@ -369,7 +369,7 @@ jobs:
           python scripts/retirement_run.py \
             --source "$GITHUB_WORKSPACE" \
             --sha "${{ github.event.pull_request.head.sha }}" \
-            --dependency-sha 7efc12107443010b17191ac7a7392a2649023dad \
+            --dependency-ref "${{ github.event.pull_request.base.sha }}" \
             --work "${RUNNER_TEMP}/retirement-work" \
             --out "${RUNNER_TEMP}/retirement-report.json"
       - name: Always publish the retirement outcome and raw fixture evidence
