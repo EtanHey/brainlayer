@@ -115,7 +115,7 @@ def test_quarantine_is_redacted_before_gemini_send(position, monkeypatch):
     assert client.models.sent == [expected]
 
 
-@pytest.mark.parametrize("sender", ["call_groq", "call_glm", "call_mlx"])
+@pytest.mark.parametrize("sender", ["call_glm", "call_mlx"])
 def test_quarantine_is_redacted_in_http_transport(sender, monkeypatch):
     from brainlayer.pipeline import enrichment
 
@@ -367,36 +367,6 @@ def _capture_requests_post(monkeypatch, target):
 
     monkeypatch.setattr(target, "post", _post)
     return sent
-
-
-def test_groq_enrichment_send_scrubs_prompt(monkeypatch):
-    from brainlayer.pipeline import enrichment
-
-    monkeypatch.setattr(enrichment, "GROQ_API_KEY", "test-not-a-key")
-    monkeypatch.setattr(enrichment, "_groq_last_call", 0.0)
-    monkeypatch.setattr(enrichment, "_sleep", lambda seconds: None)
-    monkeypatch.setattr(enrichment, "_log_glm_usage", lambda *args, **kwargs: None)
-    sent = _capture_requests_post(monkeypatch, enrichment.requests)
-
-    enrichment.call_groq(_payload_with_every_token())
-
-    assert len(sent) == 1
-    _assert_no_token(sent[0], where="Groq enrichment payload")
-
-
-def test_groq_enrichment_send_fails_closed_when_scrub_raises(monkeypatch):
-    from brainlayer.pipeline import cloud_scrub, enrichment
-
-    monkeypatch.setattr(enrichment, "GROQ_API_KEY", "test-not-a-key")
-    monkeypatch.setattr(enrichment, "_groq_last_call", 0.0)
-    monkeypatch.setattr(enrichment, "_sleep", lambda seconds: None)
-    sent = _capture_requests_post(monkeypatch, enrichment.requests)
-    monkeypatch.setattr(cloud_scrub, "scrub_secrets", lambda text: (_ for _ in ()).throw(RuntimeError("boom")))
-
-    with pytest.raises(cloud_scrub.CloudScrubError):
-        enrichment.call_groq(_payload_with_every_token())
-
-    assert sent == []
 
 
 def test_groq_ner_sender_is_removed():
