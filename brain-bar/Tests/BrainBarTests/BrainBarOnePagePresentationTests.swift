@@ -3,35 +3,27 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarOnePagePresentationTests: XCTestCase {
-    func testQueueDirectionDistinguishesPausedFromRunningEnrichment() {
-        let paused = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: true)
-        XCTAssertEqual(paused.label, "Enrichment paused · 42 queued")
-        XCTAssertEqual(paused.tone, .neutral)
-
-        let running = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: false)
-        XCTAssertEqual(running.label, "Queue growing")
-        XCTAssertEqual(running.tone, .warning)
-
-        let unknown = BrainBarQueueDirectionPresentation.derive(.growing, backlogCount: 42, enrichmentPaused: nil)
-        XCTAssertEqual(unknown.label, "Queue growing")
-        XCTAssertEqual(unknown.tone, .warning)
-
-        let offline = BrainBarQueueDirectionPresentation.derive(.unavailable, backlogCount: 42, enrichmentPaused: true)
+    func testHistoricalMetadataCountIsNeutralForEveryAvailableDirection() {
+        for status in [DashboardQueueStatus.growing, .draining, .stable, .backlogged] {
+            let count = BrainBarQueueDirectionPresentation.derive(status, backlogCount: 42)
+            XCTAssertEqual(count.label, "Enrichment retired · 42 unenriched")
+            XCTAssertEqual(count.tone, .neutral)
+        }
+        let offline = BrainBarQueueDirectionPresentation.derive(.unavailable, backlogCount: 42)
         XCTAssertEqual(offline.label, "Queue offline")
         XCTAssertEqual(offline.tone, .error)
-        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.empty, backlogCount: 0, enrichmentPaused: true).label, "Queue empty")
-        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.draining, backlogCount: 42, enrichmentPaused: true).tone, .neutral)
+        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.empty).label, "Queue empty")
     }
 
     @MainActor
-    func testRenderFixtureActuallyHasGrowingBacklog() {
+    func testRenderFixtureRetainsHistoricalMetadataCount() {
         let collector = BrainBarDashboardFixture.makeCollector(stats: BrainBarDashboardFixture.growingQueueStats)
         let flow = DashboardFlowSummary.derive(
             daemon: collector.daemon,
             stats: collector.stats,
             now: BrainBarDashboardFixture.fetchedAt
         )
-        XCTAssertEqual(flow.queue.status, .growing)
+        XCTAssertEqual(flow.queue.status, .stable)
         XCTAssertEqual(flow.queue.backlogCount, 12_840)
     }
 
