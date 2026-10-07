@@ -24,7 +24,7 @@ Keep the latest 7 daily snapshots. Weekly maintenance uses the same Drive API pa
 
 ## Why This Approach
 
-The database runs in WAL mode and has active writers from BrainBar, enrichment, watch, and maintenance jobs. Copying `brainlayer.db` directly can miss WAL contents or capture an inconsistent file pair. SQLite's online backup API reads through SQLite itself, so the backup is a consistent snapshot without stopping the live services.
+The database runs in WAL mode and has active writers from BrainBar, watch, and maintenance jobs. Copying `brainlayer.db` directly can miss WAL contents or capture an inconsistent file pair. SQLite's online backup API reads through SQLite itself, so the backup is a consistent snapshot without stopping the live services.
 
 Direct Google Drive API upload is used because the post-repair machine no longer has Google Drive Desktop mounted at the old CloudStorage path. Historical DriveFS logs show the previous path was:
 
@@ -75,7 +75,8 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
    sqlite3 /tmp/brainlayer-restore/brainlayer.db 'PRAGMA integrity_check; SELECT count(*) FROM chunks;'
    ```
 
-4. Stop writers before replacing the live DB:
+4. Stop writers before replacing the live DB. Enrichment is retired; the legacy unload
+   below only quiesces an older installed job and must not be paired with a restart:
 
    ```bash
    launchctl unload ~/Library/LaunchAgents/com.brainlayer.brainbar.plist 2>/dev/null || true
@@ -105,11 +106,11 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
    sqlite3 ~/.local/share/brainlayer/brainlayer.db 'PRAGMA integrity_check; SELECT count(*) FROM chunks;'
    ```
 
-7. Re-enable services:
+7. Re-enable the retained services. Keep retired enrichment jobs down
+   (history: [retirement details](enrichment.md)):
 
    ```bash
    launchctl load ~/Library/LaunchAgents/com.brainlayer.brainbar.plist
-   launchctl load ~/Library/LaunchAgents/com.brainlayer.enrichment.plist
    launchctl load ~/Library/LaunchAgents/com.brainlayer.watch.plist
    launchctl load ~/Library/LaunchAgents/com.brainlayer.decay.plist
    ```
