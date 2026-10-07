@@ -418,14 +418,6 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let previousConfig = config
         var nextConfig = config
         apply(&nextConfig)
-        let validation = BrainLayerConfigValidator.validate(nextConfig, previousConfig: previousConfig)
-        guard validation == .passed else {
-            if case let .failed(message) = validation {
-                recordValidationFailure(message)
-            }
-            return false
-        }
-
         let restartRequirements = Self.restartRequirements(from: previousConfig, to: nextConfig)
         var fileUpdated = false
         do {
@@ -551,8 +543,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
         configured: BrainLayerConfig,
         requirements: [BrainLayerSettingsService]
     ) -> BrainLayerActiveRuntimeReceiptState {
-        if previous.googleAPIKey != configured.googleAPIKey || previous.tuningValues != configured.tuningValues {
-            return .unknown("Secret and tuning reload state is not observable.")
+        if previous.googleAPIKey != configured.googleAPIKey {
+            return .unknown("Secret reload state is not observable.")
         }
 
         for requirement in requirements {
