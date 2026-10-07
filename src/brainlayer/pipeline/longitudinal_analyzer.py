@@ -1,21 +1,17 @@
 """Longitudinal communication style analyzer.
 
-Analyzes communication patterns over time periods using LLM,
+Analyzes communication patterns using an Ollama model bound to loopback,
 tracks evolution, and generates style rules.
 """
 
+import ipaddress
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
-try:
-    import ollama
-
-    HAS_OLLAMA = True
-except ImportError:
-    HAS_OLLAMA = False
+from urllib.parse import urlsplit
 
 from .time_batcher import TimeBatch, get_period_weight
 
@@ -50,13 +46,52 @@ class PeriodAnalysis:
         }
 
 
+def loopback_ollama_url() -> str:
+    """Resolve only numeric loopback endpoints; never delegate localhost to DNS."""
+    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+    error = "analyze-evolution requires a loopback HTTP(S) OLLAMA_HOST"
+    try:
+        if not host or any(character.isspace() for character in host):
+            raise ValueError(error)
+        url = urlsplit(host if "://" in host else f"http://{host}")
+        if (
+            url.scheme not in {"http", "https"}
+            or url.username is not None
+            or url.password is not None
+            or url.path not in {"", "/"}
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError(error)
+        hostname = url.hostname or ""
+        address = ipaddress.ip_address("127.0.0.1" if hostname == "localhost" else hostname)
+        if not address.is_loopback or "%" in hostname:
+            raise ValueError(error)
+        port = url.port if url.port is not None else 11434
+        if port == 0:
+            raise ValueError(error)
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    numeric_host = f"[{address}]" if address.version == 6 else str(address)
+    return f"{url.scheme}://{numeric_host}:{port}"
+
+
 def _ollama_generate(**kwargs):
-    """The one call into ollama.generate. OLLAMA_HOST can name any host, so the
-    prompt is secret-scrubbed first, like every other LLM send."""
+    """Send only to loopback; ignore proxy environment and refuse redirects."""
+    endpoint = loopback_ollama_url()
+    import requests
+
     from .cloud_scrub import scrub_for_cloud
 
     kwargs["prompt"] = scrub_for_cloud(kwargs["prompt"])
-    return ollama.generate(**kwargs)
+    kwargs["stream"] = False
+    with requests.Session() as client:
+        client.trust_env = False
+        response = client.post(f"{endpoint}/api/generate", json=kwargs, timeout=600, allow_redirects=False)
+        if 300 <= response.status_code < 400:
+            raise RuntimeError("analyze-evolution refused a model endpoint redirect")
+        response.raise_for_status()
+        return response.json()
 
 
 def analyze_batch_with_llm(
@@ -78,9 +113,6 @@ def analyze_batch_with_llm(
     Returns:
         PeriodAnalysis with results
     """
-    if not HAS_OLLAMA:
-        raise ImportError("ollama package required: pip install ollama")
-
     # Filter by language if specified
     if language == "hebrew":
         messages = batch.hebrew_messages
@@ -242,9 +274,6 @@ def analyze_evolution(
     Returns:
         Evolution analysis as markdown
     """
-    if not HAS_OLLAMA:
-        raise ImportError("ollama package required: pip install ollama")
-
     if len(analyses) < 2:
         return "Not enough periods to analyze evolution."
 
@@ -325,9 +354,6 @@ def generate_weighted_master_guide(
     Pass 1: Extract raw rules (grounded in actual phrases)
     Pass 2: Consolidate, deduplicate, validate
     """
-    if not HAS_OLLAMA:
-        raise ImportError("ollama package required: pip install ollama")
-
     current_year = datetime.now().year
     grounded_phrases = _collect_grounded_phrases(analyses)
     phrases_block = "\n".join(f'- "{p}"' for p in grounded_phrases[:25])
