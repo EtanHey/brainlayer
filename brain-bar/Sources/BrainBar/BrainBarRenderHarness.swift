@@ -753,7 +753,6 @@ enum BrainBarRenderHarness {
             let icon = SparklineRenderer.renderStatusBarIcon(
                 agent: stats.recentAgentWriteBuckets,
                 watcher: stats.recentWatcherWriteBuckets,
-                enrichment: stats.recentEnrichmentBuckets,
                 badgeOn: badgeOn,
                 size: NSSize(width: 26, height: 14)
             )

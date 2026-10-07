@@ -4,7 +4,7 @@ import XCTest
 
 /// Guards the menu-bar status icon: it must (1) render a non-empty image even when
 /// ALL series are idle/zero (so it never vanishes on a dark fullscreen menu bar —
-/// Etan 2026-06-20), and (2) draw the three overlapping pipeline lines.
+/// Etan 2026-06-20), and (2) draw the two retained pipeline lines.
 @MainActor
 final class SparklineRendererIconTests: XCTestCase {
     private var outDir: String? { ProcessInfo.processInfo.environment["BRAINBAR_SNAPSHOT_DIR"] }
@@ -23,7 +23,6 @@ final class SparklineRendererIconTests: XCTestCase {
         let image = SparklineRenderer.renderStatusBarIcon(
             agent: Array(repeating: 0, count: 12),
             watcher: Array(repeating: 0, count: 12),
-            enrichment: Array(repeating: 0, count: 12),
             size: NSSize(width: 26, height: 14)
         )
         XCTAssertGreaterThan(image.size.width, 0)
@@ -31,11 +30,10 @@ final class SparklineRendererIconTests: XCTestCase {
         save(image, "status-icon-idle")
     }
 
-    func testStatusIconRendersThreeActiveSeries() throws {
+    func testStatusIconRendersTwoActiveSeries() throws {
         let image = SparklineRenderer.renderStatusBarIcon(
             agent: [0, 1, 0, 2, 1, 0, 1, 0, 2, 1, 0, 1],
             watcher: [3, 5, 4, 7, 6, 5, 8, 6, 5, 7, 6, 9],
-            enrichment: [1, 0, 2, 1, 3, 2, 1, 2, 0, 1, 2, 1],
             size: NSSize(width: 26, height: 14)
         )
         XCTAssertGreaterThan(image.size.width, 0)
@@ -46,7 +44,6 @@ final class SparklineRendererIconTests: XCTestCase {
         let image = SparklineRenderer.renderStatusBarIcon(
             agent: Array(repeating: 0, count: 12),
             watcher: Array(repeating: 0, count: 12),
-            enrichment: Array(repeating: 0, count: 12),
             badgeOn: true,
             size: NSSize(width: 26, height: 14)
         )
