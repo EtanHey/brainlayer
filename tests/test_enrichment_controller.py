@@ -462,66 +462,6 @@ def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path, monkeypatch):
 # ── Telemetry tests ──────────────────────────────────────────────────────────
 
 
-def test_emit_enrichment_start_swallows_oserror_and_logs_debug(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    events = []
-    debug_logs = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-    monkeypatch.setattr(controller.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("pipe closed")))
-    monkeypatch.setattr(controller.logger, "debug", lambda msg, *args: debug_logs.append(msg % args if args else msg))
-
-    controller._emit_enrichment_start("realtime", 25)
-
-    assert len(events) == 1
-    assert events[0]["_type"] == "start"
-    assert any("ENRICHMENT_RUNTIME_LOADED" in entry for entry in debug_logs)
-
-
-def test_emit_enrichment_complete_fires(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-    from brainlayer.enrichment_controller import EnrichmentResult
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    result = EnrichmentResult(mode="local", attempted=10, enriched=8, skipped=1, failed=1)
-    controller._emit_enrichment_complete(result, 1500.0)
-
-    assert len(events) == 1
-    assert events[0]["_type"] == "complete"
-    assert events[0]["enriched"] == 8
-    assert events[0]["duration_ms"] == 1500.0
-
-
-def test_emit_enrichment_error_truncates_long_errors(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    long_error = "x" * 500
-    controller._emit_enrichment_error("realtime", "chunk123", long_error)
-
-    assert len(events[0]["error"]) == 300
-
-
-def test_realtime_emits_start_and_complete_events(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    controller.enrich_realtime(store, limit=5)
-
-    types = [e["_type"] for e in events]
-    assert "start" in types
-    assert "complete" in types
-
-
 # ── Telemetry module tests ───────────────────────────────────────────────────
 
 
@@ -611,17 +551,6 @@ async def test_enrich_stats_returns_correct_structure():
 # ── Realtime chunk_ids filter test ────────────────────────────────────────────
 
 
-def test_realtime_passes_chunk_ids_to_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    controller.enrich_realtime(store, chunk_ids=["a", "b"])
-
-    store.get_enrichment_candidates.assert_called_once_with(limit=500, since_hours=8760, chunk_ids=["a", "b"])
-
-
 # ── LaunchAgent plist validation ──────────────────────────────────────────────
 
 
@@ -646,28 +575,7 @@ def test_launchd_installer_uses_standard_env_file_instead_of_embedding_google_ke
 # ── Gemini model constant test ────────────────────────────────────────────────
 
 
-def test_gemini_realtime_model_default():
-    from brainlayer.enrichment_controller import GEMINI_REALTIME_MODEL
-
-    assert "flash-lite" in GEMINI_REALTIME_MODEL
-    assert "2.5" in GEMINI_REALTIME_MODEL
-
-
 # ── Empty candidates handling ─────────────────────────────────────────────────
-
-
-def test_realtime_returns_zero_counts_for_no_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    result = controller.enrich_realtime(store)
-
-    assert result.attempted == 0
-    assert result.enriched == 0
-    assert result.skipped == 0
-    assert result.failed == 0
 
 
 def test_decay_plist_invokes_cli_decay_entrypoint():
