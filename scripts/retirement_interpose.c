@@ -6,6 +6,29 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <libproc.h>
+#include <mach-o/dyld.h>
+
+/* Separate private diagnostics: identify the process that actually loaded this guard. */
+__attribute__((constructor)) static void fixture_process_identity(void) {
+    const char *path = getenv("RETIREMENT_PROCESS_IDENTITY");
+    if (!path) return;
+    const struct mach_header *header = NULL;
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const struct mach_header *image = _dyld_get_image_header(i);
+        if (image && image->filetype == MH_EXECUTE) header = image;
+    }
+    char executable[PROC_PIDPATHINFO_MAXSIZE];
+    int size = proc_pidpath(getpid(), executable, sizeof(executable));
+    if (!header || size <= 0) _exit(92);
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (fd < 0) _exit(93);
+    dprintf(fd, "{\"pid\":%d,\"cpu_type\":%u,\"cpu_subtype\":%u,\"executable_hex\":\"",
+            getpid(), (unsigned)header->cputype, (unsigned)header->cpusubtype);
+    for (int i = 0; i < size && executable[i]; i++) dprintf(fd, "%02x", (unsigned char)executable[i]);
+    dprintf(fd, "\"}\n");
+    close(fd);
+}
 
 static int refused(void) {
     const char *path = getenv("RETIREMENT_EVENTS");
