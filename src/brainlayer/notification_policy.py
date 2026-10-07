@@ -21,17 +21,13 @@ import os
 import stat
 import sys
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
-
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 
 DEFAULT_REASON_FILE = Path("~/.local/share/brainlayer/by-design-notifications.json").expanduser()
 DEFAULT_DISABLED_DIR = Path("~/Library/LaunchAgents/.disabled-retention-P0").expanduser()
-ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 BACKUP_DAILY_PLIST = "com.brainlayer.backup-daily.plist"
 MAX_REASON_FILE_BYTES = 64 * 1024
-FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
 
 
 def _path_from_env(env: Mapping[str, str], name: str, default: Path) -> Path:
@@ -57,21 +53,6 @@ def _explicit_reason(condition: str, env: Mapping[str, str]) -> str | None:
     return reason.strip() if isinstance(reason, str) and reason.strip() else None
 
 
-def _enrichment_pause_reason(env: Mapping[str, str], now: datetime) -> str | None:
-    for variable in ("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "BRAINLAYER_ENRICH_ENABLED"):
-        value = env.get(variable)
-        if value is not None and value.strip().lower() in FALSE_VALUES:
-            return f"enrichment is disabled by configuration ({variable})"
-    sentinel_path = _path_from_env(env, "BRAINLAYER_PAUSE_SENTINEL_PATH", DEFAULT_PAUSE_SENTINEL_PATH)
-    payload, active, _stale = pause_sentinel_state(sentinel_path, now)
-    if active and pause_applies_to_label(payload, ENRICHMENT_LABEL):
-        paused_at = payload.get("paused_at")
-        if isinstance(paused_at, str) and paused_at:
-            return f"enrichment is paused since {paused_at}"
-        return "enrichment is paused"
-    return None
-
-
 def by_design_reason(
     condition: str,
     *,
@@ -85,9 +66,7 @@ def by_design_reason(
     if reason := _explicit_reason(condition, resolved_env):
         return reason
     if condition == "enrichment_backlog":
-        if pause_sentinel_path is not None:
-            resolved_env = {**resolved_env, "BRAINLAYER_PAUSE_SENTINEL_PATH": str(pause_sentinel_path)}
-        return _enrichment_pause_reason(resolved_env, now or datetime.now(UTC))
+        return "enrichment producers are retired; existing metadata is historical"
     if condition == "backup_freshness":
         disabled_dir = _path_from_env(
             resolved_env,

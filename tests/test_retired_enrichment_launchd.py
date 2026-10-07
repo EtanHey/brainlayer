@@ -7,10 +7,12 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.retired_enrichment
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _dispatch(tmp_path, *args, fail=False, disabled=False, helper=False, loaded_name=None):
+def _dispatch(tmp_path, *args, fail=False, disabled=False, helper=False, loaded_name=None, google_env=None):
     source = (ROOT / "scripts/launchd/install.sh").read_text()
     dispatcher = 'case "${1:-all}" in' + source.split('case "${1:-all}" in', 1)[1]
     log = tmp_path / "actions"
@@ -39,6 +41,8 @@ launchctl() {
         functions += f"{name}() {{ record {name}; }}\n"
     for name in ("load_plist", "unload_plist", "job_display_name", "remove_job_wrapper", "remove_plist"):
         functions += re.search(r"(?m)^" + name + r"\(\) \{[\s\S]*?^\}", source).group() + "\n"
+    if google_env is not None:
+        functions += re.search(r"(?m)^verify_gemini_env_file\(\) \{[\s\S]*?^\}", source).group() + "\n"
     if helper:
         dispatcher = 'load_plist "$1"'
     result = subprocess.run(
@@ -47,6 +51,7 @@ launchctl() {
             "PATH": os.defpath,
             "HOME": str(tmp_path),
             "ACTION_LOG": str(log),
+            "BRAINLAYER_ENV_FILE": str(google_env or tmp_path / "missing.env"),
             "LOG_DIR": str(tmp_path),
             "LAUNCH_DIR": str(tmp_path),
             "BRAINLAYER_LIB_DIR": str(tmp_path),
@@ -145,6 +150,7 @@ def test_missing_plist_removes_loaded_label_or_fails_loudly(tmp_path, loaded, fa
     if loaded:
         marker.write_text("loaded job without file")
     result, actions = _dispatch(tmp_path, "all", fail=fail, loaded_name=f"com.brainlayer.{name}")
+    assert not any(a.startswith("launchctl unload ") for a in actions)
     bootouts = [a for a in actions if a.startswith("launchctl bootout ")]
     domain = f"gui/{os.getuid()}/com.brainlayer.{name}"
     should_fail = loaded and fail in (1, 2)
@@ -155,3 +161,62 @@ def test_missing_plist_removes_loaded_label_or_fails_loudly(tmp_path, loaded, fa
         assert "could not retire" in result.stderr
     if loaded and fail == 3:
         assert actions.count(f"launchctl print {domain}") == 3
+
+
+@pytest.mark.parametrize("name", ["enrich", "enrichment"])
+def test_retired_orphans_removed_when_plist_and_label_are_absent(tmp_path, name):
+    plist = tmp_path / f"com.brainlayer.{name}.plist"
+    orphans = [Path(str(plist) + suffix) for suffix in (".loaded-keg", ".reload-pending")]
+    orphans.append(tmp_path / "BrainLayer Enrichment")
+    preserved = [tmp_path / f"com.brainlayer.{n}.plist" for n in ("watch", "drain")]
+    preserved += [Path(str(plist) + suffix) for suffix in (".disabled", ".PAUSED-old")]
+    for path in orphans + preserved:
+        path.write_bytes(b"fixture bytes")
+    result, actions = _dispatch(tmp_path, "all", loaded_name=f"com.brainlayer.{name}")
+    assert result.returncode == 0, result.stderr
+    assert all(not path.exists() for path in orphans)
+    assert all(path.read_bytes() == b"fixture bytes" for path in preserved)
+    assert all(a.startswith("launchctl print ") for a in actions if a.startswith("launchctl "))
+
+
+@pytest.mark.parametrize("key_present", [False, True])
+def test_all_preserves_installed_hotlane_google_key_gate(tmp_path, key_present):
+    import plistlib
+
+    hotlane = tmp_path / "com.brainlayer.hotlane-brainbar.plist"
+    installed = plistlib.dumps(
+        {"Label": "com.brainlayer.hotlane-brainbar", "EnvironmentVariables": {"BRAINLAYER_REQUIRE_GOOGLE_API_KEY": "1"}}
+    )
+    hotlane.write_bytes(installed)
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n" + ("GOOGLE_API_KEY='synthetic-key'\n" if key_present else ""))
+    result, actions = _dispatch(tmp_path, "all", google_env=env_file)
+    assert hotlane.read_bytes() == installed
+    if key_present:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "install hotlane-brainbar" in actions
+    else:
+        assert result.returncode != 0
+        assert "did not provide GOOGLE_API_KEY" in result.stdout
+        assert not any(a.startswith("install ") for a in actions)
+
+
+def test_installed_hotlane_flag_still_exits_78_without_google_key(tmp_path):
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n")
+    env_file.chmod(0o600)
+    result = subprocess.run(
+        [str(ROOT / "scripts/launchd/brainlayer-env-run.sh"), "/usr/bin/true"],
+        env={
+            "PATH": os.defpath,
+            "HOME": str(tmp_path),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_REQUIRE_GOOGLE_API_KEY": "1",
+            "BRAINLAYER_LAUNCHD_SERVICE": "hotlane-brainbar",
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    assert result.returncode == 78
+    assert "GOOGLE_API_KEY not set" in result.stderr
