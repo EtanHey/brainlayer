@@ -1,5 +1,9 @@
 # MODULE-MAP — BrainLayer engine/package split (Phase 0, contract-only)
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 > Author: brainlayerClaude-LEAD-v4, 2026-05-29. **v2 — corrected after a 3-lens critique** (boundary / contract-completeness / migration-risk; critiques stored this session). Supersedes MODULE-MAP-draft.md. Status: contract-only (Etan-agreed); no physical extraction this turn.
 
 ## ⚠️ Corrections the critique forced (the draft was wrong on these — read first)

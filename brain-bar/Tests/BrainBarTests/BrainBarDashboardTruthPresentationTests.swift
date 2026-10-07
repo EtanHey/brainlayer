@@ -68,8 +68,8 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertEqual(watcherIngested.name, "Watcher-ingested chunks")
         XCTAssertEqual(watcherIngested.sparklineLabel, "Watcher-ingested chunks by ingest time over Last 1h")
         XCTAssertEqual(watcherIngested.statusText, "FLOWING")
-        XCTAssertEqual(enriched.name, "Enriched successfully")
-        XCTAssertEqual(enriched.sparklineLabel, "Successful enrichment completions over Last 1h")
+        XCTAssertEqual(enriched.name, "Enrichment history")
+        XCTAssertEqual(enriched.sparklineLabel, "Historical enrichment completions over Last 1h")
     }
 
     func testOnePageDoesNotPresentEnrichmentAsAnActiveFlow() throws {
