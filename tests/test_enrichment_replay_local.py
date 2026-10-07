@@ -38,3 +38,10 @@ def test_saved_result_apply_lives_outside_the_model_controller():
 
     assert _apply_enrichment.__module__ == "brainlayer.enrichment_replay"
     assert _apply_enrichment_impl.__module__ == "brainlayer.enrichment_replay"
+
+
+def test_historical_provenance_read_and_payload_helpers_are_local():
+    from brainlayer import enrichment_replay
+
+    for name in ("_get_chunk_readonly", "_previous_assistant_text", "_enrichment_update_payload"):
+        assert getattr(enrichment_replay, name).__module__ == "brainlayer.enrichment_replay"
