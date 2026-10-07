@@ -378,7 +378,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_valid_response(self):
         """Valid JSON response is parsed correctly."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -409,7 +409,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_response_with_markdown_wrapper(self):
         """JSON wrapped in markdown code block is still parsed."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = '```json\n{"session_summary": "This is a valid session about deployment", "primary_intent": "deploying", "outcome": "success"}\n```'
         result = parse_session_enrichment(response)
@@ -418,27 +418,27 @@ class TestParseSessionEnrichment:
 
     def test_parse_empty_response(self):
         """Empty/None response returns None."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         assert parse_session_enrichment(None) is None
         assert parse_session_enrichment("") is None
 
     def test_parse_invalid_json(self):
         """Invalid JSON returns None."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         assert parse_session_enrichment("not json at all") is None
 
     def test_parse_missing_summary(self):
         """Response without session_summary returns None (required field)."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps({"primary_intent": "debugging"})
         assert parse_session_enrichment(response) is None
 
     def test_parse_clamps_scores(self):
         """Scores are clamped to 1-10 range."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -454,7 +454,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_normalizes_intent(self):
         """Intent values are lowercased and trimmed."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -467,7 +467,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_invalid_intent_ignored(self):
         """Invalid intent value is not included."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -480,7 +480,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_caps_arrays(self):
         """Arrays are capped at reasonable limits."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {

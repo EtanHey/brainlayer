@@ -171,7 +171,7 @@ def test_tool_usage_stats_scrub_failure_writes_nothing(tmp_path, monkeypatch):
 
 
 def test_saved_session_result_replay_redacts_tool_usage_stats(tmp_path):
-    from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+    from brainlayer.pipeline.session_history import parse_session_enrichment
     from brainlayer.vector_store import VectorStore
 
     response = json.dumps(
