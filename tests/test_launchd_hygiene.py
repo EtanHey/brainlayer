@@ -577,7 +577,7 @@ def test_launchd_env_loader_skip_disable_gates_still_checks_required_key(tmp_pat
     assert "GOOGLE_API_KEY not set" in result.stderr
 
 
-def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
+def test_launchd_installer_accepts_google_key_without_retired_enrichment_config(tmp_path):
     launchd_dir = tmp_path / "launchd"
     launchd_dir.mkdir()
     shutil.copy(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh", launchd_dir / "brainlayer-env-run.sh")
@@ -622,9 +622,7 @@ def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
         check=False,
     )
 
-    assert result.returncode != 0
-    assert "missing BRAINLAYER_ENRICH_ENABLED" in result.stderr
-    assert "missing required enrichment config keys" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_launchd_installer_wires_health_check_target():

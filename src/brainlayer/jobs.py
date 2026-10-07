@@ -11,9 +11,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .retired_services import RETIRED_ENRICHMENT_LABELS
+
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 PID_RE = re.compile(r"(?m)^\s*pid\s*=\s*(\d+)\s*$")
-ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 BACKUP_LABELS = {"com.brainlayer.backup-daily", "com.brainlayer.jsonl-backup"}
 
 
@@ -132,8 +133,8 @@ def restart_loaded_jobs(
                 report["errors"][label] = f"launchctl print failed: {initial.stderr.strip() or initial.returncode}"
             continue
         report["loaded"].append(label)
-        if label == ENRICHMENT_LABEL:
-            report["skipped"][label] = "enrichment excluded"
+        if label in RETIRED_ENRICHMENT_LABELS:
+            report["skipped"][label] = "retired enrichment service"
             continue
         if label in {"com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon"}:
             report["skipped"][label] = "cask-owned BrainBar job"

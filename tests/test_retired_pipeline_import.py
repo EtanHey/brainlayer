@@ -5,6 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.retired_enrichment
+
 
 def test_local_pipeline_import_does_not_load_cloud_transport():
     env = os.environ.copy()
