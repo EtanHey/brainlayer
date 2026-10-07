@@ -12,7 +12,6 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
 
         var providerConfig = BrainLayerConfig.defaultConfig
         providerConfig.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
-        providerConfig.enrichmentProvider = .openai
         providerConfig.launchdJobs[.hotlane]?.enabled = false
         let observabilityURL = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"

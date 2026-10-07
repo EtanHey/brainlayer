@@ -27,8 +27,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
     func testFooterQualifiesBackupsAndLocalConfiguration() {
         var config = BrainLayerConfig.defaultConfig
-        config.enrichmentMode = .local
-        config.enrichmentBackend = "mlx"
         let cloud = BrainBarSettingsFooterPresentation(config: config, watcher: .running(heartbeatAt: fixedNow), now: fixedNow)
         XCTAssertEqual(cloud.state, .watcher(.running(heartbeatAt: fixedNow)))
         XCTAssertEqual(cloud.state.title, "Watcher running")
@@ -47,7 +45,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertTrue(weeklyOnly.locality.contains("Backups → Drive"))
         XCTAssertFalse(weeklyOnly.showsLock)
 
-        config.enrichmentEnabled = false
         config.launchdJobs[.maintenanceWeekly]?.enabled = false
         let local = BrainBarSettingsFooterPresentation(config: config, watcher: unknown, now: fixedNow)
         XCTAssertTrue(local.locality.contains("Memory on this Mac"))
@@ -156,12 +153,12 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         var externalConfig = try fixture.store.loadDocument().config
-        externalConfig.enrichmentBackend = "mlx"
+        externalConfig.launchdJobs[.drain]?.enabled = false
         try fixture.store.save(externalConfig)
         _ = fixture.viewModel.reloadConfigFromDisk()
         fixture.viewModel.setSystemEnabled(false)
         let persisted = try fixture.store.loadDocument().config
-        XCTAssertEqual(persisted.enrichmentBackend, "mlx")
+        XCTAssertEqual(persisted.launchdJobs[.drain]?.enabled, false)
         XCTAssertFalse(persisted.systemEnabled)
     }
 
