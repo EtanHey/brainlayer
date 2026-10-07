@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -136,13 +137,16 @@ def test_fresh_heartbeat_does_not_hide_reported_progress_failure(state, queue_co
     assert issue.code == state
     assert issue.severity == "fatal"
     assert reason in issue.message
-    assert issue.to_event()["context"]["enrichment_backlog"] is None
+    event = json.loads(json.dumps(issue.to_event()))
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    for key, value in compat["retained_for_one_release"]["drain_liveness_details"].items():
+        assert event["context"][key] is value
 
 
 @pytest.mark.parametrize(
     ("queue_kinds", "expected_state"),
     [
-        (["enrichment_update"], "drain_paused"),
+        (["enrichment_update"], "drain_legacy_queue_held"),
         (["enrichment_update", "watcher_chunk"], "drain_progress_stalled"),
         (["watcher_chunk"], "drain_progress_stalled"),
         (["invalid_utf8"], "drain_progress_stalled"),
@@ -154,6 +158,12 @@ def test_paused_enrichment_only_is_not_mistaken_for_stalled_watcher_queue(
     payload, _old = _run_old_queue(tmp_path, monkeypatch, queue_kinds, pause=True)
     assert payload["state"] == expected_state
     assert payload["reason"]
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    assert set(payload) == set(compat["drain_health_keys"])
+    assert payload["state"] not in compat["removed_codes"]
+    assert payload["state"] not in compat["renamed_codes"]
+    if queue_kinds == ["enrichment_update"]:
+        assert payload["state"] == compat["renamed_codes"]["drain_paused"]
 
 
 def test_drain_daemon_rotates_oversized_error_log_at_start(tmp_path):

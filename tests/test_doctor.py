@@ -1332,7 +1332,7 @@ def test_run_doctor_does_not_treat_recent_drain_heartbeat_as_queue_movement(tmp_
     ("kind", "paused", "stale", "expected_code"),
     [
         ("watcher_chunk", False, False, "drain_progress_stalled"),
-        ("enrichment_update", True, False, "queue_paused_enrichment"),
+        ("enrichment_update", True, False, "legacy_queue_held"),
         ("enrichment_update", True, True, "drain_liveness_stalled"),
     ],
 )
@@ -1363,6 +1363,17 @@ def test_run_doctor_distinguishes_stalled_watcher_from_paused_enrichment(tmp_pat
         command_runner=_loaded_launchctl,
         now_fn=lambda: NOW,
     )
+
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert set(payload) == set(compat["doctor_keys"])
+    for key, value in compat["retained_for_one_release"]["doctor"].items():
+        assert payload[key] is value
+    codes = {item["code"] for item in payload["issues"]}
+    assert codes.isdisjoint(compat["removed_codes"])
+    assert codes.isdisjoint(compat["renamed_codes"])
+    if paused and not stale:
+        assert compat["renamed_codes"]["queue_paused_enrichment"] in codes
 
     issue = next(issue for issue in result.issues if issue.code == expected_code)
     assert issue.severity == ("warning" if paused and not stale else "fatal")
@@ -1816,20 +1827,18 @@ def test_doctor_cli_json_uses_injected_runner_and_db_option(tmp_path, monkeypatc
     db_path = tmp_path / "cli-fixture.db"
     seen: dict[str, Path] = {}
 
-    class FakeResult:
-        ok = True
-        exit_code = 0
-        chunk_count = 2
-        recent_unvectored_chunks = 0
-        queue_count = 0
-        issues = []
+    from brainlayer.doctor import run_doctor
 
-        def to_dict(self) -> dict:
-            return {"ok": self.ok, "exit_code": self.exit_code, "db_path": str(seen["db_path"])}
+    _build_db(db_path)
 
     def fake_run(config):
         seen["db_path"] = config.db_path
-        return FakeResult()
+        return run_doctor(
+            _doctor_config(tmp_path, config.db_path),
+            ps_output_fn=_hotlane_ps,
+            command_runner=_loaded_launchctl,
+            now_fn=lambda: NOW,
+        )
 
     monkeypatch.setattr(cli, "_run_doctor_cli", fake_run)
 
@@ -1838,7 +1847,10 @@ def test_doctor_cli_json_uses_injected_runner_and_db_option(tmp_path, monkeypatc
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["ok"] is True
-    assert payload["db_path"] == str(db_path)
+    assert seen["db_path"] == db_path
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    assert set(payload) == set(compat["doctor_keys"])
+    assert payload["enrichment_backlog"] is None
 
 
 # ── repair (f): index completeness, both directions ──────────────────────────

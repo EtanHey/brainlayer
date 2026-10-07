@@ -831,11 +831,11 @@ def run_doctor(
     queue_count, queue_bytes, _queue_oldest_age = _queue_stats(config.queue_dir, now)
     result.queue_count = queue_count
     result.queue_bytes = queue_bytes
-    paused_enrichment_queue = False
+    legacy_queue_held = False
     if queue_count > 0:
         pause_path = config.pause_sentinel_path or config.db_path.expanduser().parent / "pause.sentinel"
         pause_payload, pause_active, _ = pause_sentinel_state(pause_path, now)
-        paused_enrichment_queue = (
+        legacy_queue_held = (
             pause_active
             and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
             and queue_contains_only_enrichment(config.queue_dir, queue_count)
@@ -896,8 +896,8 @@ def run_doctor(
         suppress_stale_drain = (
             active_drain_liveness_issue.code == STALLED_CODE and has_drain_backlog and drain_liveness_moving
         )
-        suppress_paused_progress = active_drain_liveness_issue.code == PROGRESS_STALLED_CODE and paused_enrichment_queue
-        if not suppress_stale_drain and not suppress_paused_progress:
+        suppress_held_progress = active_drain_liveness_issue.code == PROGRESS_STALLED_CODE and legacy_queue_held
+        if not suppress_stale_drain and not suppress_held_progress:
             if isinstance(active_drain_liveness_issue, BrainLayerAlarm):
                 emit_alarm(active_drain_liveness_issue)
             result.issues.append(
@@ -908,10 +908,10 @@ def run_doctor(
                     active_drain_liveness_issue.details,
                 )
             )
-    if queue_count > 0 and paused_enrichment_queue:
+    if queue_count > 0 and legacy_queue_held:
         warning(
-            "queue_paused_enrichment",
-            "durable queue contains only deliberately paused enrichment updates",
+            "legacy_queue_held",
+            "historical metadata updates are held by the existing maintenance sentinel",
             queue_count=queue_count,
         )
     elif queue_count > 0 and not queue_moving:
