@@ -75,13 +75,13 @@ def test_gemini_response_schema_requires_sentiment_fields():
 
 
 def test_enrichment_prompt_mentions_entities_field():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert '"entities"' in ENRICHMENT_PROMPT, "ENRICHMENT_PROMPT must include an 'entities' field in the JSON example"
 
 
 def test_enrichment_prompt_says_non_code_entities():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert "non-code entities" in ENRICHMENT_PROMPT.lower(), (
         "ENRICHMENT_PROMPT must instruct to extract non-code entities only"
@@ -89,7 +89,7 @@ def test_enrichment_prompt_says_non_code_entities():
 
 
 def test_enrichment_prompt_excludes_code_symbols():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     lower = ENRICHMENT_PROMPT.lower()
     assert "variable names" in lower, "Prompt must mention excluding variable names"
@@ -99,7 +99,7 @@ def test_enrichment_prompt_excludes_code_symbols():
 
 
 def test_enrichment_prompt_lists_entity_types():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     lower = ENRICHMENT_PROMPT.lower()
     for etype in ["person", "company", "project", "technology", "tool", "concept"]:
@@ -107,7 +107,7 @@ def test_enrichment_prompt_lists_entity_types():
 
 
 def test_enrichment_prompt_adds_meta_research_and_short_chunk_guidance():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert "META-RESEARCH DETECTION" in ENRICHMENT_PROMPT
     assert '"meta-research"' in ENRICHMENT_PROMPT
@@ -119,7 +119,7 @@ def test_enrichment_prompt_adds_meta_research_and_short_chunk_guidance():
 
 
 def test_enrichment_prompt_keeps_epistemic_debt_and_sentiment_rubrics():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     lower = ENRICHMENT_PROMPT.lower()
     assert "epistemic rubric" in lower

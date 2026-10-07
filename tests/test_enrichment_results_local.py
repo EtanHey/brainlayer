@@ -31,3 +31,10 @@ assert enrichment_version_metadata()['prompt_version']
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_legacy_prompt_template_is_a_local_offline_artifact():
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
+
+    assert "{content}" in ENRICHMENT_PROMPT
+    assert "sentiment_label" in ENRICHMENT_PROMPT

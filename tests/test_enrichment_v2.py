@@ -50,7 +50,7 @@ def test_build_prompt_renders_v2_fields_and_60_40_truncation():
 
 
 def test_prompt_signature_emits_once_across_threads(monkeypatch):
-    from brainlayer.pipeline import enrichment
+    from brainlayer.pipeline import enrichment_prompts as enrichment
 
     writes = []
     monkeypatch.setattr(enrichment.os, "write", lambda fd, data: writes.append((fd, data)) or len(data))
@@ -67,7 +67,7 @@ def test_prompt_signature_emits_once_across_threads(monkeypatch):
 
 
 def test_prompt_signature_swallow_oserror_and_logs_debug(monkeypatch):
-    from brainlayer.pipeline import enrichment
+    from brainlayer.pipeline import enrichment_prompts as enrichment
 
     debug_logs = []
     monkeypatch.setattr(enrichment.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("pipe closed")))
