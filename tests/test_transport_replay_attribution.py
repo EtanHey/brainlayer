@@ -246,7 +246,7 @@ def test_metadata_only_queued_origin_is_preserved_for_old_fallback_events(tmp_pa
 
 def test_deferred_mcp_row_stays_raw_etan_direct_with_high_enrichment_cap(tmp_path, monkeypatch):
     """Deferred MCP queue rows remain direct user-authored provenance after enrichment."""
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
     from brainlayer.provenance_integration import resolve_entity_conflicts
     from brainlayer.vector_store import VectorStore
 

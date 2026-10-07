@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import contextmanager
 from typing import Any
 
 from .chunk_write import canonical_content_hash
+from .pipeline.cloud_scrub import scrub_llm_output
 from .provenance import derive_provenance_class
 from .provenance_autosupersede import auto_supersede
+from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .writer_telemetry import start_writer_span
 
 logger = logging.getLogger(__name__)
 _content_hash = canonical_content_hash
@@ -143,3 +147,122 @@ def _derive_chunk_provenance_class(chunk: dict[str, Any], content: str | None = 
         text=text,
         prev_assistant_text=chunk.get("prev_assistant_text"),
     )
+
+
+def _apply_enrichment_impl(
+    store,
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None = None,
+    enrichment_model: str | None = None,
+    enrichment_backend: str | None = None,
+) -> None:
+    should_promote_raw_entities = False
+    enrichment = scrub_llm_output(enrichment)
+    with _savepoint(store.conn, "enrichment_apply_provenance"):
+        resolved_queries = enrichment.get("resolved_queries")
+        legacy_resolved_query = enrichment.get("resolved_query")
+        if not legacy_resolved_query and isinstance(resolved_queries, list) and resolved_queries:
+            legacy_resolved_query = resolved_queries[0]
+        model = str(enrichment_model or GEMINI_REALTIME_MODEL or "").strip()
+        _ = chunk_origin
+
+        update_kwargs = {
+            "chunk_id": chunk["id"],
+            "summary": enrichment.get("summary"),
+            "tags": enrichment.get("tags"),
+            "importance": enrichment.get("importance"),
+            "intent": enrichment.get("intent"),
+            "primary_symbols": enrichment.get("primary_symbols"),
+            "resolved_query": legacy_resolved_query,
+            "epistemic_level": enrichment.get("epistemic_level"),
+            "version_scope": enrichment.get("version_scope"),
+            "debt_impact": enrichment.get("debt_impact"),
+            "external_deps": enrichment.get("external_deps"),
+            "key_facts": enrichment.get("key_facts"),
+            "resolved_queries": resolved_queries,
+            "sentiment_label": enrichment.get("sentiment_label"),
+            "sentiment_score": enrichment.get("sentiment_score"),
+            "sentiment_signals": enrichment.get("sentiment_signals"),
+            "enrichment_model": model or GEMINI_REALTIME_MODEL,
+            "enrichment_backend": enrichment_backend or _current_enrichment_backend(),
+        }
+        enrichment_version = (enrichment.get("enrichment_metadata") or {}).get("prompt_version")
+        if enrichment_version:
+            update_kwargs["enrichment_version"] = enrichment_version
+        store.update_enrichment(**update_kwargs)
+        entities = enrichment.get("entities", [])
+        # AIDEV-NOTE: raw entities persisted to chunks.raw_entities_json staging column;
+        # R84b canonicalization pipeline will consume and populate kg_entities downstream.
+        if _ensure_raw_entities_json_column(store):
+            store.conn.cursor().execute(
+                "UPDATE chunks SET raw_entities_json = ? WHERE id = ?",
+                (json.dumps(entities), chunk["id"]),
+            )
+            try:
+                from .vector_store import VectorStore
+
+                should_promote_raw_entities = isinstance(store, VectorStore)
+            except Exception:
+                should_promote_raw_entities = False
+        # Set content_hash after enrichment so dedup works next time
+        content = chunk.get("content", "")
+        if content:
+            try:
+                h = _content_hash(content)
+                store.conn.cursor().execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (h, chunk["id"]))
+            except Exception:
+                pass  # Non-critical — dedup still works on next index
+        provenance_class = _derive_chunk_provenance_class(chunk, content)
+        if _ensure_provenance_class_column(store):
+            store.conn.cursor().execute(
+                "UPDATE chunks SET provenance_class = ? WHERE id = ?",
+                (provenance_class, chunk["id"]),
+            )
+        _maybe_auto_supersede_ingested_chunk(store, chunk, entities, provenance_class=provenance_class)
+        enqueue_provenance_resolution_for_entities(store, entities, chunk_id=chunk["id"], commit=False)
+    if should_promote_raw_entities:
+        try:
+            from .kg_promotion import promote_chunk_raw_entities
+
+            promote_chunk_raw_entities(store, chunk["id"])
+        except Exception:
+            logger.debug("raw entity KG promotion skipped for %s", chunk["id"], exc_info=True)
+
+
+def _apply_enrichment(
+    store,
+    chunk: dict[str, Any],
+    enrichment: dict[str, Any],
+    *,
+    chunk_origin: str | None = None,
+    enrichment_model: str | None = None,
+    enrichment_backend: str | None = None,
+) -> None:
+    try:
+        owns_transaction = bool(store.conn.getautocommit())
+    except Exception:
+        owns_transaction = True
+    telemetry_span = start_writer_span(
+        store.conn,
+        db_path=getattr(store, "db_path", None),
+        producer="enrichment",
+        lane="enrichment",
+        operation="apply",
+        rows_planned=1,
+        transaction_mode="savepoint",
+    )
+    try:
+        _apply_enrichment_impl(
+            store,
+            chunk,
+            enrichment,
+            chunk_origin=chunk_origin,
+            enrichment_model=enrichment_model,
+            enrichment_backend=enrichment_backend,
+        )
+    except Exception as exc:
+        telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
+        raise
+    telemetry_span.finish("commit" if owns_transaction else "completed")

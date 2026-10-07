@@ -7,7 +7,7 @@ import pytest
 
 from brainlayer.cli import _RewindArchiveBatcher
 from brainlayer.drain import drain_once
-from brainlayer.enrichment_controller import _apply_enrichment
+from brainlayer.enrichment_replay import _apply_enrichment
 from brainlayer.vector_store import VectorStore
 
 

@@ -150,7 +150,7 @@ def test_enrichment_payload_keeps_model_in_metadata_not_chunk_origin(monkeypatch
 
 
 def test_saved_local_result_replay_preserves_chunk_origin(tmp_path):
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
     from brainlayer.pipeline.enrichment_results import parse_enrichment
     from brainlayer.vector_store import VectorStore
 

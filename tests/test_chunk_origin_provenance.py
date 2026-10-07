@@ -41,7 +41,7 @@ def test_meta_research_batcher_does_not_stamp_backend(monkeypatch, tmp_path):
 def test_direct_apply_enrichment_stamps_backend_origin(monkeypatch):
     from unittest.mock import MagicMock
 
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     monkeypatch.setattr(controller, "GEMINI_REALTIME_MODEL", "gemini-test-model")
 
