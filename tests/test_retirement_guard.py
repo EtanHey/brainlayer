@@ -16,8 +16,9 @@ def ledger(monkeypatch, tmp_path):
     return events
 
 
-@pytest.mark.parametrize("name", ["google.genai", "brainlayer.enrichment_controller",
-                                  "brainlayer.pipeline.groq", "openai.chat"])
+@pytest.mark.parametrize(
+    "name", ["google.genai", "brainlayer.enrichment_controller", "brainlayer.pipeline.groq", "openai.chat"]
+)
 def test_forbidden_import_records_even_if_caught(ledger, name):
     with pytest.raises(guard.Attempt):
         guard.check_import(name)

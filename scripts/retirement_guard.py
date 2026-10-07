@@ -12,9 +12,23 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 ARMED = False
-FORBIDDEN = ("google.genai", "google.generativeai", "vertexai", "groq", "openai", "anthropic",
-             "cohere", "mistralai", "litellm", "xai_sdk", "together",
-             "brainlayer.enrichment_controller", "brainlayer.pipeline.enrichment", "brainlayer.pipeline.groq")
+FORBIDDEN = (
+    "google.genai",
+    "google.generativeai",
+    "google.cloud.aiplatform",
+    "vertexai",
+    "groq",
+    "openai",
+    "anthropic",
+    "cohere",
+    "mistralai",
+    "litellm",
+    "xai_sdk",
+    "together",
+    "brainlayer.enrichment_controller",
+    "brainlayer.pipeline.enrichment",
+    "brainlayer.pipeline.groq",
+)
 
 
 class Attempt(RuntimeError):
@@ -24,7 +38,9 @@ class Attempt(RuntimeError):
 def refuse(kind):
     fd = os.open(os.environ["RETIREMENT_EVENTS"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, (json.dumps({"kind": kind, "phase": os.environ.get("RETIREMENT_PHASE", "candidate")}) + "\n").encode())
+        os.write(
+            fd, (json.dumps({"kind": kind, "phase": os.environ.get("RETIREMENT_PHASE", "candidate")}) + "\n").encode()
+        )
     finally:
         os.close(fd)
     raise Attempt("retirement fixture refused " + kind)
@@ -75,6 +91,17 @@ def arm():
 
     class FixtureProcess(original_process):
         def __init__(self, *args, **kwargs):
+            command = args[0] if args else kwargs.get("args")
+            # Actual writer PID provenance needs this local read. No shell,
+            # alternate executable, env replacement or arbitrary child is admitted.
+            if (
+                command == ["ps", "-o", "lstart=", "-p", str(os.getpid())]
+                and not kwargs.get("shell")
+                and kwargs.get("executable") is None
+                and kwargs.get("env") is None
+                and os.environ.get("RETIREMENT_OS_BOUNDARY") == "1"
+            ):
+                return super().__init__(["/bin/ps", *command[1:]], *args[1:], **kwargs)
             refuse("subprocess")
 
     subprocess.Popen = FixtureProcess
@@ -95,8 +122,10 @@ def arm():
 
     apsw.Connection = FixtureConnection
     # Patches at the send layer also catch pre-bound transports before DNS/connect.
-    for module_name, classes in (("requests", (("Session", "send"),)),
-                                 ("httpx", (("Client", "send"), ("HTTPTransport", "handle_request")))):
+    for module_name, classes in (
+        ("requests", (("Session", "send"),)),
+        ("httpx", (("Client", "send"), ("HTTPTransport", "handle_request"))),
+    ):
         module = original_dynamic(module_name)
         for class_name, method in classes:
             setattr(getattr(module, class_name), method, lambda *a, **k: refuse("http_send"))

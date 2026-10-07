@@ -1,5 +1,5 @@
 {
-  "baseline": "R7 main 11f87591 plus isolated R11 harness; all classifications require pair review",
+  "baseline": "R7 main11f87591 plus merged R10b aa3e03cd and isolated R11 harness; classifications pending pair review",
   "schema_version": 1,
   "sites": {
     "0003daf2af1f4f656eeace2fa190b4282effe4ef8805373a41d57f251a84ef21": {
@@ -1294,6 +1294,17 @@
         "target": "from brainlayer._helpers import _escape_fts5_query"
       }
     },
+    "08b8e7743ea1060234f0f7d3f25442debcd343258debf2aa5535459a22e96a2a": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "80f21c52b46d18d972ae93db225486a900db10799e9bdba98d07dbcc819ff502",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import threading"
+      }
+    },
     "08c1194c15306a8a71b2b70e0285bdac2433a27a9c638e41360441c72f70be8e": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/backfill-created-at.py <module>.backfill_from_interpolation",
       "site": {
@@ -2577,6 +2588,17 @@
         "target": "from brainlayer.pipeline.entity_resolution import merge_entities"
       }
     },
+    "1158db376b8c911175a89eb2faa2c5667393a87cce9c26b08eae104dfa22ee62": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "6e12bad3697cd906975dd6dee5bc9841c9492b4e2ed081e8ec990d362a517372",
+        "call_sha256": "092cb77ae0770f1627b29bf41b2732722fbcc3a0e1d77a79674801800a2721d1",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_report.py",
+        "target": "import hashlib"
+      }
+    },
     "11688296029dfecbee9f3b8e5a5675b67f966fa87eb27d09557e7d849a6ae513": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>",
       "site": {
@@ -3391,17 +3413,6 @@
         "target": "from __future__ import annotations"
       }
     },
-    "163efb23da386c9b3b38d5276a382802fbd7365a69d287ed7d94c7731abf6350": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "2670e97976fb3abb8dea6a243647af99ac324eab4d09a78964045d0b2bf3c351",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "from brainlayer.pipeline import SanitizeConfig, Sanitizer, build_external_prompt"
-      }
-    },
     "1640648f23100ba6d6d289b07591513a2880875b49c2726eaeb9f14817107a46": {
       "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
       "site": {
@@ -3460,6 +3471,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/eval/phoenix_gate/__init__.py",
         "target": "from brainlayer.eval.phoenix_gate.baseline_store import BaselineRecord, JsonBaselineStore"
+      }
+    },
+    "16cefe6cd55c1693833c53a5534fc5b6399442eef6bc00ac5091c905b6aab702": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "f86622d382a4da2a01df12bc04dbc4cc39dcf7a7252ed02caee8bdcf2686624c",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import builtins"
       }
     },
     "16e450a6dcbc77527a674268656930d6e6818b1aa147436cbec896ebd25d7e73": {
@@ -3737,17 +3759,6 @@
         "target": "from __future__ import annotations"
       }
     },
-    "18b96927071047da7c218d0b40ebda1ebb28523c2b05f23d2d5a99c99ea41946": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "1c514ad4e5d66d84fb1154a2e9e7637356e75e0632e4402e104d6a2b08925670",
-        "call_sha256": "3ca97d1b41c531d71349f3a2ce0be52fb0d7634f527f81f9ac8623d1395898b7",
-        "kind": "child_process",
-        "owner": "<module>.native_probe",
-        "path": "scripts/retirement_native.py",
-        "target": "platform.system"
-      }
-    },
     "18cadf0ed0c395150f7f35c45720ee5e1ec1d5d0e8645c258622eb8adf8f66fb": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/drain.py <module>._apply_enrichment",
       "site": {
@@ -3897,6 +3908,14 @@
         "owner": "<module>",
         "path": "scripts/mine_failed_queries.py",
         "target": "import os"
+      }
+    },
+    "1958dbdef029c8a756d813179ee885b933135f45e824b519e89ec73e1fcfa05d": {
+      "non_cloud_purpose": "R10b merged installed import gate; isolated local package checks, not a model API",
+      "site": {
+        "body_sha256": "6325404d0d24c16c6a45a714d53f3e57da32a5bb61a3820d0972eaa1a08a0d2b",
+        "kind": "non_python_source",
+        "path": "scripts/installed_import_gate.sh"
       }
     },
     "19680335f4a037aa6b29220345f6fa76482b4ce9b6c4999e9e7388114f782be5": {
@@ -4103,17 +4122,6 @@
         "owner": "<module>",
         "path": "scripts/label-chunks.py",
         "target": "from rich.text import Text"
-      }
-    },
-    "1ae50932b1814001f1e9d129308476cdb737d9bf450077331b944cf42bf62ffc": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "a902423a7113e4ef4617198eedb04c56ae0c0bb13e7092a2d7aaf66971ff7c4d",
-        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_native.py",
-        "target": "import json"
       }
     },
     "1b0353b7ed7e783127d390a203a605960e1f351087b2c10b85df277699f3430d": {
@@ -4468,28 +4476,6 @@
         "target": "from sklearn.metrics.pairwise import cosine_similarity"
       }
     },
-    "1d11ba104eeeb4ea49b9e7f22d8ef38b560ced9fd83dd295c14ca4d78c133d0c": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import subprocess"
-      }
-    },
-    "1d25ab765d22ada8bafa3bed4652eb42d3d2e1f327f58fdd06d948b7dac9840b": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "313294ed735ff5513a521efc2cd30b369d05809f5c2b807dfcc7dc97aa92a3a7",
-        "call_sha256": "85598e37ba96d6e396880fbaf8f1a487d6502e6df91ce2ca25c05c876437624e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_report.py",
-        "target": "from datetime import datetime, timezone"
-      }
-    },
     "1d2f0c135b1c7bdcc63aef09970d21531a7fe0f24e5559f61893c84f0986ac01": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -4543,6 +4529,28 @@
         "owner": "<module>.verify_mcp_transport",
         "path": "src/brainlayer/setup.py",
         "target": "send"
+      }
+    },
+    "1d7db3555feeb97b05567565b8226a313687d9bbafc179a219846271d8230dc1": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import json"
+      }
+    },
+    "1d95dcfd617c3b29adac08f4773bfcc51a2c91e1004aae37ead399754f1bfe93": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import subprocess"
       }
     },
     "1da1789174609d39cb4f48ca58def2441420f5bc504850131a8d764443917055": {
@@ -4990,6 +4998,17 @@
         "target": "from .embeddings import get_embedding_model as _get_embedding_model"
       }
     },
+    "20283b6e9041f090e82267c47d0b93ba800cc3e9c15b3260a507b5d1a5ad9e60": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import subprocess"
+      }
+    },
     "2031f36a9e91bd392e6c49cab644c3229bd64bf632253e2f3856f98239105b22": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/extract_claude_desktop.py <module>",
       "site": {
@@ -5246,6 +5265,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/provenance_integration.py",
         "target": "from datetime import datetime, timezone"
+      }
+    },
+    "222771b1d46c2db90578d430b83ca1f2f157eb51585c5315edbc73af2666db48": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "2670e97976fb3abb8dea6a243647af99ac324eab4d09a78964045d0b2bf3c351",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from brainlayer.pipeline import SanitizeConfig, Sanitizer, build_external_prompt"
       }
     },
     "222f8133d9a01f2805143949e51e4723491b912350502824f7a11a5eab944f2c": {
@@ -5589,6 +5619,17 @@
         "target": "re.compile"
       }
     },
+    "247cce8b1580040cc917480c07c67365365de434fc5ab6ba8dc4272a375ebbdd": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "from pathlib import Path"
+      }
+    },
     "24827718c470f77ca13b76a227dd4e96065f6cbd0b66aa6307e5667e4ce6bda8": {
       "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
       "site": {
@@ -5628,6 +5669,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/doctor.py",
         "target": "from .pause import pause_applies_to_label, pause_sentinel_state, queue_contains_only_enrichment"
+      }
+    },
+    "24b39c59821af71630cada91956ba12ed99bb8a80e6783d69af863e1896a9c0b": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "b3ddaf10e8c2617b3d6e98cf775144ac0a215c65d21b02b0e0b99b7854d00531",
+        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_native.py",
+        "target": "from pathlib import Path"
       }
     },
     "24c4100ef026e9ace6f8c44b55bbbc8c3f0141412872736709e88cbec08fbbba": {
@@ -5954,6 +6006,17 @@
         "target": "from typing import Any, NoReturn"
       }
     },
+    "273338c57bced21080f7263270fa6cb92dd8145e2108270fed5e8a0a49f495fc": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "ac3a74d6dd975a8e8fe4b7f85fce794793a9355595b850e3926964913948d386",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import os"
+      }
+    },
     "273e8692114218f731fba724db72584fdabd8caecde085987457ae560ecccf17": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/reembed_backfill.py <module>",
       "site": {
@@ -6040,6 +6103,17 @@
         "owner": "<module>",
         "path": "scripts/abcde_report.py",
         "target": "from brainlayer.eval.enrichment_graders import find_banned_summary_pattern, score_entities, validate_schema_gate"
+      }
+    },
+    "277d41abe57b311f6fdfa62bd1ed42f620e2d89fcad1dbdc18cf1867a702ed40": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "c3192d49ab305e9a8a9eaa8fda684b32cd7f2a0b81768ecc5d1734c3a48c1b29",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from brainlayer import embeddings"
       }
     },
     "2786c74cc90af931a8993ec8e5c332304d93704d4ed7d47f3d6c29b245664406": {
@@ -6183,6 +6257,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "from time import sleep as _sleep"
+      }
+    },
+    "283fa6963d79ecc6941d7bec2f92cc24e8cb9cbbdb091c3132bf11f1809f0e46": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "fb0a1565f6b3f0c0b725138009fcda0f36d19f0bbbdfb283ec6fea035c928e32",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.vector_store import VectorStore"
       }
     },
     "2847a6a8b80defd788b34566cef34742f89f2f572ab7db16514fdb7156b87c72": {
@@ -6589,17 +6674,6 @@
         "target": "from pathlib import Path"
       }
     },
-    "2ac670ab80835bf881248bb2aad27e51029c8a5d1c1485eac55d52f66b3a8098": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "85598e37ba96d6e396880fbaf8f1a487d6502e6df91ce2ca25c05c876437624e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "from datetime import datetime, timezone"
-      }
-    },
     "2ac96e4fd2aa2982af79d44a9e3abff26db8d8ea79b1a990b6a9c7656d89bce3": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>._brainbar_changed_for_deploy",
       "site": {
@@ -6737,17 +6811,6 @@
         "target": "from datetime import datetime, timezone"
       }
     },
-    "2b7e3a8ba2ca43589002c8f2a80e9469bbb61b199fcc1e7e1984673b1d1c07c2": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "89ddb101b356a8378ccb16461276eb1596c6a3486b619f5cbeb0fef906d16608",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "import brainlayer"
-      }
-    },
     "2b7f0c9344557b9f5923e1e2be9ca5cbfd6becea0bb0c7fd03159dab1834d70e": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/doctor.py <module>",
       "site": {
@@ -6831,17 +6894,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/eval/__init__.py",
         "target": "from .enrichment_graders import check_meta_research_forced_importance, find_banned_summary_pattern, grade_candidate, score_entities, score_importance_calibration, score_key_facts_recall, validate_schema_gate"
-      }
-    },
-    "2c2dfd12cac77570210dcef1ac287a77580be647c45b9d5be977f83ef6dd3802": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "from pathlib import Path"
       }
     },
     "2c352035a9183f941ea00bc56f1d9f9ef18ba35d6b3a91f88e761ab89b211d71": {
@@ -7001,6 +7053,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/observability_surface.py",
         "target": "from typing import Any"
+      }
+    },
+    "2d32735eb10029a5fee03794a0189635133b9fd8f78a40003aff91b48c36cb2f": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "ddaf66ec5d87c9da9dc8bd7a22c98d4bea8c6b5167625a29b61a97785fd093f0",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.mcp.enrich_handler import _brain_enrich"
       }
     },
     "2d37e72e315afa29b42ad20ded0a08855f14a7cb2b43e86a2512f25cb34ef4ca": {
@@ -7511,6 +7574,28 @@
         "target": "from pathlib import Path"
       }
     },
+    "2f965d7d6272dbd8a312ea984d1a8656e463e143a07f77f69bbe269f84c364c3": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "f86622d382a4da2a01df12bc04dbc4cc39dcf7a7252ed02caee8bdcf2686624c",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import builtins"
+      }
+    },
+    "2f9f9702f7f3544493333acdc171993313d68b7b2e95a7e863b6090a1bfaa4eb": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "b461ae95c16c1e73a466fdd306ad6da693ead3a324e5d33627958cc4a2f47e36",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import shutil"
+      }
+    },
     "2fa8215c0720fc08e65f6cba8b5fda54ccac8a6240c445493eb03ccfbe25c1b5": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/dashboard/views.py <module>",
       "site": {
@@ -7643,6 +7728,17 @@
         "target": "from __future__ import annotations"
       }
     },
+    "307aaf3d9d2528c90e8a24c68fe4040a3ffd933d4ce498f7e9b97e05fed4268e": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "755664880c949d551f9f8e62818e21d776344a76c228eaeb3d0b5c5a84ee08dc",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from brainlayer.pipeline.enrichment_results import parse_enrichment"
+      }
+    },
     "30870cb9349f10dca02e9f3f9fd73578d85d60e5a781b91cdc21394e7f680925": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/fallback_replay.py <module>",
       "site": {
@@ -7707,17 +7803,6 @@
         "owner": "<module>",
         "path": "scripts/kg_p2_crosstype_cleanup.py",
         "target": "import argparse"
-      }
-    },
-    "30e1d2587b61150c343a3b25403f39674d590199b64af29e1a555184da49f410": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "9952c4bf7602b7cb514809a7992c52e25e77ceae606c062fe692e061ab18f406",
-        "call_sha256": "b284ed258d82aea969a79b3f6049eeb4ae7ff2a70f11b7dfbc42061f0f306bf5",
-        "kind": "import_binding",
-        "owner": "<module>.validate",
-        "path": "scripts/retirement_report.py",
-        "target": "from scripts.retirement_inventory import fingerprint"
       }
     },
     "30e8e7e32838ca2acd51cfb3a76ebac17cc794c4889c290ccf7708af67637c55": {
@@ -7874,6 +7959,17 @@
         "target": "import subprocess"
       }
     },
+    "320a5a44c358774594b69ca77c0b9d5e4e1598ce85930f8f9ee7c1acd3f59983": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "028e5a38a7c8e678f7d1d74eac5ff29cfbc28433e875c400ac62b6ee1a8dcbf9",
+        "call_sha256": "b284ed258d82aea969a79b3f6049eeb4ae7ff2a70f11b7dfbc42061f0f306bf5",
+        "kind": "import_binding",
+        "owner": "<module>.validate",
+        "path": "scripts/retirement_report.py",
+        "target": "from scripts.retirement_inventory import fingerprint"
+      }
+    },
     "321459193c7a6cc2c47ba144e2fc9ca5232f462863d56ad53a72d78663d0d5c6": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/search_handler.py <module>",
       "site": {
@@ -7894,17 +7990,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "import hashlib"
-      }
-    },
-    "3271703ed5f53583cee6a072a3ec60021d309e063c7d9c2692b57c6f7e7d7799": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "5b9758f0491c349e9f47fe9d83ca05783f57a236e16932fdfb0ca40fdd500bc8",
-        "kind": "dynamic_code_or_import",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "importlib.import_module"
       }
     },
     "328228423b6a771040afff2a27663b85a6a4667ac6f776e4a789fe6937fcd5ed": {
@@ -7938,6 +8023,17 @@
         "owner": "<module>.T3Reader._connect",
         "path": "src/brainlayer/ingest/t3.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "32c133af2f454865b3cbcdfee1cb985c17595f21668a809b7784321b5d27974e": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "ac3a74d6dd975a8e8fe4b7f85fce794793a9355595b850e3926964913948d386",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import os"
       }
     },
     "32c492b24ec879ea798b67ebb7f2a04804d710a7ffdb2da2eaeb063c4320eabb": {
@@ -8278,17 +8374,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/maintenance.py",
         "target": "from pathlib import Path"
-      }
-    },
-    "3480d405ee2def4b06368fded236feefa86fb5b3948785e39cce364769c51daf": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import importlib.util"
       }
     },
     "3480ddd90b25c7354ffdc0d30b3d904e475c1311fd8e554195d39e3c150541ce": {
@@ -9190,6 +9275,17 @@
         "target": "from brainlayer.queue_merge import merge_queue_dirs"
       }
     },
+    "3af6d3d3888c870e765f217cf764de7bcda4edaeacd450b6e91f514f891f8a7b": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import json"
+      }
+    },
     "3afae062ccd899b5af5763519468c2cdcd3cc87b4e16c37876e58bbcb2f8b7a3": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/wal_checkpoint.py <module>",
       "site": {
@@ -9605,6 +9701,17 @@
         "target": "import collections"
       }
     },
+    "3da2f54db5d4cc3517f71ddbb6dadac63896169d77abc9a40dc270b0498b6a44": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "89ddb101b356a8378ccb16461276eb1596c6a3486b619f5cbeb0fef906d16608",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "import brainlayer"
+      }
+    },
     "3da6f39d882efba6d724c177cb834093f693f12aa60cfc773ec98d296317fcfe": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/runtime_store.py <module>",
       "site": {
@@ -9861,6 +9968,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/kg_judge.py",
         "target": "from datetime import datetime, timezone"
+      }
+    },
+    "3ee0922598a2aaa080312a3558be00a47e1f1c9b49e21fcb492a01ad40d5b044": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "b3ddaf10e8c2617b3d6e98cf775144ac0a215c65d21b02b0e0b99b7854d00531",
+        "call_sha256": "3de5d68a6ab6a1fd917052d2f64135720f85492c894c98552c49023b5d3f0023",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_native.py",
+        "target": "from scripts.retirement_artifact import command, digest, private_env"
       }
     },
     "3ee758febc1d61e193d47f249be889ab8770ab90830083e99ca83c86b9ce9df8": {
@@ -10363,17 +10481,6 @@
         "target": "from ..config import get_user_env_path"
       }
     },
-    "422d690ec85f2139b126b3d028b12364d770a39a10210c6604611d8ccb98d05e": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "from pathlib import Path"
-      }
-    },
     "423715c110b3ad7957b1851358032e45238d241d1b08de413640a0ebf44d63c3": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cloud_backfill.py <module>",
       "site": {
@@ -10580,17 +10687,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/mcp/search_handler.py",
         "target": "import glob"
-      }
-    },
-    "43550128d9117c2f043c0419e0faa232a9728d54d1d9c8c96f68c712631b4a38": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import json"
       }
     },
     "437326329cd3aefb2633d01c9b2256e83e2d3dbe77d5819cef112178210d62d5": {
@@ -10800,17 +10896,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/eval/phoenix_gate/cli.py",
         "target": "from __future__ import annotations"
-      }
-    },
-    "44d4bdd310c59492c53530d8c9e8f08154d1c6f7f060ba30b400b10333a4840d": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "356e6775028bc09e699d8b986887aaebc5e3e8e414a507fe911e3ba7da1264d9",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import argparse"
       }
     },
     "44db03d8e84cd60cd63a5cd8e4b08322b5fa37bddc07a2cd9aff3e5f54eb2236": {
@@ -11470,6 +11555,17 @@
         "target": "import sqlite3"
       }
     },
+    "491796ab740ab61333cf9b6655ccdc3747ae01b95d56ddde748b3bb0e73ec117": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import socket"
+      }
+    },
     "4922aedd69c8157e4726e343a534093854cf0cb1d82cead46a92c24d2ded1de0": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/__init__.py <module>",
       "site": {
@@ -11861,17 +11957,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/mcp/search_handler.py",
         "target": "from ..content_class import content_class_is_default_hidden, normalize_content_class"
-      }
-    },
-    "4b305c228d69b43c63ab7aa500d084931142bc2585b4fa96b8fe50c51898ae93": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "ab82af58493201f2e6ee92b1d78cabfef98600ff0db2369770f0c913622a8ec7",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "from scripts.retirement_inventory import check_policy"
       }
     },
     "4b3c60925f91fe569aa0cf4c282106f14c295f862696cfd92c17668f83e877c0": {
@@ -12358,17 +12443,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/sentiment.py",
         "target": "re.compile"
-      }
-    },
-    "4ded0f2699980e2ac771ac9738f0f25dcf0378f4bcbc8b76c5f5817e4fa06429": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "734591fe6aee43764b2c7feaf69f806fec1f5a58bedee51bc0cf5e1c5b36a4de",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import platform"
       }
     },
     "4e0545fa91fa4f438443d3099d96de8048114ed32f74476990b23325a686c7fe": {
@@ -13061,17 +13135,6 @@
         "target": "from ..sandbox_db import stop_sandbox"
       }
     },
-    "5218d01b2a5e754cca60d9a97505006fedcecfcac5e160077fbacfb885396c81": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "313294ed735ff5513a521efc2cd30b369d05809f5c2b807dfcc7dc97aa92a3a7",
-        "call_sha256": "f0f8efc58da939cb5ff4e4496324f7833df197bbf0cff9bb8f65df2f530254f9",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_report.py",
-        "target": "from collections import Counter"
-      }
-    },
     "522b0c22c098492bba61ee1075d0047acd107f26b5ec34f70ba2e7eaacaa27cf": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/dedup_entities.py <module>",
       "site": {
@@ -13268,6 +13331,17 @@
         "owner": "<module>.embed_hot_chunk",
         "path": "src/brainlayer/store.py",
         "target": "from .search_repo import clear_hybrid_search_cache"
+      }
+    },
+    "542c16db0088b19e8cc082c3df391399e3698c83284fbcf264d6a4890e7716ca": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "f7252e3c1dbe1d5edf1f34c020a58a05b55f706b2c1d9479eae91f9a9d4be275",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import sys"
       }
     },
     "5439baeca9499e2725a574eb7713afbcd91288b82046bfd8bf79f24c13963f57": {
@@ -13778,6 +13852,17 @@
         "target": "import os"
       }
     },
+    "571ea22e28bbcc64f1527c707b928ea8d4efed38fcfd137eae23a124c84f1424": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "734591fe6aee43764b2c7feaf69f806fec1f5a58bedee51bc0cf5e1c5b36a4de",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import platform"
+      }
+    },
     "574cbb0c9fe57cac9b59ee877c98db19080ac57b70cb3b7e76b3bdf8af48effd": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/health_check.py <module>._run_health_check_locked",
       "site": {
@@ -13858,17 +13943,6 @@
         "owner": "<module>.build_entity_session_edges",
         "path": "src/brainlayer/pipeline/brain_graph.py",
         "target": "file_to_session_id.get"
-      }
-    },
-    "580e87f64fd43ad5e7d82a9f72343f307153362c3d28ecbf8a6066bff34a8012": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import importlib.util"
       }
     },
     "581ba2598e7f7820597d12123c808cfe14b24c1ec1f43c42583bd8671c50545f": {
@@ -14003,6 +14077,17 @@
         "target": "from typing import Any, Dict, List, Optional"
       }
     },
+    "58e3df6c90b6a98f76bdce3316cd7fe08307854f7e780f98a59cfd9e6cf965ea": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "fb0a1565f6b3f0c0b725138009fcda0f36d19f0bbbdfb283ec6fea035c928e32",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from brainlayer.vector_store import VectorStore"
+      }
+    },
     "591d38b18d08067a6ae7d6127960533a2b43f416d7e165fcd4cc82badfd2c2fc": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/chunk.py <module>",
       "site": {
@@ -14100,17 +14185,6 @@
         "owner": "<module>",
         "path": "scripts/observability_eval.py",
         "target": "import hashlib"
-      }
-    },
-    "59e7b4eb1806eedbf3b3df4a839636047709042a92da0499f9c560120b21d5f4": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import json"
       }
     },
     "59f0f8dc847ef5ca77d85b7d5f06a6ca54c678e7144a6157dcef81b587b31b90": {
@@ -14454,6 +14528,17 @@
         "target": "import os"
       }
     },
+    "5bff3a105d4b659bc684a747d59e2429148bcf2ffd5d58437ffd2ee530379383": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "ab82af58493201f2e6ee92b1d78cabfef98600ff0db2369770f0c913622a8ec7",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "from scripts.retirement_inventory import check_policy"
+      }
+    },
     "5c0a9f32287b59c7416ec9a568c1b53c37dd05eeaca4931d3343e20d0b44827c": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg_repo.py <module>",
       "site": {
@@ -14644,17 +14729,6 @@
         "body_sha256": "a905d8e17c390568da2b51a1ba4db61fbdbddb46c2a39b9cef0cbbb35dcf204b",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBarDaemon/SecretScrubber.swift"
-      }
-    },
-    "5d3f132a94825048cf9c69c2d4609b50369081a99e4dafc9b41d7ac11c9c758f": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "15a0f496354d1631e194290066737e50beb9ae90b83386ea3a7f5fa55cd7645b",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import sitecustomize as guard"
       }
     },
     "5d50fa41df6adbeb9de27502b184f638db9f6cdd4d7a573452672415a0cf077f": {
@@ -15498,17 +15572,6 @@
         "target": "from dedup_coordination import register_chunks"
       }
     },
-    "61fdd0873dfa26e7690e7867c07ca4504dcbea17fa926d875d2d94cececf32ae": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import importlib"
-      }
-    },
     "62260405d41ef834a5685d24ffa664ef83ea8df733e3ccc307fe8a1051727315": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>._assert_read_pool_ram_clamp",
       "site": {
@@ -15529,28 +15592,6 @@
         "owner": "<module>",
         "path": "scripts/backfill_kg_promotion.py",
         "target": "from brainlayer.kg_promotion import main"
-      }
-    },
-    "623deb231227f3cee0a4b948e1a0b4ad61c6dce1414a79db46ae9422663eba73": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "d62e8638ef64ac2d3acb1facd12455d4c4b217506d6a04b97254d50a9c30c397",
-        "call_sha256": "94c94031351f548a833ba524d4335c140ecaec113cbebdebf1b279cd6269f024",
-        "kind": "child_process",
-        "owner": "<module>.probe_profile",
-        "path": "scripts/retirement_run.py",
-        "target": "subprocess.check_output"
-      }
-    },
-    "625d0316cc995b3b1d626abae5e6e6fb0608a7c49e78e40ffbdfa52716b06341": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "092cb77ae0770f1627b29bf41b2732722fbcc3a0e1d77a79674801800a2721d1",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import hashlib"
       }
     },
     "6268a35b1457291c2c443e7d37a9080e8bc851172da3d51eeec7801f4df406f4": {
@@ -15743,17 +15784,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/ingest/codex.py",
         "target": "from pathlib import Path"
-      }
-    },
-    "63ac1d5af3cc8dd38aaf84844e1957f4f8220c8eed520db42f9d662181fdb1bd": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "77879f6b790ad5e362f2ce51bf713408f93f3848bc76ade2d46f07c43cb8c51e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "from urllib.parse import unquote, urlsplit"
       }
     },
     "63aca5efcb15e817f05546eed56fb910e5b0edac70474b9981a57bfbf4cd6deb": {
@@ -15971,6 +16001,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/watcher.py",
         "target": "import logging"
+      }
+    },
+    "650101f2348d9923f9ecc00889f5ec87184660b5e1c66697370b9904fd413c39": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "356e6775028bc09e699d8b986887aaebc5e3e8e414a507fe911e3ba7da1264d9",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import argparse"
       }
     },
     "650141a26bce39063a7f70f0d689843b313a065b4ce36a12c1288ec02d4ad4c0": {
@@ -16408,6 +16449,17 @@
         "owner": "<module>.retag_t3_app_chunks",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "681a837e5d306d3dec31f7d3e99acb07361fec2f3620f94b839d66a3066949a4": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "4123c8e546e07497699149dda363dc8539207c3974a8a7d70400f73212c30178",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import zipfile"
       }
     },
     "6826f8b9ba1e610d53204cff29d9de60bf4d50f5e8a721431ddc77419c82dc66": {
@@ -17291,17 +17343,6 @@
         "target": "re.compile"
       }
     },
-    "6dba19d8358b5034806da3772a61579419d7d8e63d443d898311112bb521e287": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "80f21c52b46d18d972ae93db225486a900db10799e9bdba98d07dbcc819ff502",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import threading"
-      }
-    },
     "6dca078afac1f0ed805294caa7bd9863c15ce852069360a7da4c29e89d4b0f5c": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/drain.py <module>",
       "site": {
@@ -17750,6 +17791,17 @@
         "target": "import json"
       }
     },
+    "709e52628e3a5e1b39c1d8f9b7212610ce32203a6421e13c5c5d681507da4390": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "c3d05f53825b118b5d480cabed57ebea950d4a50931ba1c752dca104884af459",
+        "call_sha256": "e853f355ca3883026ad163e342714f5ecb480317819297204e94bde8c2c0f778",
+        "kind": "child_process",
+        "owner": "<module>.native_probe",
+        "path": "scripts/retirement_native.py",
+        "target": "subprocess.check_output"
+      }
+    },
     "70a6ace8442d3926f7e7e00b30132274ad817e5d74a3699759160cdfe059144c": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/eval/enrichment_quality_benchmark.py <module>",
       "site": {
@@ -17887,6 +17939,17 @@
         "target": "import math"
       }
     },
+    "71e06b192d2f817ab0d49f7b8c35c49682f61e94f8378f63143c372c1c5133ef": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "548b4e2745f3c8453c8c80f98a704dea2518fd5fe54d948ef19e6818bdc74f9c",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.launchd import hotlane_brainbar_daemon as hotlane"
+      }
+    },
     "71e73e1c7c528c758f48195e4e1a9ffb0dd30c3dd20ce140ecb3f2f608eb93cc": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.watch_backfill",
       "site": {
@@ -17929,17 +17992,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/mcp_socket_config.py",
         "target": "from pathlib import Path"
-      }
-    },
-    "72463369424e1440da005fcfbf96884f7ff9521b68db7d1c576bd4dd77d462ca": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "f8e24ee9b1b0f58e74fe0f070306d6d3e397283e6726b126540d1c4a2e8d5c1d",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import sqlite3"
       }
     },
     "7255346b85db8c48d109a5e3e7d3a91e4f6778ba3cafa6e7eed4c3cb2e5bc6c2": {
@@ -18201,6 +18253,28 @@
         "owner": "<module>",
         "path": "src/brainlayer/vector_store.py",
         "target": "from .search_repo import SearchMixin"
+      }
+    },
+    "73afe405c2e6339079915e041e4773fba1960c7bd6890366812cf355bbe888ea": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import importlib"
+      }
+    },
+    "73c7526d58943b80f5187f2dafaf6148606eff767bba62241251e4a809e97144": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "15a0f496354d1631e194290066737e50beb9ae90b83386ea3a7f5fa55cd7645b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import sitecustomize as guard"
       }
     },
     "73d31d5281d0001fc1dc0a46174595e8d25d740d44ff9f311a1756bf03dd1780": {
@@ -18511,6 +18585,17 @@
         "target": "from pathlib import Path"
       }
     },
+    "75d6b3d8d8f19aa19c474c901fc7e9fc54fa17803d0c4d3ced8586483fcdc3e9": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "990b97e34ca9023f97f7ca77540395ae30adf3e9ba7eb12c04279e10964b2c4a",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.cli import app"
+      }
+    },
     "75e58260c8735bbb9697b43194e5166a80bcba0b50230b087f5dae0802740f11": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.analyze_evolution",
       "site": {
@@ -18816,6 +18901,17 @@
         "target": "import math"
       }
     },
+    "7824af952175d4022ebb079f8fef265d47b2861a87b354072b4e774061dfd4eb": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "f7252e3c1dbe1d5edf1f34c020a58a05b55f706b2c1d9479eae91f9a9d4be275",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import sys"
+      }
+    },
     "7830974aaab3fe8a6d424b51d9acbbf6beb90ec103dbf0ed0b12b1e4cf649714": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg/__init__.py <module>",
       "site": {
@@ -18937,15 +19033,15 @@
         "target": "import leidenalg"
       }
     },
-    "7915467e7215e12bd6ba321df67de219bc1a8bf7a651ff73a17f2a2044953357": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+    "790b66616e09f76838c092f277dc0812f457fce2e21d7ccbe027be2cc248206a": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
-        "body_sha256": "a902423a7113e4ef4617198eedb04c56ae0c0bb13e7092a2d7aaf66971ff7c4d",
-        "call_sha256": "3de5d68a6ab6a1fd917052d2f64135720f85492c894c98552c49023b5d3f0023",
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "7d911b99fb01e72f664270141fbd54808298591caeb852fd25be553c93ecad9b",
         "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_native.py",
-        "target": "from scripts.retirement_artifact import command, digest, private_env"
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from brainlayer.pipeline.digest import digest_content"
       }
     },
     "792033eb6b5aa35cdcff232cb5a3cf735d12a43a19178463d19b62c71e47e23c": {
@@ -19113,6 +19209,17 @@
         "target": "from __future__ import annotations"
       }
     },
+    "7a3ba4263ac3b2a9249b56c48c1158d0b2a0abc84802b71bc997fb29b29b7d81": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "092cb77ae0770f1627b29bf41b2732722fbcc3a0e1d77a79674801800a2721d1",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import hashlib"
+      }
+    },
     "7a4d034088c1536758d17c84ef2cb7e18006050d0b6598cfebbe0c074fba2eea": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/style_index.py <module>",
       "site": {
@@ -19177,17 +19284,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/cloud_backfill.py",
         "target": "from .pipeline.enrichment_results import HIGH_VALUE_TYPES, parse_enrichment"
-      }
-    },
-    "7a7ebaf74d17fd8f05552d0fe54b122370b93ce08a56a7176880717192aa80e8": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "f86622d382a4da2a01df12bc04dbc4cc39dcf7a7252ed02caee8bdcf2686624c",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import builtins"
       }
     },
     "7a8a19a441eef1ed8b5a31c3e9b834c9d47290aae93a6a7d6e153b6c1e29c343": {
@@ -19757,17 +19853,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/chunk_origin_wipe.py",
         "target": "import sys"
-      }
-    },
-    "7e9561ae38a806e664ac02d84d65bd1744e392250d79f7eee658187d04a0910a": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "4123c8e546e07497699149dda363dc8539207c3974a8a7d70400f73212c30178",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import zipfile"
       }
     },
     "7ea7a76dbe550c65769c0744012cb1aa69ec274066e50d619fbbbff1af4ff983": {
@@ -22091,6 +22176,17 @@
         "target": "from __future__ import annotations"
       }
     },
+    "8c66dd865dc7632d87a846a51b2e3c8ceb66d9061bd964e33e40555974a301f2": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "3e3fb8a19d1ef454a00958e314d9ba73c3a6dd4a628b315f43867bd99364864f",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.watcher_bridge import create_flush_callback"
+      }
+    },
     "8c72d919e113ea34ff84b89621cb980f7a2adae5ef439839453ecfab878aac60": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/telemetry.py <module>",
       "site": {
@@ -22504,17 +22600,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/alarm.py",
         "target": "import json"
-      }
-    },
-    "8f42cd08406bb281c0f982e194ae88ed750f7e3e2a5080229bb134455ed44538": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "b461ae95c16c1e73a466fdd306ad6da693ead3a324e5d33627958cc4a2f47e36",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import shutil"
       }
     },
     "8f4fd2d2a25f2dfaca38d3ca5ffaf2e65c3c7408eb7f0b263614ea4c2c4cf308": {
@@ -23223,6 +23308,17 @@
         "target": "import sys"
       }
     },
+    "9425556d85ef02414ef66c8061a4865e1eabd61ee160b440fd0ead57a59072c9": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "85598e37ba96d6e396880fbaf8f1a487d6502e6df91ce2ca25c05c876437624e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "from datetime import datetime, timezone"
+      }
+    },
     "9435d79cbb3a483a1b6ea8b965e053730e997c23d176ffd2a1a4142da651b322": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/setup.py <module>",
       "site": {
@@ -23423,17 +23519,6 @@
         "target": "import tarfile"
       }
     },
-    "95e57e9d11d65cac9cbf96246a439da395655f2fe9774d1b1c90ca3860b7af6a": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import json"
-      }
-    },
     "95f004cbdabe460a9a06127808debe6fc9c3f826e12599c90217a65f8a8938ef": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.deploy_command",
       "site": {
@@ -23465,6 +23550,17 @@
         "owner": "<module>",
         "path": "scripts/launchd/throughput-watchdog.py",
         "target": "import selectors"
+      }
+    },
+    "9632a4e155c88d0f85d82f14d5d182a3f9c368e73f116f30774e9bdb997b561b": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "8058853a01547215468ceb8652964d4821f79273f307bd4d8f44df328511a258",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import asyncio"
       }
     },
     "963879abc8888813eeebe81c752325607bee4dce58bbe53598c222d98d5a4f63": {
@@ -23835,17 +23931,6 @@
         "target": "from pathlib import Path"
       }
     },
-    "98ab139e11438d8c2dddfda8c23a047f39e7b7c2969d312d2a0ea3e12e18d5f7": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "313294ed735ff5513a521efc2cd30b369d05809f5c2b807dfcc7dc97aa92a3a7",
-        "call_sha256": "6b81b4ca19c88ec507aad63f1f49291209368a9490113655a68e994c91d092c1",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_report.py",
-        "target": "import re"
-      }
-    },
     "98b9d0038cb44906c5b173920fef5f1516d83d4f4a0bed13a0fefcf58364e094": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/brainbar_hybrid_helper.py <module>",
       "site": {
@@ -24085,17 +24170,6 @@
         "target": "import functools"
       }
     },
-    "9ab15ab4713d559346cc16813e4396421b0b42937e4164742c86c638bd779368": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "313294ed735ff5513a521efc2cd30b369d05809f5c2b807dfcc7dc97aa92a3a7",
-        "call_sha256": "092cb77ae0770f1627b29bf41b2732722fbcc3a0e1d77a79674801800a2721d1",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_report.py",
-        "target": "import hashlib"
-      }
-    },
     "9ae7bd05f1d1b35496c9d8e2abe45e952aac4ba5cd592fafb749e78a5051d453": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>._get_vector_store",
       "site": {
@@ -24261,6 +24335,17 @@
         "target": "from brainlayer.pipeline.entity_extraction import ExtractedEntity, ExtractionResult, extract_entities_from_tags, extract_seed_entities"
       }
     },
+    "9bea7e5c17df19d940d2e624aafd631f1259ef8ebe282c1efcd3278b2562b9ce": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "fd641a77e26fcc4d878bd0b6908e2e5247de5cb4416273904ab7843178bb80e9",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from brainlayer.pipeline.longitudinal_analyzer import _ollama_generate, loopback_ollama_url"
+      }
+    },
     "9bf35e693eaf93793c7a231fae7dae96694917aed05506d86268848149607879": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/smoke/repogolem_mcp_transport_smoke.py <module>",
       "site": {
@@ -24371,6 +24456,17 @@
         "target": "re.compile"
       }
     },
+    "9cb052be517ae98a82c41804e56f21145b17a86613de802af7bb94d1e9563831": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "8a592fc88e5b7015ae827bfc6e0bdb59e152a6c12ee82fb3a01c765bf52a22d0",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "from scripts.retirement_artifact import build_wheel, command, install_profile, private_env, snapshot"
+      }
+    },
     "9cb8d7d166c7cbaee2d2063d156a0c45ce0fb72ffa720a935c3be020119e6161": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/watcher_bridge.py <module>",
       "site": {
@@ -24391,17 +24487,6 @@
         "owner": "<module>",
         "path": "scripts/rebuild_vec0_tables.py",
         "target": "from brainlayer.paths import get_db_path"
-      }
-    },
-    "9cde8a21a830e6ef74b83e62450576f07f404aa0918e016d2f078c6c69ab651b": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "c3192d49ab305e9a8a9eaa8fda684b32cd7f2a0b81768ecc5d1734c3a48c1b29",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "from brainlayer import embeddings"
       }
     },
     "9ce50e0c9c7e8d3e4d60acbff000c1f40bd606c28a78bac1da4a68b735507949": {
@@ -24520,28 +24605,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/dashboard/app.py",
         "target": "from .views import HomeView, MemoryView"
-      }
-    },
-    "9e3ac199bb8c4876d591b1f9396c5e0957529914c08c5b054a429d2da7cf4229": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "313294ed735ff5513a521efc2cd30b369d05809f5c2b807dfcc7dc97aa92a3a7",
-        "call_sha256": "33cf73b09279868112c7cc61a16bd009c74114ef22d3185362145850de766ec9",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_report.py",
-        "target": "from scripts.retirement_source import EXTENSIONS, ROOTS"
-      }
-    },
-    "9e3ca8dc6cfb47078611efa11032ad00f7b7b08070379f9ce6ec61922d26a644": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import socket"
       }
     },
     "9e4e051bf263da3d9f12034e5f340e16ed7a0a28f7711a7612d4d710a26e203a": {
@@ -24806,6 +24869,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/batch_extraction.py",
         "target": "import uuid"
+      }
+    },
+    "a0b871c7a060da7a9609960c88a6a0f58cd897ca19be3f06e6b6b28b0df2632a": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "b3ddaf10e8c2617b3d6e98cf775144ac0a215c65d21b02b0e0b99b7854d00531",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_native.py",
+        "target": "import json"
       }
     },
     "a0cb571139e0d39fc69346777c110015693f68f821d36adcdb452b98da95fe3d": {
@@ -25275,6 +25349,17 @@
         "target": "sqlite3.connect"
       }
     },
+    "a3969e5ee5e62179caffbc901402cf76e9b0d7107b82e8cdd3b856d09d2a9368": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "c3d05f53825b118b5d480cabed57ebea950d4a50931ba1c752dca104884af459",
+        "call_sha256": "3ca97d1b41c531d71349f3a2ce0be52fb0d7634f527f81f9ac8623d1395898b7",
+        "kind": "child_process",
+        "owner": "<module>.native_probe",
+        "path": "scripts/retirement_native.py",
+        "target": "platform.system"
+      }
+    },
     "a3ba6434606726931d16a03c8e66729c03f1e10f10944745a2fb18f31171c4a2": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/isolation_proof.py <module>",
       "site": {
@@ -25567,17 +25652,6 @@
         "owner": "<module>",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "import json"
-      }
-    },
-    "a5ca466ae06bfa315ba7e190aff740ecba786301ea3c9b903024131f3aa30bb5": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "21c5cdf5dccca90c7c0c579bb4f79f6b24bf10896155e59727498ec8c441aa7d",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "from scripts.retirement_source import source_scan"
       }
     },
     "a5ce878991b9007a6980bb1e6a463702da62013e264901071d6eb64c61637c73": {
@@ -25919,17 +25993,6 @@
         "owner": "<module>.find_heavy_ml_processes",
         "path": "src/brainlayer/reembed_backfill.py",
         "target": "subprocess.run"
-      }
-    },
-    "a802182a6e4271f594ea67dee6a9fcafb9c32735d236987dffadbcf843355dec": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "f7252e3c1dbe1d5edf1f34c020a58a05b55f706b2c1d9479eae91f9a9d4be275",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import sys"
       }
     },
     "a80839b75f3110a5f27abb4d62d2e56d2c4b84afa95ac2c3690ed95e98e5162f": {
@@ -26567,6 +26630,17 @@
         "target": "from .dedupe import compute_dedupe_fields, ensure_dedupe_schema, find_duplicate, merge_duplicate_chunk, merge_existing_chunk_seen, resolve_chunk_id"
       }
     },
+    "ac108710cac516e01ea0a777dd06e39563baef0005fab286af70ffce0d6fb897": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "b3ddaf10e8c2617b3d6e98cf775144ac0a215c65d21b02b0e0b99b7854d00531",
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_native.py",
+        "target": "import subprocess"
+      }
+    },
     "ac17c9bd7462d03d6a5a82c528ff530471b268a5e1f943730e5deaa0881d4022": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/config.py <module>",
       "site": {
@@ -26628,6 +26702,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/batch_extraction.py",
         "target": "from typing import Any, Callable, Optional"
+      }
+    },
+    "ac908fbf6569962f5de985536415dd5bac8484355d8b6650e24f88f79c72f7ac": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "5b9758f0491c349e9f47fe9d83ca05783f57a236e16932fdfb0ca40fdd500bc8",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.import_module"
       }
     },
     "ac9def6f3bc7030c41a6a040f13ceda245038432e534c22639015438a92f5de1": {
@@ -26959,6 +27044,17 @@
         "path": "brain-bar/Sources/BrainBar/HotkeyManager.swift"
       }
     },
+    "ae727a93298ac441f84a874a425828b682d21d0d047dc0889e10b80cae726b18": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "77879f6b790ad5e362f2ce51bf713408f93f3848bc76ade2d46f07c43cb8c51e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "from urllib.parse import unquote, urlsplit"
+      }
+    },
     "ae8b84d2fbb7511d3af9ebea7fcb160be9b5667f7a82d363128f2279e46285fd": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/brainbar_hybrid_helper.py <module>",
       "site": {
@@ -27033,17 +27129,6 @@
         "target": "from ..vector_store import VectorStore"
       }
     },
-    "aee3e78a334fe8d93d5a337921fb604113ac638767f05913be4e9daaff8b3a49": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "ac3a74d6dd975a8e8fe4b7f85fce794793a9355595b850e3926964913948d386",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import os"
-      }
-    },
     "af320083444c0ff714a16d78a6ec191e8325915fb1fa419733ed2dffe2a9d91d": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/train-setfit.py <module>",
       "site": {
@@ -27099,6 +27184,17 @@
         "target": "from .enrichment_prompts import build_external_prompt"
       }
     },
+    "af5e05106c1fa424d201ac368cf4358244fa2afb70c8e1fca9748b4488186357": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "092cb77ae0770f1627b29bf41b2732722fbcc3a0e1d77a79674801800a2721d1",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import hashlib"
+      }
+    },
     "af69f2c2fd2be13e87a3e83bdd43a7c1cbf1b8c40080d232e437dbb5e3f90ad1": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/ingest_denylist.py <module>",
       "site": {
@@ -27149,17 +27245,6 @@
         "owner": "<module>",
         "path": "scripts/resimhash_dedupe.py",
         "target": "import os"
-      }
-    },
-    "afdc9b1ac7e48e4329b539b7dede17cf9250142587f01254ca284d735ebe40c4": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import subprocess"
       }
     },
     "afee1cc128571b72b13980b6666188f8783b7ff83b5b9dd4b6d1ca4574d593fa": {
@@ -27445,6 +27530,17 @@
         "target": "from typing import Annotated, Any, Optional"
       }
     },
+    "b16fb00d2bed9f3caeadfb6ff2e331e051ab4fdbc714b6f6698ba1d9b1d82200": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import importlib.util"
+      }
+    },
     "b17e81fd85eb974bb75819be026c004a7ce7b05ae19588ee8fff7f7759fdcb61": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -27597,6 +27693,17 @@
         "owner": "<module>",
         "path": "hooks/dedup_coordination.py",
         "target": "import fcntl"
+      }
+    },
+    "b24449ebd3a293b28d4091ac8763af49a0aa920549068ce3e9d52a8bd800e222": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "from pathlib import Path"
       }
     },
     "b253cf6346531e35db46b087f383eac5dd948af065d7508375b052d1c0bb7f33": {
@@ -28355,17 +28462,6 @@
         "target": "subprocess.run"
       }
     },
-    "b7f95a6d7e1e4d5d0454cf9869cbc66d731dcd6443cb632e04a1ff0113e1e83f": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import importlib"
-      }
-    },
     "b80b34c741525605a1d6b84f9a2679c1f0e73553ce74b8a55a0eeb75e5f57710": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.watch",
       "site": {
@@ -28696,17 +28792,6 @@
         "target": "from brainlayer.paths import get_db_path"
       }
     },
-    "b958ed34c99407bc2f6c38b70c34cf4edd693b1ea85accec50c202e6bc6234f3": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import socket"
-      }
-    },
     "b9703a843de819e3d3a05e10a2da7865750dc2e0f89ddc35f06735618c57229f": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/provenance_autosupersede.py <module>",
       "site": {
@@ -28727,17 +28812,6 @@
         "owner": "<module>._trash_icloud_item",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "subprocess.run"
-      }
-    },
-    "b97900cb97693ec0b9f320626c93ed314ed55d24f9da2da50784a6b5e8aa0e44": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import subprocess"
       }
     },
     "b9850f264f59013d86b488969d1e518055765d5935cc38d91dd8a17e85125b1d": {
@@ -29708,6 +29782,17 @@
         "target": "from __future__ import annotations"
       }
     },
+    "c0ae4e9cd720013b20a8840cd08afe961278e5ddfdf37270e43fa4bc75fb5d21": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "6e12bad3697cd906975dd6dee5bc9841c9492b4e2ed081e8ec990d362a517372",
+        "call_sha256": "33cf73b09279868112c7cc61a16bd009c74114ef22d3185362145850de766ec9",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_report.py",
+        "target": "from scripts.retirement_source import EXTENSIONS, ROOTS"
+      }
+    },
     "c0e06104ba720ff25753edeab331fc1933d4c6a322e97b41c814162987898c10": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/watcher_bridge.py <module>.create_flush_callback.flush_to_db",
       "site": {
@@ -30014,6 +30099,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/brain_graph.py",
         "target": "import json"
+      }
+    },
+    "c321cb6aeb96add798dc3a8b2cd4a28bb68d48b297b7ca09356a5e88756f8dde": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "ccd6b022eafaf52cca85a0ac100e267604e61249de81219f5d2f13c9e8187b3d",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.drain import drain_once"
       }
     },
     "c32c7617239b22bdfc5dbaa15ca6fdf830df76006f10d02b089d2cfd5141f851": {
@@ -30420,6 +30516,17 @@
         "target": "from pathlib import Path"
       }
     },
+    "c5604eb2c3413a22fb8731fa3ceb44fa3faa91f350e2659e852bcab677504e40": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "ba4cd4c269de929d2571de52da51d3e84a373994c3292dee853ae374b33f17c1",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from brainlayer.enrichment_replay import _apply_enrichment"
+      }
+    },
     "c567eb17488950ce1bfcd9f5e359fa1e94f0bdbd0d567508b9dc3b6bd4bcfc87": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/verify_source_class_visibility.py <module>",
       "site": {
@@ -30440,6 +30547,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/dedupe_merge.py",
         "target": "import sys"
+      }
+    },
+    "c57fe120d6813b69bb130d5bae42d07ca24345798e43dd491b9e98072826ddd7": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "b3ddaf10e8c2617b3d6e98cf775144ac0a215c65d21b02b0e0b99b7854d00531",
+        "call_sha256": "734591fe6aee43764b2c7feaf69f806fec1f5a58bedee51bc0cf5e1c5b36a4de",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_native.py",
+        "target": "import platform"
       }
     },
     "c5995ca8eb97d86b62ad7105e1d291afd97a32c44ef3dc95c0c1730782d8d602": {
@@ -31305,6 +31423,17 @@
         "target": "import re"
       }
     },
+    "caba4ca0952505a1950297f7585474415894d3ee51221bad84db9041ffc37496": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "86175cabb951934867b67fc0451348b5b98f3da305b7b9e865fce85cf12ab8bf",
+        "call_sha256": "8058853a01547215468ceb8652964d4821f79273f307bd4d8f44df328511a258",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "import asyncio"
+      }
+    },
     "cabfc14b1f6e3707d52b55226d73511533ce40dcbe993253699140592c5fc4b4": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/digest.py <module>",
       "site": {
@@ -31369,28 +31498,6 @@
         "owner": "<module>.main",
         "path": "src/brainlayer/hook_python.py",
         "target": "import json"
-      }
-    },
-    "cb585dead114fc8da0d6c3330015e3ba6e538380da9c2030453a0d86530b4df9": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "ac3a74d6dd975a8e8fe4b7f85fce794793a9355595b850e3926964913948d386",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import os"
-      }
-    },
-    "cb5e35f3b852fd435bd76ea88f0455172db9f5d3880cd3718fb751b466aa305d": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "19cad813dd36e7d2d28e34158c09f15d31fc9763ab13c9e42e639b952e3b32f6",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import importlib.metadata"
       }
     },
     "cb6776cf1e2de8ea06bbad739217e7448c731c6b32117819a8f3642ad98ca443": {
@@ -31512,6 +31619,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/job_alerts.py",
         "target": "from brainlayer.paths import get_db_path"
+      }
+    },
+    "cc80d4c131e36093ae1b881fe93c4e593b0dcf1661101595a857636f788262d4": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "19cad813dd36e7d2d28e34158c09f15d31fc9763ab13c9e42e639b952e3b32f6",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import importlib.metadata"
       }
     },
     "cc8553757fd20d838afe0a793e3724182a02c8a29acb2f068841c4d53e64d43d": {
@@ -31762,6 +31880,17 @@
         "owner": "<module>",
         "path": "scripts/benchmark_runtime_store_open.py",
         "target": "from __future__ import annotations"
+      }
+    },
+    "ce21dd386037e69f492a252fffd5e259710e7096144af05fbc36795fcaf85c29": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import json"
       }
     },
     "ce230c3190df1a4f5d15dc0122e4fc64a5008528b7501ca7b662974fe5fb2186": {
@@ -32245,6 +32374,17 @@
         "target": "from pathlib import Path"
       }
     },
+    "d13666b37f1442f660e28991d5501c298cb7a3f018c4099501c1c11784605f99": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "6e12bad3697cd906975dd6dee5bc9841c9492b4e2ed081e8ec990d362a517372",
+        "call_sha256": "f0f8efc58da939cb5ff4e4496324f7833df197bbf0cff9bb8f65df2f530254f9",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_report.py",
+        "target": "from collections import Counter"
+      }
+    },
     "d1426ab8fe43479d8878b4fe4347618eca230d127f266f23a4649e9a2f694f84": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/sanitize.py <module>",
       "site": {
@@ -32303,6 +32443,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/search_fanout.py",
         "target": "from mcp.types import CallToolResult"
+      }
+    },
+    "d161399f22907403957b0c5b3e0f9f6515d8c4ed0498f6019fa6cc9e43f91484": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "6e12bad3697cd906975dd6dee5bc9841c9492b4e2ed081e8ec990d362a517372",
+        "call_sha256": "6b81b4ca19c88ec507aad63f1f49291209368a9490113655a68e994c91d092c1",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_report.py",
+        "target": "import re"
       }
     },
     "d1620e946c08fa64d16cdd3a1ffb5bf4d60b51e24263a8144ccd0a6dbce51806": {
@@ -32566,6 +32717,17 @@
         "target": "import sqlite_vec"
       }
     },
+    "d31521484ad1cec730d05384ba2c7463969a9aea1a057cd4123d680c53ec5bb7": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import importlib"
+      }
+    },
     "d318c83bf94d4f9ee2b0445ad7ae7e18c0e4237144e71c1d03665e39496a0689": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.flush",
       "site": {
@@ -32663,17 +32825,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/dashboard/search.py",
         "target": "from ..vector_store import VectorStore"
-      }
-    },
-    "d3e0a9c2c19191065da8ecb2ac2e422ec18050e15b7854ed5c97b2cdc9f9791b": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "527b6b89bbfde91e76a2012375e214194bab69fb96e5192a1494297d3748f361",
-        "call_sha256": "8058853a01547215468ceb8652964d4821f79273f307bd4d8f44df328511a258",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_probe.py",
-        "target": "import asyncio"
       }
     },
     "d3e515c82c7edf4fe5937853691c0c285d6890c3d340e47c16c29230f7e8e5bd": {
@@ -32805,17 +32956,6 @@
         "target": "from ..scoping import resolve_project_scope"
       }
     },
-    "d4b486ead1151c255a9e078852075a051d42fcc2996acf49e72a12e014785f97": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "68a176bd942f9300024c265cef0fbdc3618f53a9427ec84fbbc02cd7a2595500",
-        "call_sha256": "f86622d382a4da2a01df12bc04dbc4cc39dcf7a7252ed02caee8bdcf2686624c",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import builtins"
-      }
-    },
     "d4c0bb799a9c8ae539fcba5efadaf4ec634a778ff36cdc965f94c87c20a72052": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli_new.py <module>",
       "site": {
@@ -32836,6 +32976,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/analyze_communication.py",
         "target": "from collections import Counter"
+      }
+    },
+    "d4e1a8a37a005b514f1e7251a560287ddb95ed7ca21bb6cfb0e90aa27465f795": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import socket"
       }
     },
     "d4f0dea6b5db258650310704157f57f8d85eadcb4496384b67d21673431e6093": {
@@ -32902,17 +33053,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/secret_scrub.py",
         "target": "re.compile"
-      }
-    },
-    "d590c6cd45197e8d3610cc03dc9c712b1adf82343282c325dfedcefa4d28299a": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "a902423a7113e4ef4617198eedb04c56ae0c0bb13e7092a2d7aaf66971ff7c4d",
-        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_native.py",
-        "target": "from pathlib import Path"
       }
     },
     "d5993deb6dfcfd6c558d99359f7b3a9318436089fd0ccc99701dc6b5d575f232": {
@@ -33198,6 +33338,17 @@
         "target": "from brainlayer.eval.phoenix_gate.cli import main"
       }
     },
+    "d78929ed0c5bd9251f0cbfc585f837a0eecc7e4b54cd74b9a24b9ece0c56838a": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "6e12bad3697cd906975dd6dee5bc9841c9492b4e2ed081e8ec990d362a517372",
+        "call_sha256": "85598e37ba96d6e396880fbaf8f1a487d6502e6df91ce2ca25c05c876437624e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_report.py",
+        "target": "from datetime import datetime, timezone"
+      }
+    },
     "d78f374b374fcebfa07f62686c2b7c5b7f5bf42db9d89772809267fed2e1a968": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/benchmark_runtime_store_open.py <module>",
       "site": {
@@ -33207,6 +33358,17 @@
         "owner": "<module>",
         "path": "scripts/benchmark_runtime_store_open.py",
         "target": "import time"
+      }
+    },
+    "d7983532c6f3d28a51e060131dad412594922abc402c47767ebaa1104ddaa7f8": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import subprocess"
       }
     },
     "d7b19e18d05671cd9386feff75b7a44dd52c5edb14352939c2ada9130e460009": {
@@ -33240,17 +33402,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/db_shrink.py",
         "target": "from typing import Any"
-      }
-    },
-    "d7ef6250e17d0b257456743da9b05e5921ecebe458c9674de9f8fa51c50dbf14": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "755664880c949d551f9f8e62818e21d776344a76c228eaeb3d0b5c5a84ee08dc",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "from brainlayer.pipeline.enrichment_results import parse_enrichment"
       }
     },
     "d800921b6274c1af32d30a26242826f8e3c9447c2a1cae341ce6615104d8a9c3": {
@@ -33965,17 +34116,6 @@
         "target": "from __future__ import annotations"
       }
     },
-    "dd3dbcda6014062c3da444a7222b7a6037110429029e02cfe2ab3ad3a97f8f0b": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "313294ed735ff5513a521efc2cd30b369d05809f5c2b807dfcc7dc97aa92a3a7",
-        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_report.py",
-        "target": "from pathlib import Path"
-      }
-    },
     "ddaee4b0d7053e7d2ff22e565d6151a78c49fcbb6d473f1b739324ed4826ae8c": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>.fallback_inventory",
       "site": {
@@ -34031,6 +34171,17 @@
         "target": "import re"
       }
     },
+    "dde192d7ae9c68052469cb6afb39abc89f59b96e301cacf8df923c880970c75e": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "86175cabb951934867b67fc0451348b5b98f3da305b7b9e865fce85cf12ab8bf",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "import json"
+      }
+    },
     "dde9f64421b3aa19a29a5cc2db8c02a9c67d6c68d7640d7404699412eae417cd": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/extract.py <module>",
       "site": {
@@ -34064,6 +34215,17 @@
         "target": "sqlite3.connect"
       }
     },
+    "de0d06b16fad975d169203ff45d84f11958fe926f67fdf816f6bb0b045280ebd": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "351804be13ff997338e5a130ee4fd9a274ca256cfa5dfcbac2e9d8242dc3f3fb",
+        "call_sha256": "c0560f0b84826e5dd4dc1e867e5cc1446fa1927102fab791cfddf4ef784e76b0",
+        "kind": "import_binding",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "from retirement_surfaces import installed_surfaces"
+      }
+    },
     "de1ba1da58f087df51c08a9af1e716bda889cc545f079db11c8bcfecaecbe844": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/benchmark_runtime_store_open.py <module>",
       "site": {
@@ -34095,17 +34257,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/index_new.py",
         "target": "from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id"
-      }
-    },
-    "de4e62ad6d2ea813befe1696cb08e797c63a6441916f0ebb56e1e380d9c9f148": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "fb0a1565f6b3f0c0b725138009fcda0f36d19f0bbbdfb283ec6fea035c928e32",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "from brainlayer.vector_store import VectorStore"
       }
     },
     "de6da3f1773def4e7d54a4f8cba3bee3032a641120ef769ed034865d92ca1b34": {
@@ -34229,6 +34380,17 @@
         "target": "from __future__ import annotations"
       }
     },
+    "df41d6f386130fe254f91651402f6662c4b71d9d7c0d002264a8d7f9aa8936c9": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "83c6e650fa1f94d54eba0229985a69412fb53dabe0c195540fb2acd9931fcc6a",
+        "call_sha256": "c8bbe7e194cd28b4eca716819efe8e65976bdcab894cccd4c35d14a9d14fdad2",
+        "kind": "import_binding",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from typer.testing import CliRunner"
+      }
+    },
     "df5462ae467f03f11fa10ed2cdcf4abf726465c37c94679e9ab6bf6eb34f69ad": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/retro_quarantine_self_pollution.py <module>",
       "site": {
@@ -34271,17 +34433,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/correction_mining.py",
         "target": "re.compile"
-      }
-    },
-    "df8e931005f36c3cb88233244f7294861cf120d3647a8c598d696dff7b891f8e": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "fd641a77e26fcc4d878bd0b6908e2e5247de5cb4416273904ab7843178bb80e9",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "from brainlayer.pipeline.longitudinal_analyzer import _ollama_generate, loopback_ollama_url"
       }
     },
     "df8fe311a42e522f2b25898baea68db0b1b3466d326e0786cbc7df2451cc1d66": {
@@ -34394,6 +34545,17 @@
         "target": "import tempfile"
       }
     },
+    "e00d1eba437edce1a86a2d2714f159ed9c53e82d37d0dd200655f56dff1464b4": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "21c5cdf5dccca90c7c0c579bb4f79f6b24bf10896155e59727498ec8c441aa7d",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "from scripts.retirement_source import source_scan"
+      }
+    },
     "e0523ab2c4085d51a09e3589ee82ba640562241bb143b9c3d77cc6b7176869bb": {
       "non_cloud_purpose": "Retained local longitudinal analysis; Ollama restricted to numeric loopback, no proxies or redirects",
       "site": {
@@ -34425,6 +34587,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/clustering.py",
         "target": "from typing import TYPE_CHECKING, Optional"
+      }
+    },
+    "e07cec0fb22f47e252d59cdc1729b4ea72dcabf59b53f2678d2a0e3d4ff1778b": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "4085f933fe0b742b2ddecdffbe7b36f8bd0b4f06bfba4aaa1d7648555967830c",
+        "call_sha256": "94c94031351f548a833ba524d4335c140ecaec113cbebdebf1b279cd6269f024",
+        "kind": "child_process",
+        "owner": "<module>.probe_profile",
+        "path": "scripts/retirement_run.py",
+        "target": "subprocess.check_output"
       }
     },
     "e0af1b6a18b8ccf8e1d387d9739e9446974e7ea2ff5bd9af2d67a43e97408f14": {
@@ -34820,14 +34993,6 @@
         "target": "from mcp.types import CallToolResult, TextContent"
       }
     },
-    "e3493e3098c0b2056d5246488721a2038647894166b8d756039c007c0e59e128": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "2dc6925f188a070f52b95c81f7e0ea8d9c6ed31e028df5b6e3b8a302911f81c1",
-        "kind": "non_python_source",
-        "path": "scripts/installed_import_gate.sh"
-      }
-    },
     "e358ac9fbb6f73ddf1366d26b1fbf4c96b93dd1c99bc9e7cb96f63e096ee6390": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/store_handler.py <module>._store",
       "site": {
@@ -34977,17 +35142,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/job_lifecycle_health.py",
         "target": "re.compile"
-      }
-    },
-    "e4514aa11de10dc15591f2a3cefda429f7b0b2182ef28e0196a243cf1f8613fa": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "092cb77ae0770f1627b29bf41b2732722fbcc3a0e1d77a79674801800a2721d1",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import hashlib"
       }
     },
     "e45626fa410c6f6968119cd051fcdc92f9aeae109b05185bb214f98b0128e38c": {
@@ -36440,6 +36594,17 @@
         "target": "re.compile"
       }
     },
+    "eeb020a4b5c21a358f30b511db03c197f1f5079d94f915571bd6e2394bb20446": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "d0760c28c979233b1a0c2c8497d38487a06269236e3ab83d82feee15f876e70a",
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import importlib.util"
+      }
+    },
     "eedb6173d36c72d43db0ca899f25c2aa0627e039ac7fdd12f600dfac35f0e865": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>._get_embedding_model",
       "site": {
@@ -36449,17 +36614,6 @@
         "owner": "<module>._get_embedding_model",
         "path": "src/brainlayer/mcp/_shared.py",
         "target": "from ..embeddings import get_embedding_model"
-      }
-    },
-    "eee0312770bd2b1257513adac0bb175c45f8f7cb10cae73e986049db9e2a6bdb": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "8a592fc88e5b7015ae827bfc6e0bdb59e152a6c12ee82fb3a01c765bf52a22d0",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "from scripts.retirement_artifact import build_wheel, command, install_profile, private_env, snapshot"
       }
     },
     "eeeaf57f89da00acb59eabc2a37c299b6390344f5782a9b8010909272d5bd564": {
@@ -36743,6 +36897,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/dedupe_merge.py",
         "target": "import re"
+      }
+    },
+    "f0d4c8f14034b44c343402a7cc567639305c298a90d02d5f81952b70c6940b4e": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "76d99ff77d8dd9605ed1194b5a2610e49f867c54f2b8e2e24faee932f92987d7",
+        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "from pathlib import Path"
       }
     },
     "f1082873e2b5ac4b946776ed5c412ab7f46d76c58a2d576de94d5aaa70817973": {
@@ -37116,17 +37281,6 @@
         "target": "from .chunk_origin import detect_chunk_origin"
       }
     },
-    "f3ca512bc9e9453c33a26541e37b1421cc4a9459fe31c65c4bb8d429ab08c386": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "e1341094c009c17557ccbe3b7c8a025f6fbfacab06b4207a67b567d0c6e12a75",
-        "call_sha256": "7d911b99fb01e72f664270141fbd54808298591caeb852fd25be553c93ecad9b",
-        "kind": "import_binding",
-        "owner": "<module>.run",
-        "path": "scripts/retirement_probe.py",
-        "target": "from brainlayer.pipeline.digest import digest_content"
-      }
-    },
     "f3cc74a031affdefc5aac1b16fd9f9ba8363edbf43f35d5e4aa9c52813fe13d4": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/rebuild_vec0_tables.py <module>",
       "site": {
@@ -37421,17 +37575,6 @@
         "target": "import random"
       }
     },
-    "f595f708f15edd9e8df4faef0f20b758ec9df1529a307c023af157d1bfc93ea9": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "a902423a7113e4ef4617198eedb04c56ae0c0bb13e7092a2d7aaf66971ff7c4d",
-        "call_sha256": "734591fe6aee43764b2c7feaf69f806fec1f5a58bedee51bc0cf5e1c5b36a4de",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_native.py",
-        "target": "import platform"
-      }
-    },
     "f59b186c9ec6b2796ccde921f0895c24cea31b9f8b0c77a244cf5ccbcd232da9": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/ingest/codex.py <module>.ingest_codex_session",
       "site": {
@@ -37553,17 +37696,6 @@
         "target": "from collections.abc import Iterable"
       }
     },
-    "f6fb7e044d5516be78a32fd202703cc8dc9217b31ac12253f3edb10722ebc824": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "from pathlib import Path"
-      }
-    },
     "f731f35a3ab172fdd767a0dee5327069799736a231179e1340cd7a238d5da64a": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/store_handler.py <module>",
       "site": {
@@ -37639,6 +37771,17 @@
         "owner": "<module>",
         "path": "scripts/d2_project_backfill.py",
         "target": "from brainlayer.vector_store import VectorStore"
+      }
+    },
+    "f7730e28766a6d9495721b0b9741b6ee2096c740f810a6dcaa33253aad8a1101": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "body_sha256": "6e12bad3697cd906975dd6dee5bc9841c9492b4e2ed081e8ec990d362a517372",
+        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_report.py",
+        "target": "from pathlib import Path"
       }
     },
     "f78e69ac847b4229b9b744efb642d425b609ec4b524b6f6c4d7b6078d152cdcb": {
@@ -37771,17 +37914,6 @@
         "owner": "<module>.load_credentials",
         "path": "src/brainlayer/drive_credentials.py",
         "target": "from google.auth.transport.requests import Request"
-      }
-    },
-    "f839cf0fbbd7776958bee700a6c89f2a8876d3a3f862c1d7f0ad5cda741b0996": {
-      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
-      "site": {
-        "body_sha256": "ba2beec2fd3f38de8a3b3a9e21120399ac03ac2114169ba6e6399fc42db396ef",
-        "call_sha256": "f7252e3c1dbe1d5edf1f34c020a58a05b55f706b2c1d9479eae91f9a9d4be275",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_run.py",
-        "target": "import sys"
       }
     },
     "f854c33ca963002fe1fef2b965a4950be1e18f517d47cde4d1be70c13b9a656a": {
@@ -38095,6 +38227,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/dashboard/search.py",
         "target": "from collections import Counter, defaultdict"
+      }
+    },
+    "fa7552850b9f3dced431a0ae1a8eff0a1f2b14a9c4a98fb3a49cdead6fff38e3": {
+      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
+      "site": {
+        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
+        "call_sha256": "f8e24ee9b1b0f58e74fe0f070306d6d3e397283e6726b126540d1c4a2e8d5c1d",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import sqlite3"
       }
     },
     "faa541cdf406dfa5e42e1990e205801b0da2eba5d8d48bbe1695f832be3ca885": {

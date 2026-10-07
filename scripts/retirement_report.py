@@ -130,6 +130,19 @@ def validate(report, expected_sha, now=None):
         need(profile["sdk"] == {"status": "PASS", "importable": [], "declared": []}, "SDK absence not measured")
         need(profile["guard"] == "private sitecustomize + OS deny network", "OS boundary absent")
         need(bool(profile["core"]) and bool(profile["local_adapter"]), "preservation/local endpoint checks missing")
+        need(
+            set(profile["surfaces"])
+            == {
+                "cli-retirement",
+                "library-mcp-retirement",
+                "installed-hotlane-vector",
+                "historical-replay",
+                "saved-result-drain",
+                "watcher-flush",
+                "drive-oauth-imports",
+            },
+            "installed entrypoint matrix incomplete",
+        )
     native = report["native"]
     need(native["status"] == "PASS" and native["tests"] == 3, "native matrix incomplete")
     need(

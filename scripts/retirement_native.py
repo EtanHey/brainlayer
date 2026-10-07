@@ -2,6 +2,7 @@
 
 import json
 import platform
+import subprocess
 from pathlib import Path
 
 from scripts.retirement_artifact import command, digest, private_env
@@ -14,17 +15,24 @@ def native_probe(source: Path, work: Path) -> dict:
     scratch = work / "swift-build"
     package = source / "brain-bar"
     command(
-        ["swift", "test", "--build-tests", "--scratch-path", str(scratch)],
+        ["swift", "build", "--build-tests", "--scratch-path", str(scratch)],
         package,
         env,
         work / "native-build.log",
         1800,
     )
-    binaries = list(scratch.glob("**/BrainBarPackageTests.xctest/Contents/MacOS/BrainBarPackageTests"))
+    binaries = [
+        path
+        for name in ("BrainBarPackageTests", "BrainBarTests")
+        for path in scratch.glob(f"**/{name}.xctest/Contents/MacOS/{name}")
+    ]
     # Swift's debug symlink may name the same binary a second time.
     binaries = sorted({path.resolve() for path in binaries})
     if len(binaries) != 1:
         raise ValueError("Native test product missing/ambiguous")
+    host = subprocess.check_output(["xcrun", "--find", "xctest"], env=env, text=True).strip()
+    if not Path(host).is_file():
+        raise ValueError("Actual XCTest host unavailable")
     dylib = work / "retirement-interpose.dylib"
     command(
         ["clang", "-dynamiclib", str(source / "scripts/retirement_interpose.c"), "-o", str(dylib)],
@@ -46,8 +54,10 @@ def native_probe(source: Path, work: Path) -> dict:
             "(version 1)(allow default)(deny network*)",
             "/usr/bin/env",
             "DYLD_INSERT_LIBRARIES=" + str(dylib),
-            str(binaries[0]),
+            host,
+            "-XCTest",
             "BrainBarTests.RetirementRatchetTests",
+            str(binaries[0].parents[2]),
         ],
         package,
         env,

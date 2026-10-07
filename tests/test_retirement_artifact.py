@@ -14,7 +14,11 @@ def fixture_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     env = private_env(tmp_path / "home")
-    for args in (["init", "-q"], ["config", "user.name", "Fixture"], ["config", "user.email", "fixture@example.invalid"]):
+    for args in (
+        ["init", "-q"],
+        ["config", "user.name", "Fixture"],
+        ["config", "user.email", "fixture@example.invalid"],
+    ):
         subprocess.run(["git", *args], cwd=repo, env=env, check=True, capture_output=True)
     (repo / "module.py").write_text("VALUE = 1\n")
     (repo / "alias.py").symlink_to("module.py")

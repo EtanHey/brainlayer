@@ -53,6 +53,15 @@ def valid():
             "guard": "private sitecustomize + OS deny network",
             "core": "tested",
             "local_adapter": "tested",
+            "surfaces": [
+                "cli-retirement",
+                "library-mcp-retirement",
+                "installed-hotlane-vector",
+                "historical-replay",
+                "saved-result-drain",
+                "watcher-flush",
+                "drive-oauth-imports",
+            ],
         }
         for name in ("default", "dev")
     ]

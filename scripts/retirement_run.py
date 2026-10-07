@@ -43,6 +43,8 @@ def probe_profile(profile, wheel, source_sha, dependency_sha, work, harness):
         RETIREMENT_EVENTS=str(events),
         RETIREMENT_PHASE="candidate",
         BRAINLAYER_READ_POOL_SIZE="1",
+        RETIREMENT_OS_BOUNDARY="1",
+        BRAINLAYER_ENRICHMENT_TAXONOMY_GIT_SHA=source_sha,
     )
     for key in (
         "GOOGLE_API_KEY",

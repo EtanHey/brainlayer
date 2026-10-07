@@ -210,6 +210,12 @@ def run(config):
         )
     finally:
         store.close()
+    # Only the identity-checked fixture directory is added, never src/ or an
+    # editable package. Every brainlayer origin remains in the private wheel.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from retirement_surfaces import installed_surfaces
+
+    surfaces = installed_surfaces(Path(os.environ["HOME"]))
     sdk = inspect_sdk(config["require_sdk_absence"])
     events = [json.loads(line) for line in Path(os.environ["RETIREMENT_EVENTS"]).read_text().splitlines()]
     require(
@@ -235,6 +241,7 @@ def run(config):
         "controls": positive_count,
         "events": events,
         "sdk": sdk,
+        "surfaces": surfaces,
         "core": "actual installed imports, Sanitizer/prompt/parser, local bge routing; actual temporary digest persistence with synthetic vectors",
         "local_adapter": "remote/credential/path overrides rejected before any send; localhost resolved numerically",
     }
