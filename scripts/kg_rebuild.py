@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
-"""Batch KG rebuild — two-tier entity extraction over enriched chunks.
+"""Local KG rebuild from seed matches and stored tags.
 
-Tier 1: Local extraction (seed matching + tag parsing) — zero API calls
-Tier 2: Groq NER with multi-chunk batching — rate-limited API calls
+Usage: python3 scripts/kg_rebuild.py --tier1
+       python3 scripts/kg_rebuild.py --stats
 
-Usage:
-    # Tier 1 only (fast, no API calls):
-    python3 scripts/kg_rebuild.py --tier1
-
-    # Tier 2 only (Groq NER, rate-limited):
-    python3 scripts/kg_rebuild.py --tier2 --limit 5000
-
-    # Both tiers:
-    python3 scripts/kg_rebuild.py --tier1 --tier2 --limit 5000
-
-    # Resume Tier 2 from where it left off:
-    python3 scripts/kg_rebuild.py --tier2 --resume
+Direct Groq NER (Tier 2) is retired. Existing checkpoints are left untouched.
 """
 
 import argparse
@@ -31,19 +20,11 @@ from brainlayer.paths import get_db_path
 from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
 from brainlayer.pipeline.entity_extraction import (
     ExtractedEntity,
-    ExtractedRelation,
     ExtractionResult,
     extract_entities_from_tags,
     extract_seed_entities,
 )
-from brainlayer.pipeline.groq import GroqModelUnavailableError
 from brainlayer.pipeline.kg_extraction import process_extraction_result
-from brainlayer.pipeline.kg_extraction_groq import (
-    RateLimiter,
-    build_multi_chunk_ner_prompt,
-    call_groq_ner,
-    parse_multi_chunk_response,
-)
 from brainlayer.vector_store import VectorStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -173,134 +154,6 @@ def tier1_seed_and_tags(store: VectorStore, batch_size: int = 5000) -> dict:
     return stats
 
 
-def tier2_groq_ner(
-    store: VectorStore,
-    limit: int = 5000,
-    chunks_per_call: int = 5,
-    resume: bool = False,
-) -> dict:
-    """Tier 2: Groq NER extraction for high-importance chunks.
-
-    Batches multiple chunks per API call for efficiency.
-    """
-    logger.info("=== Tier 2: Groq NER Extraction ===")
-
-    progress = load_progress() if resume else {"tier2_processed": 0}
-
-    cursor = store._read_cursor()
-    # Use conservative rate limit — enrichment pipeline shares the 30 RPM quota
-    rate_limiter = RateLimiter(max_per_minute=10)
-
-    # Get high-importance enriched chunks not yet KG-extracted
-    # Use a LEFT JOIN to skip chunks already linked to entities
-    query = """
-        SELECT c.id, c.content
-        FROM chunks c
-        LEFT JOIN kg_entity_chunks ec ON c.id = ec.chunk_id
-        WHERE c.summary IS NOT NULL AND c.summary != ''
-          AND c.importance >= 6
-          AND ec.chunk_id IS NULL
-          AND c.content IS NOT NULL
-          AND LENGTH(c.content) > 50
-        ORDER BY c.importance DESC, c.id
-        LIMIT ?
-    """
-
-    stats = {
-        "api_calls": 0,
-        "chunks_processed": 0,
-        "entities_found": 0,
-        "relations_found": 0,
-        "errors": 0,
-    }
-
-    while stats["chunks_processed"] < limit:
-        rows = list(cursor.execute(query, (chunks_per_call,)))
-        if not rows:
-            logger.info("No more unprocessed chunks")
-            break
-
-        chunks = [{"id": r[0], "content": r[1]} for r in rows]
-
-        try:
-            rate_limiter.wait_if_needed()
-            prompt = build_multi_chunk_ner_prompt(chunks)
-            response = call_groq_ner(prompt)
-
-            if not response:
-                logger.warning("Empty Groq response, skipping batch")
-                stats["errors"] += 1
-                continue
-
-            parsed_results = parse_multi_chunk_response(response)
-            stats["api_calls"] += 1
-
-            for chunk_result in parsed_results:
-                chunk_id = chunk_result["chunk_id"]
-                # Find the original content for span matching
-                content = ""
-                for c in chunks:
-                    if c["id"] == chunk_id:
-                        content = c["content"]
-                        break
-
-                entities = []
-                for ent_data in chunk_result.get("entities", []):
-                    entity = extracted_entity_from_groq_payload(ent_data, content)
-                    if entity is not None:
-                        entities.append(entity)
-
-                relations = []
-                for rel_data in chunk_result.get("relations", []):
-                    source = rel_data.get("source", "")
-                    target = rel_data.get("target", "")
-                    rtype = rel_data.get("type", "")
-                    if source and target and rtype:
-                        relations.append(
-                            ExtractedRelation(
-                                source_text=source,
-                                target_text=target,
-                                relation_type=rtype,
-                                confidence=0.70,
-                            )
-                        )
-
-                if entities or relations:
-                    result = ExtractionResult(
-                        entities=entities,
-                        relations=relations,
-                        chunk_id=chunk_id,
-                    )
-                    kg_stats = process_extraction_result(store, result)
-                    stats["entities_found"] += kg_stats["entities_created"]
-                    stats["relations_found"] += kg_stats["relations_created"]
-
-            stats["chunks_processed"] += len(chunks)
-
-        except GroqModelUnavailableError:
-            raise
-        except Exception:
-            logger.exception("Error in Groq NER batch")
-            stats["errors"] += 1
-
-        # Save progress every batch
-        progress["tier2_processed"] = stats["chunks_processed"]
-        save_progress(progress)
-
-        if stats["api_calls"] % 10 == 0:
-            logger.info(
-                "Tier 2 progress: %d chunks, %d API calls, %d entities, %d relations",
-                stats["chunks_processed"],
-                stats["api_calls"],
-                stats["entities_found"],
-                stats["relations_found"],
-            )
-
-    logger.info("=== Tier 2 Complete ===")
-    logger.info("Stats: %s", json.dumps(stats, indent=2))
-    return stats
-
-
 def print_kg_stats(store: VectorStore):
     """Print current KG statistics."""
     cursor = store._read_cursor()
@@ -317,10 +170,6 @@ def print_kg_stats(store: VectorStore):
 def main():
     parser = argparse.ArgumentParser(description="Batch KG rebuild")
     parser.add_argument("--tier1", action="store_true", help="Run Tier 1 (seed + tag extraction)")
-    parser.add_argument("--tier2", action="store_true", help="Run Tier 2 (Groq NER)")
-    parser.add_argument("--limit", type=int, default=5000, help="Max chunks for Tier 2")
-    parser.add_argument("--chunks-per-call", type=int, default=5, help="Chunks per Groq API call")
-    parser.add_argument("--resume", action="store_true", help="Resume Tier 2 from last checkpoint")
     parser.add_argument("--stats", action="store_true", help="Print KG stats and exit")
     args = parser.parse_args()
 
@@ -333,9 +182,9 @@ def main():
         store.close()
         return
 
-    if not args.tier1 and not args.tier2:
+    if not args.tier1:
         parser.print_help()
-        print("\nSpecify --tier1, --tier2, or both.")
+        print("\nSpecify --tier1 or --stats.")
         store.close()
         return
 
@@ -343,15 +192,6 @@ def main():
 
     if args.tier1:
         tier1_stats = tier1_seed_and_tags(store)
-        print_kg_stats(store)
-
-    if args.tier2:
-        tier2_stats = tier2_groq_ner(
-            store,
-            limit=args.limit,
-            chunks_per_call=args.chunks_per_call,
-            resume=args.resume,
-        )
         print_kg_stats(store)
 
     store.close()

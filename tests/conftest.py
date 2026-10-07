@@ -226,6 +226,82 @@ def disable_live_gemini_for_unit_tests(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
+    """Fail even when a retired entrypoint swallows a cloud-factory exception.
+
+    Scope this to retired CLI/MCP/store tests; retained producer fixtures and
+    the non-enrichment cloud exceptions continue to exercise their own mocks.
+    SDK class initialization is patched in place so pre-bound aliases cannot evade
+    the guard. The teardown assertion also catches attempts in joined threads.
+    Unjoined/daemon threads and subprocess children are NOT covered.
+    """
+    retired = (
+        request.node.path.name == "test_cli_enrich.py"
+        or request.node.name.startswith("test_brain_enrich_handler_")
+        or request.node.name.startswith("test_brain_digest_retired_")
+        or "TestStoreAutoEnrich" in request.node.nodeid
+        or request.node.name.startswith("test_retired_enrich_is_neither_advertised_nor_dispatched")
+    )
+    if not retired:
+        yield
+        return
+
+    request.getfixturevalue("isolate_brainlayer_runtime_paths")
+
+    import socket
+
+    def optional_module(name):
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError:
+            return None
+
+    client = optional_module("google.genai.client")
+    httpx = optional_module("httpx")
+    requests = optional_module("requests")
+    enrichment_controller = optional_module("brainlayer.enrichment_controller")
+    enrichment = optional_module("brainlayer.pipeline.enrichment")
+
+    attempts = []
+
+    def forbidden(name):
+        def fail(*_args, **_kwargs):
+            attempts.append(name)
+            raise AssertionError(f"Forbidden cloud construction/send: {name}")
+
+        return fail
+
+    for module in (client, httpx):
+        if module is not None:
+            for cls in (module.Client, module.AsyncClient):
+                monkeypatch.setattr(cls, "__init__", forbidden(f"{cls.__module__}.{cls.__name__}"))
+    if httpx is not None:
+        for cls in (httpx.Client, httpx.AsyncClient):
+            monkeypatch.setattr(cls, "send", forbidden(f"{cls.__module__}.{cls.__name__}.send"))
+    if requests is not None:
+        monkeypatch.setattr(requests.Session, "request", forbidden("requests.Session.request"))
+        monkeypatch.setattr(requests.Session, "send", forbidden("requests.Session.send"))
+    for module, symbol in ((enrichment_controller, "_get_gemini_client"), (enrichment, "call_llm")):
+        if module is not None and hasattr(module, symbol):
+            monkeypatch.setattr(module, symbol, forbidden(symbol))
+
+    def guarded_connect(method, original):
+        def connect(sock, *args, **kwargs):
+            if sock.family in (socket.AF_INET, socket.AF_INET6):
+                forbidden(f"socket.{method}")(sock, *args, **kwargs)
+            return original(sock, *args, **kwargs)
+
+        return connect
+
+    for method in ("connect", "connect_ex"):
+        monkeypatch.setattr(socket.socket, method, guarded_connect(method, getattr(socket.socket, method)))
+    monkeypatch.setenv("GOOGLE_API_KEY", "synthetic-retirement-key")
+    monkeypatch.setenv("GROQ_API_KEY", "synthetic-retirement-key")
+    yield
+    assert not attempts, f"Cloud construction/send attempted in retirement test: {attempts}"
+
+
+@pytest.fixture(autouse=True)
 def isolate_backup_daily_log(monkeypatch, tmp_path):
     """Keep backup_daily tests and subprocesses from appending to the production heartbeat log."""
     monkeypatch.setenv("BRAINLAYER_BACKUP_LOG_PATH", str(tmp_path / "pytest-backup-daily.log"))

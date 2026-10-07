@@ -2,7 +2,7 @@
 
 Extracts named entities and relationships using multiple strategies:
 1. Seed entity matching (known entities by string match)
-2. LLM-based extraction (structured output from local LLM)
+2. Caller-supplied extraction callbacks (no built-in model transport)
 3. ML model extraction (GLiNER/DictaBERT — future)
 
 Each strategy returns ExtractedEntity/ExtractedRelation with confidence scores
@@ -11,18 +11,11 @@ and source provenance.
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
-
-_FALSEY = {"0", "false", "no"}
-
-
-def _llm_extraction_enabled() -> bool:
-    return os.environ.get("BRAINLAYER_LLM_ENTITY_EXTRACTION", "1").lower() not in _FALSEY
 
 
 @dataclass
@@ -379,18 +372,18 @@ def extract_entities_llm(
 
     Args:
         text: Source text to extract from.
-        llm_caller: Callable(prompt) -> str. If None, uses Gemini via enrichment_controller.
+        llm_caller: Explicit Callable(prompt) -> str. No implicit model backend remains.
         enable_gleaning: If True, re-prompt for missed entities (catches 20-40% more).
             Default False to avoid doubling LLM calls. Enable for high-value chunks.
 
     Returns:
         Tuple of (entities, relations).
     """
-    if not text.strip() or (llm_caller is None and not _llm_extraction_enabled()):
+    if not text.strip():
         return [], []
 
     if llm_caller is None:
-        llm_caller = _get_default_llm_caller()
+        raise RuntimeError("Implicit LLM entity extraction has been retired. Supply an explicit extraction callback.")
 
     # Pass 1: Primary extraction
     prompt = build_ner_prompt(text)
@@ -433,25 +426,6 @@ def extract_entities_llm(
             unique_relations.append(r)
 
     return entities, unique_relations
-
-
-def _get_default_llm_caller():
-    """Get the best available LLM caller — Gemini first, then enrichment.call_llm."""
-    try:
-        from ..enrichment_controller import call_gemini_for_extraction
-
-        return call_gemini_for_extraction
-    except (ImportError, RuntimeError):
-        pass
-
-    try:
-        from .enrichment import call_llm
-
-        return call_llm
-    except ImportError:
-        pass
-
-    raise RuntimeError("No LLM backend available for entity extraction")
 
 
 # ── GLiNER-based extraction ──
@@ -738,8 +712,8 @@ def extract_entities_combined(
         gliner_entities = extract_entities_gliner(text)
         all_entities.extend(gliner_entities)
 
-    # 3. LLM-based extraction (slower, moderate confidence)
-    if use_llm:
+    # 3. Explicit callback extraction; default ingest/digest/connect stay local.
+    if use_llm and llm_caller is not None:
         llm_entities, llm_relations = extract_entities_llm(text, llm_caller)
         all_entities.extend(llm_entities)
         all_relations.extend(llm_relations)

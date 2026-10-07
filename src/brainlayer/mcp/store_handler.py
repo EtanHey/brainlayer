@@ -103,34 +103,22 @@ async def _brain_digest(
     project: str | None = None,
     participants: list[str] | None = None,
     mode: str = "digest",
-    limit: int = 25,
+    **_legacy_options: object,
 ) -> CallToolResult:
     """Handle brain_digest tool call."""
     # Validate inputs before initializing DB connection
-    if mode not in ("digest", "enrich", "connect"):
+    if mode == "enrich":
+        return _error_result("Enrichment has been retired. Use brain_digest to ingest or connect content locally.")
+    if mode not in ("digest", "connect"):
         return _error_result(f"Unknown brain_digest mode: {mode}")
-    if mode in ("digest", "connect") and (not content or not content.strip()):
+    if _legacy_options.keys() - {"limit"}:
+        return _error_result("Unknown brain_digest option")
+    if not content or not content.strip():
         return _error_result(f"content is required for brain_digest mode='{mode}'")
 
     store = _get_vector_store()
 
     try:
-        if mode == "enrich":
-            from ..enrichment_controller import enrich_realtime
-
-            loop = asyncio.get_event_loop()
-            enrich_result = await loop.run_in_executor(None, lambda: enrich_realtime(store=store, limit=limit))
-            result = {
-                "mode": enrich_result.mode,
-                "attempted": enrich_result.attempted,
-                "enriched": enrich_result.enriched,
-                "skipped": enrich_result.skipped,
-                "failed": enrich_result.failed,
-                "errors": enrich_result.errors,
-            }
-            formatted = format_digest_result(result)
-            return CallToolResult(content=[TextContent(type="text", text=formatted)])
-
         from ..pipeline.digest import digest_connect, digest_content
 
         model = _get_embedding_model()

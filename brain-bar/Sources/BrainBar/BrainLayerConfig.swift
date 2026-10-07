@@ -115,7 +115,6 @@ enum BrainLayerLaunchdLoadState: Equatable, Sendable {
 }
 
 enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
-    case enrichment
     case hotlane
     case decay
     case drain
@@ -132,7 +131,6 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .enrichment: "Enrichment"
         case .hotlane: "Hotlane"
         case .decay: "Decay"
         case .drain: "Drain"
@@ -149,7 +147,6 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
 
     var configKey: String {
         switch self {
-        case .enrichment: "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED"
         case .hotlane: "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED"
         case .decay: "BRAINLAYER_LAUNCHD_DECAY_ENABLED"
         case .drain: "BRAINLAYER_LAUNCHD_DRAIN_ENABLED"
@@ -194,7 +191,7 @@ struct BrainLayerConfig: Equatable, Sendable {
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
 
     var enrichmentIsOff: Bool {
-        !enrichmentEnabled || launchdJobs[.enrichment]?.enabled == false
+        true // Enrichment is retired; legacy config flags cannot enable it.
     }
 
     static let defaultConfig = BrainLayerConfig(
@@ -432,7 +429,6 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_MAX_COMMIT_BATCH",
         "BRAINLAYER_GEMINI_SERVICE_TIER",
         "BRAINLAYER_DISABLED_SLEEP_SECONDS",
-        "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED",
         "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED",
         "BRAINLAYER_LAUNCHD_DECAY_ENABLED",
         "BRAINLAYER_LAUNCHD_DRAIN_ENABLED",
@@ -774,7 +770,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
 private extension BrainLayerLaunchdJob {
     var isContinuous: Bool {
         switch self {
-        case .watch, .drain, .hotlane, .enrichment: true
+        case .watch, .drain, .hotlane: true
         default: false
         }
     }
