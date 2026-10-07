@@ -5,16 +5,12 @@ General embeddings (Qwen3, bge-m3) cluster by topic, not style; StyleDistance
 clusters by how you write (formality, emoji, punctuation, phrasing).
 """
 
+from importlib.util import find_spec
 from typing import Optional
 
-try:
-    from sentence_transformers import SentenceTransformer
-
-    HAS_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    HAS_SENTENCE_TRANSFORMERS = False
-
 from .unified_timeline import UnifiedMessage
+
+HAS_SENTENCE_TRANSFORMERS = find_spec("sentence_transformers") is not None
 
 # Best for style analysis: clusters by writing style, not content
 STYLE_MODEL = "StyleDistance/mstyledistance"
@@ -29,6 +25,8 @@ def _get_model() -> "SentenceTransformer":
 
     if not HAS_SENTENCE_TRANSFORMERS:
         raise ImportError("sentence-transformers required. Install: pip install sentence-transformers")
+    from sentence_transformers import SentenceTransformer
+
     return SentenceTransformer(STYLE_MODEL)
 
 
