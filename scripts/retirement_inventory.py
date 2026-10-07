@@ -35,7 +35,15 @@ def fingerprint(value):
 
 def python_sites(text, path):
     tree = ast.parse(text)
-    sites = []
+    # A new module can accept an injected client and use an unfamiliar method
+    # without importing anything. Bind its whole AST, not just named call sites.
+    sites = [
+        {
+            "path": path,
+            "kind": "python_source",
+            "body_sha256": hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest(),
+        }
+    ]
     aliases = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
