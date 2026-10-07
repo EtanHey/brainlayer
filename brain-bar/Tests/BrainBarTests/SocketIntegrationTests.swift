@@ -1947,7 +1947,7 @@ final class SocketIntegrationTests: XCTestCase {
                 print("[#726] \(label) tools=\(listed.tools.count) bytes=\(listed.byteCount)")
 
                 XCTAssertFalse(listed.tools.isEmpty, "\(label): tools/list returned no tools")
-                let expectedCount = palette == .core ? 5 : 17
+                let expectedCount = palette == .core ? 5 : 16
                 XCTAssertEqual(listed.tools.count, expectedCount, "\(label): unexpected tool count")
 
                 for tool in listed.tools {
