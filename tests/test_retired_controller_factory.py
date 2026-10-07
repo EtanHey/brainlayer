@@ -1,26 +1,15 @@
-"""Retirement closes the last SDK factory before any legacy entrypoint can write."""
+"""The retired controller host is absent; local replay remains importable."""
 
-from unittest.mock import MagicMock
+import importlib.util
 
 import pytest
 
-
-def test_controller_sdk_factory_is_absent():
-    from brainlayer import enrichment_controller
-
-    assert not hasattr(enrichment_controller, "_get_gemini_client")
+pytestmark = pytest.mark.retired_enrichment
 
 
-@pytest.mark.parametrize(
-    "name", ["enrich_realtime", "enrich_single", "run_enrich_supervisor", "call_gemini_for_extraction"]
-)
-def test_controller_legacy_entrypoints_retire_before_using_arguments(name):
-    from brainlayer import enrichment_controller
+def test_retired_controller_host_is_absent():
+    assert importlib.util.find_spec("brainlayer.enrichment_controller") is None
+    from brainlayer.enrichment_replay import _apply_enrichment, _apply_enrichment_impl
 
-    store = MagicMock(side_effect=AssertionError("retired producer used an argument"))
-    args = (store, "synthetic") if name == "enrich_single" else (store,)
-    with pytest.raises(RuntimeError, match="enrichment has been retired"):
-        getattr(enrichment_controller, name)(
-            *args, **({"max_cycles": 1, "sleep_fn": lambda _: None} if name == "run_enrich_supervisor" else {})
-        )
-    assert store.mock_calls == []
+    assert callable(_apply_enrichment)
+    assert callable(_apply_enrichment_impl)
