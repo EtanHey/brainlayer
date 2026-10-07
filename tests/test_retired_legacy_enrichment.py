@@ -51,3 +51,16 @@ def test_legacy_single_chunk_producer_is_absent():
     from brainlayer.pipeline import enrichment
 
     assert not hasattr(enrichment, "_enrich_one")
+
+
+def test_legacy_fallback_health_and_restart_are_absent():
+    from brainlayer.pipeline import enrichment
+
+    for name in (
+        "call_llm",
+        "_check_fallback_available",
+        "check_backend_health",
+        "_try_restart_mlx",
+        "_recover_backend",
+    ):
+        assert not hasattr(enrichment, name), name
