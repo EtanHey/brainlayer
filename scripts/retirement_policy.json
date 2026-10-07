@@ -2926,6 +2926,16 @@
         "target": "import subprocess"
       }
     },
+    "f2d188bb875af1b7187ac1e6f7529de12e390985f4b462fae6e83b7d06ea1e1f": {
+      "non_cloud_purpose": "Local optional embedding-package availability metadata; find_spec never imports or executes a model client.",
+      "site": {
+        "call_sha256": "92511dd6efab44d6f1519ed7569c0436b726053ff867b420db9c1266f42a8b49",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/style_embed.py",
+        "target": "from importlib.util import find_spec"
+      }
+    },
     "f386188d7f0fc6b517c7011f286de7c0da3b2c26c107b332ed970e7f6209cdf8": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/extract_whatsapp.py <module>.extract_whatsapp_messages",
       "site": {
