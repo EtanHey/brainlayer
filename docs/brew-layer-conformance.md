@@ -1,5 +1,9 @@
 # BrainLayer — Robust Brew Layer Conformance
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](enrichment.md).
+
 > Self-audit of BrainLayer against the cross-layer **Robust Brew Layer Standard**
 > (`orchestrator/standards/robust-brew-layer.md`, owner: cmuxlayerClaude).
 > Status as of **2026-06-21**, after the M1-clone (`happycampr`) friction sprint;

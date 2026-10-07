@@ -56,7 +56,9 @@ def _tick(tmp_path: Path, opt: Path, fake: FakeCommands, state: dict, now: int, 
 
 
 def test_daemon_backoff_badge_and_recovery(tmp_path: Path) -> None:
-    old, current, opt = _setup(tmp_path, ("watch", {"KeepAlive": True}), ("enrichment", {"KeepAlive": True}))
+    old, current, opt = _setup(
+        tmp_path, ("watch", {"KeepAlive": True}), ("enrichment", {"KeepAlive": True}), ("enrich", {"KeepAlive": True})
+    )
     fake = FakeCommands(current, old)
     state: dict = {}
     for now in (0, 300, 301, 900, 2100):
@@ -67,6 +69,7 @@ def test_daemon_backoff_badge_and_recovery(tmp_path: Path) -> None:
     tick = _tick(tmp_path, opt, fake, state, 2101)
     kicks = [args[-1] for args in fake.commands if args[:3] == ["launchctl", "kickstart", "-k"]]
     assert kicks == ["gui/501/com.brainlayer.watch"] * 3
+    assert not any("com.brainlayer.enrich" in " ".join(args) for args in fake.commands)
     assert "3 heal attempts" in tick.escalations[0] and "last exit code 1" in tick.escalations[0]
 
 

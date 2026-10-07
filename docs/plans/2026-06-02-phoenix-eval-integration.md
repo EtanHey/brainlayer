@@ -1,5 +1,9 @@
 # Phoenix Eval Integration — Design Doc
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 > Author: brainlayerClaude-LEAD-v6 · 2026-06-02
 > Status: **DESIGN (gate-before-build)**. The BUILD is delegated to a fresh Codex (xhigh) and gated by LEAD.
 > Decision context: Etan picked **Arize Phoenix** as the local retrieval-eval platform (see `/tmp/eval_platform_comparison.md`, v5's cited comparison; Phoenix = top pick on all 4 needs + strongest privacy + lowest setup).
