@@ -19,6 +19,7 @@ REMOVED_SCRIPTS = (
     "batch_submit_paced.py",
     "vertex_poll_import.py",
     "monitor_batch_reenrichment.py",
+    "run_abcde_enrich.py",
 )
 TRIMMED = {
     "cloud_stream.py": {"run_stream", "main"},

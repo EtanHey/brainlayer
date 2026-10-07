@@ -1,38 +1,20 @@
-"""ABCDE variant enrichment runner for OpenAI-compatible backends (xAI Grok, DeepSeek).
+"""Injected ABCDE evaluation harness with no built-in model transport.
 
-This is the GENERATION leg of the ABCDE eval: it takes a frozen variant prompt
-(from the registry) plus a source chunk, calls an OpenAI-compatible chat API, and
-parses the result into the production enrichment JSON schema. The output rows are
-consumable by ``enrichment_judge.build_judge_request`` / ``score_jsonl_inline``.
-
-Design constraints:
-  * Sanitization is MANDATORY. ``build_external_prompt`` requires a Sanitizer, so
-    personal data is scrubbed before any external API call — same guarantee the
-    production Gemini path gives.
-  * The JUDGE leg stays offline (a free CLI-agent pane). This module only does
-    generation.
-  * Cost is metered live via ``cost_in_usd_ticks`` (xAI returns it) with a hard
-    cumulative spend stop, so a run can never exceed its budget even if the
-    per-item estimate is wrong.
-
-The HTTP call is injected (``ChatFn``) so tests never hit a real API.
+Frozen prompts, response parsing, offline judge rows and usage accounting remain
+available to callers that explicitly supply a ChatFn.
 """
 
 from __future__ import annotations
 
 import json
-import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from brainlayer.eval.abcde_variants import ABCDEVariant
-from brainlayer.pipeline.cloud_scrub import scrub_for_cloud
 from brainlayer.pipeline.enrichment import build_external_prompt
 
-DEFAULT_BASE_URL = "https://api.x.ai/v1"
-DEFAULT_MODEL = "grok-4.20-0309-non-reasoning"
 # Only 1e-9 USD/tick is physically plausible: 1e-8 implies ~$76/1M tokens and
 # 1e-7 implies ~$765/1M, neither of which exists. See orc gen-7 smoke analysis.
 DEFAULT_TICK_USD = 1e-9
@@ -441,41 +423,3 @@ def run_batch(
         if sink is not None:
             sink.close()
     return stats
-
-
-def make_http_chat_fn(
-    *,
-    base_url: str,
-    api_key: str,
-    timeout: int = 60,
-    model_override: Optional[str] = None,
-) -> ChatFn:
-    """Build a ChatFn backed by a live OpenAI-compatible endpoint.
-
-    No response_format is forced: the variant prompts already instruct "Return
-    ONLY the JSON object", and forcing json_object mode tripped xAI's content
-    filter on some inputs during smoke testing.
-    """
-    import requests
-
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    def _chat(model: str, prompt: str, params: Mapping[str, Any]) -> tuple[int, dict]:
-        payload_model = model_override or model
-        content = scrub_for_cloud(prompt)
-        payload = {"model": payload_model, "messages": [{"role": "user", "content": content}], **params}
-        for attempt in range(3):
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                time.sleep(2**attempt)
-                continue
-            try:
-                return resp.status_code, resp.json()
-            except ValueError:
-                return resp.status_code, {"error": {"message": resp.text[:300]}}
-        return resp.status_code, {"error": {"message": "retries_exhausted"}}
-
-    if model_override is not None:
-        _chat.backend_model = model_override  # type: ignore[attr-defined]
-    return _chat
