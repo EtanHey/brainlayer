@@ -986,7 +986,7 @@ def _full_tool_definitions() -> list[Tool]:
         Tool(
             name="brain_digest",
             title="Digest Content",
-            description="""Digest a large block of raw text (transcript, doc, article) into one searchable memory chunk: it enriches the text and connects the entities it extracts into the knowledge graph. For a short note use brain_store.""",
+            description="""Digest a large block of raw text (transcript, doc, article) into one searchable memory chunk and connect extracted entities into the knowledge graph. For a short note use brain_store.""",
             annotations=_WRITE,
             input_schema=_bounded_input_schema(
                 {
@@ -994,12 +994,12 @@ def _full_tool_definitions() -> list[Tool]:
                     "properties": {
                         "mode": {
                             "type": "string",
-                            "enum": ["digest", "enrich", "connect"],
-                            "description": "digest (default): ingest content and store. connect: search→connect→propose without storing (returns proposal). enrich: run realtime enrichment on existing DB chunks.",
+                            "enum": ["digest", "connect"],
+                            "description": "digest (default): ingest content and store. connect: search→connect→propose without storing (returns proposal).",
                         },
                         "content": {
                             "type": "string",
-                            "description": "Raw text content to deeply digest and enrich (research, audit, transcript, article, meeting notes)",
+                            "description": "Raw text content to digest (research, audit, transcript, article, meeting notes)",
                         },
                         "title": {
                             "type": "string",
@@ -1013,13 +1013,6 @@ def _full_tool_definitions() -> list[Tool]:
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Optional list of known participant names (improves entity extraction)",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "default": 25,
-                            "minimum": 1,
-                            "maximum": 5000,
-                            "description": "For mode=enrich: max number of existing chunks to enrich via realtime mode.",
                         },
                     },
                     "required": [],
@@ -1498,7 +1491,6 @@ async def call_tool(name: str, arguments: dict[str, Any]):
             project=arguments.get("project"),
             participants=arguments.get("participants"),
             mode=arguments.get("mode", "digest"),
-            limit=arguments.get("limit", 25),
         )
 
     elif name == "brain_expand":
