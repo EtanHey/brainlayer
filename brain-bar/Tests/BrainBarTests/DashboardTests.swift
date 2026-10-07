@@ -119,13 +119,13 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.chunkCount, 2)
-        XCTAssertEqual(stats.enrichedChunkCount, 1)
-        XCTAssertEqual(stats.pendingEnrichmentCount, 1)
-        XCTAssertEqual(stats.enrichmentPercent, 50.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichedChunkCount, 0)
+        XCTAssertEqual(stats.pendingEnrichmentCount, 0)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets.count, 6)
         XCTAssertEqual(stats.recentEnrichmentBuckets.count, 6)
         XCTAssertGreaterThanOrEqual(stats.recentActivityBuckets.reduce(0, +), 2)
-        XCTAssertGreaterThanOrEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertGreaterThanOrEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
@@ -156,14 +156,10 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.chunkCount, 6)
-        XCTAssertEqual(
-            stats.enrichedChunkCount,
-            1,
-            "The ENRICHED SUCCESSFULLY numerator counts only enrich_status='success'."
-        )
-        XCTAssertEqual(stats.pendingEnrichmentCount, 1)
-        XCTAssertEqual(stats.skippedEnrichmentCount, 3)
-        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 6.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichedChunkCount, 0, "UI no longer queries historical enrichment")
+        XCTAssertEqual(stats.pendingEnrichmentCount, 0)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 0)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
     }
 
     func testWatcherLaneDoesNotCallAnEmptyLatestBucketLive() {
@@ -414,8 +410,8 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
         XCTAssertEqual(stats.recentWriteFiveMinuteCount, 2)
-        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 2)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 4)
+        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardStatsBucketsEventsOnFixedWallClockWindowEndingNow() throws {
@@ -445,9 +441,9 @@ final class DashboardTests: XCTestCase {
         }
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
-        XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
-        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 1)
-        XCTAssertEqual(stats.recentEnrichmentCount, 4)
+        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentWriteFiveMinuteCount, 1)
+        XCTAssertEqual(stats.recentWriteCount, 4)
     }
 
     func testDashboardStatsSplitsLiveWritesIntoAgentStoresAndJSONLWatcherPaths() throws {
@@ -1138,14 +1134,13 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.enrichedChunkCount, 1)
-        XCTAssertEqual(stats.failedEnrichmentCount, 1)
-        XCTAssertEqual(stats.skippedEnrichmentCount, 1)
+        XCTAssertEqual(stats.enrichedChunkCount, 0)
+        XCTAssertEqual(stats.failedEnrichmentCount, 0)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 0)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
-        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 3.0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
-        let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
-        XCTAssertLessThan(abs(lastEnrichedAt.timeIntervalSinceNow + 300), 10)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
+        XCTAssertNil(stats.lastEnrichedAt)
     }
 
     func testDashboardStatsReturnsZeroPercentForEmptyDatabase() throws {
@@ -1154,7 +1149,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.chunkCount, 0)
         XCTAssertEqual(stats.enrichedChunkCount, 0)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
-        XCTAssertEqual(stats.enrichmentPercent, 0.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets, [0, 0, 0, 0])
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 0, 0, 0])
     }
@@ -2559,8 +2554,8 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 0)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
-        XCTAssertGreaterThan(stats.enrichmentRatePerMinute, 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
+        XCTAssertEqual(stats.enrichmentRatePerMinute, 0)
     }
 
     func testDashboardStatsCurrentEnrichmentRateDropsToZeroWhenPipelineIsIdle() throws {
@@ -2582,7 +2577,7 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardStatsTreatsNinetySecondStallAsIdle() throws {
@@ -2604,7 +2599,7 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardStatsCarriesExplicitWindowMetadataAndLastEventTimestamps() throws {
@@ -2630,12 +2625,9 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.bucketCount, 12)
         XCTAssertEqual(stats.liveWindowMinutes, 1)
         XCTAssertNotNil(stats.lastWriteAt)
-        XCTAssertNotNil(stats.lastEnrichedAt)
-        let lastWriteAt = try XCTUnwrap(stats.lastWriteAt)
-        let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
-        XCTAssertGreaterThan(lastWriteAt, lastEnrichedAt)
+        XCTAssertNil(stats.lastEnrichedAt)
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardDataVersionChangesAfterExternalWrite() throws {
@@ -2879,48 +2871,49 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testBrainBusDataEventRefreshesEnrichmentBucketsWithoutLongCoalesceDelay() async throws {
+    func testBrainBusEnrichmentEventDoesNotScheduleDashboardReads() async throws {
         let eventSource = RecordingBrainBusEventSource()
+        let reads = DashboardReadCounter()
+        let path = tempDBPath!
         let collector = StatsCollector(
-            dbPath: tempDBPath,
+            dbPath: path,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
             agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
+            liveStatsRefreshDelay: 60,
             autoRefreshInterval: 60,
-            brainBusEvents: eventSource
+            brainBusEvents: eventSource,
+            observeDatabaseChanges: false, // Isolate BrainBus from system-wide Darwin traffic.
+            dashboardStatsProvider: {
+                reads.record()
+                let reader = BrainDatabase(path: path)
+                defer { reader.close() }
+                return try reader.dashboardStats(includeSignalCoverage: false)
+            },
+            signalCoverageStartDelay: 60
         )
         defer { collector.stop() }
-
         collector.start()
-        try await waitForCollector(collector) { $0.lastDataFetchedAt != nil }
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 0)
-
-        try db.insertChunk(
-            id: "brain-bus-live-enrichment",
-            content: "BrainBus enrichment events should refresh the dashboard chart promptly",
-            sessionId: "dashboard",
-            project: "brainlayer",
-            contentType: "assistant_text",
-            importance: 5
-        )
-        db.exec("""
-            UPDATE chunks
-            SET enriched_at = datetime('now'),
-                enrich_status = 'success'
-            WHERE id = 'brain-bus-live-enrichment'
-        """)
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+        let completedReads = reads.count
+        XCTAssertGreaterThan(completedReads, 0)
+        XCTAssertFalse(collector.hasPendingStatsRefresh)
 
         eventSource.publish(.enrichStatus("running"))
-
-        try await waitForCollector(collector, timeout: 0.5) {
-            $0.stats.recentEnrichmentBuckets.reduce(0, +) == 1
-        }
-
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.enrichStatus == "running" }
+        XCTAssertEqual(collector.lastDataFetchedAt, fetchedAt)
+        XCTAssertEqual(reads.count, completedReads)
+        XCTAssertFalse(collector.isRefreshing)
+        XCTAssertFalse(collector.hasPendingStatsRefresh, "Enrichment must not schedule a future dashboard read")
+        XCTAssertEqual(collector.stats.recentEnrichmentCount, 0)
+        eventSource.publish(.queueDepth(1))
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.queueDepth == 1 }
+        XCTAssertTrue(collector.hasPendingStatsRefresh, "Retained queue events still schedule reads")
     }
 
     @MainActor
-    func testManualRefreshRepopulatesRecentEnrichmentBuckets() async throws {
+    func testManualRefreshCompletesAndUpdatesRetainedIngestMetrics() async throws {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
@@ -2929,32 +2922,23 @@ final class DashboardTests: XCTestCase {
             autoRefreshInterval: 60
         )
         defer { collector.stop() }
-
         collector.refresh(force: true)
-        try await waitForCollector(collector) { !$0.isRefreshing }
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 0)
-
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+        let chunksBefore = collector.stats.chunkCount
         try db.insertChunk(
-            id: "manual-refresh-enrichment",
-            content: "Manual refresh should repopulate the enrichment sparkline buckets",
-            sessionId: "dashboard",
-            project: "brainlayer",
-            contentType: "assistant_text",
-            importance: 5
+            id: "manual-refresh-ingest",
+            content: "Manual refresh updates retained ingest metrics without reading enrichment metadata",
+            sessionId: "dashboard", project: "brainlayer", contentType: "assistant_text", importance: 5
         )
-        db.exec("""
-            UPDATE chunks
-            SET created_at = datetime('now', '-45 minutes'),
-                enriched_at = datetime('now'),
-                enrich_status = 'success'
-            WHERE id = 'manual-refresh-enrichment'
-        """)
-
+        db.exec("UPDATE chunks SET created_at=datetime('now'), enriched_at=datetime('now'), enrich_status='success' WHERE id='manual-refresh-ingest'")
         collector.manualRefresh()
-        try await waitForCollector(collector) { $0.stats.recentEnrichmentBuckets.reduce(0, +) == 1 }
-
-        XCTAssertEqual(collector.stats.recentEnrichmentCount, 1)
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        try await waitForCollector(collector) {
+            $0.lastDataFetchedAt != fetchedAt && !$0.isRefreshing && !$0.isManualRefreshInProgress
+        }
+        XCTAssertEqual(collector.stats.chunkCount, chunksBefore + 1)
+        XCTAssertEqual(collector.stats.recentWriteCount, 1)
+        XCTAssertEqual(collector.stats.recentEnrichmentCount, 0)
     }
 
     @MainActor
@@ -3365,12 +3349,14 @@ final class DashboardTests: XCTestCase {
     private func waitForCollector(
         _ collector: StatsCollector,
         timeout: TimeInterval = 2.0,
+        file: StaticString = #filePath, line: UInt = #line,
         until predicate: (StatsCollector) -> Bool
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !predicate(collector), Date() < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
+        XCTAssertTrue(predicate(collector), "Collector wait timed out without satisfying its predicate", file: file, line: line)
     }
 
     private static func absoluteTime(_ date: Date) -> String {
@@ -3564,4 +3550,11 @@ private func writeDashboardPendingStoreQueue(count: Int, to path: URL) throws {
         """
     }
     try lines.joined(separator: "\n").appending("\n").write(to: path, atomically: true, encoding: .utf8)
+}
+
+private final class DashboardReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.withLock { value } }
+    func record() { lock.withLock { value += 1 } }
 }
