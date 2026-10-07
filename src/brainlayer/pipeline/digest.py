@@ -19,7 +19,6 @@ from typing import Any, Callable, Dict, List, Optional
 from ..vector_store import VectorStore
 from .batch_extraction import DEFAULT_SEED_ENTITIES, _dedup_entities, process_chunk, store_extraction_result
 from .cloud_scrub import scrub_llm_output
-from .enrichment import VALID_INTENTS
 from .secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested
 from .sentiment import analyze_sentiment
 
@@ -255,21 +254,6 @@ def _default_faceted_enrich(**_legacy_options: Any) -> Dict[str, Any]:
     return {"status": "retired", "reason": "cloud_enrichment_retired"}
 
 
-def _activity_to_intent(activity_tag: Optional[str]) -> Optional[str]:
-    """Convert act:* tags into the plain intent field used by chunk enrichment."""
-    if not activity_tag or not activity_tag.startswith("act:"):
-        return None
-    intent = activity_tag.split(":", 1)[1].strip().lower()
-    return intent if intent in VALID_INTENTS else None
-
-
-def _is_successful_faceted_result(result: Dict[str, Any]) -> bool:
-    """Accept both explicit status markers and minimal successful payloads."""
-    if result.get("status") == "enriched":
-        return True
-    return bool(result.get("topics") or result.get("activity") or result.get("domains"))
-
-
 def digest_content(
     content: str,
     store: VectorStore,
@@ -302,8 +286,8 @@ def digest_content(
     if not content or not content.strip():
         raise ValueError("content must be non-empty")
 
-    # Scrub first: the embedding, the stored chunk, entity extraction and the
-    # faceted Gemini call below all see only the scrubbed text.
+    # Scrub first: embeddings, the stored chunk and local extraction all see
+    # only the scrubbed text.
     content, scrub_metadata = scrub_for_storage(content)
     if title:
         # The title is stored in metadata, so it is scrubbed too (#962 review N4).
@@ -382,27 +366,10 @@ def digest_content(
     if len(summary) > 200:
         summary = summary[:197] + "..."
 
-    faceted_enrich_fn = faceted_enrich_fn or _default_faceted_enrich
-    faceted_result = faceted_enrich_fn(
-        content=content,
-        project=project,
-        title=title,
-        participants=participants,
-    )
-
+    if faceted_enrich_fn is not None:
+        logger.warning("Digest faceted enrichment has been retired; the supplied enrichment callback was not called.")
+    faceted_result = _default_faceted_enrich()
     merged_tags: List[str] = []
-    if _is_successful_faceted_result(faceted_result):
-        merged_tags = (
-            faceted_result.get("topics", []) + [faceted_result.get("activity", "")] + faceted_result.get("domains", [])
-        )
-        merged_tags = [tag for tag in merged_tags if tag]
-        faceted_result = {**faceted_result, "status": "enriched"}  # status last to prevent override
-        store.update_enrichment(
-            chunk_id=chunk_id,
-            summary=summary,
-            tags=merged_tags,
-            intent=_activity_to_intent(faceted_result.get("activity")),
-        )
 
     # 6. Confidence tier stats
     tier_stats = _classify_confidence(entities)
