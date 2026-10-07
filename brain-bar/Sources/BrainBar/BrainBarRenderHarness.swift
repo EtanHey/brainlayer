@@ -457,8 +457,7 @@ enum BrainBarRenderHarness {
                 initialMaintenanceEvidence: evidence ?? .unread
             )
             if scenario.receipt {
-                viewModel.backendDraft = "mlx"
-                viewModel.commitBackendDraft()
+                viewModel.setSystemEnabled(false)
                 guard viewModel.lastSaveReceipt != nil else {
                     throw Failure("Settings receipt fixture did not produce a save receipt")
                 }

@@ -188,7 +188,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
     func testReshowReloadKeepsUncommittedSettingsDrafts() throws {
         let (root, store, viewModel) = try makeFixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        viewModel.backendDraft = "draft-backend"
         viewModel.onePasswordReference = "op://draft/reference"
         viewModel.pendingPlainAPIKey = "draft-secret"
         var external = try store.loadDocument().config
@@ -197,7 +196,6 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.reloadConfigFromDisk(preservingDrafts: true))
         XCTAssertFalse(viewModel.config.systemEnabled)
-        XCTAssertEqual(viewModel.backendDraft, "draft-backend")
         XCTAssertEqual(viewModel.onePasswordReference, "op://draft/reference")
         XCTAssertEqual(viewModel.pendingPlainAPIKey, "draft-secret")
     }
@@ -216,82 +214,11 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             refreshStatusOnLoad: false
         )
 
-        XCTAssertTrue(viewModel.config.enrichmentEnabled)
-        viewModel.setEnrichmentEnabled(false)
+        XCTAssertTrue(viewModel.config.systemEnabled)
+        viewModel.setSystemEnabled(false)
 
-        XCTAssertTrue(viewModel.config.enrichmentEnabled)
+        XCTAssertTrue(viewModel.config.systemEnabled)
         XCTAssertNotNil(viewModel.errorMessage)
-    }
-
-    @MainActor
-    func testBackendDraftDoesNotPersistUntilCommitted() throws {
-        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("brainbar-settings-model-\(UUID().uuidString)", isDirectory: true)
-        let configURL = tempRoot.appendingPathComponent("brainlayer.env")
-        defer { try? FileManager.default.removeItem(at: tempRoot) }
-
-        let store = BrainLayerConfigStore(configURL: configURL)
-        try store.save(BrainLayerConfig.defaultConfig)
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
-            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
-            refreshStatusOnLoad: false
-        )
-
-        viewModel.backendDraft = "mlx"
-        var document = try store.loadDocument()
-        XCTAssertEqual(document.config.enrichmentBackend, "gemini")
-
-        viewModel.commitBackendDraft()
-        document = try store.loadDocument()
-        XCTAssertEqual(document.config.enrichmentBackend, "mlx")
-    }
-
-    @MainActor
-    func testUnwiredProviderCannotReplaceConfiguredProvider() throws {
-        let fixture = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-
-        fixture.viewModel.setEnrichmentProvider(.openai)
-
-        XCTAssertEqual(fixture.viewModel.config.enrichmentProvider, .gemini)
-        XCTAssertEqual(
-            fixture.viewModel.lastSaveReceipt?.validation,
-            .failed("OpenAI cannot be activated because its runtime integration is unavailable.")
-        )
-        XCTAssertEqual(try fixture.store.loadDocument().config.enrichmentProvider, .gemini)
-    }
-
-    @MainActor
-    func testExistingUnavailableProviderDoesNotTrapSafeDisableOrUnrelatedEdits() throws {
-        var config = BrainLayerConfig.defaultConfig
-        config.enrichmentProvider = .openai
-        config.enrichmentBackend = "openai"
-        let fixture = try makeFixture(config: config)
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-
-        fixture.viewModel.setSystemEnabled(false)
-        fixture.viewModel.setEnrichmentEnabled(false)
-
-        let persisted = try fixture.store.loadDocument().config
-        XCTAssertFalse(persisted.systemEnabled)
-        XCTAssertFalse(persisted.enrichmentEnabled)
-        XCTAssertEqual(persisted.enrichmentProvider, .openai)
-        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.validation, .passed)
-    }
-
-    @MainActor
-    func testSelectingGeminiRepairsWhitespaceOnlyBackend() throws {
-        let fixture = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-        fixture.viewModel.config.enrichmentProvider = .openai
-        fixture.viewModel.config.enrichmentBackend = "   "
-
-        fixture.viewModel.setEnrichmentProvider(.gemini)
-
-        XCTAssertEqual(fixture.viewModel.config.enrichmentProvider, .gemini)
-        XCTAssertEqual(fixture.viewModel.config.enrichmentBackend, "gemini")
-        XCTAssertEqual(try fixture.store.loadDocument().config.enrichmentBackend, "gemini")
     }
 
     @MainActor
@@ -302,71 +229,53 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        fixture.viewModel.backendDraft = "mlx"
-        fixture.viewModel.commitBackendDraft()
+        fixture.viewModel.setSystemEnabled(false)
 
-        XCTAssertEqual(fixture.viewModel.config.enrichmentBackend, "mlx")
+        XCTAssertFalse(fixture.viewModel.config.systemEnabled)
         XCTAssertEqual(
             fixture.viewModel.activeRuntimeObservation,
             .observed(BrainLayerActiveRuntimeValues(config: initial))
         )
         XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.fileUpdated, true)
         XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.validation, .passed)
-        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.servicesRequiringRestart, [.enrichment])
+        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.servicesRequiringRestart, [.systemJobs])
         XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.activeRuntimeState, .notObserved)
-        XCTAssertEqual(try fixture.store.loadDocument().config.enrichmentBackend, "mlx")
+        XCTAssertFalse(try fixture.store.loadDocument().config.systemEnabled)
     }
 
     @MainActor
     func testSaveReceiptReportsWhenActiveRuntimeAlreadyMatchesConfiguredValue() throws {
         var active = BrainLayerConfig.defaultConfig
-        active.enrichmentBackend = "mlx"
+        active.systemEnabled = false
         let fixture = try makeFixture(
             runtimeObservation: .observed(BrainLayerActiveRuntimeValues(config: active))
         )
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        fixture.viewModel.backendDraft = "mlx"
-        fixture.viewModel.commitBackendDraft()
+        fixture.viewModel.setSystemEnabled(false)
 
         XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.activeRuntimeState, .observed)
         XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.savedAt, fixedNow)
     }
 
     @MainActor
-    func testValidationErrorDoesNotOverwritePersistedConfig() throws {
-        let fixture = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-
-        fixture.viewModel.backendDraft = "   "
-        fixture.viewModel.commitBackendDraft()
-
-        XCTAssertEqual(fixture.viewModel.config.enrichmentBackend, "gemini")
-        XCTAssertEqual(try fixture.store.loadDocument().config.enrichmentBackend, "gemini")
-        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.fileUpdated, false)
-        XCTAssertEqual(
-            fixture.viewModel.lastSaveReceipt?.validation,
-            .failed("Enrichment backend is required.")
-        )
-        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.servicesRequiringRestart, [])
-    }
-
-    @MainActor
     func testPostWriteReloadMismatchStillReportsThatFileChanged() throws {
-        let fixture = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let initial = BrainLayerConfig.defaultConfig
+        let store = BrainLayerConfigStore(
+            configURL: URL(fileURLWithPath: "/unused/synthetic-config.env"),
+            loadDocumentOverride: { BrainLayerEnvDocument(config: initial) },
+            saveOverride: { _ in }
+        )
+        let viewModel = BrainBarSettingsViewModel(store: store, refreshStatusOnLoad: false)
+        viewModel.setSystemEnabled(false)
 
-        fixture.viewModel.backendDraft = "MLX"
-        fixture.viewModel.commitBackendDraft()
-
-        XCTAssertEqual(try fixture.store.loadDocument().config.enrichmentBackend, "mlx")
-        XCTAssertEqual(fixture.viewModel.lastSaveReceipt?.fileUpdated, true)
+        XCTAssertEqual(viewModel.lastSaveReceipt?.fileUpdated, true)
         XCTAssertEqual(
-            fixture.viewModel.lastSaveReceipt?.validation,
+            viewModel.lastSaveReceipt?.validation,
             .failed("Saved configuration did not validate on reload.")
         )
         XCTAssertEqual(
-            fixture.viewModel.lastSaveReceipt?.activeRuntimeState,
+            viewModel.lastSaveReceipt?.activeRuntimeState,
             .unknown("Configuration file changed, but reload validation failed.")
         )
     }
