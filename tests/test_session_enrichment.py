@@ -316,7 +316,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_orders_by_time(self, populated_store):
         """Chunks are ordered by created_at timestamp."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -330,7 +330,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_counts_messages(self, populated_store):
         """Message counts are correct."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -341,7 +341,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_calculates_timing(self, populated_store):
         """Duration is calculated from first to last chunk."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -352,7 +352,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_empty_session(self, store):
         """Nonexistent session returns empty result."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         result = reconstruct_session(store, "nonexistent-session")
         assert result["chunks"] == []
@@ -361,7 +361,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_formats_roles(self, populated_store):
         """Conversation text includes role prefixes."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
