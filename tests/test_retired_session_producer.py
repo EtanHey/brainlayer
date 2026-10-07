@@ -5,3 +5,10 @@ def test_session_model_producer_is_absent():
     from brainlayer.pipeline import session_enrichment
 
     assert not hasattr(session_enrichment, "enrich_session")
+
+
+def test_session_model_prompt_is_absent():
+    from brainlayer.pipeline import session_enrichment
+
+    assert not hasattr(session_enrichment, "build_session_prompt")
+    assert not hasattr(session_enrichment, "SESSION_ANALYSIS_PROMPT")

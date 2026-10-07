@@ -1,22 +1,7 @@
-"""Session-level enrichment pipeline — analyze full conversations, not just chunks.
+"""Historical session reconstruction and metadata parsing.
 
-Processes sessions through local LLM (Ollama/MLX) to extract:
-- Session summary + primary intent + outcome
-- Decisions made (with rationale)
-- Corrections (what the user corrected)
-- Learnings (new knowledge gained)
-- Mistakes (what went wrong)
-- Patterns (recurring behaviors)
-- Tool usage statistics
-- Quality scores
-
-Usage:
-    from brainlayer.pipeline.session_enrichment import enrich_session
-    result = enrich_session(store, session_id, call_llm_fn)
-
-CLI:
-    brainlayer enrich-sessions
-    brainlayer enrich-sessions --project my-project --since 2026-01-01
+Model production and prompt construction are retired. Stored session metadata,
+source-class selection and historical conversation reads remain available.
 """
 
 import json
@@ -171,67 +156,6 @@ def reconstruct_session(store: VectorStore, session_id: str) -> Dict[str, Any]:
 
 
 # Session analysis prompt — single-pass for local LLM efficiency
-SESSION_ANALYSIS_PROMPT = """You are a session analysis assistant. Analyze this Claude Code conversation and return ONLY a JSON object.
-
-CONVERSATION (session from project: {project}):
----
-{conversation}
----
-
-Return this exact JSON structure:
-{{
-  "session_summary": "<2-3 sentence summary of what happened in this session>",
-  "primary_intent": "<one of: debugging, designing, configuring, discussing, deciding, implementing, reviewing, refactoring, deploying, testing>",
-  "outcome": "<one of: success, partial_success, failure, abandoned, ongoing>",
-  "complexity_score": <1-10 integer>,
-  "session_quality_score": <1-10 integer>,
-  "decisions_made": [
-    {{"decision": "<what was decided>", "rationale": "<why>"}}
-  ],
-  "corrections": [
-    {{"what_was_wrong": "<what the AI did wrong>", "what_user_wanted": "<correct behavior>"}}
-  ],
-  "learnings": [
-    "<new knowledge or insight gained during this session>"
-  ],
-  "mistakes": [
-    "<what went wrong and how it was resolved>"
-  ],
-  "patterns": [
-    "<recurring behaviors or approaches observed>"
-  ],
-  "topic_tags": ["<tag1>", "<tag2>"],
-  "tool_usage_stats": [
-    {{"tool": "<tool name>", "count": <number>}}
-  ],
-  "what_worked": "<what went well in this session>",
-  "what_failed": "<what didn't work or caused problems>"
-}}
-
-SCORING RULES:
-- complexity_score: 1-3 trivial (quick fix), 4-6 moderate (feature work), 7-9 complex (architecture), 10 critical
-- session_quality_score: 1-3 poor (many errors, user frustrated), 4-6 average, 7-9 good (smooth), 10 exceptional
-
-EXTRACTION RULES:
-- decisions: Only extract REAL decisions — "we chose X over Y because Z"
-- corrections: Only when the user explicitly corrected the AI's approach
-- learnings: Concrete knowledge, not vague observations
-- mistakes: What actually failed, not hypothetical risks
-- topic_tags: lowercase, hyphenated (e.g., "bug-fix", "api-design", "typescript")
-- tool_usage_stats: List tools used (Read, Write, Edit, Bash, etc.) with approximate counts
-- Empty arrays [] are fine when nothing matches a category
-
-Return ONLY the JSON object, no other text."""
-
-
-def build_session_prompt(conversation: str, project: str) -> str:
-    """Build the session analysis prompt."""
-    # Escape braces in conversation to avoid str.format() crash
-    safe_conversation = conversation.replace("{", "{{").replace("}", "}}")
-    return SESSION_ANALYSIS_PROMPT.format(
-        project=project or "unknown",
-        conversation=safe_conversation,
-    )
 
 
 def parse_session_enrichment(text: str) -> Optional[Dict[str, Any]]:
