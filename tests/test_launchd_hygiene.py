@@ -129,7 +129,7 @@ def test_active_daemon_launchd_hygiene_matrix():
     hotlane_args = hotlane["ProgramArguments"]
     assert hotlane_args[hotlane_args.index("--backlog-interval") + 1] == "7.0"
     assert hotlane_args[hotlane_args.index("--backlog-batch") + 1] == "16"
-    assert hotlane_args[hotlane_args.index("--enrich-limit") + 1] == "0"
+    assert not any(arg.startswith("--enrich-") for arg in hotlane_args)
 
     backup = _load("scripts/launchd/com.brainlayer.backup-daily.plist")
     assert "KeepAlive" not in backup

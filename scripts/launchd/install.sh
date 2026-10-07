@@ -22,7 +22,7 @@
 #   ./scripts/launchd/install.sh fleet-watchdog # Install com.brainlayer.* revival watchdog only
 #   ./scripts/launchd/install.sh fleet-watchdog-quiesce # Disable + bootout the fleet watchdog (upgrades)
 #   ./scripts/launchd/install.sh fleet-watchdog-resume  # Re-enable + bootstrap the fleet watchdog
-#   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
+#   ./scripts/launchd/install.sh hotlane      # Install BrainBar local hotlane embedding daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
@@ -680,7 +680,9 @@ unload_plist() {
         echo "ERROR: unload attempts must be a positive integer for $label; got '$attempts'" >&2
         return 1
     fi
-    launchctl unload "$dst" 2>/dev/null || true
+    if [ "${2:-}" != "--wait-only" ]; then
+        launchctl unload "$dst" 2>/dev/null || true
+    fi
     while [ "$attempt" -le "$attempts" ]; do
         if ! launchctl print "$domain" >/dev/null 2>&1; then
             echo "  Unloaded: $label"
@@ -1224,8 +1226,14 @@ remove_fleet_watchdog() {
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    [ -f "$dst" ] || return 0
-    if ! unload_plist "$name"; then
+    if [ ! -f "$dst" ]; then
+        local domain="gui/$UID/com.brainlayer.$name"
+        launchctl print "$domain" >/dev/null 2>&1 || return 0
+        if ! launchctl bootout "$domain" || ! unload_plist "$name" --wait-only; then
+            echo "ERROR: could not retire $domain without a plist; refusing to remove its executable" >&2
+            return 1
+        fi
+    elif ! unload_plist "$name"; then
         return 1
     fi
     rm -f "$dst"
@@ -1318,7 +1326,6 @@ case "${1:-all}" in
         resume_fleet_watchdog
         ;;
     hotlane|hotlane-brainbar)
-        verify_gemini_env_file
         install_plist hotlane-brainbar
         ;;
     p0-counter)

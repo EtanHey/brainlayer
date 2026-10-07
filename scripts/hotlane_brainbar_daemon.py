@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Hot-embed recent BrainBar MCP writes and interleave realtime enrichment.
+"""Locally embed recent BrainBar MCP writes and pending embedding backlog.
 
 BrainBar owns the live MCP socket and stores ``brain_store`` rows directly in
 SQLite. This adapter owns the single BrainLayer writer slot and must therefore
-perform all write-side background work that needs steady progress: hot embedding,
-optional embedding backlog, and enrichment backlog.
+perform local hot embedding and optional embedding backlog work. Legacy
+Python enrichment arguments are accepted for compatibility but cannot invoke a model.
 """
 
 from __future__ import annotations
@@ -24,11 +24,6 @@ import sqlite_vec
 
 from brainlayer._helpers import serialize_f32
 from brainlayer.embeddings import get_embedding_model
-from brainlayer.enrichment_controller import (
-    DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
-    _result_hit_daily_cap,
-    enrich_realtime,
-)
 from brainlayer.paths import get_db_path
 from brainlayer.store import embed_hot_chunk, embed_pending_chunks
 from brainlayer.vector_store import VectorStore
@@ -36,7 +31,8 @@ from brainlayer.writer_telemetry import start_writer_span
 
 LOGGER = logging.getLogger("brainlayer.hotlane_brainbar")
 STOP = False
-DEFAULT_HOTLANE_ENRICH_LIMIT = 5
+DEFAULT_HOTLANE_ENRICH_LIMIT = 0
+DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS = 87_600  # Legacy Python compatibility only.
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HOTLANE_EMBED_DEVICE = "cpu"
 MAX_BACKLOG_BATCH = 16
@@ -53,8 +49,7 @@ VECTOR_WRITE_YIELD_SECONDS = 0.005
 # the durable queue, so nothing here wakes on arrival — this cap IS the worst-case time a
 # freshly stored chunk stays unembedded, during which a related search can miss it.
 # Note the per-cycle idle probe is already bounded by rowid lanes (HotCandidateScanner),
-# so backing off further buys little; hotlane's real CPU burn is continuous enrichment
-# inference, tracked separately in #738.
+# so backing off further would increase local embedding latency.
 IDLE_BACKOFF_FACTOR = 2.0
 MAX_IDLE_INTERVAL_SECONDS = 5.0
 MAX_PENDING_CANDIDATE_SCAN_PAGES = 16
@@ -739,7 +734,7 @@ def _run_split_cycle(
     enrich_limit: int,
     enrich_since_hours: int,
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
-    enrich_fn: Callable[..., object] = enrich_realtime,
+    enrich_fn: Callable[..., object] | None = None,
     candidate_rows_fn: Callable[..., list[EmbedCandidate]] = _candidate_chunk_rows,
     pending_rows_fn: Callable[..., list[EmbedCandidate]] = _pending_chunk_rows_with_resume,
     write_vectors_fn: Callable[..., int] = _write_embedded_vectors,
@@ -789,22 +784,17 @@ def _run_split_cycle(
                 )
             raise
 
-    if enrich_limit <= 0:
-        return CycleResult(embedded=embedded)
+    _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
+    return CycleResult(embedded=embedded)
 
-    enrich_store = _open_store(vector_store_cls, db_path, readonly=False)
-    try:
-        enrich_result = enrich_fn(store=enrich_store, limit=enrich_limit, since_hours=enrich_since_hours)
-    finally:
-        enrich_store.close()
-    return CycleResult(
-        embedded=embedded,
-        enrich_attempted=int(getattr(enrich_result, "attempted", 0) or 0),
-        enriched=int(getattr(enrich_result, "enriched", 0) or 0),
-        enrich_skipped=int(getattr(enrich_result, "skipped", 0) or 0),
-        enrich_failed=int(getattr(enrich_result, "failed", 0) or 0),
-        enrich_daily_cap_reached=hasattr(enrich_result, "errors") and _result_hit_daily_cap(enrich_result),
-    )
+
+def _warn_retired_enrichment(limit: int, since_hours: int, callback: object) -> None:
+    if limit > 0 or callback is not None:
+        LOGGER.warning(
+            "Hotlane enrichment has been retired; ignoring limit=%d since_hours=%d and any callback",
+            limit,
+            since_hours,
+        )
 
 
 def _default_queue_dir() -> Path:
@@ -843,7 +833,7 @@ def run_cycle(
     hot_embed_fn: Callable[..., bool] = embed_hot_chunk,
     pending_embed_fn: Callable[..., int] = embed_pending_chunks,
     embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
-    enrich_fn: Callable[..., object] = enrich_realtime,
+    enrich_fn: Callable[..., object] | None = None,
 ) -> CycleResult:
     embedded = 0
     for chunk_id in candidate_chunk_ids_fn(store, limit=recent_limit):
@@ -859,18 +849,8 @@ def run_cycle(
             embed_batch_fn=embed_batch_fn,
         )
 
-    if enrich_limit <= 0:
-        return CycleResult(embedded=embedded)
-
-    enrich_result = enrich_fn(store, limit=enrich_limit, since_hours=enrich_since_hours)
-    return CycleResult(
-        embedded=embedded,
-        enrich_attempted=int(getattr(enrich_result, "attempted", 0) or 0),
-        enriched=int(getattr(enrich_result, "enriched", 0) or 0),
-        enrich_skipped=int(getattr(enrich_result, "skipped", 0) or 0),
-        enrich_failed=int(getattr(enrich_result, "failed", 0) or 0),
-        enrich_daily_cap_reached=hasattr(enrich_result, "errors") and _result_hit_daily_cap(enrich_result),
-    )
+    _warn_retired_enrichment(enrich_limit, enrich_since_hours, enrich_fn)
+    return CycleResult(embedded=embedded)
 
 
 def run(
@@ -909,8 +889,9 @@ def run(
     queue_dir_was_explicit = queue_dir is not None
     queue_dir = queue_dir or _default_queue_dir()
     last_backlog = time_fn() - backlog_interval
-    last_enrich = 0.0
-    enrich_disabled = False
+    _warn_retired_enrichment(enrich_limit, enrich_since_hours, None)
+    if enrich_limit > 0:
+        LOGGER.warning("Ignoring retired hotlane enrichment interval=%s", enrich_interval)
     queue_backpressure_active = False
     backlog_slice_logged = False
     hot_candidate_scanner = HotCandidateScanner()
@@ -930,7 +911,7 @@ def run(
             cycle_recent_limit = recent_limit
             if queue_has_high_priority_backlog:
                 if not queue_backpressure_active:
-                    LOGGER.info("durable high-priority queue has backlog; suppressing hot embedding and enrichment")
+                    LOGGER.info("durable high-priority queue has backlog; suppressing hot embedding")
                 queue_backpressure_active = True
                 if cycle_backlog_batch <= 0:
                     cycles += 1
@@ -949,18 +930,8 @@ def run(
             else:
                 queue_backpressure_active = False
                 backlog_slice_logged = False
-            cycle_enrich_limit = (
-                enrich_limit
-                if not queue_has_backlog
-                and not enrich_disabled
-                and enrich_limit > 0
-                and now - last_enrich >= enrich_interval
-                else 0
-            )
             if cycle_backlog_batch > 0:
                 last_backlog = now
-            if cycle_enrich_limit > 0:
-                last_enrich = now
             if cycle_fn is run_cycle:
                 result = _run_split_cycle(
                     db_path=db_path,
@@ -969,7 +940,7 @@ def run(
                     recent_limit=cycle_recent_limit,
                     backlog_batch=cycle_backlog_batch,
                     embed_batch_fn=embed_batch_fn,
-                    enrich_limit=cycle_enrich_limit,
+                    enrich_limit=0,
                     enrich_since_hours=enrich_since_hours,
                     candidate_rows_fn=hot_candidate_scanner,
                 )
@@ -982,27 +953,17 @@ def run(
                         recent_limit=cycle_recent_limit,
                         backlog_batch=cycle_backlog_batch,
                         embed_batch_fn=embed_batch_fn,
-                        enrich_limit=cycle_enrich_limit,
+                        enrich_limit=0,
                         enrich_since_hours=enrich_since_hours,
                     )
                 finally:
                     store.close()
-            if result.enrich_daily_cap_reached:
-                enrich_disabled = True
-                LOGGER.warning("enrichment daily cap reached; disabling hotlane enrichment until restart")
             # A queued backlog means the system has work even when THIS cycle embedded
             # nothing (the hot slice is deliberately suppressed to yield to the drain),
             # so it must not be treated as idle -- backing off there would slow recovery.
-            did_work = bool(result.embedded or result.enrich_attempted) or queue_has_backlog
-            if result.embedded or result.enrich_attempted:
-                LOGGER.info(
-                    "embedded=%d enrich_attempted=%d enriched=%d skipped=%d failed=%d",
-                    result.embedded,
-                    result.enrich_attempted,
-                    result.enriched,
-                    result.enrich_skipped,
-                    result.enrich_failed,
-                )
+            did_work = bool(result.embedded) or queue_has_backlog
+            if result.embedded:
+                LOGGER.info("embedded=%d", result.embedded)
         except Exception:
             LOGGER.exception("hotlane adapter cycle failed")
             cycles += 1
@@ -1030,12 +991,16 @@ def main() -> None:
     parser.add_argument("--recent-limit", type=int, default=5)
     parser.add_argument("--backlog-interval", type=float, default=10.0)
     parser.add_argument("--backlog-batch", type=int, default=DEFAULT_BACKLOG_BATCH)
-    parser.add_argument("--enrich-interval", type=float, default=10.0)
-    parser.add_argument("--enrich-limit", type=int, default=DEFAULT_HOTLANE_ENRICH_LIMIT)
-    parser.add_argument("--enrich-since-hours", type=int, default=DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS)
+    # Old installed plists outlive a keg upgrade. Remove these inert shims only
+    # after the lead receipts hotlane plist re-rendering on BOTH Macs.
+    parser.add_argument("--enrich-interval", type=float, default=0.0, help=argparse.SUPPRESS)
+    parser.add_argument("--enrich-limit", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--enrich-since-hours", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if any(value != 0 for value in (args.enrich_interval, args.enrich_limit, args.enrich_since_hours)):
+        LOGGER.warning("Hotlane enrichment options are retired and ignored; continuing local embedding")
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     run(
@@ -1044,9 +1009,9 @@ def main() -> None:
         recent_limit=max(args.recent_limit, 1),
         backlog_interval=max(args.backlog_interval, 1.0),
         backlog_batch=min(max(args.backlog_batch, 0), MAX_BACKLOG_BATCH),
-        enrich_interval=max(args.enrich_interval, 1.0),
-        enrich_limit=max(args.enrich_limit, 0),
-        enrich_since_hours=max(args.enrich_since_hours, 0),
+        enrich_interval=0.0,
+        enrich_limit=0,
+        enrich_since_hours=0,
     )
 
 

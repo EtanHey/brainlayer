@@ -10,6 +10,14 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertEqual(rendered.components(separatedBy: "BRAINLAYER_SHOW_RETRIEVAL_TOOLS=").count, 2)
     }
 
+    func testRetiredEnrichmentJobKeyRemainsUnmanagedOnRender() throws {
+        var document = try BrainLayerEnvDocument(text: "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=0\n")
+        document.update { $0.systemEnabled = false }
+        let rendered = document.rendered()
+        XCTAssertTrue(rendered.contains("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=0"))
+        XCTAssertEqual(rendered.components(separatedBy: "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=").count, 2)
+    }
+
     func testProviderAvailabilityOnlyExposesRuntimeWiredChoices() {
         XCTAssertEqual(BrainLayerEnrichmentProvider.selectableCases, [.gemini])
         XCTAssertNil(BrainLayerEnrichmentProvider.gemini.unavailableReason)
@@ -194,7 +202,7 @@ final class BrainLayerConfigTests: XCTestCase {
         XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_MODE=remote"))
         XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_PROVIDER=gemini"))
         XCTAssertTrue(content.contains("BRAINLAYER_ENRICH_BACKEND=gemini"))
-        XCTAssertTrue(content.contains("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED=1"))
+        XCTAssertFalse(content.contains("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED="))
         XCTAssertTrue(content.contains("BRAINLAYER_LAUNCHD_DRAIN_ENABLED=1"))
     }
 
