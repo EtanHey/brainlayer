@@ -1,4 +1,4 @@
-"""Track A local-vs-Gemini enrichment quality benchmark utilities.
+"""Local benchmarks and offline grading of stored enrichment artifacts.
 
 This module is intentionally separate from ``enrichment_controller``. It reads
 BrainLayer chunks and writes JSONL artifacts for evaluation, but it does not
@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import random
 import re
 import sqlite3
 import time
@@ -348,73 +347,6 @@ def run_local_mlx(
     return {"attempted": count, "failed": failures, "model": model_id, "memory_snapshot": asdict(snapshot)}
 
 
-def run_gemini_flex_sample(
-    input_jsonl: str | Path,
-    output_jsonl: str | Path,
-    *,
-    limit: int,
-    seed: int = 20260615,
-) -> dict[str, Any]:
-    """Re-run a deterministic sample through Gemini Flex for variance measurement."""
-
-    from brainlayer.enrichment_controller import (
-        GEMINI_REALTIME_MODEL,
-        _build_gemini_config,
-        _generate_content_with_rate_limit,
-        _get_gemini_client,
-    )
-    from brainlayer.pipeline.enrichment import build_external_prompt
-    from brainlayer.pipeline.sanitize import Sanitizer
-
-    rows = list(_read_jsonl(input_jsonl))
-    random.Random(seed).shuffle(rows)
-    sample = rows[:limit]
-    client = _get_gemini_client()
-    config = _build_gemini_config()
-    sanitizer = Sanitizer.from_env()
-    output_path = Path(output_jsonl)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    failures = 0
-    with output_path.open("w", encoding="utf-8") as target:
-        for row in sample:
-            chunk = {
-                "id": row["chunk_id"],
-                "content": row["chunk_text"],
-                "project": row.get("pure_metadata", {}).get("project"),
-                "content_type": row.get("pure_metadata", {}).get("content_type"),
-                "source": row.get("pure_metadata", {}).get("source"),
-            }
-            started = time.monotonic()
-            try:
-                prompt, _ = build_external_prompt(chunk, sanitizer)
-                response = _generate_content_with_rate_limit(client, GEMINI_REALTIME_MODEL, prompt, config, None)
-                raw_response = getattr(response, "text", "")
-                enrichment = _normalize_enrichment_for_benchmark(parse_enrichment(raw_response) or {})
-                error = None if enrichment else "invalid_enrichment"
-            except Exception as exc:  # noqa: BLE001
-                raw_response = ""
-                enrichment = {}
-                error = str(exc)
-            if error:
-                failures += 1
-            target.write(
-                json.dumps(
-                    {
-                        "chunk_id": row["chunk_id"],
-                        "model": GEMINI_REALTIME_MODEL,
-                        "backend": "gemini-flex",
-                        "latency_seconds": round(time.monotonic() - started, 3),
-                        "enrichment": enrichment,
-                        "raw_response": raw_response,
-                        "error": error,
-                    },
-                    sort_keys=True,
-                )
-                + "\n"
-            )
-    return {"attempted": len(sample), "failed": failures, "model": GEMINI_REALTIME_MODEL}
-
-
 def score_enrichment_pair(
     source_text: str,
     candidate: Mapping[str, Any],
@@ -502,7 +434,7 @@ def write_jsonl(rows: Iterable[Mapping[str, Any]], path: str | Path) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Track A local-vs-Gemini enrichment quality benchmark")
+    parser = argparse.ArgumentParser(description="Local benchmark and historical-artifact grading")
     sub = parser.add_subparsers(dest="command", required=True)
 
     select_p = sub.add_parser("select", help="select meaningful pure chunks from a read-only BrainLayer DB")
@@ -525,13 +457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     local_p.add_argument("--min-available-gb", type=float)
     local_p.add_argument("--allow-tight-memory", action="store_true")
 
-    flex_p = sub.add_parser("flex-sample", help="rerun a sample through Gemini Flex for natural variance")
-    flex_p.add_argument("--in", dest="input", required=True)
-    flex_p.add_argument("--out", required=True)
-    flex_p.add_argument("--limit", type=int, default=50)
-    flex_p.add_argument("--seed", type=int, default=20260615)
-
-    grade_p = sub.add_parser("grade", help="grade local-vs-Gemini and optional Flex variance")
+    grade_p = sub.add_parser("grade", help="grade saved local and historical Flex artifacts")
     grade_p.add_argument("--selection", required=True)
     grade_p.add_argument("--local", required=True)
     grade_p.add_argument("--out", required=True)
@@ -559,11 +485,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_tight_memory=args.allow_tight_memory,
         )
         print(json.dumps(result, sort_keys=True))
-        return 0
-    if args.command == "flex-sample":
-        print(
-            json.dumps(run_gemini_flex_sample(args.input, args.out, limit=args.limit, seed=args.seed), sort_keys=True)
-        )
         return 0
     if args.command == "grade":
         print(json.dumps(grade_outputs(args.selection, args.local, args.out, flex_jsonl=args.flex), sort_keys=True))

@@ -181,3 +181,43 @@ def test_build_selection_query_does_not_reference_enrichment_columns():
     lowered = query.lower()
     for forbidden in ["summary", "tags", "importance", "intent", "key_facts", "resolved_queries", "raw_entities_json"]:
         assert forbidden not in lowered
+
+
+def test_grade_outputs_still_reads_saved_flex_artifacts_offline(tmp_path):
+    import json
+
+    from brainlayer.eval.enrichment_quality_benchmark import grade_outputs, write_jsonl
+
+    enrichment = {
+        "summary": "Retain the synthetic offline grading fixture.",
+        "key_facts": ["The fixture stays offline."],
+        "tags": ["offline", "fixture", "grading"],
+        "importance": 5,
+        "intent": "deciding",
+        "primary_symbols": [],
+        "resolved_query": "offline fixture grading",
+        "resolved_queries": ["offline fixture", "synthetic grading", "retained fixture grading"],
+        "epistemic_level": "validated",
+        "version_scope": None,
+        "debt_impact": "none",
+        "external_deps": [],
+        "entities": [],
+        "sentiment_label": "neutral",
+        "sentiment_score": 0,
+        "sentiment_signals": [],
+    }
+    selection, local, flex, report_path = (
+        tmp_path / name for name in ("selection.jsonl", "local.jsonl", "saved-flex.jsonl", "report.json")
+    )
+    write_jsonl(
+        [{"chunk_id": "fixture", "chunk_text": enrichment["summary"], "gemini_existing": enrichment}], selection
+    )
+    for path in (local, flex):
+        write_jsonl([{"chunk_id": "fixture", "enrichment": enrichment}], path)
+    before = {path: path.read_bytes() for path in (selection, local, flex)}
+    report = grade_outputs(selection, local, report_path, flex_jsonl=flex)
+    assert report["local"]["count"] == report["flex_variance"]["count"] == 1
+    assert report["local_scores"][0]["schema_passed"] is True
+    assert report["verdict"] == "local-matches-flex-variance"
+    assert json.loads(report_path.read_text()) == json.loads(json.dumps(report))
+    assert {path: path.read_bytes() for path in before} == before
