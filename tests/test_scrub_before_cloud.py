@@ -380,7 +380,7 @@ def _llm_response_echoing_tokens() -> str:
 
 
 def test_parse_enrichment_scrubs_every_output_field():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     enrichment = parse_enrichment(_llm_response_echoing_tokens())
 
@@ -391,7 +391,7 @@ def test_parse_enrichment_scrubs_every_output_field():
 
 def test_parse_enrichment_fails_closed_when_output_scrub_raises(monkeypatch):
     from brainlayer.pipeline import cloud_scrub
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     monkeypatch.setattr(cloud_scrub, "scrub_secrets", lambda text: (_ for _ in ()).throw(RuntimeError("boom")))
 

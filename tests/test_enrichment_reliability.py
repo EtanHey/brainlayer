@@ -1,6 +1,6 @@
 """Tests for enrichment reliability — retry, circuit breaker, timeout config."""
 
-from brainlayer.pipeline import enrichment
+from brainlayer.pipeline import enrichment_results as enrichment
 
 
 def test_parse_enrichment_uses_hybrid_tag_taxonomy_by_default(monkeypatch):
@@ -72,6 +72,8 @@ def test_parse_enrichment_version_stamps_outputs(monkeypatch):
 
 
 def test_build_prompt_switches_tag_rules_with_env(monkeypatch):
+    from brainlayer.pipeline import enrichment
+
     chunk = {
         "content": "BrainLayer React.js tag normalization decision.",
         "project": "brainlayer",

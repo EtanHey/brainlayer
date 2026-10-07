@@ -134,7 +134,7 @@ class TestParseEnrichment:
     """Test enrichment JSON parsing — existing but good to verify."""
 
     def test_valid_json(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         text = (
             '{"summary":"Test summary here","tags":["tech/testing","project/brainlayer"],'
@@ -148,7 +148,7 @@ class TestParseEnrichment:
         assert result["intent"] == "debugging"
 
     def test_json_with_extra_text(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         text = (
             'Here is the result:\n{"summary":"Found it","tags":["test"],"importance":5,"intent":"implementing"}\nDone.'
@@ -158,21 +158,21 @@ class TestParseEnrichment:
         assert result["summary"] == "Found it"
 
     def test_invalid_json(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         assert parse_enrichment("not json at all") is None
         assert parse_enrichment("") is None
         assert parse_enrichment(None) is None
 
     def test_missing_required_fields(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         # Missing tags — should return None
         text = '{"summary":"test"}'
         assert parse_enrichment(text) is None
 
     def test_extended_fields_optional(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         text = '{"summary":"Testing extended fields work correctly","tags":["python"],"importance":5,"intent":"debugging","primary_symbols":["MyClass"],"resolved_query":"How to fix it?","epistemic_level":"validated","debt_impact":"resolution","external_deps":["fastapi"]}'
         result = parse_enrichment(text)
