@@ -30,7 +30,6 @@ final class BrainBarUXLogicTests: XCTestCase {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(indicators.indexing.status, .live)
-        XCTAssertEqual(indicators.enriching.status, .idle)
     }
 
     func testPipelineIndicatorsKeepHistoricalMetadataDebtIdle() {
@@ -56,7 +55,6 @@ final class BrainBarUXLogicTests: XCTestCase {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats)
 
         XCTAssertEqual(indicators.indexing.status, .idle)
-        XCTAssertEqual(indicators.enriching.status, .idle)
     }
 
     func testPipelineStateIsIdleForPendingBacklogWhenEnrichmentIsOff() {
@@ -185,8 +183,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .live)
-        XCTAssertEqual(summary.queue.status, .stable)
-        XCTAssertEqual(summary.enrichment.status, .idle)
+        XCTAssertEqual(summary.queue.status, .empty)
         XCTAssertEqual(summary.windowLabel, "Last 1h")
     }
 
@@ -734,9 +731,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .idle)
-        XCTAssertEqual(summary.queue.status, .stable)
-        XCTAssertEqual(summary.enrichment.status, .idle)
-        XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)")
+        XCTAssertEqual(summary.queue.status, .empty)
     }
 
     func testDashboardFlowSummaryPreservesHistoricalCompletionBuckets() {
@@ -758,11 +753,7 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
-        XCTAssertEqual(summary.enrichment.sparklineLabel, "Historical enrichment completions over Last 1h")
-        XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
         let formattedCount = DashboardMetricFormatter.integerString(2_055)
-        XCTAssertEqual(summary.enrichment.statusText, "Enrichment retired")
-        XCTAssertEqual(summary.enrichment.volumeText, "\(formattedCount) in 1h")
     }
 
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {

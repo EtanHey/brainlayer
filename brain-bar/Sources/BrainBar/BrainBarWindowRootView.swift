@@ -146,13 +146,7 @@ struct BrainBarQueueDirectionPresentation: Equatable {
     let symbol: String
     let tone: BrainBarQueueDirectionTone
 
-    static func derive(_ status: DashboardQueueStatus, backlogCount: Int = 0) -> Self {
-        if status != .unavailable, backlogCount > 0 {
-            return Self(
-                label: "Enrichment retired · \(DashboardMetricFormatter.integerString(backlogCount)) unenriched",
-                symbol: "archivebox", tone: .neutral
-            )
-        }
+    static func derive(_ status: DashboardQueueStatus) -> Self {
         return switch status {
         case .empty, .stable:
             Self(label: "Queue \(status.label)", symbol: "arrow.left.and.right", tone: .neutral)
@@ -382,7 +376,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
     /// The same definition in full, for the tooltip.
     static let agentWritesDefinitionDetail =
         "New chunks agents stored with the brain_store tool (chunks.source = 'mcp'), rolling 24 h by created_at. "
-        + "Excludes watcher-ingested transcripts, hooks, enrichment, digest and replays."
+        + "Excludes watcher-ingested transcripts, hooks, digest and replays."
 
     func agentWritesDetailText(locale: Locale) -> String {
         guard let agentWritesCount else {
@@ -1116,10 +1110,6 @@ private struct BrainBarDashboardView: View {
 
     private var statusStrip: some View {
         let status = onePagePresentation.status
-        let queueDirection = BrainBarQueueDirectionPresentation.derive(
-            flowSummary.queue.status,
-            backlogCount: flowSummary.queue.backlogCount
-        )
         let attentionItems = onePagePresentation.attentionItems
         let statusColor: Color = switch status.tone {
         case .green: Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
@@ -1183,15 +1173,7 @@ private struct BrainBarDashboardView: View {
                 }
             }
             Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(queueDirectionStatusColor(queueDirection.tone))
-                    .frame(width: 6, height: 6)
-                Label(queueDirection.label, systemImage: queueDirection.symbol)
-                    .foregroundStyle(Color.brainBarTextPrimary)
-            }
-                .font(.system(size: 11, weight: .semibold))
-                .fixedSize(horizontal: true, vertical: false)
+
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1204,22 +1186,7 @@ private struct BrainBarDashboardView: View {
         .accessibilityIdentifier("brainbar.dashboard.status")
     }
 
-    private func queueDirectionStatusColor(_ tone: BrainBarQueueDirectionTone) -> Color {
-        switch tone {
-        case .neutral:
-            Color(nsColor: BrainBarDesignTokens.Colors.statusUnknown)
-        case .active:
-            Color(nsColor: BrainBarDesignTokens.Colors.statusOK)
-        case .warning:
-            Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
-        case .error:
-            Color(nsColor: BrainBarDesignTokens.Colors.statusError)
-        }
-    }
 
-
-
-    @ViewBuilder
     private func summaryTiles(layout: BrainBarDashboardLayout) -> some View {
         Group {
             if layout.compactCards {
@@ -1477,7 +1444,6 @@ private struct BrainBarDashboardView: View {
         case .allCommits: allCommitPulseRevision
         case .agentStores: writePulseRevision
         case .jsonlWatcher: watcherPulseRevision
-        case .enrichment: 0
         }
     }
 
@@ -1486,7 +1452,6 @@ private struct BrainBarDashboardView: View {
         case .allCommits: "All chunks · chunk rows"
         case .agentStores: "Agent · chunk rows"
         case .jsonlWatcher: "Watcher · unique chunk IDs"
-        case .enrichment: "Enriched · chunk rows"
         }
     }
 
@@ -2780,7 +2745,7 @@ private struct BrainBarFlowLaneCard: View {
                 activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
                 pulseRevision: pulseRevision,
-                referenceValue: sparklineReferenceValue,
+                referenceValue: nil,
                 metricDisclosure: nil,
                 accessibilitySummary: nil
             )
@@ -2819,12 +2784,7 @@ private struct BrainBarFlowLaneCard: View {
         .background(BrainBarDashboardCardStyle(emphasized: emphasize))
     }
 
-    private var sparklineReferenceValue: Int? {
-        guard lane.name.localizedCaseInsensitiveContains("enrichment") else { return nil }
-        let peak = max(lane.values.max() ?? 0, lane.secondaryValues.max() ?? 0, lane.tertiaryValues.max() ?? 0)
-        // No benchmark line on a completely empty chart — it would imply a phantom target.
-        return peak > 0 ? peak : nil
-    }
+
 }
 
 /// The ONE shared window for every pipeline graph: Live(1h) / 3h / 24h.
@@ -2974,7 +2934,7 @@ private struct BrainBarTimeframeButton: View {
 }
 
 /// A single-series truth card for chunk rows, agent-origin chunks,
-/// watcher-ingested chunks, or successful enrichments.
+/// watcher-ingested chunks.
 ///
 /// Unlike `BrainBarFlowLaneCard` (kept for legacy `ingress`/diagnostics callers),
 /// this card plots exactly ONE series so `SparklineChartPresentation.maxValue`
@@ -3010,13 +2970,8 @@ private struct BrainBarPipelineSeriesCard: View {
     }
 
     /// "scale · peak N" so two similar-height waveforms are not misread as equal
-    /// volume — the magnitude gap stays honest even at auto-fit y-scales. When a
-    /// dashed reference line is drawn (enrichment lanes), the caption doubles as
-    /// its legend — "dashed = peak N" — so the line is never an unlabeled mystery.
+    /// volume — the magnitude gap stays honest even at auto-fit y-scales.
     private var scaleCaptionText: String {
-        if sparklineReferenceValue != nil {
-            return "scale · dashed = peak \(presentation.axisMax)"
-        }
         return "scale · peak \(presentation.axisMax)"
     }
 
@@ -3059,7 +3014,7 @@ private struct BrainBarPipelineSeriesCard: View {
                     activityWindowMinutes: lane.activityWindowMinutes,
                 fetchedAt: fetchedAt,
                 pulseRevision: pulseRevision,
-                referenceValue: sparklineReferenceValue,
+                referenceValue: nil,
                 metricDisclosure: chartDisclosure.tooltipDisclosure,
                 accessibilitySummary: chartDisclosure.accessibilitySummary
                 )
@@ -3145,11 +3100,7 @@ private struct BrainBarPipelineSeriesCard: View {
         }
     }
 
-    private var sparklineReferenceValue: Int? {
-        guard series == .enrichment else { return nil }
-        let peak = lane.values.max() ?? 0
-        return peak > 0 ? peak : nil
-    }
+
 }
 
 struct BrainBarIngestSeriesPresentation: Equatable {
@@ -3204,13 +3155,7 @@ struct BrainBarDashboardChartDisclosure: Equatable {
             statusLabel = lane.statusText
             clockLabel = "ingest time"
             unitLabel = "unique chunk IDs first seen in this window"
-        case .enrichment:
-            subtitle = "Completion time · successful chunk rows"
-            visibleDetail = "Success status only; failed, skipped, and pending rows are disclosed above."
-            accessibilityIdentifier = "brainbar.dashboard.chart.enriched-successfully"
-            statusLabel = lane.status.label
-            clockLabel = "successful enrichment completion time"
-            unitLabel = "success-status chunk rows"
+
         }
 
         if lane.evidenceStatus == .unavailable {
@@ -3335,7 +3280,7 @@ enum BrainBarFlowLaneCardPreview {
 }
 
 /// Debug-only seam: render the (private) PIPELINE + SIGNAL-COVERAGE composition
-/// (writes card -> signal coverage panel -> enrichments card + queue rail ->
+/// (writes card -> signal coverage panel -> queue rail ->
 /// agent presence) exactly as `BrainBarDashboardView.pipelinePanel` lays it out,
 /// but driven by an injected mock `DashboardStats` instead of a live
 /// `StatsCollector`. This is the slice currently being redesigned; visual QA

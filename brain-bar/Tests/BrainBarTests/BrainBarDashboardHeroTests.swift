@@ -44,7 +44,6 @@ final class BrainBarDashboardHeroTests: XCTestCase {
             ingress: ingress,
             agentWriteReadability: baseline.agentWriteReadability,
             queue: baseline.queue,
-            enrichment: baseline.enrichment,
             watcherFlowState: state,
             watcherStatus: status ?? baseline.watcherStatus,
             watcherStatusReason: (status ?? baseline.watcherStatus).reasonText(now: BrainBarDashboardFixture.fetchedAt)
