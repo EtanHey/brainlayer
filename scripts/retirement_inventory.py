@@ -74,14 +74,75 @@ def python_sites(text, path):
             for item in node.names:
                 aliases[item.asname or item.name] = (node.module or "") + "." + item.name
 
+    def resolve(node):
+        if isinstance(node, ast.Name):
+            return aliases.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            return resolve(node.value) + "." + node.attr
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            return resolve(node.args[0]) + "." + node.args[1].value
+        if isinstance(node, ast.Call):
+            callee = resolve(node.func)
+            if transport_import(callee) and callee.rsplit(".", 1)[-1] in factories:
+                return callee + "()"
+            return "<call-result>"
+        target = ast.unparse(node)
+        first, dot, remainder = target.partition(".")
+        return aliases.get(first, first) + (dot + remainder if dot else "")
+
+    def callable_target(target):
+        last = target.rsplit(".", 1)[-1]
+        return target not in {"re.compile", "platform.system"} and (
+            last in NETWORK_NAMES | DYNAMIC_NAMES | PROCESS_NAMES | {"get"}
+            or (transport_import(target) and not last.isupper())
+        )
+
+    # Bind callable values, not arbitrary return values (e.g. CompletedProcess data).
+    factories = {"Session", "Client", "AsyncClient", "ClientSession", "socket", "SSLContext", "create_connection"}
+    bindings = [node for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
+    for _ in range(len(bindings) + 1):
+        changed = False
+        for node in bindings:
+            value = node.value
+            if value is None or not isinstance(value, (ast.Name, ast.Attribute, ast.Call)):
+                continue
+            if isinstance(value, ast.Name) and value.id not in aliases and value.id not in DYNAMIC_NAMES:
+                continue
+            if isinstance(value, ast.Call):
+                callee = resolve(value.func)
+                if transport_import(callee) and callee.rsplit(".", 1)[-1] in factories:
+                    target = callee + "()"
+                elif isinstance(value.func, ast.Name) and value.func.id == "getattr":
+                    target = resolve(value)
+                else:
+                    continue
+            else:
+                target = resolve(value)
+            if not callable_target(target):
+                continue
+            names = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for name in names:
+                if isinstance(name, ast.Name) and name.id not in aliases:
+                    aliases[name.id] = target
+                    changed = True
+        if not changed:
+            break
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
     def walk(node, owner):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             owner = owner + "." + node.name
         if isinstance(node, (ast.Import, ast.ImportFrom, ast.Call)):
             target = ast.unparse(node.func) if isinstance(node, ast.Call) else ast.unparse(node)
             if isinstance(node, ast.Call):
-                first, dot, remainder = target.partition(".")
-                target = aliases.get(first, first) + (dot + remainder if dot else "")
+                target = resolve(node.func)
             last = target.rsplit(".", 1)[-1]
             kind = None
             if isinstance(node, ast.Import) and any(transport_import(item.name) for item in node.names):
@@ -107,12 +168,43 @@ def python_sites(text, path):
                 and (last in PROCESS_NAMES or (last == "run" and "subprocess" in target))
             ):
                 kind = "child_process"
+            if (
+                isinstance(node, ast.Call)
+                and kind is None
+                and ast.unparse(node.func).split(".")[0] in aliases
+                and transport_import(target)
+            ):
+                kind = "transport_call"
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and callable_target(resolve(node))
+            ):
+                kind = "callable_reference"
             if kind:
                 sites.append(
                     {
                         "path": path,
                         "owner": owner,
                         "kind": kind,
+                        "target": target,
+                        "call_sha256": hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest(),
+                    }
+                )
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            # Direct calls are already bound above; classify only the outer escaping expression.
+            direct = isinstance(parent, ast.Call) and parent.func is node
+            nested = isinstance(parent, ast.Attribute) and parent.value is node
+            target = resolve(node)
+            known = not isinstance(node, ast.Name) or node.id in aliases or node.id in DYNAMIC_NAMES
+            if known and not direct and not nested and callable_target(target):
+                sites.append(
+                    {
+                        "path": path,
+                        "owner": owner,
+                        "kind": "callable_reference",
                         "target": target,
                         "call_sha256": hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest(),
                     }
