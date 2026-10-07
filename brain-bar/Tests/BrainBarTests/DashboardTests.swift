@@ -3240,7 +3240,7 @@ final class DashboardTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .live)
-        XCTAssertEqual(summary.enrichment.status, .live)
+        XCTAssertEqual(summary.enrichment.status, .idle)
         XCTAssertNotEqual(summary.queue.status, .unavailable)
         XCTAssertEqual(summary.ingress.volumeText, "3 in 30m")
         XCTAssertEqual(summary.enrichment.volumeText, "2 in 30m")

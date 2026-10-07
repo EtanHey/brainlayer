@@ -8,7 +8,7 @@ from pathlib import Path
 from brainlayer.notification_policy import by_design_reason
 
 
-def test_paused_enrichment_only_suppresses_enrichment_backlog(tmp_path: Path) -> None:
+def test_retired_producer_reason_cannot_suppress_durable_queue(tmp_path: Path) -> None:
     sentinel = tmp_path / "pause.sentinel"
     sentinel.write_text(
         json.dumps(
@@ -22,16 +22,18 @@ def test_paused_enrichment_only_suppresses_enrichment_backlog(tmp_path: Path) ->
     )
     env = {"BRAINLAYER_PAUSE_SENTINEL_PATH": str(sentinel)}
 
-    assert "enrichment" in (by_design_reason("enrichment_backlog", env=env) or "")
+    reason = by_design_reason("enrichment_backlog", env=env)
+    assert reason and "retired" in reason and "paused" not in reason
+    assert by_design_reason("queue_backlog", env=env) is None
     assert by_design_reason("watcher_stopped", env=env) is None
 
 
-def test_disabled_enrichment_suppresses_only_enrichment_backlog() -> None:
+def test_retired_producer_reason_ignores_activation_flags() -> None:
     for variable in ("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "BRAINLAYER_ENRICH_ENABLED"):
         for value in ("0", "false", "NO", "Off", "disabled"):
             env = {variable: value}
             assert by_design_reason("enrichment_backlog", env=env) == (
-                f"enrichment is disabled by configuration ({variable})"
+                "enrichment producers are retired; existing metadata is historical"
             )
             assert by_design_reason("watcher_stopped", env=env) is None
 

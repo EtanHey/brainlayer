@@ -229,13 +229,12 @@ def disable_live_gemini_for_unit_tests(monkeypatch, request):
 def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
     """Fail even when a retired entrypoint swallows a cloud-factory exception.
 
-    Scope this to retired CLI/MCP/store tests; retained producer fixtures and
-    the non-enrichment cloud exceptions continue to exercise their own mocks.
+    Scope this to marked retirement tests and legacy CLI/MCP/store test names.
     SDK class initialization is patched in place so pre-bound aliases cannot evade
     the guard. The teardown assertion also catches attempts in joined threads.
     Unjoined/daemon threads and subprocess children are NOT covered.
     """
-    retired = (
+    retired = request.node.get_closest_marker("retired_enrichment") or (
         request.node.path.name in {"test_cli_enrich.py", "test_retired_controller_batch.py"}
         or request.node.name.startswith("test_brain_enrich_handler_")
         or request.node.name.startswith("test_brain_digest_retired_")

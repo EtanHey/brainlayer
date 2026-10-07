@@ -1,5 +1,9 @@
 # Hierarchical knowledge clustering for BrainLayer's personal knowledge graph
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 **Recursive Leiden community detection on a Faiss-built KNN graph is the optimal algorithm for BrainLayer's 245K chunks**, running entirely on an M1 Pro in under 30 minutes at ~3–4 GB peak memory. This approach delivers a clean 3-level hierarchy with direct control over cluster counts, supports incremental updates, and leverages the user's existing Leiden experience. The biggest risk isn't the clustering itself but the Hebrew embeddings: bge-large-en-v1.5 produces near-random vectors for Hebrew text, meaning **16K WhatsApp chunks need re-embedding with BGE-M3** before clustering can work cross-lingually.
 
 This report provides a complete implementation blueprint: algorithm with parameters, memory plan, Python code outline, SQLite schema, incremental strategy, search integration, labeling pipeline, content automation hooks, visualization approach, migration plan, and risk assessment.
