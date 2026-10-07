@@ -1,16 +1,10 @@
 """An unclassified generic sender cannot hide behind a novel endpoint/alias."""
 
 import json
-from pathlib import Path
 
 import pytest
 
 from scripts.retirement_inventory import check_policy, fingerprint, inventory, python_sites
-
-
-def test_repository_transport_sites_are_explicitly_classified():
-    report = check_policy(Path(__file__).resolve().parents[1])
-    assert report["sites"] and not report["unclassified"], report["unclassified"]
 
 
 @pytest.mark.parametrize(

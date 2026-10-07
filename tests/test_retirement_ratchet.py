@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 from scripts import ci_ratchet_table as ratchet
+from scripts.retirement_inventory import check_policy
 from tests.test_ci_ratchet_table import HEAD, retirement_receipt
 
 
@@ -35,3 +36,8 @@ def test_workflow_has_unconditional_failure_handoff():
     collect = next(step for step in jobs["table"]["steps"] if step.get("name") == "Collect ratchet rows")
     assert "--retirement-report" in collect["run"]
     assert "RETIREMENT_RESULT" in collect["env"] and "!= success" in collect["run"]
+
+
+def test_repository_transport_sites_are_explicitly_classified():
+    report = check_policy(Path(__file__).resolve().parents[1])
+    assert report["sites"] and not report["unclassified"], report["unclassified"]
