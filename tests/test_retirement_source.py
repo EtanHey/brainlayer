@@ -4,9 +4,29 @@ from pathlib import Path
 
 import pytest
 
-from scripts.retirement_source import python_findings, source_scan
+from scripts.retirement_source import MODEL_URL, python_findings, source_scan
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "openrouter.ai",
+        "api.deepseek.com",
+        "api.together.xyz",
+        "api.fireworks.ai",
+        "api.perplexity.ai",
+        "bedrock-runtime.us-east-1.amazonaws.com",
+        "bedrock-runtime.cn-north-1.amazonaws.com.cn",
+        "fixture.openai.azure.com",
+        "api-inference.huggingface.co",
+        "router.huggingface.co",
+        "fixture.us-east-1.aws.endpoints.huggingface.cloud",
+    ],
+)
+def test_model_provider_rest_hosts_are_forbidden(host):
+    assert MODEL_URL.search(f"https://{host}/model")
 
 
 @pytest.mark.parametrize(

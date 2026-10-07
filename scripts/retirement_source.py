@@ -33,8 +33,11 @@ SDKS = {
 SEND_NAMES = {"generate_content", "generate_content_stream", "generateContent", "generateContentStream"}
 MODEL_URL = re.compile(
     r"https?://(?:api\.(?:openai\.com|anthropic\.com|groq\.com|cohere\.(?:ai|com)|"
-    r"mistral\.ai|x\.ai)|generativelanguage\.googleapis\.com|"
-    r"(?:[^/]+-)?aiplatform\.googleapis\.com)(?:/|\b)",
+    r"mistral\.ai|x\.ai|deepseek\.com|together\.(?:xyz|ai)|fireworks\.ai|perplexity\.ai)|"
+    r"openrouter\.ai|generativelanguage\.googleapis\.com|"
+    r"(?:[^/]+-)?aiplatform\.googleapis\.com|bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?|"
+    r"[a-z0-9.-]+\.openai\.azure\.com|(?:api-inference|router)\.huggingface\.co|"
+    r"[a-z0-9.-]+\.endpoints\.huggingface\.cloud)(?=/|[\s'\"]|$)",
     re.I,
 )
 ROOTS = ("src", "scripts", "hooks", "brain-bar/Sources", "dashboard")
