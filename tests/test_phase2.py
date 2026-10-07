@@ -56,45 +56,6 @@ class TestBackendAutoDetection:
                     assert _detect_default_backend() == "ollama"
 
 
-class TestCallLlmBackendOverride:
-    """Test that call_llm respects the backend parameter."""
-
-    @patch("brainlayer.pipeline.enrichment.call_mlx", return_value='{"summary":"test"}')
-    @patch("brainlayer.pipeline.enrichment.call_glm", return_value='{"summary":"test"}')
-    def test_override_to_mlx(self, mock_glm, mock_mlx):
-        """Backend override to MLX calls call_mlx."""
-        from brainlayer.pipeline.enrichment import call_llm
-
-        call_llm("test prompt", backend="mlx")
-        mock_mlx.assert_called_once()
-        mock_glm.assert_not_called()
-
-    @patch("brainlayer.pipeline.enrichment.call_mlx", return_value='{"summary":"test"}')
-    @patch("brainlayer.pipeline.enrichment.call_glm", return_value='{"summary":"test"}')
-    def test_override_to_ollama(self, mock_glm, mock_mlx):
-        """Backend override to Ollama calls call_glm."""
-        from brainlayer.pipeline.enrichment import call_llm
-
-        call_llm("test prompt", backend="ollama")
-        mock_glm.assert_called_once()
-        mock_mlx.assert_not_called()
-
-    @patch("brainlayer.pipeline.enrichment.call_mlx", return_value='{"summary":"test"}')
-    @patch("brainlayer.pipeline.enrichment.call_glm", return_value='{"summary":"test"}')
-    def test_none_uses_module_default(self, mock_glm, mock_mlx):
-        """None backend uses the module-level ENRICH_BACKEND."""
-        from brainlayer.pipeline import enrichment
-        from brainlayer.pipeline.enrichment import call_llm
-
-        original = enrichment.ENRICH_BACKEND
-        try:
-            enrichment.ENRICH_BACKEND = "ollama"
-            call_llm("test prompt", backend=None)
-            mock_glm.assert_called_once()
-        finally:
-            enrichment.ENRICH_BACKEND = original
-
-
 class TestCurrentContextFix:
     """Test that current_context returns data from chunks table when session_context is empty."""
 

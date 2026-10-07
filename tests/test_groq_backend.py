@@ -154,13 +154,6 @@ class TestGroqBackendSelection:
         enrichment._fallback_active = False
         enrichment._fallback_available = None
 
-    def test_call_llm_routes_to_groq(self):
-        """call_llm with backend='groq' calls call_groq."""
-        with patch.object(enrichment, "call_groq", return_value='{"summary":"ok"}') as mock_groq:
-            result = enrichment.call_llm("test prompt", backend="groq")
-        assert result == '{"summary":"ok"}'
-        mock_groq.assert_called_once()
-
     def test_detect_backend_groq_from_env(self):
         """BRAINLAYER_ENRICH_BACKEND=groq is recognized."""
         with patch.dict(os.environ, {"BRAINLAYER_ENRICH_BACKEND": "groq"}):

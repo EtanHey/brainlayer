@@ -66,10 +66,33 @@ def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
         if surface == "cli"
         else "tests/test_mcp_palette.py::test_retired_enrich_is_neither_advertised_nor_dispatched[core]"
         if surface == "palette"
-        else "tests/test_enrichment_controller.py::test_brain_enrich_handler_stats_is_retired_without_reading_metadata"
+        else "tests/test_retirement_factory_guard.py::test_brain_enrich_handler_cold_bootstrap"
     )
+    from importlib import import_module
+
+    def optional_module(name):
+        try:
+            return import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name and (name == exc.name or name.startswith(exc.name + ".")):
+                return None
+            raise
+
+    targets = {
+        "controller._get_gemini_client()": ("brainlayer.enrichment_controller", "_get_gemini_client"),
+        "enrichment.call_llm('synthetic prompt')": ("brainlayer.pipeline.enrichment", "call_llm"),
+        "Client(api_key='synthetic-key')": ("google.genai.client", "Client"),
+        "AsyncClient(api_client=None)": ("google.genai.client", "AsyncClient"),
+    }
+    if attempt in targets:
+        module_name, symbol = targets[attempt]
+        module = optional_module(module_name)
+        if module is None or not hasattr(module, symbol):
+            pytest.skip(f"Retired optional mutation target absent: {module_name}.{symbol}")
+
     probe = f"""
 import pytest
+import importlib
 import httpx
 import requests
 import asyncio
@@ -87,11 +110,18 @@ class Mutation:
         # Conftest isolates config before these imports. Capture SDK aliases
         # before the guard is armed, and make an absent guard network-safe.
         global Client, AsyncClient, controller, enrichment, precreated_httpx, precreated_requests, send_precreated_async
-        from google.genai.client import Client, AsyncClient
-        from brainlayer import enrichment_controller as controller
-        from brainlayer.pipeline import enrichment
-        enrichment.GROQ_API_KEY = ''
-        enrichment.ENRICH_BACKEND = 'groq'
+        def optional(name):
+            try:
+                return importlib.import_module(name)
+            except ModuleNotFoundError as exc:
+                if exc.name and (name == exc.name or name.startswith(exc.name + '.')):
+                    return None
+                raise
+        sdk = optional('google.genai.client')
+        Client = sdk.Client if sdk else None
+        AsyncClient = sdk.AsyncClient if sdk else None
+        controller = optional('brainlayer.enrichment_controller')
+        enrichment = optional('brainlayer.pipeline.enrichment')
         if {"precreated" in attempt!r}:
             transport = httpx.MockTransport(lambda req: httpx.Response(200, request=req))
             precreated_httpx = httpx.Client(transport=transport, trust_env=False)
