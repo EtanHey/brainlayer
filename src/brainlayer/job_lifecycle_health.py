@@ -13,7 +13,7 @@ EXIT_RE = re.compile(r"(?m)^\s*last exit code\s*=\s*(-?\d+)\s*$")
 RUNS_RE = re.compile(r"(?m)^\s*runs\s*=\s*(\d+)\s*$")
 MAX_HEAL_ATTEMPTS = 3
 MIN_FAILURES = 2
-SKIP_NAMES = {"enrichment", "brainbar", "brainbar-daemon", "backup-daily", "jsonl-backup", "health-check"}
+SKIP_NAMES = {"enrich", "enrichment", "brainbar", "brainbar-daemon", "backup-daily", "jsonl-backup", "health-check"}
 
 
 @dataclass(frozen=True)

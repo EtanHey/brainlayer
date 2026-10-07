@@ -41,6 +41,7 @@ from .pause import (
 )
 from .pipeline.secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested, scrub_tags
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL
 from .runtime_store import _without_connection_maintenance_hooks
 from .vector_store import _configure_writer_pragmas
 from .wal_checkpoint import checkpoint_guard
@@ -66,7 +67,6 @@ _DRAIN_PROGRESS_SCAN_INTERVAL_SECONDS = 10.0
 DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT = 50
 FALLBACK_REPLAY_ON_START_ENV = "BRAINLAYER_FALLBACK_REPLAY_ON_START"
 FALLBACK_REPLAY_ON_START_LIMIT_ENV = "BRAINLAYER_FALLBACK_REPLAY_ON_START_LIMIT"
-_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 # The post-commit WAL checkpoint is best-effort and must stay non-blocking. A
 # truncating checkpoint can wedge the live writer behind long-lived readers on a
 # multi-GB WAL; the scheduled wal-checkpoint job owns truncation.
@@ -1612,7 +1612,7 @@ def burn_drain_once(
     queue_dir.mkdir(parents=True, exist_ok=True)
     max_events_per_transaction = max(1, max_events_per_transaction)
     pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
-    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
+    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
 
     result = BurnDrainResult()
     lock_fd = _acquire_queue_lock(queue_dir)
@@ -1649,7 +1649,9 @@ def burn_drain_once(
                     try:
                         _preserve_remaining_events(path, paused_events)
                     except OSError as exc:
-                        _log(log_path, f"burn drain could not preserve paused enrichment in {path}: {exc}")
+                        _log(
+                            log_path, f"burn drain could not preserve held historical metadata updates in {path}: {exc}"
+                        )
             return result
         queue_telemetry = _queue_telemetry([path for path, _events in batch], all_events)
         batch_includes_store = _events_include_store(all_events)
@@ -1744,7 +1746,10 @@ def burn_drain_once(
                 try:
                     _preserve_remaining_events(path, paused_events)
                 except OSError as exc:
-                    _log(log_path, f"burn drain committed but could not preserve paused enrichment in {path}: {exc}")
+                    _log(
+                        log_path,
+                        f"burn drain committed but could not preserve held historical metadata updates in {path}: {exc}",
+                    )
                 continue
             try:
                 path.unlink()
@@ -1785,7 +1790,7 @@ def drain_once(
     pause_sentinel_path = pause_sentinel_path or DEFAULT_PAUSE_SENTINEL_PATH
     queue_dir.mkdir(parents=True, exist_ok=True)
     pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
-    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
+    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
@@ -1820,7 +1825,7 @@ def drain_once(
                     try:
                         _preserve_remaining_events(path, remaining_events)
                     except OSError as exc:
-                        _log(log_path, f"drain could not preserve paused enrichment in {path}: {exc}")
+                        _log(log_path, f"drain could not preserve held historical metadata updates in {path}: {exc}")
                 continue
             queue_telemetry = _queue_telemetry([path], events_to_apply)
             events_include_store = _events_include_store(events_to_apply)
@@ -1999,12 +2004,12 @@ def _queue_progress_state(
         pause_payload, pause_active, _ = pause_sentinel_state(DEFAULT_PAUSE_SENTINEL_PATH, now)
         if (
             pause_active
-            and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
+            and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
             and queue_contains_only_enrichment(queue_dir, count)
         ):
             return {
-                "state": "drain_paused",
-                "reason": f"queue_count={count} contains only deliberately paused enrichment updates",
+                "state": "drain_legacy_queue_held",
+                "reason": f"queue_count={count} contains only historical metadata updates held by the maintenance sentinel",
             }, count
         return {
             "state": "drain_progress_stalled",
