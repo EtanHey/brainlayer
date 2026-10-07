@@ -31,6 +31,7 @@
 - Search validation hardened with backfill coverage (a108aff)
 
 ### Changed
+- Service JSON compatibility: doctor and drain-liveness alarm details retain retired `enrichment_backlog: null` for one release. Doctor code `queue_paused_enrichment` becomes `legacy_queue_held`; drain-health state `drain_paused` becomes `drain_legacy_queue_held`. Removed codes: `enrichment_unloaded`, `enrichment_idle_with_backlog`, `enrichment_backlog_count_failed`. Enrichment CLI options `--enrichment-label` and `--enrichment-plist-path` are removed; callers must stop passing them.
 - MCP tool count updated from 7 to 8 (brain_expand added)
 - Brain graph clustering documented as Leiden + UMAP (was incorrectly listed as HDBSCAN + UMAP)
 - Test count: 698 → 929 (after eval suite expansion and search hardening)

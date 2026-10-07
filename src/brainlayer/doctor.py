@@ -26,14 +26,12 @@ from .config import get_brainlayer_db_config_error
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
-    ENRICH_DAILY_COST_COUNTER_FILENAME,
     PROGRESS_STALLED_CODE,
     STALLED_CODE,
     check_drain_liveness,
 )
 from .health_check import (
     DEFAULT_DRAIN_LABEL,
-    DEFAULT_ENRICHMENT_LABEL,
     DEFAULT_HOTLANE_LABEL,
     DEFAULT_WATCH_LABEL,
     CommandRunner,
@@ -59,6 +57,7 @@ from .mcp_socket_config import (
 )
 from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
 from .pause import pause_applies_to_label, pause_sentinel_state, queue_contains_only_enrichment
+from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL
 from .search_repo import clear_hybrid_search_cache
 from .vector_store import VectorStore
 
@@ -214,7 +213,6 @@ class DoctorConfig:
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
     watch_label: str = DEFAULT_WATCH_LABEL
     drain_label: str = DEFAULT_DRAIN_LABEL
-    enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
     recent_window_hours: int = DEFAULT_RECENT_WINDOW_HOURS
     roundtrip_timeout_seconds: float = DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS
     roundtrip_probe_enabled: bool = True
@@ -247,9 +245,10 @@ class DoctorResult:
     recent_unvectored_chunks: int | None = None
     missing_vectors: int | None = None
     index_completeness: dict[str, Any] | None = None
-    enrichment_backlog: int | None = None
     queue_count: int | None = None
     queue_bytes: int | None = None
+    # Retired producer field: retain JSON null for one release; never measure it.
+    enrichment_backlog: None = field(default=None, init=False)
     hotlane_running: bool = False
     roundtrip_latency_seconds: float | None = None
     fts5_health: dict[str, Any] | None = None
@@ -389,25 +388,6 @@ def _index_completeness(db_path: Path, *, verify_payload: bool = False) -> dict[
         return index_census(conn, verify_vector_payload=verify_payload, collect_ids=False).summary()
     finally:
         conn.close()
-
-
-def _enrichment_backlog(db_path: Path) -> int:
-    with _ro_conn(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM chunks
-            WHERE enriched_at IS NULL
-              AND enrich_status IS NULL
-              AND COALESCE(char_count, length(content), 0) >= 50
-              AND content IS NOT NULL
-              AND content != ''
-              AND archived_at IS NULL
-              AND superseded_by IS NULL
-              AND aggregated_into IS NULL
-            """
-        ).fetchone()
-    return int(row[0] if row else 0)
 
 
 def _probe_embedding(text: str) -> list[float]:
@@ -811,14 +791,8 @@ def run_doctor(
                     reason=reason,
                 )
 
-    try:
-        result.enrichment_backlog = _enrichment_backlog(config.db_path)
-    except Exception as exc:
-        fatal("enrichment_backlog_failed", f"could not count enrichment backlog: {exc}")
-
     drain_loaded: bool | None = None
     for label, code, message in (
-        (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
         (config.hotlane_label, "hotlane_unloaded", "hot-lane launchd label is not loaded"),
         (config.watch_label, "watch_unloaded", "watch launchd label is not loaded"),
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
@@ -854,44 +828,34 @@ def run_doctor(
         if not hotlane_processes:
             fatal("hotlane_dead", "hot-lane embedding process is not running")
 
-    if result.enrichment_backlog and result.enrichment_backlog > 0:
-        warning(
-            "enrichment_idle_with_backlog",
-            "enrichment backlog is present; loaded-but-idle is warning-only for quota/throttle reality",
-            backlog=result.enrichment_backlog,
-        )
-
     queue_count, queue_bytes, _queue_oldest_age = _queue_stats(config.queue_dir, now)
     result.queue_count = queue_count
     result.queue_bytes = queue_bytes
-    paused_enrichment_queue = False
+    legacy_queue_held = False
     if queue_count > 0:
         pause_path = config.pause_sentinel_path or config.db_path.expanduser().parent / "pause.sentinel"
         pause_payload, pause_active, _ = pause_sentinel_state(pause_path, now)
-        paused_enrichment_queue = (
+        legacy_queue_held = (
             pause_active
-            and pause_applies_to_label(pause_payload, config.enrichment_label)
+            and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
             and queue_contains_only_enrichment(config.queue_dir, queue_count)
         )
     drain_health = _load_json(config.drain_health_path)
     watcher_health = _load_json(config.watcher_health_path)
     # Drain should publish heartbeat cycles even while the durable queue is empty.
-    # Stale drain health plus enrichment backlog is the loaded-but-dead case that
-    # the generic loaded-but-idle warning cannot distinguish from quota throttling.
+    # Only durable queued work participates in drain liveness after producer retirement.
     pending_drain_liveness_issue = check_drain_liveness(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
         queue_count=queue_count,
-        enrichment_backlog=result.enrichment_backlog,
         drain_health=drain_health,
         now=now,
         stale_seconds=config.drain_liveness_stale_seconds,
-        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
     drain_total = drain_health.get("drained_total")
     drain_cycles = drain_health.get("drain_cycles")
     watcher_poll_count = watcher_health.get("poll_count")
-    has_drain_backlog = queue_count > 0 or bool(result.enrichment_backlog and result.enrichment_backlog > 0)
+    has_drain_backlog = queue_count > 0
     drain_moving = queue_count == 0
     drain_liveness_moving = not has_drain_backlog
     watcher_moving = queue_count == 0
@@ -922,11 +886,9 @@ def run_doctor(
             drain_label=config.drain_label,
             drain_loaded=drain_loaded,
             queue_count=queue_count,
-            enrichment_backlog=result.enrichment_backlog,
             drain_health=next_drain_health,
             now=sample_now,
             stale_seconds=config.drain_liveness_stale_seconds,
-            enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
         )
     queue_moving = drain_moving or watcher_moving
     active_drain_liveness_issue = sampled_drain_liveness_issue if has_drain_backlog else pending_drain_liveness_issue
@@ -934,8 +896,8 @@ def run_doctor(
         suppress_stale_drain = (
             active_drain_liveness_issue.code == STALLED_CODE and has_drain_backlog and drain_liveness_moving
         )
-        suppress_paused_progress = active_drain_liveness_issue.code == PROGRESS_STALLED_CODE and paused_enrichment_queue
-        if not suppress_stale_drain and not suppress_paused_progress:
+        suppress_held_progress = active_drain_liveness_issue.code == PROGRESS_STALLED_CODE and legacy_queue_held
+        if not suppress_stale_drain and not suppress_held_progress:
             if isinstance(active_drain_liveness_issue, BrainLayerAlarm):
                 emit_alarm(active_drain_liveness_issue)
             result.issues.append(
@@ -946,10 +908,10 @@ def run_doctor(
                     active_drain_liveness_issue.details,
                 )
             )
-    if queue_count > 0 and paused_enrichment_queue:
+    if queue_count > 0 and legacy_queue_held:
         warning(
-            "queue_paused_enrichment",
-            "durable queue contains only deliberately paused enrichment updates",
+            "legacy_queue_held",
+            "historical metadata updates are held by the existing maintenance sentinel",
             queue_count=queue_count,
         )
     elif queue_count > 0 and not queue_moving:
