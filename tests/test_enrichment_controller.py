@@ -690,7 +690,7 @@ def test_enrich_local_is_disabled():
 
 
 def test_content_hash_deterministic():
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     h1 = _content_hash("hello world")
     h2 = _content_hash("hello world")
@@ -699,7 +699,7 @@ def test_content_hash_deterministic():
 
 
 def test_content_hash_strips_whitespace():
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     h1 = _content_hash("  hello world  ")
     h2 = _content_hash("hello world")
@@ -707,7 +707,7 @@ def test_content_hash_strips_whitespace():
 
 
 def test_content_hash_differs_for_different_content():
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     h1 = _content_hash("hello")
     h2 = _content_hash("world")
@@ -715,7 +715,7 @@ def test_content_hash_differs_for_different_content():
 
 
 def test_is_duplicate_returns_false_when_column_missing():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     store._read_cursor.side_effect = Exception("no such column: content_hash")
@@ -723,7 +723,7 @@ def test_is_duplicate_returns_false_when_column_missing():
 
 
 def test_is_duplicate_returns_true_when_hash_exists_enriched():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     cursor = MagicMock()
@@ -733,7 +733,7 @@ def test_is_duplicate_returns_true_when_hash_exists_enriched():
 
 
 def test_is_duplicate_returns_false_when_summary_cleared():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     cursor = MagicMock()
@@ -747,7 +747,7 @@ def test_is_duplicate_returns_false_when_summary_cleared():
 
 
 def test_is_duplicate_returns_false_when_hash_not_found():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     cursor = MagicMock()
@@ -757,7 +757,7 @@ def test_is_duplicate_returns_false_when_hash_not_found():
 
 
 def test_ensure_content_hash_column_creates_if_missing():
-    from brainlayer.enrichment_controller import _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _ensure_content_hash_column
 
     store = MagicMock()
     cursor = MagicMock()
@@ -767,7 +767,7 @@ def test_ensure_content_hash_column_creates_if_missing():
 
 
 def test_ensure_content_hash_column_noop_if_exists():
-    from brainlayer.enrichment_controller import _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _ensure_content_hash_column
 
     store = MagicMock()
     cursor = MagicMock()
@@ -776,7 +776,7 @@ def test_ensure_content_hash_column_noop_if_exists():
 
 
 def test_ensure_content_hash_column_drops_legacy_unique_index(tmp_path):
-    from brainlayer.enrichment_controller import _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _ensure_content_hash_column
 
     db_path = tmp_path / "legacy-content-hash.db"
     conn = sqlite3.connect(db_path)
@@ -795,7 +795,7 @@ def test_ensure_content_hash_column_drops_legacy_unique_index(tmp_path):
 
 
 def test_backfill_content_hashes_processes_null_rows():
-    from brainlayer.enrichment_controller import _backfill_content_hashes
+    from brainlayer.enrichment_replay import _backfill_content_hashes
 
     store = MagicMock()
     cursor = MagicMock()
@@ -807,7 +807,7 @@ def test_backfill_content_hashes_processes_null_rows():
 
 
 def test_backfill_content_hashes_skips_empty_content():
-    from brainlayer.enrichment_controller import _backfill_content_hashes
+    from brainlayer.enrichment_replay import _backfill_content_hashes
 
     store = MagicMock()
     cursor = MagicMock()
@@ -819,7 +819,7 @@ def test_backfill_content_hashes_skips_empty_content():
 
 
 def test_backfill_content_hashes_handles_legacy_unique_index(tmp_path):
-    from brainlayer.enrichment_controller import _backfill_content_hashes, _content_hash, _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _backfill_content_hashes, _content_hash, _ensure_content_hash_column
 
     db_path = tmp_path / "legacy-backfill.db"
     conn = sqlite3.connect(db_path)
@@ -1247,7 +1247,7 @@ def test_local_preserves_legacy_signature():
 
 
 def test_meta_research_filter_detects_common_patterns():
-    from brainlayer.enrichment_controller import is_meta_research
+    from brainlayer.enrichment_replay import is_meta_research
 
     samples = [
         "brain_search(query='crypto trading bot')",
@@ -1264,7 +1264,7 @@ def test_meta_research_filter_detects_common_patterns():
 
 
 def test_meta_research_filter_preserves_real_content():
-    from brainlayer.enrichment_controller import is_meta_research
+    from brainlayer.enrichment_replay import is_meta_research
 
     samples = [
         "We decided to keep the enrichment controller in a single file until the batch path is stabilized.",
