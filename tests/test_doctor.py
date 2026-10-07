@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import sqlite3
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1343,7 +1344,7 @@ def test_run_doctor_distinguishes_stalled_watcher_from_paused_enrichment(tmp_pat
     config = _doctor_config(tmp_path, db_path)
     (config.queue_dir / "queue.jsonl").write_text(json.dumps({"kind": kind}) + "\n", encoding="utf-8")
     if paused:
-        config.pause_sentinel_path.write_text(json.dumps({"labels": [config.enrichment_label]}), encoding="utf-8")
+        config.pause_sentinel_path.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}), encoding="utf-8")
     config.drain_health_path.write_text(
         json.dumps(
             {
@@ -1372,7 +1373,7 @@ def test_run_doctor_distinguishes_stalled_watcher_from_paused_enrichment(tmp_pat
         assert "queue_count=1" in issue.message
 
 
-def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_without_quota(tmp_path, monkeypatch):
+def test_doctor_ignores_retired_producer_backlog_with_stale_drain(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
     monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
@@ -1390,14 +1391,10 @@ def test_run_doctor_fails_loudly_when_loaded_drain_heartbeat_stale_with_backlog_
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
-    assert result.exit_code == 1
-    assert issue.severity == "fatal"
-    assert "DRAIN_LIVENESS_STALLED" in issue.message
-    assert issue.details["backlog_count"] == 1
-    assert issue.details["queue_count"] == 0
-    assert issue.details["enrichment_backlog"] == 1
-    assert issue.details["drain_label"] == "com.brainlayer.drain"
+    assert result.exit_code == 0
+    assert not [issue for issue in result.issues if issue.code.startswith("drain_liveness")]
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL").fetchone()[0] > 0
 
 
 def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp_path, monkeypatch):
@@ -1421,7 +1418,7 @@ def test_run_doctor_does_not_fail_drain_liveness_when_heartbeat_is_advancing(tmp
     assert result.exit_code == 0
     assert result.ok is True
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
-    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "enrichment_idle_with_backlog"]
 
 
 def test_run_doctor_suppresses_enrichment_only_stale_liveness_when_drain_cycles_advance(tmp_path, monkeypatch):
@@ -1459,8 +1456,8 @@ def test_run_doctor_suppresses_enrichment_only_stale_liveness_when_drain_cycles_
 
     assert result.exit_code == 0
     assert result.ok is True
-    assert drain_reads == 2
-    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert drain_reads == 1
+    assert not [issue for issue in result.issues if issue.code == "enrichment_idle_with_backlog"]
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
@@ -1489,8 +1486,8 @@ def test_run_doctor_keeps_loaded_but_idle_warning_only_when_daily_cap_blocks_enr
     assert result.exit_code == 0
     assert result.ok is True
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
-    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
-    assert any(issue.code == "drain_liveness_quota_blocked" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "enrichment_idle_with_backlog"]
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
 
 
 def test_run_doctor_honors_enrich_cost_dir_for_drain_liveness_quota(tmp_path, monkeypatch):
@@ -1516,12 +1513,12 @@ def test_run_doctor_honors_enrich_cost_dir_for_drain_liveness_quota(tmp_path, mo
     assert result.exit_code == 0
     assert result.ok is True
     assert not [issue for issue in result.issues if issue.severity == "fatal"]
-    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
-    assert any(issue.code == "drain_liveness_quota_blocked" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "enrichment_idle_with_backlog"]
+    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_stalled"]
 
 
-def test_run_doctor_fails_loudly_when_drain_liveness_quota_counter_is_corrupt(tmp_path, monkeypatch):
+def test_doctor_ignores_retired_producer_backlog_with_corrupt_quota(tmp_path, monkeypatch):
     from brainlayer.doctor import run_doctor
 
     monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
@@ -1540,19 +1537,14 @@ def test_run_doctor_fails_loudly_when_drain_liveness_quota_counter_is_corrupt(tm
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
-    assert result.exit_code == 1
-    assert result.ok is False
-    assert issue.severity == "fatal"
-    assert "DRAIN_LIVENESS_STALLED" in issue.message
-    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
-    assert not [issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown"]
+    assert result.exit_code == 0
+    assert not [issue for issue in result.issues if issue.code.startswith("drain_liveness")]
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL").fetchone()[0] > 0
 
 
 @pytest.mark.parametrize("invalid_spend", ["oops", "nan", "inf", "-1"])
-def test_run_doctor_fails_loudly_when_drain_liveness_quota_counter_has_invalid_spend(
-    tmp_path, monkeypatch, invalid_spend
-):
+def test_doctor_ignores_retired_producer_backlog_with_invalid_quota(tmp_path, monkeypatch, invalid_spend):
     from brainlayer.doctor import run_doctor
 
     monkeypatch.delenv("BRAINLAYER_ENRICH_COST_DIR", raising=False)
@@ -1571,13 +1563,10 @@ def test_run_doctor_fails_loudly_when_drain_liveness_quota_counter_has_invalid_s
         now_fn=lambda: NOW,
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "drain_liveness_stalled")
-    assert result.exit_code == 1
-    assert result.ok is False
-    assert issue.severity == "fatal"
-    assert "DRAIN_LIVENESS_STALLED" in issue.message
-    assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
-    assert not [issue for issue in result.issues if issue.code == "drain_liveness_blocker_unknown"]
+    assert result.exit_code == 0
+    assert not [issue for issue in result.issues if issue.code.startswith("drain_liveness")]
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE enriched_at IS NULL").fetchone()[0] > 0
 
 
 def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tmp_path, monkeypatch):
@@ -1629,7 +1618,7 @@ def test_run_doctor_skips_drain_liveness_when_drain_label_is_disabled(tmp_path, 
 
     assert result.exit_code == 0
     assert result.ok is True
-    assert any(issue.code == "enrichment_idle_with_backlog" for issue in result.issues)
+    assert not [issue for issue in result.issues if issue.code == "enrichment_idle_with_backlog"]
     assert not [issue for issue in result.issues if issue.code.startswith("drain_liveness")]
 
 
@@ -1975,3 +1964,25 @@ def test_doctor_index_completeness_does_not_fatal_on_ordinary_embed_lag(tmp_path
     assert "index_completeness_aux_to_chunk" not in codes
     # the pre-existing vector check still owns this signal
     assert "vector_parity_gap" in codes
+
+
+@pytest.mark.parametrize("label", ["com.brainlayer.enrich", "com.brainlayer.enrichment"])
+def test_doctor_does_not_expect_retired_enrichment_services(tmp_path, label):
+    from brainlayer.doctor import run_doctor
+
+    db_path = tmp_path / "retirement.db"
+    _build_db(db_path)
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+        return SimpleNamespace(returncode=113 if label in args[-1] else 0, stdout="", stderr="")
+
+    result = run_doctor(
+        _doctor_config(tmp_path, db_path), ps_output_fn=_hotlane_ps, command_runner=runner, now_fn=lambda: NOW
+    )
+    assert result.ok
+    assert not any("com.brainlayer.enrich" in " ".join(args) for args in calls)
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert "enrichment_backlog" in payload
+    assert payload["enrichment_backlog"] is None
