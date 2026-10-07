@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -92,6 +93,17 @@ def arm():
     class FixtureProcess(original_process):
         def __init__(self, *args, **kwargs):
             command = args[0] if args else kwargs.get("args")
+            if (
+                command == "lscpu"
+                and not shutil.which("lscpu")
+                and not kwargs.get("shell")
+                and kwargs.get("executable") is None
+                and kwargs.get("env") is None
+            ):
+                # NumPy's optional Linux SVE probe catches the actual missing
+                # executable. Preserve that capability result without launching
+                # or admitting a child, rather than turning it into a send.
+                raise FileNotFoundError(2, "No such file or directory", "lscpu")
             # Actual writer PID provenance needs this local read. No shell,
             # alternate executable, env replacement or arbitrary child is admitted.
             if (
