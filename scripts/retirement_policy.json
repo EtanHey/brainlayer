@@ -1488,6 +1488,16 @@
         "target": "import subprocess"
       }
     },
+    "5806f46ede5c1bd552ccc1bc755acf1c68a048bfece06cc20cf5f0714349f5bc": {
+      "non_cloud_purpose": "Runs local swiftc on exact production Swift source and the extracted process enum to compile a private consumer; no network/model call.",
+      "site": {
+        "call_sha256": "b8d0b00da291dda7479156fa1a40670fb32d387a791d4fc2532cbcfdb2e1f382",
+        "kind": "child_process",
+        "owner": "<module>.measure",
+        "path": "scripts/watcher_heartbeat_ratchet.py",
+        "target": "subprocess.run"
+      }
+    },
     "5871daa3fffbfcd8d6d7b5c13e1b5bb817819b5f5e110b7b0d481f7abaabb8bd": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -1546,6 +1556,16 @@
         "owner": "<module>._count_chunks",
         "path": "src/brainlayer/backup_daily.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "5e50076da60c13e438075d687e04107d9606581451311899f5f2c75bce84def3": {
+      "non_cloud_purpose": "Executes the freshly compiled private native consumer against synthetic watcher health; path is locally constructed, never receipt-supplied; no network/model call.",
+      "site": {
+        "call_sha256": "43021264b8880b9f302851990cc56c835d81c8216fe4c49d0fe624cbde11c8ef",
+        "kind": "child_process",
+        "owner": "<module>.measure.check",
+        "path": "scripts/watcher_heartbeat_ratchet.py",
+        "target": "subprocess.check_output"
       }
     },
     "5efbc0753a92f2f18e4025347c2c15928aa84bf1954f547141ff6d1787dc3de6": {
@@ -3096,6 +3116,16 @@
         "target": "socket.socket"
       }
     },
+    "affd2a68152d18f159ec6021317a20097fe47be71eff6ed74daabfba0efe1293": {
+      "non_cloud_purpose": "Imports subprocess only for local Swift compilation, private native fixture execution, and local Git identity reads; no model/cloud sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/watcher_heartbeat_ratchet.py",
+        "target": "import subprocess"
+      }
+    },
     "b01f941f773c592d9c51561ca7deb43c5c18d73a127815c50e8195030b26c29d": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/config.py <module>",
       "site": {
@@ -3504,6 +3534,16 @@
         "owner": "<module>._ollama_generate",
         "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
         "target": "import requests"
+      }
+    },
+    "c1f80533f56ae61fe18f4fa0e540a9d026fff6070250af5c29b0fc97aa95957d": {
+      "non_cloud_purpose": "Reads local git rev-parse HEAD to bind the measurement to its checkout; no network/model call.",
+      "site": {
+        "call_sha256": "7f6199dcc8e5713af0f8385979a878ea3f3b15ff8f651c19c8ed86ee1bc66b27",
+        "kind": "child_process",
+        "owner": "<module>.measure",
+        "path": "scripts/watcher_heartbeat_ratchet.py",
+        "target": "subprocess.check_output"
       }
     },
     "c20d960bbd50f00b2160f5f55dfa8eb308fed6bcda4901cff1816d186605f4cf": {
