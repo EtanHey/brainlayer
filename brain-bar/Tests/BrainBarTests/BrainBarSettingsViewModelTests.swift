@@ -18,9 +18,9 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             XCTAssertFalse(footer.locality.contains("Gemini"))
             XCTAssertNotEqual(footer.symbol, "icloud")
             let queue = BrainBarQueueDirectionPresentation.derive(
-                .growing, backlogCount: 42, enrichmentPaused: config.enrichmentIsOff
+                .growing, backlogCount: 42
             )
-            XCTAssertEqual(queue.label, "Enrichment paused · 42 queued")
+            XCTAssertEqual(queue.label, "Enrichment retired · 42 unenriched")
             XCTAssertEqual(queue.tone, .neutral)
         }
     }
@@ -57,7 +57,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(local.detail, "Watcher is running, but its health file is missing at /x.")
 
         let unreadable = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
-        XCTAssertTrue(unreadable.locality.contains("Enrichment unknown"))
+        XCTAssertTrue(unreadable.locality.contains("Enrichment off (retired)"))
         XCTAssertTrue(unreadable.locality.contains("Backups unknown"))
         XCTAssertFalse(unreadable.showsLock)
         XCTAssertEqual(unreadable.symbol, "questionmark.circle")
@@ -74,7 +74,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.reloadConfigFromDisk())
         XCTAssertFalse(viewModel.configReadSucceeded)
         let footer = viewModel.footerPresentation
-        XCTAssertTrue(footer.locality.contains("Enrichment unknown"))
+        XCTAssertTrue(footer.locality.contains("Enrichment off (retired)"))
         XCTAssertTrue(footer.locality.contains("Backups unknown"))
         XCTAssertEqual(footer.state, .unavailable)
     }

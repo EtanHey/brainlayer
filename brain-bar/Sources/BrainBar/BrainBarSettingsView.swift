@@ -615,7 +615,7 @@ struct BrainBarSettingsFooterPresentation {
         guard let config else {
             state = .unavailable
             detail = nil
-            locality = "Memory on this Mac · Enrichment unknown · Backups unknown"
+            locality = "Memory on this Mac · Enrichment off (retired) · Backups unknown"
             showsLock = false
             symbol = "questionmark.circle"
             return
@@ -632,7 +632,7 @@ struct BrainBarSettingsFooterPresentation {
             detail = nil
         }
 
-        let enrichment = "Enrichment off"
+        let enrichment = "Enrichment off (retired)"
         let enrichmentOff = config.enrichmentIsOff
         let driveJobs: [BrainLayerLaunchdJob] = [.backupDaily, .jsonlBackup, .maintenanceWeekly]
         let driveStates = driveJobs.map { config.launchdJobs[$0]?.enabled }
