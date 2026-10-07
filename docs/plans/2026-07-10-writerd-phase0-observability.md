@@ -1,5 +1,9 @@
 # Writerd Phase 0 Observability Implementation Plan
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add fail-open local telemetry that identifies every current writer transaction, its active SQL fingerprint, queue delay, WAL/FTS context, and outcome without changing write semantics.

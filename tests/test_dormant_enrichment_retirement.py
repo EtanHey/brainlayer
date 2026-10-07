@@ -10,6 +10,8 @@ import pytest
 
 from brainlayer.import_sweep import _child_env
 
+pytestmark = pytest.mark.retired_enrichment
+
 ROOT = Path(os.environ.get("BRAINLAYER_IMPORT_SWEEP_SOURCE_ROOT", Path(__file__).resolve().parents[1])).resolve()
 REMOVED_SCRIPTS = (
     "cloud_stream.py",

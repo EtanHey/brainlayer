@@ -29,7 +29,7 @@ That writes PNGs to **`brain-bar/docs.local/brainbar-render/`**:
 | `dashboard-compact.png`  | Full dashboard (hero/overview + pipeline + diagnostics) | width 760 — compact cards, 1 chart column |
 | `dashboard-default.png`  | Full dashboard | width 960 — roomy cards, 1 chart column |
 | `dashboard-wide.png`     | Full dashboard | width 1280 — 2 chart columns |
-| `settings.png`           | Settings panel (enrichment config, launchd jobs) | width 700 |
+| `settings.png`           | Settings panel (launchd jobs and backup status) | width 700 |
 
 Then `Read` any PNG to inspect the UI. Override the output directory with
 `BRAINBAR_RENDER_DIR=/abs/path swift test --filter BrainBarDashboardSnapshotTests`.
