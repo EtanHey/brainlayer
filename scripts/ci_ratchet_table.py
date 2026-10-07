@@ -1169,7 +1169,7 @@ PROVENANCE_NOTES = (
     "Sha half of #749 keg-mode provenance: a keg built from this wheel can answer "
     "`__build_sha__`. The helper-age and served-process predicates need a running BrainBar "
     "and are measured only by `scripts/sprint_gate.py` on an installed Mac. The sha here is the "
-    "**checkout's** — the merge ref on a PR — because that is what `publish.yml` stamps at release "
+    "**checkout's** — the explicit PR head in ratchet.yml — because that is what `publish.yml` stamps at release "
     "time; the PR-head sha this table describes is the one in `commit provenance` above."
 )
 
@@ -1753,6 +1753,19 @@ ROW_BUILDERS = (
 )
 
 
+def row_brainbar_no_enrichment(report: Path | None, expected_sha: str | None) -> Row:
+    from scripts.brainbar_no_enrichment_ratchet import ROW, read_report
+
+    payload, problem = read_report(report, expected_sha)
+    return Row(
+        ROW,
+        RED if problem else GREEN,
+        problem or f"{len(payload['captures'])} actual-view captures; active pending-store/replay retained",
+        "macOS DEBUG binary · AppKit actual views · Vision OCR + icon RGBA comparison · private synthetic state",
+        "Missing render capability/evidence is RED. Historical data is retained; this is source-build proof, not installed-app proof.",
+    )
+
+
 def row_quiesce(report: Path | None, unavailable: str | None, measured_sha: str | None) -> Row:
     name = "maintenance quiesce: services stay down under a reviving watchdog"
     method = "real launchd · GitHub macOS runner · real maintenance + fleet-watchdog"
@@ -2073,6 +2086,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--retirement-report", type=Path, help="Required exact-head installed/native global model absence receipt"
     )
+    parser.add_argument(
+        "--brainbar-render-report", type=Path, help="Actual no-enrichment view evidence; missing is RED"
+    )
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -2102,6 +2118,10 @@ def main(argv: list[str] | None = None) -> int:
         args.fallback_gits_root,
     )
     rows = collect(probe, corpus)
+    # Main's baseline attestor calibrates the original resource rows, not UI evidence.
+    # Every normal/PR collector run requires this render row, including absent reports.
+    if not args.attest_out or args.brainbar_render_report:
+        rows.append(row_brainbar_no_enrichment(args.brainbar_render_report, probe.head_sha))
     if args.quiesce_report or args.quiesce_unavailable:
         rows.append(row_quiesce(args.quiesce_report, args.quiesce_unavailable, args.measured_sha))
     if args.retirement_report or args.measured_sha:
