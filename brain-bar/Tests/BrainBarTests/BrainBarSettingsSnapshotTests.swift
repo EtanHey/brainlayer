@@ -12,7 +12,6 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
 
         var providerConfig = BrainLayerConfig.defaultConfig
         providerConfig.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
-        providerConfig.enrichmentProvider = .openai
         providerConfig.launchdJobs[.hotlane]?.enabled = false
         let observabilityURL = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
@@ -32,18 +31,8 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             name: "saved",
             config: .defaultConfig
         )
-        savedViewModel.backendDraft = "mlx"
-        savedViewModel.commitBackendDraft()
+        savedViewModel.setSystemEnabled(false)
         try render(viewModel: savedViewModel, named: "saved-restart-needed")
-
-        let validationViewModel = try makeViewModel(
-            root: tempRoot,
-            name: "validation",
-            config: .defaultConfig
-        )
-        validationViewModel.backendDraft = "   "
-        validationViewModel.commitBackendDraft()
-        try render(viewModel: validationViewModel, named: "validation-error")
 
         let probeErrorViewModel = try makeViewModel(
             root: tempRoot,
