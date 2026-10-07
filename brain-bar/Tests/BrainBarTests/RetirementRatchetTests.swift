@@ -58,7 +58,9 @@ final class RetirementRatchetTests: XCTestCase {
         let stored = call(router, "brain_store", ["content": "NATIVE-R11 synthetic local decision",
                                                   "project": "fixture", "type": "note"])
         XCTAssertNil(stored["error"])
-        XCTAssertEqual((stored["result"] as? [String: Any])?["status"] as? String, "STORED")
+        let receipt = try XCTUnwrap(stored["result"] as? [String: Any])
+        let storedChunk = try XCTUnwrap(receipt["_brainbarStoredChunk"] as? [String: Any])
+        XCTAssertNotNil(storedChunk["chunk_id"] as? String)
         let digest = call(router, "brain_digest", ["content": "NATIVE-R11-DIGEST synthetic historical content", "project": "fixture"])
         XCTAssertNil(digest["error"])
         XCTAssertEqual((digest["result"] as? [String: Any])?["content_integrity"] as? String, "verified")

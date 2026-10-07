@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.retirement_artifact import build_wheel, command, install_profile, private_env, snapshot  # noqa: E402
+from scripts.retirement_inventory import check_policy  # noqa: E402
 from scripts.retirement_source import source_scan  # noqa: E402
 
 
@@ -135,9 +136,17 @@ def main(argv=None):
             report["dependency_is_ancestor"] = True
         snapshot_root = work / "source"
         report["source"] = snapshot(source_root, args.sha, snapshot_root)
+        # Execute only harness bytes included in this immutable source identity.
+        for path in Path(__file__).parent.glob("retirement_*.py"):
+            name = "scripts/" + path.name
+            if hashlib.sha256(path.read_bytes()).hexdigest() != report["source"]["files"].get(name):
+                raise ValueError("Harness differs from measured source: " + name)
         report["scan"] = source_scan(snapshot_root)
         if report["scan"]["findings"] or report["scan"]["errors"]:
             raise ValueError("Static model transport/source import gate RED")
+        report["transport_inventory"] = check_policy(snapshot_root)
+        if report["transport_inventory"]["unclassified"]:
+            raise ValueError("Unclassified transport/dynamic source site")
         report["wheel"] = build_wheel(snapshot_root, work, args.sha)
         for name in ("default", "dev"):
             profile = install_profile(Path(report["wheel"]["path"]), name, work)

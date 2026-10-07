@@ -71,6 +71,14 @@ def validate(report, expected_sha, now=None):
         "\n".join(f"{name}:{value}" for name, value in sorted(inventory.items())).encode()
     ).hexdigest()
     need(digest == scan["inventory_sha256"], "source scan inventory was tampered")
+    transport = report["transport_inventory"]
+    from scripts.retirement_inventory import fingerprint
+
+    need(transport["sites"] and transport["unclassified"] == [], "transport inventory incomplete/unclassified")
+    need(fingerprint(transport["sites"]) == transport["sha256"], "transport inventory hash mismatch")
+    need(transport["source_inventory"] == inventory, "transport corpus is incomplete/unbound")
+    need(transport["policy_sha256"] == files["scripts/retirement_policy.json"], "transport policy is unbound")
+    need(all(site["path"] in inventory for site in transport["sites"].values()), "transport site outside corpus")
     need(identity(wheel["sha256"], 64) and "brainlayer/_build.py" in wheel["members"], "wheel identity/stamp missing")
     package_members = [name for name in wheel["members"] if name.startswith("brainlayer/") and not name.endswith("/")]
     required_modules = sorted(

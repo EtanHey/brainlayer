@@ -38,7 +38,7 @@ MODEL_URL = re.compile(
     re.I,
 )
 ROOTS = ("src", "scripts", "hooks", "brain-bar/Sources", "dashboard")
-EXTENSIONS = {".py", ".swift", ".sh", ".js", ".ts", ".tsx", ".mjs"}
+EXTENSIONS = {".py", ".swift", ".sh", ".js", ".ts", ".tsx", ".mjs", ".c", ".h", ".cpp", ".m", ".mm"}
 
 
 def forbidden(name: str) -> bool:
