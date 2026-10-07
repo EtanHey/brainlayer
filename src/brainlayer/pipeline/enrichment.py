@@ -64,8 +64,6 @@ from .cloud_scrub import scrub_for_cloud, scrub_llm_output
 from .entity_extraction import normalize_entity_type
 from .groq import (
     DEFAULT_GROQ_MODEL,
-    GroqModelUnavailableError,
-    raise_for_groq_response,
 )
 
 # Thread-local storage for per-thread VectorStore connections.
@@ -606,71 +604,6 @@ def call_mlx(prompt: str, timeout: int = MLX_DEFAULT_TIMEOUT) -> Optional[str]:
         return None
     except Exception as e:
         print(f"  MLX error: {e}", file=sys.stderr)
-        return None
-
-
-def call_groq(prompt: str, timeout: int = 60) -> Optional[str]:
-    """Call Groq cloud API via OpenAI-compatible endpoint. Logs usage to Supabase.
-
-    PRIVACY: This sends content to Groq's cloud. Callers MUST sanitize content
-    before calling this function. The _enrich_one() function enforces this by
-    using build_external_prompt() with a Sanitizer when backend='groq'.
-
-    Rate limiting: enforces GROQ_RATE_LIMIT_DELAY between consecutive calls
-    to stay under free tier limits (~30 req/min).
-    """
-    global _groq_last_call
-    if not GROQ_API_KEY:
-        print("  Groq error: GROQ_API_KEY not set", file=sys.stderr)
-        return None
-    # Outside the try below: a scrub failure raises CloudScrubError instead of
-    # degrading into a silent None, and nothing is sent.
-    prompt = scrub_for_cloud(prompt)
-    try:
-        # Rate limit: serialize timestamp check/update across threads
-        with _groq_rate_lock:
-            now = time.monotonic()
-            elapsed = now - _groq_last_call
-            if _groq_last_call > 0 and elapsed < GROQ_RATE_LIMIT_DELAY:
-                _sleep(GROQ_RATE_LIMIT_DELAY - elapsed)
-            _groq_last_call = time.monotonic()
-
-        start_ms = int(time.time() * 1000)
-        resp = requests.post(
-            GROQ_URL,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0,
-            },
-            timeout=timeout,
-        )
-        raise_for_groq_response(resp, GROQ_MODEL)
-        data = resp.json()
-        duration_ms = int(time.time() * 1000) - start_ms
-
-        # Extract token counts from OpenAI-compatible response
-        usage = data.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-
-        # Log to Supabase (best-effort)
-        _log_glm_usage(prompt_tokens, completion_tokens, duration_ms, model=f"groq:{GROQ_MODEL}")
-
-        # Extract response text
-        choices = data.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "")
-        return None
-    except GroqModelUnavailableError:
-        raise
-    except Exception as e:
-        print(f"  Groq error: {e}", file=sys.stderr)
         return None
 
 

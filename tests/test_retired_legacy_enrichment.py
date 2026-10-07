@@ -64,3 +64,9 @@ def test_legacy_fallback_health_and_restart_are_absent():
         "_recover_backend",
     ):
         assert not hasattr(enrichment, name), name
+
+
+def test_legacy_groq_sender_is_absent():
+    from brainlayer.pipeline import enrichment
+
+    assert not hasattr(enrichment, "call_groq")
