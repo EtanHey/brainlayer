@@ -100,9 +100,8 @@ async def _with_timeout(coro, timeout: float | None = None):
                 TextContent(
                     type="text",
                     text=(
-                        f"BrainLayer timeout ({timeout}s): DB may be locked by enrichment pipeline. "
-                        "Try again in a few minutes, or kill enrichment: "
-                        "pkill -f 'brainlayer.pipeline.enrichment'"
+                        f"BrainLayer timeout ({timeout}s): a database operation exceeded its deadline. "
+                        "Retry the request after checking the active writer."
                     ),
                 )
             ],

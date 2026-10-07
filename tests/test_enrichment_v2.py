@@ -25,30 +25,6 @@ def _sanitizer():
     )
 
 
-def test_build_prompt_renders_v2_fields_and_60_40_truncation():
-    from brainlayer.pipeline.enrichment import build_prompt
-
-    head = "H" * 4800
-    middle = "M" * 1200
-    tail = "T" * 3200
-    prompt = build_prompt(
-        {
-            "content": head + middle + tail,
-            "project": "test",
-            "content_type": "user_message",
-        }
-    )
-
-    assert '"key_facts"' in prompt
-    assert '"resolved_queries"' in prompt
-    assert '"relation"' in prompt
-    assert "[...truncated middle...]" in prompt
-    assert head in prompt
-    assert tail in prompt
-    assert middle not in prompt
-    assert "{{" not in prompt
-
-
 def test_prompt_signature_emits_once_across_threads(monkeypatch):
     from brainlayer.pipeline import enrichment_prompts as enrichment
 

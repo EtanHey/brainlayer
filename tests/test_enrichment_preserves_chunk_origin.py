@@ -147,3 +147,34 @@ def test_enrichment_payload_keeps_model_in_metadata_not_chunk_origin(monkeypatch
     assert payload.get("chunk_origin") in (None, "")
     assert payload["enrichment_model"] == "gemini-test-model"
     assert (payload["enrichment"].get("enrichment_metadata") or {})["enriched_by"] == "gemini-test-model"
+
+
+def test_saved_local_result_replay_preserves_chunk_origin(tmp_path):
+    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
+    from brainlayer.vector_store import VectorStore
+
+    store = VectorStore(tmp_path / "saved-result.db")
+    try:
+        store.conn.cursor().execute(
+            "INSERT INTO chunks (id, content, metadata, source_file, chunk_origin, char_count, source) "
+            "VALUES ('saved-1', 'Synthetic historical conversation', '{}', 'saved.jsonl', 'claude_code', 80, 'claude_code')"
+        )
+        result = parse_enrichment('{"summary":"Synthetic saved model result", "tags":["reactjs"]}')
+        _apply_enrichment(
+            store,
+            {"id": "saved-1", "content": "Synthetic historical conversation", "source": "claude_code"},
+            result,
+            enrichment_model="historical-model",
+            enrichment_backend="historical-backend",
+        )
+        origin, model, metadata = (
+            store.conn.cursor()
+            .execute("SELECT chunk_origin, enrichment_model, metadata FROM chunks WHERE id='saved-1'")
+            .fetchone()
+        )
+        assert origin == "claude_code"
+        assert model == "historical-model"
+        assert json.loads(metadata)["enriched_by"] == "historical-model"
+    finally:
+        store.close()
