@@ -5460,6 +5460,17 @@
         "target": "from pathlib import Path"
       }
     },
+    "20c29b60a33e31da07d160ee9e255c8128e59bd29e741ae7a18ec374c0522d83": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "ac3a74d6dd975a8e8fe4b7f85fce794793a9355595b850e3926964913948d386",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import os"
+      }
+    },
     "20c34339655ca0ced3637c6b376f62d05c93c9f887d1c7f1ac67d2afe6071a85": {
       "non_cloud_purpose": "Exact Python module AST binding; new or changed modules require non-cloud classification and pair review",
       "site": {
@@ -6023,17 +6034,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/sanitize.py",
         "target": "re.compile"
-      }
-    },
-    "247cce8b1580040cc917480c07c67365365de434fc5ab6ba8dc4272a375ebbdd": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "from pathlib import Path"
       }
     },
     "24827718c470f77ca13b76a227dd4e96065f6cbd0b66aa6307e5667e4ce6bda8": {
@@ -8089,17 +8089,6 @@
         "target": "from pathlib import Path"
       }
     },
-    "2f965d7d6272dbd8a312ea984d1a8656e463e143a07f77f69bbe269f84c364c3": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "f86622d382a4da2a01df12bc04dbc4cc39dcf7a7252ed02caee8bdcf2686624c",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import builtins"
-      }
-    },
     "2f9f9702f7f3544493333acdc171993313d68b7b2e95a7e863b6090a1bfaa4eb": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -8570,17 +8559,6 @@
         "owner": "<module>.T3Reader._connect",
         "path": "src/brainlayer/ingest/t3.py",
         "target": "sqlite3.connect"
-      }
-    },
-    "32c133af2f454865b3cbcdfee1cb985c17595f21668a809b7784321b5d27974e": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "ac3a74d6dd975a8e8fe4b7f85fce794793a9355595b850e3926964913948d386",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import os"
       }
     },
     "32c492b24ec879ea798b67ebb7f2a04804d710a7ffdb2da2eaeb063c4320eabb": {
@@ -9798,6 +9776,17 @@
         "target": "from __future__ import annotations"
       }
     },
+    "3a90083617c399c615942ae55c630725a6c156211649fb09dca511a2db54bfff": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "77879f6b790ad5e362f2ce51bf713408f93f3848bc76ade2d46f07c43cb8c51e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "from urllib.parse import unquote, urlsplit"
+      }
+    },
     "3a98a29a0163207a4c5b6485a378dc3228d62824f4940cc56e7adc8b93471beb": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/session_repo.py <module>",
       "site": {
@@ -9892,17 +9881,6 @@
         "owner": "<module>",
         "path": "scripts/merge_queue.py",
         "target": "from brainlayer.queue_merge import merge_queue_dirs"
-      }
-    },
-    "3af6d3d3888c870e765f217cf764de7bcda4edaeacd450b6e91f514f891f8a7b": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import json"
       }
     },
     "3afae062ccd899b5af5763519468c2cdcd3cc87b4e16c37876e58bbcb2f8b7a3": {
@@ -12139,6 +12117,17 @@
         "target": "import datetime as dt"
       }
     },
+    "47e751a35714dba6c9cebc6e98222a9cb78027058d10d5e39e051de644107a09": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import subprocess"
+      }
+    },
     "47eb1846b6356fa5b87028fc7f9915104bd187717fe2fb40cc2894d69ef69481": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/wal_checkpoint.py <module>",
       "site": {
@@ -12164,6 +12153,17 @@
         "body_sha256": "c01d05debd911bc93ad01d516872b1059f929631ce6801b04b1e7f3bf56449e2",
         "kind": "python_source",
         "path": "src/brainlayer/bitemporal.py"
+      }
+    },
+    "481559cf5c650d2c30b8702a0dd126ba2326d0d6ad90696f88f0633bdd3edf67": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "211ee42757705c7e350e70e36b762987a737f5e9c268f2a343e2dbfcb8fbea75",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import json"
       }
     },
     "482326bf9a076f26af1776e283689d1ad285c3adb04e5a8fbed00df288e3e367": {
@@ -13813,6 +13813,17 @@
         "target": "import sqlite3"
       }
     },
+    "503d439c76ce685bbd863af6dbfbd72830aa6dd2f4657bfae978338f0a8986bc": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import importlib"
+      }
+    },
     "503e2fbcd46e1a60fc4e52a44743fd50ac078ed27d67d43c126dc2986803b305": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/_helpers.py <module>",
       "site": {
@@ -14184,6 +14195,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/reembed_backfill.py",
         "target": "from __future__ import annotations"
+      }
+    },
+    "53aeb04d1163a28f4c398414463faa64ae018a64358f946a8b5a744eacec981c": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "59051b17634cdcb5a576ceb58fdc0a4e5652ed3b60d66667e92ddefd931abeca",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "from pathlib import Path"
       }
     },
     "53c3726d56f8d4b3c1b4ffd9ab9decade5e3a50aab0288e5b86338d491a42322": {
@@ -16240,6 +16262,17 @@
         "path": "scripts/calibrate_importance.py"
       }
     },
+    "5ff719208b1ea211fd6364c1cd73df47eeab86207ff200647ed63276c20ecb5e": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "f86622d382a4da2a01df12bc04dbc4cc39dcf7a7252ed02caee8bdcf2686624c",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import builtins"
+      }
+    },
     "600c6c07e1aff748558a5c8f4627dc6fbcf25a4697da7236d6c4567900580d1b": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/dedupe.py <module>",
       "site": {
@@ -16370,6 +16403,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/phonetic.py",
         "target": "import unicodedata"
+      }
+    },
+    "60e99432b6b6c869fc081333dd904a1148b40b4967cff6afc756b071ebe7cfe8": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import socket"
       }
     },
     "60f90a16f66f396fbae7fa71ba3949fc34e5b23af0631a51af4bb82bcf64f0e5": {
@@ -19481,17 +19525,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/vector_store.py",
         "target": "from .search_repo import SearchMixin"
-      }
-    },
-    "73afe405c2e6339079915e041e4773fba1960c7bd6890366812cf355bbe888ea": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import importlib"
       }
     },
     "73c7526d58943b80f5187f2dafaf6148606eff767bba62241251e4a809e97144": {
@@ -26713,6 +26746,14 @@
         "target": "from collections import Counter"
       }
     },
+    "a1fb3155baa06b3625da40425e64891fae978f25daab652d95571e0f43daa7a6": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "kind": "python_source",
+        "path": "scripts/retirement_guard.py"
+      }
+    },
     "a1fbc211fd3f18d8d6a6f0982a584c938fa9f4a97a942723d86bc1076997cdbe": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/sentiment.py <module>",
       "site": {
@@ -27002,6 +27043,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/isolation_proof.py",
         "target": "from pathlib import Path"
+      }
+    },
+    "a3e49a3fd3546b1e4641f8e354431c2bec086002fa33f1aa6d98e27f36564c6d": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "f8e24ee9b1b0f58e74fe0f070306d6d3e397283e6726b126540d1c4a2e8d5c1d",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import sqlite3"
       }
     },
     "a3e8d34a6b5d4ba454c38a92975ed75f974218a0d3a8286f26a8daf3070b7042": {
@@ -28757,17 +28809,6 @@
         "path": "src/brainlayer/kg_judge.py"
       }
     },
-    "ae727a93298ac441f84a874a425828b682d21d0d047dc0889e10b80cae726b18": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "77879f6b790ad5e362f2ce51bf713408f93f3848bc76ade2d46f07c43cb8c51e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "from urllib.parse import unquote, urlsplit"
-      }
-    },
     "ae8b84d2fbb7511d3af9ebea7fcb160be9b5667f7a82d363128f2279e46285fd": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/brainbar_hybrid_helper.py <module>",
       "site": {
@@ -29281,17 +29322,6 @@
         "body_sha256": "d1e0d97e66ed40d77565454d74fbd4d1055e53428b44a603f4e23cce397db217",
         "kind": "python_source",
         "path": "src/brainlayer/agent_profiles.py"
-      }
-    },
-    "b16fb00d2bed9f3caeadfb6ff2e331e051ab4fdbc714b6f6698ba1d9b1d82200": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import importlib.util"
       }
     },
     "b17e81fd85eb974bb75819be026c004a7ce7b05ae19588ee8fff7f7759fdcb61": {
@@ -35120,17 +35150,6 @@
         "target": "from collections import Counter"
       }
     },
-    "d4e1a8a37a005b514f1e7251a560287ddb95ed7ca21bb6cfb0e90aa27465f795": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import socket"
-      }
-    },
     "d4f0dea6b5db258650310704157f57f8d85eadcb4496384b67d21673431e6093": {
       "non_cloud_purpose": "Read-only evaluation observations, not a model generation API",
       "site": {
@@ -35532,17 +35551,6 @@
         "body_sha256": "a189b82f4b9c51f211bf686225c66d3725306285dd5900103f4793ade6d40cb4",
         "kind": "python_source",
         "path": "scripts/__init__.py"
-      }
-    },
-    "d7983532c6f3d28a51e060131dad412594922abc402c47767ebaa1104ddaa7f8": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import subprocess"
       }
     },
     "d7b19e18d05671cd9386feff75b7a44dd52c5edb14352939c2ada9130e460009": {
@@ -36320,6 +36328,17 @@
         "owner": "<module>",
         "path": "src/brainlayer/engine.py",
         "target": "from __future__ import annotations"
+      }
+    },
+    "dd8f60d36a8fca4bb9bc06f11c00cf24aef40844508e87f6b6421f0e39b72a2a": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "b461ae95c16c1e73a466fdd306ad6da693ead3a324e5d33627958cc4a2f47e36",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import shutil"
       }
     },
     "ddaee4b0d7053e7d2ff22e565d6151a78c49fcbb6d473f1b739324ed4826ae8c": {
@@ -39981,6 +40000,17 @@
         "path": "scripts/kg_cleanup_apply.py"
       }
     },
+    "f5f0b6ace1dd51845ebe46054bbc87358f47d8911b18cfd6785f4de7a2bd9e5d": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "body_sha256": "a8bd30feee60bf255fbeaa11763d6cf216cc8002be2f50bec8c5e8b52da4ee66",
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import importlib.util"
+      }
+    },
     "f5f576b644e76c7c02d9fe59c6641b7dd3f9be505ac8652bf965ce7ce80beb1e": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/digest.py <module>",
       "site": {
@@ -40659,17 +40689,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/dashboard/search.py",
         "target": "from collections import Counter, defaultdict"
-      }
-    },
-    "fa7552850b9f3dced431a0ae1a8eff0a1f2b14a9c4a98fb3a49cdead6fff38e3": {
-      "non_cloud_purpose": "Private retirement fixture guard: cloud SDK import refusal, never a model caller",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "call_sha256": "f8e24ee9b1b0f58e74fe0f070306d6d3e397283e6726b126540d1c4a2e8d5c1d",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "scripts/retirement_guard.py",
-        "target": "import sqlite3"
       }
     },
     "faa541cdf406dfa5e42e1990e205801b0da2eba5d8d48bbe1695f832be3ca885": {
@@ -41521,14 +41540,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/embeddings.py",
         "target": "from sentence_transformers import SentenceTransformer"
-      }
-    },
-    "ff5ab4aa684742f5aa0c5e1bc31e87a7f0e385d6b5f045b198f53528dd3b305e": {
-      "non_cloud_purpose": "Exact Python module AST binding; new or changed modules require non-cloud classification and pair review",
-      "site": {
-        "body_sha256": "34ac44848e56387045230a251c90eec7652653b598b67cde2e154728a65c1245",
-        "kind": "python_source",
-        "path": "scripts/retirement_guard.py"
       }
     },
     "ff68ae5a598b232071639b3b49f3cb5980a5edf7ec3f10c800651e7bf9f930d3": {
