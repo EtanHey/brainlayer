@@ -20,6 +20,7 @@ REMOVED_SCRIPTS = (
     "vertex_poll_import.py",
     "monitor_batch_reenrichment.py",
     "run_abcde_enrich.py",
+    "enrichment_llm_judge.py",
 )
 TRIMMED = {
     "cloud_stream.py": {"run_stream", "main"},
@@ -117,6 +118,7 @@ def test_removed_scripts_have_no_source_or_install_references():
             for path in (ROOT / directory).rglob("*")
             if path.is_file() and path.suffix in {".py", ".sh", ".yml", ".yaml", ".toml", ".md", ".json", ".plist"}
         )
+    retired_modules = {"scripts." + Path(script).stem for script in REMOVED_SCRIPTS}
     findings = []
     for path in paths:
         text = path.read_text()
@@ -125,6 +127,10 @@ def test_removed_scripts_have_no_source_or_install_references():
                 findings.append((str(path.relative_to(ROOT)), script))
         if path.suffix == ".py":
             for node in ast.walk(ast.parse(text)):
+                if isinstance(node, ast.ImportFrom) and node.module in retired_modules:
+                    findings.append((str(path.relative_to(ROOT)), node.module))
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in retired_modules:
+                    findings.append((str(path.relative_to(ROOT)), node.value))
                 if isinstance(node, ast.ImportFrom) and node.module == "scripts":
                     for alias in node.names:
                         if alias.name + ".py" in REMOVED_SCRIPTS:

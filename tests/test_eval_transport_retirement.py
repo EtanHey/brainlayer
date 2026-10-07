@@ -9,6 +9,7 @@ import pytest
 RETIRED = {
     "abcde_enrich_runner": ("make_http_chat_fn", "DEFAULT_BASE_URL", "DEFAULT_MODEL"),
     "enrichment_quality_benchmark": ("run_gemini_flex_sample",),
+    "enrichment_llm_judge": ("run_judge", "main", "JudgeRunConfig", "DEFAULT_JUDGE_MODEL"),
 }
 
 
