@@ -60,7 +60,13 @@ def check_drain_liveness(
         return build_alarm(
             progress_state,
             f"DRAIN_PROGRESS_UNHEALTHY: {drain_label} queue progress {condition}; {reason}",
-            {"queue_count": queue_backlog, "drained_total": drain_health.get("drained_total"), "reason": reason},
+            {
+                "queue_count": queue_backlog,
+                "drained_total": drain_health.get("drained_total"),
+                "reason": reason,
+                # Retired producer field: JSON null for one release, never measured.
+                "enrichment_backlog": None,
+            },
         )
     if backlog <= 0:
         return None
@@ -70,6 +76,8 @@ def check_drain_liveness(
 
     details = {
         "backlog_count": backlog,
+        # Retired producer field: JSON null for one release, never measured.
+        "enrichment_backlog": None,
         "drain_cycles": drain_health.get("drain_cycles"),
         "drain_label": drain_label,
         "drained_total": drain_health.get("drained_total"),

@@ -84,6 +84,7 @@ def test_drain_liveness_stalled_uses_alarm_primitive():
     assert issue.code == "drain_liveness_stalled"
     assert issue.severity == "fatal"
     assert issue.details["queue_count"] == 2
+    assert issue.to_event()["context"]["enrichment_backlog"] is None
 
 
 def test_retired_enrichment_quota_does_not_affect_durable_queue(monkeypatch, tmp_path):
@@ -98,7 +99,8 @@ def test_retired_enrichment_quota_does_not_affect_durable_queue(monkeypatch, tmp
     )
     assert isinstance(issue, BrainLayerAlarm)
     assert issue.code == "drain_liveness_stalled"
-    assert "enrichment_backlog" not in issue.details
+    assert "enrichment_backlog" in issue.details
+    assert issue.details["enrichment_backlog"] is None
 
 
 def test_empty_queue_has_no_retired_producer_liveness_issue():
