@@ -285,6 +285,7 @@ enum BrainBarDashboardFixture {
     private static func makeStats(
         replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown,
         coverageAvailable: Bool = true,
+        historicalBacklog: Int? = nil,
         activityWindowMinutes: Int = 60,
         watcherProcessProbeResult: WatcherProcessProbeResult = .running(pid: 4242),
         watcherRecentDistinctChunkCount: Int = 14,
@@ -307,7 +308,7 @@ enum BrainBarDashboardFixture {
             enrichedChunkCount: zeroFlow ? 0 : 188_204,
             failedEnrichmentCount: zeroFlow ? 0 : 1_204,
             skippedEnrichmentCount: zeroFlow ? 0 : 2_104,
-            pendingEnrichmentCount: zeroFlow ? 0 : 12_840,
+            pendingEnrichmentCount: historicalBacklog ?? (zeroFlow ? 0 : 12_840),
             enrichmentPercent: zeroFlow ? 0 : 63.3,
             enrichmentRatePerMinute: zeroFlow ? 0 : 11.4,
             databaseSizeBytes: zeroFlow ? 0 : 8_120_000_000,
@@ -467,6 +468,10 @@ enum BrainBarDashboardFixture {
             lastFetchError: lastFetchError,
             snapshotFreshnessState: freshness
         )
+    }
+
+    static func makeHistoricalBacklogCollector() -> StatsCollector {
+        makeCollector(stats: makeStats(replayDebtBreakdown: readableReplayDebt, historicalBacklog: 274_847))
     }
 
     static func makeCollector(stats: DashboardStats) -> StatsCollector {
