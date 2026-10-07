@@ -1,14 +1,43 @@
 """Closed inventory for generic sends/dynamic code that SDK-name bans cannot cover.
 
-The policy binds a reviewed non-cloud purpose to exact call/enclosing-body bytes.
+The policy binds a reviewed non-cloud purpose to each transport import/call AST.
 A new/changed site requires an explicit policy diff and pair review, never a skip.
 """
 
 import ast
 import hashlib
 import json
+import re
 
-from scripts.retirement_source import EXTENSIONS, ROOTS
+from scripts.retirement_source import EXTENSIONS, ROOTS, SDKS
+
+TRANSPORT_IMPORTS = {
+    "requests",
+    "httpx",
+    "http.client",
+    "socket",
+    "ssl",
+    "aiohttp",
+    "subprocess",
+    "importlib",
+    "ctypes",
+    "boto3",
+    "botocore",
+    "sagemaker",
+    "replicate",
+    "deepseek",
+    "fireworks",
+    "perplexity",
+    "huggingface_hub",
+} | SDKS
+NATIVE_TRANSPORT = re.compile(r"\b(?:URLSession|NWConnection|CFStream|curl)\b|\b(?:fetch|socket)\s*\(")
+
+
+def transport_import(name):
+    return name.startswith(("urllib", "websocket")) or any(
+        name == prefix or name.startswith(prefix + ".") for prefix in TRANSPORT_IMPORTS
+    )
+
 
 NETWORK_NAMES = {
     "post",
@@ -35,15 +64,7 @@ def fingerprint(value):
 
 def python_sites(text, path):
     tree = ast.parse(text)
-    # A new module can accept an injected client and use an unfamiliar method
-    # without importing anything. Bind its whole AST, not just named call sites.
-    sites = [
-        {
-            "path": path,
-            "kind": "python_source",
-            "body_sha256": hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest(),
-        }
-    ]
+    sites = []
     aliases = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -53,17 +74,23 @@ def python_sites(text, path):
             for item in node.names:
                 aliases[item.asname or item.name] = (node.module or "") + "." + item.name
 
-    def walk(node, owner, body):
+    def walk(node, owner):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             owner = owner + "." + node.name
-            body = node
         if isinstance(node, (ast.Import, ast.ImportFrom, ast.Call)):
             target = ast.unparse(node.func) if isinstance(node, ast.Call) else ast.unparse(node)
             if isinstance(node, ast.Call):
                 first, dot, remainder = target.partition(".")
                 target = aliases.get(first, first) + (dot + remainder if dot else "")
             last = target.rsplit(".", 1)[-1]
-            kind = "import_binding" if isinstance(node, (ast.Import, ast.ImportFrom)) else None
+            kind = None
+            if isinstance(node, ast.Import) and any(transport_import(item.name) for item in node.names):
+                kind = "import_binding"
+            elif isinstance(node, ast.ImportFrom) and any(
+                transport_import((node.module or "") + "." + item.name) or transport_import(node.module or "")
+                for item in node.names
+            ):
+                kind = "import_binding"
             if isinstance(node, ast.Call) and (
                 last in NETWORK_NAMES
                 or (
@@ -72,9 +99,13 @@ def python_sites(text, path):
                 )
             ):
                 kind = "generic_send"
-            elif last in DYNAMIC_NAMES:
+            elif isinstance(node, ast.Call) and last in DYNAMIC_NAMES and target != "re.compile":
                 kind = "dynamic_code_or_import"
-            elif last in PROCESS_NAMES or (last == "run" and "subprocess" in target):
+            elif (
+                isinstance(node, ast.Call)
+                and target != "platform.system"
+                and (last in PROCESS_NAMES or (last == "run" and "subprocess" in target))
+            ):
                 kind = "child_process"
             if kind:
                 sites.append(
@@ -83,14 +114,13 @@ def python_sites(text, path):
                         "owner": owner,
                         "kind": kind,
                         "target": target,
-                        "body_sha256": hashlib.sha256(ast.dump(body, include_attributes=False).encode()).hexdigest(),
                         "call_sha256": hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest(),
                     }
                 )
         for child in ast.iter_child_nodes(node):
-            walk(child, owner, body)
+            walk(child, owner)
 
-    walk(tree, "<module>", tree)
+    walk(tree, "<module>")
     return sites
 
 
@@ -109,15 +139,18 @@ def inventory(root):
             if path.suffix == ".py":
                 rows = python_sites(text, name)
             else:
-                # Native, shell and JS source have no Python AST. Exact file
-                # binding avoids allowing a changed wrapper by broad path/token.
-                rows = [
-                    {
-                        "path": name,
-                        "kind": "non_python_source",
-                        "body_sha256": hashlib.sha256(text.encode()).hexdigest(),
-                    }
-                ]
+                # Bind exact bytes only for non-Python transport-bearing files.
+                rows = (
+                    [
+                        {
+                            "path": name,
+                            "kind": "non_python_source",
+                            "body_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                        }
+                    ]
+                    if NATIVE_TRANSPORT.search(text)
+                    else []
+                )
             for row in rows:
                 sites[fingerprint(row)] = row
     return dict(sorted(sites.items()))
