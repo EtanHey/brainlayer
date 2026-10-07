@@ -27,7 +27,7 @@ def native_probe(source: Path, work: Path) -> dict:
         raise ValueError("Native test product missing/ambiguous")
     dylib = work / "retirement-interpose.dylib"
     command(
-        ["clang", "-dynamiclib", str(Path(__file__).with_name("retirement_interpose.c")), "-o", str(dylib)],
+        ["clang", "-dynamiclib", str(source / "scripts/retirement_interpose.c"), "-o", str(dylib)],
         work,
         env,
         work / "native-guard-build.log",
@@ -44,6 +44,8 @@ def native_probe(source: Path, work: Path) -> dict:
             "/usr/bin/sandbox-exec",
             "-p",
             "(version 1)(allow default)(deny network*)",
+            "/usr/bin/env",
+            "DYLD_INSERT_LIBRARIES=" + str(dylib),
             str(binaries[0]),
             "BrainBarTests.RetirementRatchetTests",
         ],
@@ -58,7 +60,10 @@ def native_probe(source: Path, work: Path) -> dict:
         "testEveryPaletteRejectsRetiredDispatch",
         "testActualTemporaryStoreDigestAndSearchRemainLocal",
     )
-    if not all(name in log for name in required) or "Executed 3 tests, with 0 failures" not in log:
+    if (
+        not all(any(name in line and "passed" in line for line in log.splitlines()) for name in required)
+        or "Executed 3 tests, with 0 failures" not in log
+    ):
         raise ValueError("Native tests did not execute the complete required matrix")
     ledger = [json.loads(line) for line in events.read_text().splitlines()]
     if ledger != [{"kind": "native.connect", "phase": "control"}]:

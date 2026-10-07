@@ -1,6 +1,7 @@
 """Build and probe an exact source SHA; every failure leaves a report."""
 
 import argparse
+import hashlib
 import json
 import platform
 import shutil
@@ -90,7 +91,11 @@ def probe_profile(profile, wheel, source_sha, dependency_sha, work, harness):
     if result.get("status") != "PASS":
         raise ValueError("Installed probe failed")
     result.update(
-        profile=name, cli="PASS", guard="private sitecustomize + OS deny network", wheel_sha256=wheel["sha256"]
+        profile=name,
+        source_sha=source_sha,
+        cli="PASS",
+        guard="private sitecustomize + OS deny network",
+        wheel_sha256=wheel["sha256"],
     )
     return result
 
@@ -127,6 +132,7 @@ def main(argv=None):
                 private_env(work / "build-home"),
                 work / "dependency.log",
             )
+            report["dependency_is_ancestor"] = True
         snapshot_root = work / "source"
         report["source"] = snapshot(source_root, args.sha, snapshot_root)
         report["scan"] = source_scan(snapshot_root)
@@ -143,8 +149,18 @@ def main(argv=None):
         from scripts.retirement_native import native_probe
 
         report["native"] = native_probe(snapshot_root, work)
+        for filename, expected in report["source"]["files"].items():
+            path = snapshot_root / filename
+            data = str(path.readlink()).encode() if path.is_symlink() else path.read_bytes()
+            if hashlib.sha256(data).hexdigest() != expected:
+                raise ValueError("Build changed tracked source: " + filename)
         report["status"] = "PASS" if args.dependency_sha else "PENDING_R10B"
+        if report["status"] == "PASS":
+            from scripts.retirement_report import validate
+
+            validate(report, args.sha)
     except Exception as error:
+        report["status"] = "FAIL"
         report["failures"].append(str(error))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=2) + "\n")

@@ -56,7 +56,7 @@ def snapshot(repo: Path, sha: str, destination: Path) -> dict:
     with tarfile.open(archive) as tar:
         tar.extractall(destination, filter="data")
     tracked = subprocess.check_output(["git", "ls-tree", "-r", "--full-tree", sha], cwd=repo, env=env, text=True)
-    manifest = {}
+    manifest, links = {}, {}
     for line in tracked.splitlines():
         identity, filename = line.split("\t", 1)
         mode, kind, blob = identity.split()
@@ -66,12 +66,17 @@ def snapshot(repo: Path, sha: str, destination: Path) -> dict:
         if path.is_symlink() and not path.resolve().is_relative_to(destination.resolve()):
             raise ValueError("Source link escapes snapshot: " + filename)
         data = str(path.readlink()).encode() if mode == "120000" else path.read_bytes()
+        if mode == "120000":
+            links[filename] = {
+                "target": str(path.readlink()),
+                "resolved": path.resolve().relative_to(destination.resolve()).as_posix(),
+            }
         actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
         if actual != blob:
             raise ValueError("Source blob mismatch: " + filename)
         manifest[filename] = hashlib.sha256(data).hexdigest()
     tree = subprocess.check_output(["git", "rev-parse", sha + "^{tree}"], cwd=repo, env=env, text=True).strip()
-    return {"sha": sha, "tree": tree, "archive_sha256": digest(archive), "files": manifest}
+    return {"sha": sha, "tree": tree, "archive_sha256": digest(archive), "files": manifest, "links": links}
 
 
 def build_wheel(source: Path, work: Path, sha: str) -> dict:
