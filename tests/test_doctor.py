@@ -1332,7 +1332,7 @@ def test_run_doctor_does_not_treat_recent_drain_heartbeat_as_queue_movement(tmp_
     ("kind", "paused", "stale", "expected_code"),
     [
         ("watcher_chunk", False, False, "drain_progress_stalled"),
-        ("enrichment_update", True, False, "queue_paused_enrichment"),
+        ("enrichment_update", True, False, "legacy_queue_held"),
         ("enrichment_update", True, True, "drain_liveness_stalled"),
     ],
 )

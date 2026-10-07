@@ -1783,7 +1783,7 @@ def _capture_queue_notifications(monkeypatch) -> list[tuple[str, str]]:
         health_check,
         "_log_health_event",
         lambda condition, message, **_kwargs: notifications.append(
-            ("BrainLayer queue backlog" if condition in {"queue_backlog", "enrichment_backlog"} else condition, message)
+            ("BrainLayer queue backlog" if condition == "queue_backlog" else condition, message)
         ),
     )
     return notifications
@@ -1800,12 +1800,13 @@ def test_pause_aware_heal_decision_blocks_only_an_entirely_paused_enrichment_que
     }
 
     def explanation():
-        return health_check._paused_enrichment_queue_explanation(
-            queue_dir, 1, pause_payload=pause_payload, pause_active=True
-        )
+        return health_check._legacy_queue_hold_explanation(queue_dir, 1, pause_payload=pause_payload, pause_active=True)
 
     reason = explanation()
-    assert reason == "enrichment lane paused since 2026-08-04; drain restart would be a no-op"
+    assert (
+        reason
+        == "historical metadata updates held by maintenance sentinel since 2026-08-04; drain restart would be a no-op"
+    )
 
     queue_file.write_text('{"kind":"store_memory"}\n', encoding="utf-8")
     assert explanation() is None
@@ -1846,7 +1847,7 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
 
     queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
     assert "heal=skipped" in queue_issue.message and "heal_failures=85" in queue_issue.message
-    assert "enrichment lane paused since 2026-08-04" in queue_issue.message
+    assert "historical metadata updates held by maintenance sentinel since 2026-08-04" in queue_issue.message
     assert "drain restart would be a no-op" in queue_issue.message
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)

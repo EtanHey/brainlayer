@@ -42,7 +42,7 @@ from .pause import (
     pause_sentinel_state,
     queue_contains_only_enrichment,
 )
-from .retired_services import RETIRED_ENRICHMENT_LABELS
+from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL, RETIRED_ENRICHMENT_LABELS
 from .socket_hygiene import refuse_production_brainbar_socket
 from .watcher import default_watch_roots
 
@@ -54,7 +54,6 @@ DEFAULT_BRAINBAR_DAEMON_LABEL = "com.brainlayer.brainbar-daemon"
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_DRAIN_LABEL = "com.brainlayer.drain"
 DEFAULT_HEALTH_CHECK_LABEL = "com.brainlayer.health-check"
-DEFAULT_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 DEFAULT_OBSERVABILITY_LABEL = "com.brainlayer.observability"
 DEFAULT_INDEX_LABEL = "com.brainlayer.index"
 DEFAULT_BACKLOG_BATCH = 4
@@ -1022,7 +1021,7 @@ def _queue_stats(queue_dir: Path, now: datetime) -> tuple[int, int, float | None
     return count, total_bytes, oldest
 
 
-def _paused_enrichment_queue_explanation(
+def _legacy_queue_hold_explanation(
     queue_dir: Path,
     expected_count: int,
     *,
@@ -1030,13 +1029,17 @@ def _paused_enrichment_queue_explanation(
     pause_active: bool,
     queue_is_entirely_enrichment: bool | None = None,
 ) -> str | None:
-    """Explain a queue that the active pause makes completely undrainable.
+    """Explain a historical queue held by an existing maintenance sentinel.
 
     Match the drain's payload predicate, not its filename-based priority lane.
     Require the second scan to match the measured count so a racing or unreadable
-    file cannot make a mixed backlog look safely paused.
+    file cannot make a mixed backlog look safely held.
     """
-    if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, DEFAULT_ENRICHMENT_LABEL):
+    if (
+        expected_count <= 0
+        or not pause_active
+        or not pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
+    ):
         return None
     if queue_is_entirely_enrichment is None:
         queue_is_entirely_enrichment = _queue_is_entirely_enrichment(queue_dir, expected_count)
@@ -1044,7 +1047,7 @@ def _paused_enrichment_queue_explanation(
         return None
     paused_at = pause_payload.get("paused_at")
     since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
-    return f"enrichment lane paused since {since}; drain restart would be a no-op"
+    return f"historical metadata updates held by maintenance sentinel since {since}; drain restart would be a no-op"
 
 
 def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
@@ -1113,7 +1116,6 @@ def _report_queue_backlog(
     queue_count: int,
     queue_bytes: int,
     queue_should_page: bool,
-    queue_is_entirely_enrichment: bool,
     pause_explanation: str | None,
     heal_blocking_reason: str | None,
     previous_failures: dict[str, int],
@@ -1146,9 +1148,8 @@ def _report_queue_backlog(
         "pause_explanation": pause_explanation,
     }
     if pause_explanation is None or state.get("queue_backlog_notice") != signature:
-        condition = "enrichment_backlog" if queue_is_entirely_enrichment else "queue_backlog"
         _log_health_event(
-            condition,
+            "queue_backlog",
             f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
             timestamp=now.isoformat(),
         )
@@ -1513,7 +1514,7 @@ def _run_health_check_locked(
         config.queue_dir,
         queue_count,
     )
-    queue_pause_explanation = _paused_enrichment_queue_explanation(
+    queue_pause_explanation = _legacy_queue_hold_explanation(
         config.queue_dir,
         queue_count,
         pause_payload=pause_payload,
@@ -1714,7 +1715,6 @@ def _run_health_check_locked(
         queue_count=queue_count,
         queue_bytes=queue_bytes,
         queue_should_page=queue_should_page,
-        queue_is_entirely_enrichment=queue_is_entirely_enrichment,
         pause_explanation=queue_pause_explanation,
         heal_blocking_reason=queue_heal_blocking_reason,
         previous_failures=previous_heal_failures,

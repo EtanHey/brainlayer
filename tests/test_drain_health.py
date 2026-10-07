@@ -141,7 +141,7 @@ def test_fresh_heartbeat_does_not_hide_reported_progress_failure(state, queue_co
 @pytest.mark.parametrize(
     ("queue_kinds", "expected_state"),
     [
-        (["enrichment_update"], "drain_paused"),
+        (["enrichment_update"], "drain_legacy_queue_held"),
         (["enrichment_update", "watcher_chunk"], "drain_progress_stalled"),
         (["watcher_chunk"], "drain_progress_stalled"),
         (["invalid_utf8"], "drain_progress_stalled"),
