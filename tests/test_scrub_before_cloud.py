@@ -400,18 +400,10 @@ def test_groq_enrichment_send_fails_closed_when_scrub_raises(monkeypatch):
     assert sent == []
 
 
-def test_groq_ner_send_scrubs_prompt(monkeypatch):
-    import requests
-
+def test_groq_ner_sender_is_removed():
     from brainlayer.pipeline import kg_extraction_groq
 
-    monkeypatch.setenv("GROQ_API_KEY", "test-not-a-key")
-    sent = _capture_requests_post(monkeypatch, requests)
-
-    kg_extraction_groq.call_groq_ner(_payload_with_every_token(), max_retries=1)
-
-    assert len(sent) == 1
-    _assert_no_token(sent[0], where="Groq NER payload")
+    assert not hasattr(kg_extraction_groq, "call_groq_ner")
 
 
 def test_digest_faceted_gemini_send_scrubs_prompt(monkeypatch):
