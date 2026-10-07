@@ -7,6 +7,7 @@ number so the check cannot accidentally turn line 192 into a current count.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from pathlib import Path
@@ -42,8 +43,8 @@ def _current_readme_lines() -> list[str]:
 def _has_b3_disambiguation() -> bool:
     current_readme = "\n".join(_current_readme_lines())
     return (
-        re.search(r"Python server\s*=\s*13", current_readme, re.IGNORECASE) is not None
-        and re.search(r"BrainBar router\s*=\s*17", current_readme, re.IGNORECASE) is not None
+        re.search(r"Python library\s*=\s*12", current_readme, re.IGNORECASE) is not None
+        and re.search(r"BrainBar router\s*=\s*16", current_readme, re.IGNORECASE) is not None
     )
 
 
@@ -56,7 +57,15 @@ pytestmark = pytest.mark.xfail(
 
 
 def _python_tool_count() -> int:
-    return len(re.findall(r"\bTool\(", PYTHON_REGISTRATION.read_text(encoding="utf-8")))
+    module = ast.parse(PYTHON_REGISTRATION.read_text(encoding="utf-8"))
+    canonical = next(
+        node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "_full_tool_definitions"
+    )
+    # The expansion control is not a canonical tool; count only the full palette.
+    return sum(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Tool"
+        for node in ast.walk(canonical)
+    )
 
 
 def _python_literal_tool_name_count() -> int:
@@ -64,13 +73,15 @@ def _python_literal_tool_name_count() -> int:
 
 
 def _swift_tool_names() -> set[str]:
-    return set(re.findall(r"\bbrain_[a-z_]+\b", SWIFT_REGISTRATION.read_text(encoding="utf-8")))
+    source = SWIFT_REGISTRATION.read_text(encoding="utf-8")
+    canonical = source.split("static let toolDefinitions", 1)[1]
+    return set(re.findall(r'"name": "(brain_[a-z_]+)"', canonical))
 
 
 def test_documented_counts_match_both_registration_surfaces() -> None:
-    assert _python_tool_count() == 13
+    assert _python_tool_count() == 12
     assert _python_literal_tool_name_count() == 0
-    assert len(_swift_tool_names()) == 17
+    assert len(_swift_tool_names()) == 16
 
     documented_counts = [
         int(match.group(1) or match.group(2) or match.group(3) or match.group(4))
@@ -78,5 +89,5 @@ def test_documented_counts_match_both_registration_surfaces() -> None:
         for match in COUNT_LINE.finditer(line)
     ]
     assert documented_counts, "README must contain at least one in-scope MCP count"
-    assert set(documented_counts) <= {13, 17}
+    assert set(documented_counts) <= {12, 16}
     assert _has_b3_disambiguation()
