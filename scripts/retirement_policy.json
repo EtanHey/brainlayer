@@ -2,14 +2,14 @@
   "baseline": "R11 Opus r1 narrowing adopted by lead; preserved purposes for unchanged transport import/call sites; round2 review pending",
   "schema_version": 1,
   "sites": {
-    "01190a0b394b0984d5c7bcc43696116748db1e4cbbb918c30c7115aae957e8a6": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge",
+    "00db5ec85f9abd52c6d5d9ff6ed45c08d7a6b8cc3151b4371a1965a59c0c6dc3": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
-        "call_sha256": "8a877f1902a28914bc5b150292bfba78cb9a89477c6231a0518b8e162d9dac5b",
-        "kind": "generic_send",
-        "owner": "<module>.run_bridge",
-        "path": "src/brainlayer/mcp_stdio_bridge.py",
-        "target": "sock.send"
+        "call_sha256": "91465b1708d453e5959bfa5897ca7f66c5d68603815578ce57b9f765e1593d13",
+        "kind": "transport_call",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "socket.socket"
       }
     },
     "01de005383a5bd942b899fd451e09bd0823f07d3dcf4c79d42972baa46be07a6": {
@@ -20,6 +20,26 @@
         "owner": "<module>.upload_file_to_drive_raw",
         "path": "src/brainlayer/backup_daily.py",
         "target": "requests.post"
+      }
+    },
+    "0251bde8a9132c26cbaf2e8c1444007af605295d4e5b5a300dfd7612078ca874": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_tag_contains.py <module>._git subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>._git",
+        "path": "scripts/release_tag_contains.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "028db327c851013719189f132872744995bf54a49a96d0acc494e06810a53244": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect socket.socket().connect.",
+      "site": {
+        "call_sha256": "0b7d3dd9af314cd697b31518073f506f89c69771f013144f628c1e6c284ecc79",
+        "kind": "generic_send",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().connect"
       }
     },
     "041e3b7ae74566732035e7acf8ffc81febd89724aabf4d2417b62110aecbdbcd": {
@@ -62,6 +82,46 @@
         "target": "import ssl"
       }
     },
+    "0ab7f79347ca25c3b4dba2b5e569eb33f51ac2b6cd02f060dc1761724f78eb1b": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>.send_brainbar_search_canary socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>.send_brainbar_search_canary",
+        "path": "src/brainlayer/health_check.py",
+        "target": "socket.socket"
+      }
+    },
+    "0ad54d5618bb7e08a643fd888f526d43a46f6135d905928dade354e4fbda0d02": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.disconnect socket.socket().",
+      "site": {
+        "call_sha256": "bced65cb5175062df06361e06cfecbc47ed6371a6a2ca544ae1235ac133c2d72",
+        "kind": "callable_reference",
+        "owner": "<module>.run_bridge.disconnect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket()"
+      }
+    },
+    "0af5bb04d385b08cb9d5ffb822a96672fdab26422baad91b1c59bfcbf2228422": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_source.py <module>.python_findings importlib.util.resolve_name.",
+      "site": {
+        "call_sha256": "b8b31d513628952d8742d863621ded22cf076a96dbfd608a2152bf49244886a9",
+        "kind": "transport_call",
+        "owner": "<module>.python_findings",
+        "path": "scripts/retirement_source.py",
+        "target": "importlib.util.resolve_name"
+      }
+    },
+    "0c654e2294ed2d641f58f0c5af693badb1b7490cb29c6460d5fb42945b5eac3c": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls requests.Session().send.",
+      "site": {
+        "call_sha256": "c923925c0a162b217c471831f63786c87910596792a4c4492ab933c808803c8e",
+        "kind": "generic_send",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "requests.Session().send"
+      }
+    },
     "0e51ab70ae6658dc3aec80b0aff78357b0e9819ee23f8df097a28f2eb737ad6f": {
       "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
       "site": {
@@ -90,6 +150,16 @@
         "target": "subprocess.run"
       }
     },
+    "0ec94676fbed2d2ab181d94e34fc416ee3947c8b84d4c04e48af425cc1971ecc": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/backup_daily.py <module>.resolve_machine_id socket.gethostname.",
+      "site": {
+        "call_sha256": "dc241d885f02620d9fa68fb341d2984f8278500d6bb8af85e997242a75ad2650",
+        "kind": "transport_call",
+        "owner": "<module>.resolve_machine_id",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "socket.gethostname"
+      }
+    },
     "0ee754e3e853a6317d6df6dbcf38cefcd9b4c062c354aa77090c72c564c3623a": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/benchmark_runtime_store_open.py <module>",
       "site": {
@@ -100,6 +170,16 @@
         "target": "import subprocess"
       }
     },
+    "0f53d8019026802bf33844914ede0017ed4a218d1cfd358249f189d1cd72f79b": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/health_check.py <module>._default_ps_output subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._default_ps_output",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "0fb5e1d2b569a5ba6bc46f8341f968eb62c89de9484e29798669ef0b7da37a3e": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_cleanup_apply.py <module>.main",
       "site": {
@@ -108,6 +188,16 @@
         "owner": "<module>.main",
         "path": "scripts/kg_cleanup_apply.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "1009187960a9ac692d7b39b187d199ebd847a7fede3c7c43f34c1d6480f5c12b": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm importlib.import_module.",
+      "site": {
+        "call_sha256": "613ca10284471d1850ed05a2704b85bab8da3ab9ba53a48734296e1f79501bfc",
+        "kind": "callable_reference",
+        "owner": "<module>.arm",
+        "path": "scripts/retirement_guard.py",
+        "target": "importlib.import_module"
       }
     },
     "1145d01dadd4a02262ac80b6f95bdeb2808dfeeb2662f7580ee1dc317bc0fe4c": {
@@ -170,6 +260,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "15535a145e5492d50ea89bc81c4edabe6ddb9611955c7029b027fbd8f2d3e913": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/launchd/throughput-watchdog.py <module>._bounded_nul_paths subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._bounded_nul_paths",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "15890b091768ecc1b679b56e711988d0d1cdc4453936901faf0ebb6b0af9d956": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -200,6 +300,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "164ae50a75fce5e3efdb53c43822739129e8d71e1176801567bc757d4d638cec": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module> requests.ConnectionError.",
+      "site": {
+        "call_sha256": "1245af9fdbdb06415e20836f93d4112fc2c9e48201eed1b7360569974b6c590c",
+        "kind": "callable_reference",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.ConnectionError"
+      }
+    },
     "1699bc9f7f227cf52e3b895480f6355658fbdb645e6f5519473c5a18e7b539dc": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -228,6 +338,16 @@
         "owner": "<module>.WriteQueue.stop",
         "path": "src/brainlayer/pipeline/write_queue.py",
         "target": "self._queue.put"
+      }
+    },
+    "184717a76320ccc9d6d5d40d57fa0452cf280ebfe99356d0a09fcb12ad05dab1": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/maintenance.py <module>.run_command subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>.run_command",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.CompletedProcess"
       }
     },
     "189ac3d93a99db26994efb4c238f999cb8620507da702d06d232987368ce534d": {
@@ -270,6 +390,26 @@
         "target": "subprocess.run"
       }
     },
+    "1b57650e6a3f5cc373432f49165bdefad749f09f015e5ac68d115bed53d7f635": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/launchd/throughput-watchdog.py <module>._stop_process subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._stop_process",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "1c4c4f4694589f8c906d6620e3f3f917950dc2a348bebb8fad74e82b39e13c54": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/cleanup_stale_mcp.py <module>.parent_has_active_session subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.parent_has_active_session",
+        "path": "scripts/cleanup_stale_mcp.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "1c98642c6145b590cc0bf02ff5a24375311872ad48b2b76da54df5b492df4e3d": {
       "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
       "site": {
@@ -288,6 +428,36 @@
         "owner": "<module>",
         "path": "src/brainlayer/jobs.py",
         "target": "import subprocess"
+      }
+    },
+    "1e2756986e7c87b4ad726478c8154c42b8e9339746174a2e0e7cd976bb046451": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/mcp/_shared.py <module>._detected_default_read_pool_size subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._detected_default_read_pool_size",
+        "path": "src/brainlayer/mcp/_shared.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
+    "1f0e32635a77afd81f5bf7ccb7c39426a00ecd970c057d028996096a44d5405c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module>._run subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "1f4f48c27e14a7df743efcafb7eb617d6450e98e78b0d54ce4ddedba77869cb2": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/pipeline/semantic_style.py <module> importlib.util.find_spec.",
+      "site": {
+        "call_sha256": "d000a7fa0e6760543ef9456eaa11a944432a13e5566f2432a5067b96f235408f",
+        "kind": "transport_call",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/semantic_style.py",
+        "target": "importlib.util.find_spec"
       }
     },
     "20797ab7cdc02149f2c24b2428930d8b1baf000a12218480d524d52d0ff20197": {
@@ -340,6 +510,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "21fc7de7a24d8edb6ed75076945ac2374e2aa097cf320492482420d8e15504ac": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm subprocess.Popen.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.arm",
+        "path": "scripts/retirement_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "2227e39aef79184a86d4f35b4ef99c2519739216877c2ceccfe73509d238e904": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/sprint_gate.py <module>",
       "site": {
@@ -348,6 +528,46 @@
         "owner": "<module>",
         "path": "scripts/sprint_gate.py",
         "target": "import socket"
+      }
+    },
+    "228591843d94f862262e6ca0ac685d04a4f1af79fcc8acda150e4996d116a375": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>.HybridSearchHelper.serve_forever",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket"
+      }
+    },
+    "22a0c615bce8b9f9689c7da05524970b3f42a4d4055d46296be22edb160f9b80": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/drive_credentials.py <module>.authorize socket.timeout.",
+      "site": {
+        "call_sha256": "2a1651a672404bb49068f96627a4ee1318247688ed1b93bc82bd677e99bcecaf",
+        "kind": "callable_reference",
+        "owner": "<module>.authorize",
+        "path": "src/brainlayer/drive_credentials.py",
+        "target": "socket.timeout"
+      }
+    },
+    "234a5dd806d9af5dc395a5dba902d19ddaca3b9997a9055c373ef9cda02a913a": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/setup.py <module>.get_launchd_dir importlib.resources.files.",
+      "site": {
+        "call_sha256": "9b3373bf1d67524f63d626fb5d7a2455bd1b9c98b5274234df3404b83684aa88",
+        "kind": "transport_call",
+        "owner": "<module>.get_launchd_dir",
+        "path": "src/brainlayer/setup.py",
+        "target": "importlib.resources.files"
+      }
+    },
+    "23a09bf35310b4d8bad8f0e8b3be1dcab15cdc19d2de67c5c61e2aab718f9223": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.getaddrinfo.",
+      "site": {
+        "call_sha256": "e0c04e36b04e9dde139076cef6bf016dba97540821144fa1023be9f78dcf786a",
+        "kind": "transport_call",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "socket.getaddrinfo"
       }
     },
     "24dd1ce1e18348f57da42cee504971386e395583fc3f2229ff6ced4bfd02989e": {
@@ -438,6 +658,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/reembed_backfill.py",
         "target": "import subprocess"
+      }
+    },
+    "2caff6dab225bf4212fa3e41a296db0ef64c88ff06c33d887fe5bb0ba291c423": {
+      "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._quote_id urllib.parse.quote.",
+      "site": {
+        "call_sha256": "bf255d0f201170b688e6273357956a669cd576ed2be8823d8e1ff5273ded4c1c",
+        "kind": "transport_call",
+        "owner": "<module>.PhoenixRestClient._quote_id",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "urllib.parse.quote"
       }
     },
     "2d018285dd33dbedf6133206bf8bd08e6390add209cf90125a858e4981804a33": {
@@ -540,6 +770,36 @@
         "target": "client.sendall"
       }
     },
+    "30ac96d42bb27eb338d14a8cd3dd08306576ac820ff4e5928159708f1c961e3a": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>.copy_archive_to_icloud subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.copy_archive_to_icloud",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "3102e78888e06465923ce9a171deb9808a1a25a4afb9c14ffaa5b9b44eb28fe2": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/observability_backup.py <module>.build_backups_section subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.build_backups_section",
+        "path": "src/brainlayer/observability_backup.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "318b34ca8de2e9329b4e185d5e3f5088688547f9dbef4029dd1928d299037366": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/benchmark_runtime_store_open.py <module>.benchmark_legacy_open subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.benchmark_legacy_open",
+        "path": "scripts/benchmark_runtime_store_open.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "31e136a8a241ce7569ae64a4ffe2a812e59e4adc81ce312407c53676cc89a2a2": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/git_learning.py <module>._iter_commits",
       "site": {
@@ -600,6 +860,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "3484376f8a6e6af7587e3e0c39716dac10811f6bbb43794ba006ebf3ae526765": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._request_macos_purge subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._request_macos_purge",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "34b76c98650a82db6cc2ab9cea3cd5ad27421d0a64fd90efa9fa005fa2d161ce": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -618,6 +888,16 @@
         "owner": "<module>.rollback_migration",
         "path": "src/brainlayer/dedupe_merge.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "360ca2b0b589a6220d8894141eea73afbc9103bb108abad69f42e66c9becd234": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/health_check.py <module>._default_command_runner subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.CompletedProcess"
       }
     },
     "3680f7f7a50ae9afc104b77047cdbb5486b9bd11e85ef8c7961f7e48f082c647": {
@@ -650,6 +930,26 @@
         "target": "import subprocess"
       }
     },
+    "37dfc7d84db570735ab747c4b9942decbe0d1d1d23133dd2caa4833dac68e90b": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/pipeline/git_overlay.py <module>.get_git_context subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.get_git_context",
+        "path": "src/brainlayer/pipeline/git_overlay.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "38d8ae158442e2eca39999edc9d320a3dc009c345be55fdcf7133e15db828ec2": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/kg_judge.py <module>._read_repo_evidence subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._read_repo_evidence",
+        "path": "src/brainlayer/kg_judge.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "39d56b4b3dc4758b6bf3129fa75de86c3516d1b6d6f161cf8ec8239999851d5e": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -668,6 +968,16 @@
         "owner": "<module>.build_entity_session_edges",
         "path": "src/brainlayer/pipeline/brain_graph.py",
         "target": "file_to_session_id.get"
+      }
+    },
+    "3b3de2b8d2e6897a1c448e8cd631b81f42aa04e14a407cf815092669113df9c2": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module>._run subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "3b6a5d2a999ed5b87b5e4dbe944d0d3dc47a6d884bd9b0054d4441201d02ca36": {
@@ -698,6 +1008,16 @@
         "owner": "<module>.served_package",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "3c9121a971b7ab348b26e31d85852188534a9d85830f31d5a9adbe0db6cc2c53": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.Session().close.",
+      "site": {
+        "call_sha256": "d31020d292fd8a01a5286f8aa7e70fd278ad11f2bb33720dfdf1bb4fe0221c2f",
+        "kind": "transport_call",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Session().close"
       }
     },
     "3c9149998aa0e6a5c17ca65af694f02d71555d08fa92264220230c3a94a50db4": {
@@ -778,6 +1098,26 @@
         "target": "sqlite3.connect"
       }
     },
+    "40cb05a8b4c026ccb703c88ff572132eddafa04a29afbf1fb73b232b330a6a55": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/sprint_gate.py <module>.MCPClient.__init__ socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>.MCPClient.__init__",
+        "path": "scripts/sprint_gate.py",
+        "target": "socket.socket"
+      }
+    },
+    "4181c872eb9212dc9ad6ae2f349275cfff79450c8f32d365d092a84c7742fa51": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>._close_socket socket.socket().close.",
+      "site": {
+        "call_sha256": "7a31d80d280ced7fa4b94f1ba00a3d1706c280e19be6ad3f43f0fb5ab5d50cc0",
+        "kind": "transport_call",
+        "owner": "<module>._close_socket",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().close"
+      }
+    },
     "42a3f3aaa43f52be8326c9e58ce2a4c4c5c00e5d2c79a34cac8661d8af497f78": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -796,6 +1136,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "import subprocess"
+      }
+    },
+    "43c057d267648450e9b65487a26f50e101500e4094a49caea04268afef937bc1": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_source.py <module>.python_findings importlib.util.resolve_name.",
+      "site": {
+        "call_sha256": "19dbc72c3c240777df928d14ea16334e0d4c84e51cd8dda59ab1026e7414e72b",
+        "kind": "transport_call",
+        "owner": "<module>.python_findings",
+        "path": "scripts/retirement_source.py",
+        "target": "importlib.util.resolve_name"
       }
     },
     "443387d4d73eb75e9c20e6df1c179f3fc0f5429306acdaeb61759d8857dc2906": {
@@ -838,6 +1188,26 @@
         "target": "subprocess.check_output"
       }
     },
+    "47244bdf50632f30d06315d5b8a1226e35b8bb127fe8f0d4e77a8f495390735e": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.inspect_sdk importlib.util.find_spec.",
+      "site": {
+        "call_sha256": "ca487f0cf60ba58f70f48bff428a624feb63c97b5a0f2383b90553a4b3f30c98",
+        "kind": "transport_call",
+        "owner": "<module>.inspect_sdk",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.util.find_spec"
+      }
+    },
+    "4726129dc24f06c46b2377afd6c513a89f30ecddbdf67a665d74b232ca92c17c": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.check_db urllib.parse.unquote.",
+      "site": {
+        "call_sha256": "533ae6765930b382fea9a89834d85b4e1d262dc8f0764b4db3b3fe02d85e30f2",
+        "kind": "transport_call",
+        "owner": "<module>.check_db",
+        "path": "scripts/retirement_guard.py",
+        "target": "urllib.parse.unquote"
+      }
+    },
     "47613e1f656c88dc4cf970b789c2060fcf23531520194e495636bacae230a22d": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>.socket_owner_binary",
       "site": {
@@ -858,6 +1228,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "47e668ac0763b4501f21ff3933157e0c9512e52bca2955ca33c8d044fa10323a": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge socket.socket().send.",
+      "site": {
+        "call_sha256": "8a877f1902a28914bc5b150292bfba78cb9a89477c6231a0518b8e162d9dac5b",
+        "kind": "generic_send",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().send"
+      }
+    },
     "4898f8475525eb19152098cd119c73abf2fd7bfe14ca550692c42485657e8337": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -866,6 +1246,16 @@
         "owner": "<module>._send_brainbar_json_request",
         "path": "src/brainlayer/backup_daily.py",
         "target": "client.connect"
+      }
+    },
+    "4934bb9e97aecf9b00668a9fd3101afd741576f8493ae2cc4a057a06b22897c6": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.run importlib.metadata.distribution.",
+      "site": {
+        "call_sha256": "63f7a278fa1c63393f7b2484e7217916143ed3d08922c523fa54370d57dad3de",
+        "kind": "transport_call",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.metadata.distribution"
       }
     },
     "4997b6e8a1b1593dc22be1f360b927424ada7ba43c6f66fd207261c94f76a626": {
@@ -878,6 +1268,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "49a0e76fab4229b050d2f862e64d6a7a6ef3c23da3f3c2feb7d14a25c0eebd95": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/cli/__init__.py <module>.setup subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>.setup",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
     "4af5fe0f4e14dac652231ffe290945674586c25b9dbf74783c2d3b9ea216f571": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/fallback_replay.py <module>._git_root_uncached",
       "site": {
@@ -886,16 +1286,6 @@
         "owner": "<module>._git_root_uncached",
         "path": "src/brainlayer/fallback_replay.py",
         "target": "subprocess.check_output"
-      }
-    },
-    "4b50f772bb043cb474d3ea67b7fe437ccd37cacb9b930e048c1526d5bd109be2": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect",
-      "site": {
-        "call_sha256": "0b7d3dd9af314cd697b31518073f506f89c69771f013144f628c1e6c284ecc79",
-        "kind": "generic_send",
-        "owner": "<module>.run_bridge.start_connect",
-        "path": "src/brainlayer/mcp_stdio_bridge.py",
-        "target": "candidate.connect"
       }
     },
     "4ca3ef7c8fdf6bed5029ce4ca3f70154cc0cfb7247c3fbcc4066e30d9941d5bf": {
@@ -938,6 +1328,16 @@
         "target": "import subprocess"
       }
     },
+    "4ffd3d0f2e33eb3c2678696f6915b221bcc80a57ba9e5b023bc2dda3115e23a8": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>._close_socket socket.socket().",
+      "site": {
+        "call_sha256": "bced65cb5175062df06361e06cfecbc47ed6371a6a2ca544ae1235ac133c2d72",
+        "kind": "callable_reference",
+        "owner": "<module>._close_socket",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket()"
+      }
+    },
     "504a2b68728c000a140561a4622af27e1b3ee992b6197973d739c9a7947ca2f5": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/code_intelligence.py <module>",
       "site": {
@@ -956,6 +1356,36 @@
         "owner": "<module>",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "import subprocess"
+      }
+    },
+    "50b2f0f2f2257f72f03e67570e861dff2b5aa22b333ac8b4d1f618e6f9826359": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/cli/__init__.py <module>.init subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>.init",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
+    "510636185e1db06d07cf297a79bed83f00fa08fead34f37ea405c0c5edec4494": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/health_check.py <module>._default_command_runner subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "52a2414f7fd22684b952f66c8cb461fda11ceb82c05ae7cc6781fd4d6f20b3a4": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>._close_socket socket.socket.",
+      "site": {
+        "call_sha256": "20fc7144ee32e12ec05c2b569882a60f7141b6d9d9e09285a5e9d0e1b4f18d1d",
+        "kind": "callable_reference",
+        "owner": "<module>._close_socket",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket"
       }
     },
     "53194c405c6e21cdd0368bdb7d0bf42b22c1eb1a6111bc6b14fa0cf919b7ce27": {
@@ -978,6 +1408,26 @@
         "target": "importlib.import_module"
       }
     },
+    "5509aa9d4767c5a43cc7629c3f622ca8a1830db170fef66c0c1dfffaa289158c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>.resolve_machine_id subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.resolve_machine_id",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "551dbb6b1f29ffd35d2d2cd7e651a7e800c9041163df1d06c75bb37f0742354c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: hooks/session-cleanup.py <module>.cleanup_stale_mcp subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.cleanup_stale_mcp",
+        "path": "hooks/session-cleanup.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "555e4ceded5bd53ac1c47bfe96fa2351bef6db0b063f2251c1aced90fa0c6538": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/observability_eval.py <module>._run_case",
       "site": {
@@ -986,6 +1436,26 @@
         "owner": "<module>._run_case",
         "path": "scripts/observability_eval.py",
         "target": "subprocess.run"
+      }
+    },
+    "55bcce35b5141d0ec66d61a4663aa78cc29bb46859705258822fa2c46a5e348d": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/health_check.py <module>._default_command_runner subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "cdde18b756c6d34354bf65dba967a8ae7c54ed07c2629e8a0378dee524bc85cf",
+        "kind": "transport_call",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "5620e4cc66f074ba6461b435f55318f95a0241db2745919e2e81fe595f164862": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._important_usage_capacity_bytes subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._important_usage_capacity_bytes",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.CalledProcessError"
       }
     },
     "5630892589a1470c03d492afad92f5386c3b60e4b48496eaa700dcd6808be4bb": {
@@ -1018,6 +1488,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "59e1f0d35eb41868da718ffa8d4500a91f74643b7e6b17bb51d1c5dc811ff9bd": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().accept.",
+      "site": {
+        "call_sha256": "0ebf8a1bfbfe0cda7ea842ed1966f50181cfd4e3e7dd76ba0b0f49713301db35",
+        "kind": "transport_call",
+        "owner": "<module>.HybridSearchHelper.serve_forever",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket().accept"
+      }
+    },
     "5bbb0cda3cd45afe2ee0c349bd0a3b36d68eb1a26bfeb45c43d8ea124916c439": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.run_fts_search",
       "site": {
@@ -1026,6 +1506,16 @@
         "owner": "<module>.run_fts_search",
         "path": "hooks/brainlayer-prompt-search.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "5ccacf801317d0248eeee6af7f82ef4b4eae917c5659248c222e0b3f38b12774": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/import_sweep.py <module>._installed_package_root importlib.util.find_spec.",
+      "site": {
+        "call_sha256": "b4032bdae4bce1e91a824810152d56431d871452328b4528cc5a7348d030bb7d",
+        "kind": "transport_call",
+        "owner": "<module>._installed_package_root",
+        "path": "src/brainlayer/import_sweep.py",
+        "target": "importlib.util.find_spec"
       }
     },
     "5de05ca5f77b450fa9a13bf0198d3f929f4a7061db76d3c08bb391c937d9b008": {
@@ -1046,6 +1536,16 @@
         "owner": "<module>._count_chunks",
         "path": "src/brainlayer/backup_daily.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "5efbc0753a92f2f18e4025347c2c15928aa84bf1954f547141ff6d1787dc3de6": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().settimeout.",
+      "site": {
+        "call_sha256": "6262e1f5b98e456da3c5ac391b3f561e99e4a2a121397371c6517c0c77f8a729",
+        "kind": "transport_call",
+        "owner": "<module>.HybridSearchHelper.serve_forever",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket().settimeout"
       }
     },
     "5f5db29e7a86c3bb73b7f94e72b87fe58772f065ec7152c7709c631157211737": {
@@ -1196,6 +1696,26 @@
         "target": "subprocess.check_output"
       }
     },
+    "65b50f41df46124c85d1ba93a33e64e845927e9d62b571eaae05f5f8f937f2f4": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.Session.",
+      "site": {
+        "call_sha256": "4046223b2bc9d68e4ad1d7d1eb6647ea3262b6a81ddeab56f2dcafbe855ba437",
+        "kind": "transport_call",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Session"
+      }
+    },
+    "661b8066c3acc9ace5274c46e2c5a20f35bd71639373ac3136cb52643d88ee48": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci/run_with_deadline.py <module>.main subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.main",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "663f8e3260afd2782569d1dca82aa43a95e1a92ebadafb16538db00596a63f42": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/derive_observability_goldens.py <module>._input",
       "site": {
@@ -1204,6 +1724,16 @@
         "owner": "<module>._input",
         "path": "scripts/derive_observability_goldens.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "667d6a0e016ac6dc464c2d7af4c61b0217f29fcae144bc2a17b4730257ccba46": {
+      "non_cloud_purpose": "Existing Phoenix tracing/retrieval evaluation REST request/error metadata; no generative model request. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._get_json urllib.request.Request.",
+      "site": {
+        "call_sha256": "4c547ad9b046deaad44cb50948ea9217eca3a95ab01c10a309586f1681c58cd8",
+        "kind": "transport_call",
+        "owner": "<module>.PhoenixRestClient._get_json",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "urllib.request.Request"
       }
     },
     "66b39fc55a31fe0850420973bc0dc223def7df19e136dd9c5e7075abfcf159e7": {
@@ -1276,6 +1806,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "6aa52f7edbcac2bf3f5ed281d76432672218b011e120b0f130e2cd2e21dd984a": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci_ratchet_table.py <module>.replay_pre_push subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>.replay_pre_push",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
     "6af97d75a3bf8fef459b5629fcda0276fc1a4e0482f29747a743de9640882828": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/job_alerts.py <module>._notify",
       "site": {
@@ -1306,6 +1846,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "6baee9bdab1fbdb6491e23c1bbbe6f34540642f6f7bdffd6b66fa8017ecd07d8": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect socket.socket().close.",
+      "site": {
+        "call_sha256": "d36dfa4b78f2193b05f449721c3baaf02fa79c9d0326c9fcbd7ef7e2bf6d331d",
+        "kind": "transport_call",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().close"
+      }
+    },
     "6c1eda9f9d1cb09d1decab47577371ceb462bcc646133aca8db3f391977c7e06": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper._handle_connection",
       "site": {
@@ -1334,6 +1884,26 @@
         "target": "import subprocess"
       }
     },
+    "6dcda7b3618524cd94f99273d26091b632623db8eae8df6b911843a64eeeaf75": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module> subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "6dde2f766c4b02fbcf96be5d605fe020a3db3f59782da799489d646008a6406c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._supervise_backup_process subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._supervise_backup_process",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "6de58c6a2f9376b9c74af3820ba7d3387d899ccc8de67a6e55452ad0ed5d8bb8": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -1344,6 +1914,16 @@
         "target": "import subprocess"
       }
     },
+    "6e1e9661c2ad8182b84450bb9a1cb1c0421d79c00c6404d282638e9602e7c24f": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper._read_line socket.socket.",
+      "site": {
+        "call_sha256": "20fc7144ee32e12ec05c2b569882a60f7141b6d9d9e09285a5e9d0e1b4f18d1d",
+        "kind": "callable_reference",
+        "owner": "<module>.HybridSearchHelper._read_line",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket"
+      }
+    },
     "6e2a9480b27a20e366ff8084e1872b0e0bc8e3b97e2cfd54539f2c8b1677a9ad": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/vector_store.py <module>",
       "site": {
@@ -1352,6 +1932,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/vector_store.py",
         "target": "import subprocess"
+      }
+    },
+    "6e50d6b4af1379bf662f5648ef79aa3d0a2575566b5f71e0e311a230c075eef5": {
+      "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/pipeline/longitudinal_analyzer.py <module>.loopback_ollama_url urllib.parse.urlsplit.",
+      "site": {
+        "call_sha256": "243737f4552e56f66ca8ee29e50fed6390fb76c90cb43e09451c6955d6cc838e",
+        "kind": "transport_call",
+        "owner": "<module>.loopback_ollama_url",
+        "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
+        "target": "urllib.parse.urlsplit"
       }
     },
     "6ea2bed6654b561e49885df4581d29d919e3d2d04873e7ecb8e5cd4022d1ee90": {
@@ -1392,6 +1982,36 @@
         "target": "import subprocess"
       }
     },
+    "728edf293557e1d1928eb944369f59950afcf2b9f1d1d26e0f64f1ecaf49ca44": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls requests.Session().send.",
+      "site": {
+        "call_sha256": "921cdceeee2f389b806835e6038947780580e7360a9d6fff0168c5552c44e04a",
+        "kind": "callable_reference",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "requests.Session().send"
+      }
+    },
+    "72c83397251125128931292fbea217d430a3b0cff3c74955e8b15f80558a7dbf": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/health_check.py <module>._default_command_runner subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "c64a5ab3d127b9e7a64c9db16a9c9dae06a142f7e1a219b73834add93d028db2",
+        "kind": "transport_call",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "7376608b021219afc7c9464c9441b2ef4c3cd002729d962e1836ac40464a04ee": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/job_alerts.py <module>.report subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.report",
+        "path": "src/brainlayer/job_alerts.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "74928325a3b02c1e9761a65ed08586d553cf72b2a8a92ccf52676c6c11f04cd9": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
       "site": {
@@ -1422,6 +2042,26 @@
         "target": "sqlite3.connect"
       }
     },
+    "7ba118109017c8785a84ce462bd719049e4390669da6a476beb476980c1e0dd6": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/import_sweep.py <module>.run_target subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.run_target",
+        "path": "src/brainlayer/import_sweep.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "7bb90b88206369838687ac1fd559c6a950bedb431a0021f6cfffae89b569341f": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/vector_store.py <module>.VectorStore._pid_start_time subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.VectorStore._pid_start_time",
+        "path": "src/brainlayer/vector_store.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "7d586f3e7e97e739f34db5656a6f775f925856c1ab0beaafe16d63b9aa618ab6": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/launchd_primitive.py <module>",
       "site": {
@@ -1430,6 +2070,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/launchd_primitive.py",
         "target": "import subprocess"
+      }
+    },
+    "7e120d0ad02dfbb6d1395091ead9af4e2998868f27cd829956c5612c96ddfe38": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect socket.socket().",
+      "site": {
+        "call_sha256": "bced65cb5175062df06361e06cfecbc47ed6371a6a2ca544ae1235ac133c2d72",
+        "kind": "callable_reference",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket()"
       }
     },
     "7e449b3e2158177d0feaa76be9d7fc3395b706a06d4e2f67285d57101dfea9bf": {
@@ -1482,6 +2132,26 @@
         "target": "sqlite3.connect"
       }
     },
+    "80e57809fb98d9ad4178271e9f8747ef66db8e74e5c302376f3a79a4fca7e799": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge socket.socket().recv.",
+      "site": {
+        "call_sha256": "dd58557289c865e1db319be2e14acda4429514ac266a8d4b408a572a066c625b",
+        "kind": "transport_call",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().recv"
+      }
+    },
+    "81d7d96247e55a9471b6d63043c836bbf07ba69aec2d999dc2e82b6fd4253c52": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>._drive_put_with_deadline requests.Session().close.",
+      "site": {
+        "call_sha256": "d31020d292fd8a01a5286f8aa7e70fd278ad11f2bb33720dfdf1bb4fe0221c2f",
+        "kind": "transport_call",
+        "owner": "<module>._drive_put_with_deadline",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Session().close"
+      }
+    },
     "824aebabf6b6b19d74e5a7bd33fe2e018309331ef9da395dcb3416d114b89888": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/dedupe_merge.py <module>._detect_git_sha",
       "site": {
@@ -1502,6 +2172,16 @@
         "target": "client.connect"
       }
     },
+    "83bfa4b4a14d021d4904c4597c6766dc7995560212474404a8c0201c6b4f7a68": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket"
+      }
+    },
     "84c0c675ede8b44e1bf3b8d63846088595a241f1ad698fff27b785cb0589f5a2": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/brain_graph.py <module>.compute_entity_positions",
       "site": {
@@ -1520,6 +2200,16 @@
         "owner": "<module>.match_session_to_plan",
         "path": "src/brainlayer/pipeline/plan_linking.py",
         "target": "session.get"
+      }
+    },
+    "85edf7ad1310157f713eeb2171a1a59a83cc18f78801dcc3f647d755219665f7": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/archive_collapse.py <module>._detect_git_sha subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/archive_collapse.py",
+        "target": "subprocess.CalledProcessError"
       }
     },
     "8670771ec5de78de96ff3727d306c32b3e13605688ea34ec4fda03639ba0c865": {
@@ -1550,6 +2240,26 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import importlib.util"
+      }
+    },
+    "87403a07c63b8e7f1552db6d5f51fe9d022b31d6ee46b373816b58b11861741c": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.RequestException.",
+      "site": {
+        "call_sha256": "a6133f6f93f3c45bc30dd3acc473748ebdfbaaa6361302b8de2a06bee65a03d4",
+        "kind": "callable_reference",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.RequestException"
+      }
+    },
+    "87ff92f466a87c97487fa94dade93ed6dbd8401d447bb13506bb409dcb892b31": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/observability_backup.py <module>.build_backups_section subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.build_backups_section",
+        "path": "src/brainlayer/observability_backup.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "8806b83a40d614e32975d9abe74945944c18603a063b925d3c2065c47f4ca96e": {
@@ -1632,6 +2342,16 @@
         "target": "session.get"
       }
     },
+    "8b747a5fbcc43e532d8cadb9fae8e97b1ac35871f74250a0f2c5cd7b41f7f2b8": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.inspect_sdk importlib.metadata.distribution.",
+      "site": {
+        "call_sha256": "63f7a278fa1c63393f7b2484e7217916143ed3d08922c523fa54370d57dad3de",
+        "kind": "transport_call",
+        "owner": "<module>.inspect_sdk",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.metadata.distribution"
+      }
+    },
     "8bdd8bc99bfbae604ca6c7e873da8f799e87da6d3477735b38bd2050baa80724": {
       "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
       "site": {
@@ -1680,6 +2400,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "8d8fee81622e38483ec028190cd3fc0cd0513ca508bcb6ca48e800e3bb9e3fc9": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/maintenance.py <module>._run_bounded_weekly_backup subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._run_bounded_weekly_backup",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "8e5d7ecb281462574f316ee22dd1d399b688089a1ab3cba63c324c5ccb43398a": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/frustration_mining.py <module>.mine_frustration_qrels",
       "site": {
@@ -1710,6 +2440,16 @@
         "target": "subprocess.run"
       }
     },
+    "8ef5088a1ce9bd2adf1c42b24e4ab08fbd2c6cd655f80e848ef2aa7fca93e48c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/cleanup_stale_mcp.py <module>.get_mcp_processes subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.get_mcp_processes",
+        "path": "scripts/cleanup_stale_mcp.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "90276fddd3be39f7ad2915552bd70babab966a2d520a1e2c69b655cfcac0c70f": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/t3_provenance.py <module>.t3_app_codex_session_ids",
       "site": {
@@ -1728,6 +2468,36 @@
         "owner": "<module>",
         "path": "src/brainlayer/index_completeness.py",
         "target": "import subprocess"
+      }
+    },
+    "90bcdd1288f9d0b7e60a747941eb6f52bcc863c89f0fed2d01ae4771cff8f53e": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.RequestException.",
+      "site": {
+        "call_sha256": "93e0479d37956b0d24d24b1bcab5405a92d985ac5ee3f2594c1f674334e44cb6",
+        "kind": "transport_call",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.RequestException"
+      }
+    },
+    "914d9965f99d76c3b11d36041f8b2a2db2585ed21ba1f53a9342c6922c562a4a": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/setup.py <module>.install_launchd subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.install_launchd",
+        "path": "src/brainlayer/setup.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "92b07f75026c1fce9819d5c17a8a2ade7435aa5af21ecd2ffa45c60ed74b7d71": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().listen.",
+      "site": {
+        "call_sha256": "358cd840867021e7e6fbcf6dba9488982e80042259ac23679ee865a7f6d503c6",
+        "kind": "transport_call",
+        "owner": "<module>.HybridSearchHelper.serve_forever",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket().listen"
       }
     },
     "92c62d93c1ab5d6fa468d1fb5975ab5ebe7508516fa56f0c698239ff2d2e380d": {
@@ -1778,6 +2548,26 @@
         "target": "sqlite3.connect"
       }
     },
+    "96486f88203067a0182d74bc0b1dad8b69586421c47e77483a0c883313b70af7": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge socket.socket().fileno.",
+      "site": {
+        "call_sha256": "5fb66f1946e24a4c36a88579aa4bd1bf69c3d9278b67eba447b7f5bf28a81a71",
+        "kind": "transport_call",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().fileno"
+      }
+    },
+    "96639366abee26e032ea5226a5689d5317079f13fd9bb7e282e22ec4b5d03662": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/kg_session_harvest.py <module>._load_apply_decisions importlib.util.spec_from_file_location.",
+      "site": {
+        "call_sha256": "87e04d299eae2a9e6daff421868ee1a3d6fd3e448c63360e79659b2c31387612",
+        "kind": "transport_call",
+        "owner": "<module>._load_apply_decisions",
+        "path": "src/brainlayer/kg_session_harvest.py",
+        "target": "importlib.util.spec_from_file_location"
+      }
+    },
     "96fc029fb9849f69bdac59d6787159030ac33dbf5fa5abd3051ff85b272c48c3": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -1788,6 +2578,16 @@
         "target": "import subprocess"
       }
     },
+    "9755da02f30771a48411dc8cb619c30acb46f59be0068ec36809dcf7d02d95d6": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/timestamp_iso.py <module>._detect_git_sha subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/timestamp_iso.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
     "9772a05e5860760c38504fd0291620c4fa99775dbb96fd1344694b46d9b3f388": {
       "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
       "site": {
@@ -1796,6 +2596,16 @@
         "owner": "<module>.download_audio",
         "path": "scripts/diarize_episodes.py",
         "target": "subprocess.run"
+      }
+    },
+    "97d36751fea5526ab1950e6dcda87bc1dc45a99e276ee451444e0e23c7080f93": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().close.",
+      "site": {
+        "call_sha256": "7ca176cfedb138fa1acfe7ab3718fd409b5f983132b79b248e6e7e42bc077fef",
+        "kind": "transport_call",
+        "owner": "<module>.HybridSearchHelper.serve_forever",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket().close"
       }
     },
     "97eacb7c49afb380fd31575c8ec53ab2bc76bc09e51784f389ea22702216b3ac": {
@@ -1888,6 +2698,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "9fe423d92c5c06da1c21f7647cfcd0b4fe184d00ebb62ad7a9af0e8299666cbb": {
+      "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/backup_retention_invariant.py <module>._upload_requests_md5 urllib.parse.urlsplit.",
+      "site": {
+        "call_sha256": "f6b807cf1d8d56e044f1fb19911bd9734050cb6598636486053061d86545463c",
+        "kind": "transport_call",
+        "owner": "<module>._upload_requests_md5",
+        "path": "src/brainlayer/backup_retention_invariant.py",
+        "target": "urllib.parse.urlsplit"
+      }
+    },
     "a02ded347dbbdc50a0bbaed42dab767dc2a8e2074acee991df693ac64fc73242": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.run_with_timeout.target",
       "site": {
@@ -1896,6 +2716,16 @@
         "owner": "<module>.run_with_timeout.target",
         "path": "hooks/brainlayer-prompt-search.py",
         "target": "results.put"
+      }
+    },
+    "a064792daf53f753f24b7664904f04476ade4b56ef8e4fc65a16aebe0f1a1dfc": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm builtins.__import__.",
+      "site": {
+        "call_sha256": "9e3090787f675ba36c0341cd55ca4bd1f69a2d33c1b18cc01e1690d77804585d",
+        "kind": "callable_reference",
+        "owner": "<module>.arm",
+        "path": "scripts/retirement_guard.py",
+        "target": "builtins.__import__"
       }
     },
     "a0e41b553c0c9c33422f94d6cc520a01436fad65a9427bc596cfb43dc9756d03": {
@@ -1958,16 +2788,6 @@
         "target": "subprocess.check_output"
       }
     },
-    "a49ffc62e9f98ba4c278979471dea6c23f23f53c57e91c582a48531abe6e72a7": {
-      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
-      "site": {
-        "call_sha256": "df9c85562fc37b27faa5db639dd1d2be325fde3cba4a45b44018d9f83c3f7b17",
-        "kind": "generic_send",
-        "owner": "<module>._drive_put_with_deadline.perform",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "session.put"
-      }
-    },
     "a5071046c464e0617a34b0c3cb5dc4d8a715363e6f57e8fd8b7e58c08bf82ed8": {
       "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
       "site": {
@@ -2006,6 +2826,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "a6bbf5cbac0923890fe97661ee59af3819c401a491bb7941e2b52649040f064e": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/observability_eval.py <module>._run_case subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._run_case",
+        "path": "scripts/observability_eval.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "a7b652380ad7ca586ab6ff4d20a7827225c89f0a8336295fd6cf806befc35f4f": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/launchd/throughput-watchdog.py <module>",
       "site": {
@@ -2024,6 +2854,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
         "target": "from urllib.parse import urlsplit"
+      }
+    },
+    "a7ede94630f1e87b9348d09c860e2056110a1bfec411eb578956fe79152edd6c": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/config.py <module>._resolve_op_read_value subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._resolve_op_read_value",
+        "path": "src/brainlayer/config.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "a7fae5234db1039296c960ffd772cd5b3e1e30bf3186d6402c5e6c8b5652210f": {
@@ -2046,6 +2886,26 @@
         "target": "client.connect"
       }
     },
+    "a86a0a62889efcfba84878ba7826d7f3d9ed3a052aee09b7ead9af785b15ad0f": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/pipeline/code_intelligence.py <module>._pid_start_time subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._pid_start_time",
+        "path": "src/brainlayer/pipeline/code_intelligence.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
+    "a91912acc200781dc7fdc0eb419c4b963a25c5a393148adeaaf96f9d2e2d9824": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>._trash_icloud_item subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._trash_icloud_item",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
     "aaec04afd5254f328e629432cdeb7e069ed9e6b8ed5a31bb42ff206c4dd08e0f": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/setup.py <module>",
       "site": {
@@ -2054,6 +2914,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/setup.py",
         "target": "from importlib import resources"
+      }
+    },
+    "aafca8b5930a41d0cf54e4a04de5df2a2c078506c24929a6f2b15502f03101e1": {
+      "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/kg_promotion.py <module>._ReadOnlyPromotionStore.__init__ urllib.parse.quote.",
+      "site": {
+        "call_sha256": "67bb3b2bf2103f0c9a9a4e21f9fb3245aaceb410c6f6c6e169174b81033d1419",
+        "kind": "transport_call",
+        "owner": "<module>._ReadOnlyPromotionStore.__init__",
+        "path": "src/brainlayer/kg_promotion.py",
+        "target": "urllib.parse.quote"
       }
     },
     "aafcfae5bbbe76d4d193518eddf7c566d05d4dcbc743b5464e61a93598e2bb7a": {
@@ -2116,6 +2986,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "ae7f0bbdf1fa083bc78c1ad28d0f2d6075d8eb52fcd86760206cf2f1edb8884a": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/ci_ratchet_table.py <module>.collect_search_latency socket.gethostname.",
+      "site": {
+        "call_sha256": "64a1d07cb72ba78ec82ed7d7961c9ce77a1ca40c7b9b333fed58875ebbc8d5eb",
+        "kind": "transport_call",
+        "owner": "<module>.collect_search_latency",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "socket.gethostname"
+      }
+    },
     "aed9b5dea2412a92d4cd4b5defb4ace626bbe2554309872f7bd632c1e5678598": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -2124,6 +3004,26 @@
         "owner": "<module>._send_brainbar_json_request",
         "path": "src/brainlayer/backup_daily.py",
         "target": "client.sendall"
+      }
+    },
+    "aee3589e4e723236c7356a86bbf39dd9253bf1f14a73a8571662f165b6f054f8": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge socket.socket().getsockopt.",
+      "site": {
+        "call_sha256": "b31d1e8ef8182304bfc049d4a92b0cdeb801acfe2504de5fba67f5b01151340c",
+        "kind": "transport_call",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().getsockopt"
+      }
+    },
+    "aefa03a9a6bb360c1b706e1719f7e805219621724deee5c976dca6dabdc0f832": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>._icloud_inventory_is_verified subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._icloud_inventory_is_verified",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "af590c54442cf25c4ed1157f5d66ff254a54096665634c7226085f979d90dabd": {
@@ -2156,6 +3056,16 @@
         "target": "import subprocess"
       }
     },
+    "af969d63b6f3e6052ef11d9b178c845e70bdb5c65b1bbe6b0ed0a5daac0a5ed5": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp/search_handler.py <module>._forward_to_helper socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>._forward_to_helper",
+        "path": "src/brainlayer/mcp/search_handler.py",
+        "target": "socket.socket"
+      }
+    },
     "b01f941f773c592d9c51561ca7deb43c5c18d73a127815c50e8195030b26c29d": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/config.py <module>",
       "site": {
@@ -2176,6 +3086,26 @@
         "target": "sqlite3.connect"
       }
     },
+    "b212f1f1f02595b0cca7bb3189844cc7aef1849247fb6e36641a3ef61788c200": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/ci_ratchet_table.py <module>.Probe.detect socket.gethostname.",
+      "site": {
+        "call_sha256": "64a1d07cb72ba78ec82ed7d7961c9ce77a1ca40c7b9b333fed58875ebbc8d5eb",
+        "kind": "transport_call",
+        "owner": "<module>.Probe.detect",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "socket.gethostname"
+      }
+    },
+    "b26deabe85f82b84a722ceedb37fce09fdd46229846bd5a8a09a6c7cc1197ae1": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/kg_session_harvest.py <module>._load_apply_decisions importlib.util.module_from_spec.",
+      "site": {
+        "call_sha256": "bb4723054f32176cee5e266ef4667f8db0569035d97cc85c475f736232fdd1d3",
+        "kind": "transport_call",
+        "owner": "<module>._load_apply_decisions",
+        "path": "src/brainlayer/kg_session_harvest.py",
+        "target": "importlib.util.module_from_spec"
+      }
+    },
     "b2b851040fd90aaf8421ca58f0d2031f3424a28c7eacade3996819ed25390529": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/retag_t3_app_provenance.py <module>.rollback_t3_app_chunks",
       "site": {
@@ -2186,6 +3116,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "b3343b991cdc6ab1fe01d7372bb3a290c555b0e6a1acc15431f6f9775d39cc14": {
+      "non_cloud_purpose": "Preserved numeric-loopback Ollama adapter; endpoint validation, proxy refusal and redirects disabled remain required. Site: src/brainlayer/pipeline/longitudinal_analyzer.py <module>._ollama_generate requests.Session.",
+      "site": {
+        "call_sha256": "4046223b2bc9d68e4ad1d7d1eb6647ea3262b6a81ddeab56f2dcafbe855ba437",
+        "kind": "transport_call",
+        "owner": "<module>._ollama_generate",
+        "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
+        "target": "requests.Session"
+      }
+    },
     "b3c5692d01029a2af49f22a547fe7cd3b2f6460e9bc1326ccf810ded1e88b434": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.check_mcp",
       "site": {
@@ -2194,6 +3134,26 @@
         "owner": "<module>.check_mcp",
         "path": "scripts/sprint_gate.py",
         "target": "client.request"
+      }
+    },
+    "b40a92458cc40955f678415e6c70bd1fd40ffa80868aed7437cabf0d7382111d": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci_ratchet_table.py <module>.row_pre_push_delete subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.row_pre_push_delete",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
+    "b41dc6e9c02ef42ad5f9b7ce99005349ff8683e26807d7e383bb3554f970d6f9": {
+      "non_cloud_purpose": "Existing SSL context or error metadata for YouTube transcript ingest or Drive backup; no model send. Site: scripts/index_youtube.py <module>._get_ssl_context ssl.create_default_context.",
+      "site": {
+        "call_sha256": "6e9c6640a009a2438362769a6f6585c02941c5897a78cff88f8d4c610cbc3c71",
+        "kind": "transport_call",
+        "owner": "<module>._get_ssl_context",
+        "path": "scripts/index_youtube.py",
+        "target": "ssl.create_default_context"
       }
     },
     "b5370172bcd7be633f6f921a7f3711eac5441176182f0890c7ab7ffa3675781b": {
@@ -2216,6 +3176,46 @@
         "target": "subprocess.run"
       }
     },
+    "b684440ab14ebfa5e14721c84779c561498f5f7e62e1659a3e383dbbbb12a86a": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jsonl_backup.py <module>._icloud_item_state subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._icloud_item_state",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
+    "b6bcbea418b7fed44b98ccd247ec0a8ffb2364ddc0a48a955bf77c99f9f956cd": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/cli/__init__.py <module>.hooks subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>.hooks",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
+    "b7a7102464bccc81b95e552a2bdf3487facf2fb9217ce05dedaae7a68dd30a37": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/launchd/throughput-watchdog.py <module>._stop_process subprocess.Popen.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>._stop_process",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "b83910fba9047a8e28ce54df490dff6ca7ed3cba30faf7b90d92874604954836": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect socket.socket().",
+      "site": {
+        "call_sha256": "6ea4e66d846af011597b82834cbfc1b61c3297a5f9cfd575283fb8f031fd3356",
+        "kind": "callable_reference",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket()"
+      }
+    },
     "b8776f9dd67b2bd7925b2dc3158939941eea4c9697c21663c9df02ddf6c1a71f": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli_new.py <module>._has_readonly_schema",
       "site": {
@@ -2224,6 +3224,16 @@
         "owner": "<module>._has_readonly_schema",
         "path": "src/brainlayer/cli_new.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "b9c231e78b63b749ccadcfa6a2bbf992eb4dadf5dc3070a06ce7751004136d36": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper.serve_forever socket.socket().bind.",
+      "site": {
+        "call_sha256": "b2163a8b2a8a9b3d6b09fbbadfa8132428477c3a66519420b38c64f0b80005e1",
+        "kind": "transport_call",
+        "owner": "<module>.HybridSearchHelper.serve_forever",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket().bind"
       }
     },
     "ba6e61a03dbe573db8b9952b30d1e5eb53d6a8f3ee1313d291a74f0e4d95d6b9": {
@@ -2256,6 +3266,26 @@
         "target": "import subprocess"
       }
     },
+    "babf9740737daee42f2494e3dbcdfb9499b1d79581aa96934e29df07545389ab": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/pipeline/git_overlay.py <module>._git_cmd subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._git_cmd",
+        "path": "src/brainlayer/pipeline/git_overlay.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "baed4cb59b552413cee1eba5a2b06f6fe58bf90ec44469923ab041ef695a9b6f": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper._handle_connection socket.socket.",
+      "site": {
+        "call_sha256": "20fc7144ee32e12ec05c2b569882a60f7141b6d9d9e09285a5e9d0e1b4f18d1d",
+        "kind": "callable_reference",
+        "owner": "<module>.HybridSearchHelper._handle_connection",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "socket.socket"
+      }
+    },
     "baf511dcff573e55fb6cbf3220478b8cba3f3198aace26afc8214ffd29de0470": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -2286,6 +3316,36 @@
         "target": "sqlite3.connect"
       }
     },
+    "bb84c257294cbed4f998a672009e99741850bf940e6df814f15a2546d126d5f6": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/cli/__init__.py <module>._run_launchctl subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>._run_launchctl",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "bbec38baa32ca5b4db5f7cab488e4c331dd9a059bb5c5568415d1a25fcbc56d0": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/fallback_replay.py <module>._git_root_uncached subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._git_root_uncached",
+        "path": "src/brainlayer/fallback_replay.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
+    "bc20e7a6a03aab640a2160667dee167f2c6a0f80a1417c60ac225a8571b8d68a": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_tag_contains.py <module>._run subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "222c2d16c587fe676a8ead96e491afbf70b14ef61d9ef75dd5344d4495643a79",
+        "kind": "transport_call",
+        "owner": "<module>._run",
+        "path": "scripts/release_tag_contains.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
     "bc611dc9d29a86fc3c2c956d9b55986067fcf18b9ab88ac12982e563395a4cec": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>",
       "site": {
@@ -2296,6 +3356,16 @@
         "target": "import socket as socket_module"
       }
     },
+    "bc9c5f0ac90179afaccd109b3d93b94ad7401e13de2e4577af741f4395b1c733": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm.guarded_import importlib.util.resolve_name.",
+      "site": {
+        "call_sha256": "d50126cfc75afd262a158de4dbe80061bedd400b1f57aca5ff67156568d11efb",
+        "kind": "transport_call",
+        "owner": "<module>.arm.guarded_import",
+        "path": "scripts/retirement_guard.py",
+        "target": "importlib.util.resolve_name"
+      }
+    },
     "bcd5b1258d871efc6bb5be61f65ccaa77b5a624bf8da242cfb262803c88b6814": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.main",
       "site": {
@@ -2304,6 +3374,16 @@
         "owner": "<module>.main",
         "path": "hooks/brainlayer-prompt-search.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "bd84dfde36162fc7399c003a0f02e58ba551252cfee8730a6e21c01ac25ac526": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module> requests.exceptions.ChunkedEncodingError.",
+      "site": {
+        "call_sha256": "b4b2a2324f4a55162abaaf415371f2b46272532e5307ae180431b7d862751767",
+        "kind": "callable_reference",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.exceptions.ChunkedEncodingError"
       }
     },
     "bdc0d591f1446f10db50820e0125ce44f106be0547f408158836b6396c39ca1c": {
@@ -2396,6 +3476,16 @@
         "target": "import importlib.util"
       }
     },
+    "c343123b5bce882548c0792ff6b6ac679eb7232a8bfc86c96cec0a08ad406ee8": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_tag_contains.py <module>._run subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>._run",
+        "path": "scripts/release_tag_contains.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
     "c3f31975fdedf30b5dd9253999a17e722206e3420e19e1403512910dc958d366": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>",
       "site": {
@@ -2476,6 +3566,26 @@
         "target": "subprocess.run"
       }
     },
+    "c8e8ecaa10063ee1be9dd072083642685db915a79ba7b6959a9bbd529eae8ac1": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._important_usage_capacity_bytes subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._important_usage_capacity_bytes",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "c9044373efd6c8fa270f8388f42d7cd9b0c28604f5c20d7243c4168f4f5de35d": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm.guarded_dynamic importlib.util.resolve_name.",
+      "site": {
+        "call_sha256": "a7b36534008b8ff2faaedb2335efa8e9be546cb1c38f9a346e60dcab84b15d88",
+        "kind": "transport_call",
+        "owner": "<module>.arm.guarded_dynamic",
+        "path": "scripts/retirement_guard.py",
+        "target": "importlib.util.resolve_name"
+      }
+    },
     "c926b94f1f065087541cf52f53244e67a4610a51a96b2fd6a7dd6ba3eb2edb13": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -2484,6 +3594,26 @@
         "owner": "<module>.verify_jsonl_bundle",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "subprocess.run"
+      }
+    },
+    "c952d9e3646fc1302934aa7f007b27026735d7af473c434eba1502ad4b52c2f1": {
+      "non_cloud_purpose": "Existing Phoenix tracing/retrieval evaluation REST request/error metadata; no generative model request. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._get_json urllib.error.URLError.",
+      "site": {
+        "call_sha256": "1fc845b5fbc3be381611e91c062891af1b525c537f96d668db690975f4160476",
+        "kind": "callable_reference",
+        "owner": "<module>.PhoenixRestClient._get_json",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "urllib.error.URLError"
+      }
+    },
+    "c9be6ca583916b8f68108e8a702dcf053ed8e58484f9d3d9c55845080ff6a294": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/ci_ratchet_table.py <module>._git subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._git",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "ca6e8ac93b9deaa32ef4c0cf8c423094e192dce322bc02fb37d25c89e3004999": {
@@ -2504,6 +3634,26 @@
         "owner": "<module>._load_entity_cache",
         "path": "hooks/brainlayer-prompt-search.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "cbaa405aa0e16df0fd564a2bebaa2740eddf8b90e5c0be3f54ba4c9b60c59303": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm.FixtureProcess subprocess.Popen.",
+      "site": {
+        "call_sha256": "d9eda780475a22526c7af9d020868352792c65126d515532c375845fdec61071",
+        "kind": "callable_reference",
+        "owner": "<module>.arm.FixtureProcess",
+        "path": "scripts/retirement_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "cbd26cb983856e5260f07255371c2459641ab6742ca4f2a7abdc69ff433f9be8": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/sprint_gate.py <module>.main socket.gethostname.",
+      "site": {
+        "call_sha256": "dc241d885f02620d9fa68fb341d2984f8278500d6bb8af85e997242a75ad2650",
+        "kind": "transport_call",
+        "owner": "<module>.main",
+        "path": "scripts/sprint_gate.py",
+        "target": "socket.gethostname"
       }
     },
     "cc8148484d0ed72743624b0b1851c4eb1ba3285b8efe7d45c8215f99e06e5e94": {
@@ -2536,6 +3686,26 @@
         "target": "import subprocess"
       }
     },
+    "cdd332c341efb2f54350ef7de5cd908c540f04fe08ecb651b7677615ddeff322": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge socket.socket().",
+      "site": {
+        "call_sha256": "bced65cb5175062df06361e06cfecbc47ed6371a6a2ca544ae1235ac133c2d72",
+        "kind": "callable_reference",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket()"
+      }
+    },
+    "cf2412ae297c17775143acee0b8828f2284f8680b545dd61da273e5d4bf3a62b": {
+      "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/backup_retention_invariant.py <module>._upload_requests_md5 urllib.parse.parse_qs.",
+      "site": {
+        "call_sha256": "05d28214ce8ffaabba42afbc0a43d2b879f7137b1c87b3970135534ff3f11e89",
+        "kind": "transport_call",
+        "owner": "<module>._upload_requests_md5",
+        "path": "src/brainlayer/backup_retention_invariant.py",
+        "target": "urllib.parse.parse_qs"
+      }
+    },
     "cfa57df0265aa2cf5b087e6d11cb904663e9b7919f10632de919f04d7fcd3779": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._default_command_runner",
       "site": {
@@ -2544,6 +3714,16 @@
         "owner": "<module>._default_command_runner",
         "path": "src/brainlayer/health_check.py",
         "target": "subprocess.run"
+      }
+    },
+    "cfde3c32544aed2e651e2014a85f06e7b0b22679d35deef65d809dcb66afb85f": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/launchd_primitive.py <module>._default_command_runner subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "bc465ede3fb44d4496ccb8e8c10d6ac2aadbd8022e5026ea15ea2c17147ca3f2",
+        "kind": "callable_reference",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/launchd_primitive.py",
+        "target": "subprocess.CompletedProcess"
       }
     },
     "d06212e49c5343c03fc699c334c6f9c938ef9ec6418d6846f68fee6dca3d4e8a": {
@@ -2596,6 +3776,26 @@
         "target": "subprocess.run"
       }
     },
+    "d4de14cf71d304c604f13e2dfb94f500d3be6cf153c4a336d3da0e7990123c6d": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/setup.py <module>.verify_mcp_transport.receive subprocess.Popen.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.verify_mcp_transport.receive",
+        "path": "src/brainlayer/setup.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "d7967f8b10f25c262303281063349f16884d81c8365d987b705aa6684a8023d8": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._optional_sqlite_pragma_check subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._optional_sqlite_pragma_check",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "d7a13d716b3275ee778327bb991a35a115eed80fe0a00f162e852e8e138624ff": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/semantic_style.py <module>",
       "site": {
@@ -2624,6 +3824,16 @@
         "owner": "<module>.retag_t3_app_chunks",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "d9b55af618c33228420b271c253ad481da96c4baeaee04d48e5a56cce546bd4a": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/pipeline/style_embed.py <module> importlib.util.find_spec.",
+      "site": {
+        "call_sha256": "8761cbfd7cf3631964e10c10c47984241cd3e23bb07fed6d708b80cedd8305ff",
+        "kind": "transport_call",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/style_embed.py",
+        "target": "importlib.util.find_spec"
       }
     },
     "da267e005f503413fc43e4356b80da77dabcc3f4fc7ff0db5ce5b317ac2e44b1": {
@@ -2686,6 +3896,36 @@
         "target": "subprocess.run"
       }
     },
+    "de00ab5510da36ed21719375c85227f6fce4dbaf23348c6e8d035077341724c0": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm socket.socket.",
+      "site": {
+        "call_sha256": "20fc7144ee32e12ec05c2b569882a60f7141b6d9d9e09285a5e9d0e1b4f18d1d",
+        "kind": "callable_reference",
+        "owner": "<module>.arm",
+        "path": "scripts/retirement_guard.py",
+        "target": "socket.socket"
+      }
+    },
+    "e027a7091fb7fc6753f1abc3d5049a1b64ee1802a690235a4b142819a8b8dff3": {
+      "non_cloud_purpose": "Existing SSL context or error metadata for YouTube transcript ingest or Drive backup; no model send. Site: src/brainlayer/backup_daily.py <module> ssl.SSLEOFError.",
+      "site": {
+        "call_sha256": "7a4e4ae700cd237c2ca68e18911214710e045e3fcdca84f1be0eba0ec60f88ab",
+        "kind": "callable_reference",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "ssl.SSLEOFError"
+      }
+    },
+    "e0b7367bb1d7de93817cc9b74c38f1bcd2860fcad7532fdea300a0c64e1fddb4": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.Session().",
+      "site": {
+        "call_sha256": "64011aa59517520e80a042e7dce5b45ed9fc765aa00b3e304a64b5278107249d",
+        "kind": "callable_reference",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Session()"
+      }
+    },
     "e1da2d586c38446168d11a75e953d137bbf712a97b464026686b7594365e1c61": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/code_intelligence.py <module>._pid_start_time",
       "site": {
@@ -2714,6 +3954,36 @@
         "owner": "<module>",
         "path": "src/brainlayer/mcp_stdio_bridge.py",
         "target": "import socket"
+      }
+    },
+    "e331b5e35c4296106518aa501e6f80c489286d98f706a0c7a91f9f64c1a8fde7": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
+      "site": {
+        "call_sha256": "555a92d6bff5f2c2c11a405c75736dedd7453618d5b893c099790abf730d141f",
+        "kind": "transport_call",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "socket.socket"
+      }
+    },
+    "e373e62bec3e1ca4fe32fa72a0abc611ee968e5a4071f634d85837d8a977c600": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect socket.socket().setblocking.",
+      "site": {
+        "call_sha256": "6cf0612c36028a4372d61f691651abbddee8ce8e994a386a6fce7844f499600f",
+        "kind": "transport_call",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket().setblocking"
+      }
+    },
+    "e5826fe904e7c0b1a1ae6f3974098232488e3ec727d9e5e35a62f9a3c0b22da4": {
+      "non_cloud_purpose": "Existing SSL context or error metadata for YouTube transcript ingest or Drive backup; no model send. Site: scripts/index_youtube.py <module>._get_ssl_context ssl.create_default_context.",
+      "site": {
+        "call_sha256": "db20b03a1f6aec07b1e035e86a4eafde04c3f71e2b30772c7b656401fead3484",
+        "kind": "transport_call",
+        "owner": "<module>._get_ssl_context",
+        "path": "scripts/index_youtube.py",
+        "target": "ssl.create_default_context"
       }
     },
     "e5e8028f85119139fa276395b4258dd799409f3924fbc88982b2168985dce3c3": {
@@ -2786,6 +4056,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "eb3700ac2632d76248fd95cbf08a6bd227b20f881cbcb38fdedc0a2bb3fda021": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
+      "site": {
+        "call_sha256": "f866676d3417b6a0a374ec20fea4c7c0c9be174bae3bebc533491b7201d0f832",
+        "kind": "transport_call",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "socket.socket"
+      }
+    },
     "eb383dc4d1dc91e9ba8553b0c1aef1db327d2a3c3ff714ae4d80b88b8df1e5f5": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/doctor.py <module>._ro_conn",
       "site": {
@@ -2816,6 +4096,26 @@
         "target": "import importlib"
       }
     },
+    "ed6b68f5900e0814dfc47d89e1b33fb9ebaa5bf0b7aa0721d78f9476f6f25c23": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm.sqlite_connect sqlite3.connect.",
+      "site": {
+        "call_sha256": "8e8947bf1584d7f9be75ac6274ce2668eac101f61e47eb0d6710cb2121c8d392",
+        "kind": "generic_send",
+        "owner": "<module>.arm.sqlite_connect",
+        "path": "scripts/retirement_guard.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "ee46f0bb17fc978667bd01afbe37ace753dcdba0d3fa0edbca730ed1641d06a3": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/backup_daily.py <module>._send_brainbar_json_request socket.socket.",
+      "site": {
+        "call_sha256": "30305b95b691736882fade0c8f51cbfc591af0793d1a915d2582c4cc3234ab5a",
+        "kind": "transport_call",
+        "owner": "<module>._send_brainbar_json_request",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "socket.socket"
+      }
+    },
     "eeafab348ca471c014c0ff0b0a02740c232da06df354b3786ba36f9f6c65a8ef": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
       "site": {
@@ -2824,6 +4124,16 @@
         "owner": "<module>.run",
         "path": "scripts/retirement_probe.py",
         "target": "importlib.import_module"
+      }
+    },
+    "eefebd62990b9c0cf3ef20d44df2ac3756c61ef84293cc868dc55b4e059a7165": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>._drive_put_with_deadline requests.Timeout.",
+      "site": {
+        "call_sha256": "b0566914dfd9eeb91911f122eb459a80f5663e97b9cdb8f19d998abe0884fafa",
+        "kind": "callable_reference",
+        "owner": "<module>._drive_put_with_deadline",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Timeout"
       }
     },
     "ef51606440448632ea342fa0d256ffa75f29405ebfcc6b75af1bdf68b01d732f": {
@@ -2864,6 +4174,16 @@
         "owner": "<module>.PhoenixRestClient._get_json",
         "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
         "target": "urllib.request.urlopen"
+      }
+    },
+    "f076f96299cbfc169d782b25930da8a444709c63c7e7fb008d04d6944a6f8dda": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm sqlite3.connect.",
+      "site": {
+        "call_sha256": "48c4f62b3f4e6b72397530729336bda80231cb606fb23099ecf3b525e07ae46e",
+        "kind": "callable_reference",
+        "owner": "<module>.arm",
+        "path": "scripts/retirement_guard.py",
+        "target": "sqlite3.connect"
       }
     },
     "f090101d5077fecd7f944369c7a9d3fd418e46442efe9db55b9f3aff547f5b34": {
@@ -2936,6 +4256,16 @@
         "target": "from importlib.util import find_spec"
       }
     },
+    "f349321a5001f391bfee4047e5fdfcca8017390e0d7650c7c55e8313a2fcb585": {
+      "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.check_db urllib.parse.urlsplit.",
+      "site": {
+        "call_sha256": "a6523fba2a57b3e9625807ba75f6081e1fcee36a33a570befc68aabc33ccbd7f",
+        "kind": "transport_call",
+        "owner": "<module>.check_db",
+        "path": "scripts/retirement_guard.py",
+        "target": "urllib.parse.urlsplit"
+      }
+    },
     "f386188d7f0fc6b517c7011f286de7c0da3b2c26c107b332ed970e7f6209cdf8": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/extract_whatsapp.py <module>.extract_whatsapp_messages",
       "site": {
@@ -2946,6 +4276,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "f3c7f65319e486e70a9d79e34dac2289bdf525a1834b61b3c8c73a000dcc0179": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/launchd_primitive.py <module>._default_command_runner subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "c64a5ab3d127b9e7a64c9db16a9c9dae06a142f7e1a219b73834add93d028db2",
+        "kind": "transport_call",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/launchd_primitive.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
     "f43238c6c57ba20062361bbebdbe5beb276bd7c4bf9ed39dd26c9d9e0d425baa": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/release_tag_contains.py <module>._run",
       "site": {
@@ -2954,6 +4294,46 @@
         "owner": "<module>._run",
         "path": "scripts/release_tag_contains.py",
         "target": "subprocess.run"
+      }
+    },
+    "f499d017f3e771a3bb1f4fc04d930e4cafad177043ef2b180e2f63a36d7c2c5e": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module>._run subprocess.CompletedProcess.",
+      "site": {
+        "call_sha256": "be907d3b0ac2db3f15c8270360811ffa49a2b0430c3edabc509aae39a88c56ce",
+        "kind": "transport_call",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
+    "f57c768ec8ff1ca8b6c6e9f1b27a844c204bfaa0146bf821576fbb2a00ea07af": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/setup.py <module>.verify_mcp_transport.send subprocess.Popen.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.verify_mcp_transport.send",
+        "path": "src/brainlayer/setup.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "f6157933d3509a50432246f6deacb16d2b595480e395bc99416f6ece8a11fe22": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/sprint_gate.py <module>.check_mcp socket.gethostname.",
+      "site": {
+        "call_sha256": "dc241d885f02620d9fa68fb341d2984f8278500d6bb8af85e997242a75ad2650",
+        "kind": "transport_call",
+        "owner": "<module>.check_mcp",
+        "path": "scripts/sprint_gate.py",
+        "target": "socket.gethostname"
+      }
+    },
+    "f6b256370e3dfcdba9dff17270a0583dd9e3d0783cb8052fe0846cd4c71b23c3": {
+      "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/pipeline/semantic_style.py <module> importlib.util.find_spec.",
+      "site": {
+        "call_sha256": "48497bc8969ff8337fdab41077683ccd716415e25af1492d8dfc668ca543bc61",
+        "kind": "transport_call",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/semantic_style.py",
+        "target": "importlib.util.find_spec"
       }
     },
     "f6b5e021dfc704712932e71df0256b4372cda72151a8a5a005c1da06c9a19b50": {
@@ -2984,6 +4364,56 @@
         "owner": "<module>._git_merged_head_sha",
         "path": "src/brainlayer/maintenance.py",
         "target": "subprocess.run"
+      }
+    },
+    "fa3f5b16bf754ffb6681c1b70e3c8ac635902a35a1b96c60748e62969e1ad363": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/dedupe_merge.py <module>._detect_git_sha subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/dedupe_merge.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
+    "face50d3594f99a3c98ace29a7eb6d1ce3212e000dd17f3e106e5ab8ccbd0e7e": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/setup.py <module>.verify_mcp_transport subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.verify_mcp_transport",
+        "path": "src/brainlayer/setup.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "fadb1e5f4424da368f3f906365e1a15656ebba25765f814219f5d579b1f452b1": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/cli/__init__.py <module>._run_status_doctor_cli subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._run_status_doctor_cli",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "faf17c35b63145a2a5a138e3a51c26013f613444544153f3445f86e488ad4624": {
+      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>._drive_put_with_deadline.perform requests.Session().put.",
+      "site": {
+        "call_sha256": "df9c85562fc37b27faa5db639dd1d2be325fde3cba4a45b44018d9f83c3f7b17",
+        "kind": "generic_send",
+        "owner": "<module>._drive_put_with_deadline.perform",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Session().put"
+      }
+    },
+    "fb48852fa7655e36547f6aac88a03c3221c3443303d782a84688f0dec13064a8": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: hooks/post-commit.py <module>.main subprocess.CalledProcessError.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>.main",
+        "path": "hooks/post-commit.py",
+        "target": "subprocess.CalledProcessError"
       }
     },
     "fbf4405e1f058504bcc6cba1838751f128c782ac13c0fdc7c8519e80e9693703": {
@@ -3022,6 +4452,16 @@
         "body_sha256": "1894168298f47563bb47c74859867da43642f11bae3b5944d92c15ed6a85ffe7",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBar/BrainBusClient.swift"
+      }
+    },
+    "fef7ec01932cf5184a47e49d3d8430e0848fa37550a1b1149b5b1e922d5a9f8e": {
+      "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge socket.socket.",
+      "site": {
+        "call_sha256": "20fc7144ee32e12ec05c2b569882a60f7141b6d9d9e09285a5e9d0e1b4f18d1d",
+        "kind": "callable_reference",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "socket.socket"
       }
     },
     "ff3854eb46455c3b00338247cee676d542a6dc04ac7f20f06cfa6a76f8028499": {
