@@ -76,6 +76,8 @@ def test_caught_cloud_attempt_fails_retirement_test(surface, attempt):
                 return None
             raise
 
+    # Factory entries survive as explicit absent-target witnesses after host retirement.
+    # HTTP, request, and socket mutations below remain mandatory.
     targets = {
         "controller._get_gemini_client()": ("brainlayer.enrichment_controller", "_get_gemini_client"),
         "enrichment.call_llm('synthetic prompt')": ("brainlayer.pipeline.enrichment", "call_llm"),

@@ -16,7 +16,7 @@ def test_controller_batch_is_retired_before_store_access(monkeypatch, request, p
     store = MagicMock()
     store.get_enrichment_candidates.return_value = candidates
     factory = MagicMock(side_effect=AssertionError("cloud factory reached"))
-    monkeypatch.setattr(controller, "_get_gemini_client", factory)
+    monkeypatch.setattr(controller, "_get_gemini_client", factory, raising=False)
 
     with pytest.raises(RuntimeError, match="enrichment has been retired"):
         controller.enrich_batch(store, phase=phase, limit=5, max_retries=3)
