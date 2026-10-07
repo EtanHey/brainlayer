@@ -204,11 +204,9 @@ struct PipelineIndicators: Sendable, Equatable {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         let indexingStatus: PipelineIndicatorStatus
-        let enrichingStatus: PipelineIndicatorStatus
 
         if summary.isUnavailable {
             indexingStatus = .unavailable
-            enrichingStatus = .unavailable
         } else {
             indexingStatus = switch summary.ingress.status {
             case .live:
@@ -218,22 +216,11 @@ struct PipelineIndicators: Sendable, Equatable {
             default:
                 .idle
             }
-
-            enrichingStatus = switch summary.enrichment.status {
-            case .live:
-                .live
-            case .recent where summary.queue.status == .draining:
-                .live
-            case .queued:
-                .queued
-            default:
-                stats.pendingEnrichmentCount > 0 ? .queued : .idle
-            }
         }
 
         return PipelineIndicators(
             indexing: PipelineIndicator(name: "Indexing", status: indexingStatus),
-            enriching: PipelineIndicator(name: "Enriching", status: enrichingStatus)
+            enriching: PipelineIndicator(name: "Enrichment retired", status: .idle)
         )
     }
 }
@@ -428,10 +415,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let allCommitsColor = BrainBarDesignTokens.Colors.accentBright
         let agentStoresColor = BrainBarDesignTokens.Colors.seriesAgent
         let jsonlWatcherColor = BrainBarDesignTokens.Colors.seriesWatcher
-        let enrichmentColor = BrainBarStateTheme.active.theme.color
+        let enrichmentColor = BrainBarStateTheme.idle.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
-        let enrichmentsLive = stats.eventIsLive(stats.lastEnrichedAt, now: now)
         let backlogCount = stats.pendingEnrichmentCount
         let storeOldestAgeSeconds = stats.pendingStoreOldestQueuedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
         let storeHealth = storeQueueHealth(depth: stats.pendingStoreQueueDepth, oldestAgeSeconds: storeOldestAgeSeconds)
@@ -457,61 +443,12 @@ struct DashboardFlowSummary: Sendable, Equatable {
             ingressStatus = .idle
         }
 
-        let enrichmentStatus: DashboardFlowLaneStatus
-        if enrichmentsLive {
-            enrichmentStatus = .live
-        } else if backlogCount > 0 {
-            enrichmentStatus = stats.recentEnrichmentCount > 0 ? .recent : .queued
-        } else if stats.recentEnrichmentCount > 0 {
-            enrichmentStatus = .recent
-        } else {
-            enrichmentStatus = .idle
-        }
-
-        let queueStatus: DashboardQueueStatus
-        if backlogCount == 0 {
-            queueStatus = (stats.recentWriteCount > 0 || stats.recentEnrichmentCount > 0) ? .stable : .empty
-        } else if writesLive && !enrichmentsLive {
-            queueStatus = .growing
-        } else if enrichmentsLive && !writesLive {
-            queueStatus = .draining
-        } else if writesLive && enrichmentsLive {
-            queueStatus = .stable
-        } else if stats.recentEnrichmentCount > 0 {
-            queueStatus = .draining
-        } else {
-            queueStatus = .backlogged
-        }
-
-        let headline: String
-        let detail: String
-
-        if ingressStatus == .live && queueStatus == .stable && enrichmentStatus == .live {
-            headline = "Writes are landing and enrichments are shipping"
-            detail = "\(DashboardMetricFormatter.integerString(stats.recentWriteCount)) writes and \(DashboardMetricFormatter.integerString(stats.recentEnrichmentCount)) enrichments in \(windowLabel.lowercased())."
-        } else if ingressStatus == .live && queueStatus == .growing {
-            headline = "Writes are outrunning enrichments"
-            detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are waiting while ingress is still active."
-        } else if backlogCount > 0 &&
-            (queueStatus == .draining || enrichmentStatus == .draining || enrichmentStatus == .live) {
-            headline = "Queued work is draining"
-            detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks remain queued, and completions are still moving."
-        } else if queueStatus == .backlogged || enrichmentStatus == .queued {
-            headline = "Backlog is waiting for enrichment"
-            detail = "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are queued with no enrichment in the live window."
-        } else if ingressStatus == .recent || enrichmentStatus == .recent {
-            headline = "The flow is cooling down"
-            detail = "Live activity is quiet, but recent movement is still visible in \(windowLabel.lowercased())."
-        } else {
-            headline = "The flow is idle"
-            detail = "No writes or enrichments landed in \(windowLabel.lowercased())."
-        }
-
-        let enrichmentStatusText = enrichmentStatusText(
-            status: enrichmentStatus,
-            stats: stats,
-            windowLabel: windowLabel
-        )
+        // Completion timestamps are historical metadata, not a running producer.
+        let enrichmentStatus: DashboardFlowLaneStatus = .idle
+        let queueStatus: DashboardQueueStatus = backlogCount > 0 ? .stable : .empty
+        let headline = ingressStatus == .live ? "Local indexing active"
+            : (ingressStatus == .recent ? "Recent local writes" : "Local indexing idle")
+        let detail = "\(DashboardMetricFormatter.integerString(stats.recentWriteCount)) writes in \(windowLabel.lowercased()). Enrichment retired."
 
         return DashboardFlowSummary(
             headline: headline,
@@ -605,12 +542,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     ratePerMinute: stats.pendingStoreFlushRatePerMinute
                 ),
                 title: queueTitle(
-                    status: queueStatus,
-                    backlogCount: backlogCount,
                     storeHealth: storeHealth
                 ),
                 detail: queueDetail(
-                    status: queueStatus,
                     backlogCount: backlogCount,
                     storeHealth: storeHealth,
                     storeDepth: stats.pendingStoreQueueDepth,
@@ -618,14 +552,13 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     storeReplayDebtDepth: stats.pendingStoreReplayDebtDepth,
                     storeOldestAgeSeconds: storeOldestAgeSeconds,
                     storeFlushRatePerMinute: stats.pendingStoreFlushRatePerMinute,
-                    stats: stats,
-                    windowLabel: windowLabel
+                    stats: stats
                 )
             ),
             enrichment: DashboardFlowLane(
-                name: "Enriched successfully",
+                name: "Enrichment history",
                 status: enrichmentStatus,
-                statusText: enrichmentStatusText,
+                statusText: "Enrichment retired",
                 windowLabel: windowLabel,
                 activityWindowMinutes: stats.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
@@ -642,10 +575,10 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     now: now
                 ),
                 values: stats.recentEnrichmentBuckets,
-                sparklineLabel: "Successful enrichment completions over \(windowLabel)",
+                sparklineLabel: "Historical enrichment completions over \(windowLabel)",
                 latestBucketName: "latest successful-enrichment bucket",
                 accentColor: enrichmentColor,
-                primarySeriesLabel: "Enriched successfully",
+                primarySeriesLabel: "Historical enrichment completions",
                 secondaryValues: [],
                 secondarySeriesLabel: nil,
                 secondaryAccentColor: nil,
@@ -657,34 +590,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
             watcherStatus: watcherStatus,
             watcherStatusReason: watcherStatus.reasonText(now: now)
         )
-    }
-
-    private static func enrichmentStatusText(
-        status: DashboardFlowLaneStatus,
-        stats: DashboardStats,
-        windowLabel: String
-    ) -> String {
-        if let burstText = enrichmentBurstText(stats: stats) {
-            return burstText
-        }
-
-        switch status {
-        case .live:
-            return "Enrichments live now"
-        case .draining:
-            return "Recent enrichments are draining backlog"
-        case .queued:
-            return "Backlog is queued without live enrichments"
-        case .recent:
-            return "Recent enrichments in \(windowLabel.lowercased())"
-        case .idle:
-            return "No recent enrichments"
-        case .unavailable:
-            return "Unavailable"
-        case .running, .attention, .stopped, .unknown:
-            // Watcher-lane states; the enrichment lane never takes them.
-            return status.label.capitalized
-        }
     }
 
     private static func allCommitsStatusText(
@@ -725,23 +630,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
         return "\(DashboardMetricFormatter.integerString(totalEvents)) chunk rows in \(windowLabel)"
     }
 
-    private static func enrichmentBurstText(stats: DashboardStats) -> String? {
-        guard stats.pendingEnrichmentCount > 0,
-              let latestBucketCount = stats.recentEnrichmentBuckets.last,
-              latestBucketCount >= 25 else {
-            return nil
-        }
-
-        let earlierBucketTotal = stats.recentEnrichmentBuckets.dropLast().reduce(0, +)
-        guard latestBucketCount >= max(earlierBucketTotal * 2, 25) else {
-            return nil
-        }
-
-        let bucketMinutes = max(1, stats.activityWindowMinutes / max(stats.bucketCount, 1))
-        let bucketLabel = DashboardMetricFormatter.shortWindowLabel(minutes: bucketMinutes)
-        return "Backlog drain burst: \(DashboardMetricFormatter.integerString(latestBucketCount)) enriched in latest \(bucketLabel)"
-    }
-
     private static func storeQueueHealth(depth: Int, oldestAgeSeconds: Int?) -> DashboardStoreQueueHealth {
         guard depth > 0 else { return .empty }
         let oldest = oldestAgeSeconds ?? 0
@@ -776,8 +664,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
     }
 
     private static func queueTitle(
-        status: DashboardQueueStatus,
-        backlogCount: Int,
         storeHealth: DashboardStoreQueueHealth
     ) -> String {
         if storeHealth == .writerStuck {
@@ -786,24 +672,10 @@ struct DashboardFlowSummary: Sendable, Equatable {
         if storeHealth != .empty {
             return "Queue \(storeHealth.label)"
         }
-        switch status {
-        case .empty:
-            return "Queue empty"
-        case .stable:
-            return backlogCount == 0 ? "Flow balanced" : "Queue stable"
-        case .growing:
-            return "Queue growing"
-        case .draining:
-            return "Queue draining"
-        case .backlogged:
-            return "Queue backlogged"
-        case .unavailable:
-            return "Queue unavailable"
-        }
+        return "Enrichment retired"
     }
 
     private static func queueDetail(
-        status: DashboardQueueStatus,
         backlogCount: Int,
         storeHealth: DashboardStoreQueueHealth,
         storeDepth: Int,
@@ -811,8 +683,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
         storeReplayDebtDepth: Int,
         storeOldestAgeSeconds: Int?,
         storeFlushRatePerMinute: Double,
-        stats: DashboardStats,
-        windowLabel: String
+        stats: DashboardStats
     ) -> String {
         if storeHealth != .empty {
             let breakdown = stats.replayDebtBreakdown.detailText
@@ -828,22 +699,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "\(stats.replayDebtBreakdown.detailText)."
         }
 
-        switch status {
-        case .empty:
-            return "No chunks are waiting for enrichment."
-        case .stable:
-            return backlogCount == 0
-                ? "Ingress and enrichment stayed balanced across \(windowLabel.lowercased())."
-                : "\(DashboardMetricFormatter.integerString(backlogCount)) chunks queued while ingress and enrichment remain balanced."
-        case .growing:
-            return "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are accumulating faster than enrichments are landing."
-        case .draining:
-            return "\(DashboardMetricFormatter.integerString(backlogCount)) chunks remain queued, but enrichments are still landing."
-        case .backlogged:
-            return "\(DashboardMetricFormatter.integerString(backlogCount)) chunks are queued with no enrichments in the live window."
-        case .unavailable:
-            return "Queue state cannot be trusted until the daemon comes back."
-        }
+        return "Enrichment retired · \(DashboardMetricFormatter.integerString(backlogCount)) chunks without enrichment metadata."
     }
 }
 
@@ -1065,7 +921,6 @@ extension DashboardFlowSummary {
 enum PipelineState: String, Sendable, Equatable {
     case degraded
     case indexing
-    case enriching
     case idle
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> PipelineState {
@@ -1076,10 +931,6 @@ enum PipelineState: String, Sendable, Equatable {
         if summary.ingress.status == .live || summary.ingress.status == .recent || summary.queue.status == .growing {
             return .indexing
         }
-        if summary.enrichment.status == .live ||
-            (summary.enrichment.status == .recent && summary.queue.status == .draining) {
-            return .enriching
-        }
         return .idle
     }
 
@@ -1087,7 +938,6 @@ enum PipelineState: String, Sendable, Equatable {
         switch self {
         case .degraded: return "Degraded"
         case .indexing: return "Indexing"
-        case .enriching: return "Enriching"
         case .idle: return "Idle"
         }
     }
@@ -1096,7 +946,6 @@ enum PipelineState: String, Sendable, Equatable {
         switch self {
         case .degraded: return "exclamationmark.triangle.fill"
         case .indexing: return "waveform.path.ecg"
-        case .enriching: return "sparkles"
         case .idle: return "checkmark.circle.fill"
         }
     }
@@ -1111,8 +960,6 @@ enum PipelineState: String, Sendable, Equatable {
             return .degraded
         case .indexing:
             return .loading
-        case .enriching:
-            return .active
         case .idle:
             return .idle
         }

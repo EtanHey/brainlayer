@@ -35,6 +35,7 @@ The per-tool sections below document the main eight. For the remaining eight
 
 `brain_enrich` is retired and returns an unknown-tool error. Historical enrichment metadata
 remains readable; `brain_digest` continues to digest content locally.
+History: [retirement details](enrichment.md).
 
 > **Which schema are these tables?** They document the **Python library handlers** under
 > `src/brainlayer/mcp/`, whose parameter sets are wider than what BrainBar puts on the wire.
@@ -54,7 +55,7 @@ Unified semantic search — pass `query`, `file_path`, `chunk_id`, or filters. A
 | `content_type` | string | No | Filter: `ai_code`, `stack_trace`, `user_message`, etc. |
 | `num_results` | integer | No | Max results (default: 5, max: 100) |
 | `source` | string | No | Filter: `claude_code`, `whatsapp`, `youtube`, `all` |
-| `tag` | string | No | Filter by enrichment tag |
+| `tag` | string | No | Filter by tag, including historical enrichment tags |
 | `intent` | string | No | Filter: `debugging`, `designing`, `implementing`, etc. |
 | `importance_min` | integer | No | Minimum importance (1-10) |
 

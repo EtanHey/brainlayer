@@ -27,8 +27,6 @@ graph TD
     end
 
     subgraph Post-Processing
-        D1["Chunk Enrichment<br/>15-field LLM metadata"]
-        D2["Session Enrichment<br/>decisions, learnings"]
         D3["Brain Graph<br/>Leiden clustering"]
     end
 
@@ -41,9 +39,13 @@ graph TD
     A1 & A2 & A3 & A4 & A5 --> B1
     A6 --> C
     B1 --> B2 --> B3 --> B4 --> C
-    C --> D1 & D2 & D3
+    C --> D3
     C --> E1 & E2 & E4
 ```
+
+LLM chunk and session enrichment is retired. Existing metadata and session analysis
+remain readable; the local knowledge graph remains available.
+History: [retirement details](enrichment.md).
 
 ## Pipeline Stages
 
@@ -126,11 +128,11 @@ Size scales with the corpus, dominated by the 1024-dim embeddings. The dev machi
 
 Key tables:
 
-- **chunks** — content, embeddings, metadata, enrichment fields
+- **chunks** — content, embeddings, metadata, historical enrichment fields
 - **chunks_vec** — sqlite-vec virtual table for vector search
 - **chunks_fts** — FTS5 virtual table for keyword search
 - **session_context** — session metadata (project, branch, plan)
-- **session_enrichments** — session-level analysis results
+- **session_enrichments** — historical session-level analysis results (read compatibility)
 - **prompts** — deduplicated system prompts (SHA-256 keyed)
 
 ## Concurrency
@@ -140,4 +142,4 @@ Multiple processes can safely access the database:
 - **WAL mode** allows concurrent readers
 - **busy_timeout = 5000ms** waits for write locks
 - **Retry logic** with backoff on `SQLITE_BUSY`
-- **Thread-local connections** in parallel enrichment workers
+- **Per-worker connections** for local indexing and other retained writers

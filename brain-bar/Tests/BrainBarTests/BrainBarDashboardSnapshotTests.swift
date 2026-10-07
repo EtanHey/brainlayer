@@ -358,10 +358,6 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             .appendingPathComponent(".config/brainlayer/brainlayer.env", isDirectory: false)
         var config = BrainLayerConfig.defaultConfig
         config.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
-        config.enrichmentEnabled = true
-        config.enrichmentMode = .remote
-        config.enrichmentProvider = .gemini
-        config.enrichmentBackend = "gemini"
         config.launchdJobs[.drain]?.enabled = true
         config.launchdJobs[.hotlane]?.enabled = false
 

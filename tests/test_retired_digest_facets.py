@@ -9,6 +9,8 @@ from brainlayer.pipeline import digest
 from brainlayer.pipeline.sanitize import Sanitizer
 from brainlayer.vector_store import VectorStore
 
+pytestmark = pytest.mark.retired_enrichment
+
 
 @pytest.fixture
 def legacy_settings(monkeypatch):
