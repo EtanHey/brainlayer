@@ -11,7 +11,7 @@ BrainLayer fixes this. It's a **local-first memory layer** that gives any MCP-co
 - **16 MCP tools** — served by BrainBar on `/tmp/brainbar.sock`; a session boots into a core palette of 5 (`brain_search`, `brain_store`, `brain_recall`, `brain_expand`, `expand_palette`) and `expand_palette` exposes the rest
 - **Local-first** — SQLite + sqlite-vec, single file, no cloud, no Docker
 - **Hybrid search** — semantic vectors + keyword, merged with Reciprocal Rank Fusion
-- **15-field enrichment** — summary, key facts, tags, importance, intent, entities, sentiment, and more, via Groq/Gemini/MLX/Ollama
+- **Local knowledge graph** — entities, relations, co-occurrence extraction, and person lookup
 - **Multi-source** — Claude Code (batch + real-time watcher), Codex CLI, T3 threads, YouTube, manual
 - **Works everywhere** — Claude Code, Cursor, Zed, VS Code, any MCP client
 
@@ -59,8 +59,10 @@ graph LR
 
     E["Conversations<br/>Claude Code JSONL / Codex / YouTube"] --> F["Pipeline"]
     F -->|extract → classify → chunk → embed| D
-    G["Local LLM<br/>Ollama / MLX"] -->|enrich| D
 ```
+
+LLM enrichment is retired; existing metadata remains readable.
+History: [retirement details](enrichment.md).
 
 ## Next Steps
 
