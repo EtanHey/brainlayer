@@ -21,7 +21,6 @@ from typing import Any, Callable
 
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
-    ENRICH_DAILY_COST_COUNTER_FILENAME,
     PROGRESS_STALLED_CODE,
     PROGRESS_UNKNOWN_CODE,
     STALLED_CODE,
@@ -1589,11 +1588,9 @@ def _run_health_check_locked(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
         queue_count=queue_count + pending_stores_count,
-        enrichment_backlog=0,
         drain_health=drain_health,
         now=now,
         stale_seconds=config.drain_liveness_stale_seconds,
-        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
     if drain_liveness_issue is not None and not (
         drain_liveness_issue.code == PROGRESS_STALLED_CODE and queue_pause_explanation
