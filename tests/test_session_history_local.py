@@ -42,3 +42,9 @@ def test_saved_session_parser_is_a_local_history_helper():
     from brainlayer.pipeline.session_history import parse_session_enrichment
 
     assert parse_session_enrichment.__module__ == "brainlayer.pipeline.session_history"
+
+
+def test_saved_session_candidates_are_local_history_reads():
+    from brainlayer.pipeline.session_history import list_sessions_for_enrichment
+
+    assert list_sessions_for_enrichment.__module__ == "brainlayer.pipeline.session_history"
