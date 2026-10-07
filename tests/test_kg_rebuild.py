@@ -353,7 +353,6 @@ def test_local_rebuild_preserves_chunk_and_checkpoint_and_resolves_entities(stor
 
     checkpoint = tmp_path / "progress.json"
     checkpoint.write_text('{"tier2_processed": 41}')
-    monkeypatch.setattr(kg_rebuild, "PROGRESS_FILE", checkpoint)
     monkeypatch.setattr(kg_rebuild, "DEFAULT_SEED_ENTITIES", _TEST_SEED_ENTITIES)
     content = "Person Alpha builds brainlayer at Example Corp."
     store.conn.cursor().execute(
@@ -391,3 +390,10 @@ def test_kg_rebuild_module_import_does_not_require_python_dotenv(monkeypatch):
     module = importlib.import_module("scripts.kg_rebuild")
 
     assert callable(module.extracted_entity_from_groq_payload)
+
+
+def test_unused_cloud_kg_progress_helpers_are_removed():
+    from scripts import kg_rebuild
+
+    for name in ("load_progress", "save_progress", "PROGRESS_FILE"):
+        assert not hasattr(kg_rebuild, name), name
