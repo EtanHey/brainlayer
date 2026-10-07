@@ -46,7 +46,9 @@ def controls():
     family, child = guard.FORBIDDEN[0].rsplit(".", 1)
     blocked(lambda: builtins.__import__(family, fromlist=(child,)))
     blocked(
-        lambda: builtins.__import__(guard.FORBIDDEN[-3].rsplit(".", 1)[1], {"__package__": "brainlayer"}, fromlist=("X",), level=1)
+        lambda: builtins.__import__(
+            guard.FORBIDDEN[-3].rsplit(".", 1)[1], {"__package__": "brainlayer"}, fromlist=("X",), level=1
+        )
     )
     blocked(lambda: importlib.import_module(guard.FORBIDDEN[-1]))
     blocked(lambda: subprocess.Popen([sys.executable, "-c", "pass"]))
@@ -163,6 +165,28 @@ def run(config):
     from brainlayer import embeddings
 
     require(embeddings.DEFAULT_MODEL == "BAAI/bge-large-en-v1.5", "Local bge routing changed")
+    from brainlayer.pipeline.longitudinal_analyzer import _ollama_generate, loopback_ollama_url
+
+    previous_host = os.environ["OLLAMA_HOST"]
+    try:
+        for remote in (
+            "https://fixture.invalid",
+            "http://192.0.2.1:11434",
+            "http://127.0.0.1.fixture.invalid",
+            "http://user:pass@127.0.0.1",
+            "http://127.0.0.1/api/generate",
+        ):
+            os.environ["OLLAMA_HOST"] = remote
+            try:
+                _ollama_generate(prompt="synthetic local-only adapter probe")
+            except ValueError:
+                pass
+            else:
+                raise RuntimeError("Local adapter accepted a remote/ambiguous endpoint")
+        os.environ["OLLAMA_HOST"] = "http://localhost:11434"
+        require(loopback_ollama_url() == "http://127.0.0.1:11434", "Local adapter delegated localhost to DNS")
+    finally:
+        os.environ["OLLAMA_HOST"] = previous_host
     from brainlayer.pipeline.digest import digest_content
     from brainlayer.vector_store import VectorStore
 
@@ -212,6 +236,7 @@ def run(config):
         "events": events,
         "sdk": sdk,
         "core": "actual installed imports, Sanitizer/prompt/parser, local bge routing; actual temporary digest persistence with synthetic vectors",
+        "local_adapter": "remote/credential/path overrides rejected before any send; localhost resolved numerically",
     }
 
 
