@@ -26,7 +26,6 @@ from .config import get_brainlayer_db_config_error
 from .deploy_drift import DEFAULT_DEPLOY_DRIFT_LABELS, default_deploy_provenance_dir, detect_deploy_drift
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
-    ENRICH_DAILY_COST_COUNTER_FILENAME,
     PROGRESS_STALLED_CODE,
     STALLED_CODE,
     check_drain_liveness,
@@ -847,11 +846,9 @@ def run_doctor(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
         queue_count=queue_count,
-        enrichment_backlog=0,
         drain_health=drain_health,
         now=now,
         stale_seconds=config.drain_liveness_stale_seconds,
-        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
     drain_total = drain_health.get("drained_total")
     drain_cycles = drain_health.get("drain_cycles")
@@ -887,11 +884,9 @@ def run_doctor(
             drain_label=config.drain_label,
             drain_loaded=drain_loaded,
             queue_count=queue_count,
-            enrichment_backlog=0,
             drain_health=next_drain_health,
             now=sample_now,
             stale_seconds=config.drain_liveness_stale_seconds,
-            enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
         )
     queue_moving = drain_moving or watcher_moving
     active_drain_liveness_issue = sampled_drain_liveness_issue if has_drain_backlog else pending_drain_liveness_issue

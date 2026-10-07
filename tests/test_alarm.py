@@ -75,7 +75,6 @@ def test_drain_liveness_stalled_uses_alarm_primitive():
         drain_label="com.brainlayer.drain",
         drain_loaded=True,
         queue_count=2,
-        enrichment_backlog=0,
         drain_health={"updated_at": (NOW - timedelta(minutes=10)).isoformat(), "drain_cycles": 3},
         now=NOW,
         stale_seconds=300,
@@ -87,18 +86,27 @@ def test_drain_liveness_stalled_uses_alarm_primitive():
     assert issue.details["queue_count"] == 2
 
 
-def test_drain_liveness_quota_blocker_is_not_an_alarm():
+def test_retired_enrichment_quota_does_not_affect_durable_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "0")
+    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
+    issue = check_drain_liveness(
+        drain_label="com.brainlayer.drain",
+        drain_loaded=True,
+        queue_count=2,
+        drain_health={"updated_at": (NOW - timedelta(minutes=10)).isoformat()},
+        now=NOW,
+    )
+    assert isinstance(issue, BrainLayerAlarm)
+    assert issue.code == "drain_liveness_stalled"
+    assert "enrichment_backlog" not in issue.details
+
+
+def test_empty_queue_has_no_retired_producer_liveness_issue():
     issue = check_drain_liveness(
         drain_label="com.brainlayer.drain",
         drain_loaded=True,
         queue_count=0,
-        enrichment_backlog=3,
-        drain_health={"updated_at": (NOW - timedelta(minutes=10)).isoformat(), "drain_cycles": 3},
+        drain_health={"updated_at": (NOW - timedelta(minutes=10)).isoformat()},
         now=NOW,
-        stale_seconds=300,
-        quota_or_throttle_blocker="enrichment daily cap reached",
     )
-
-    assert issue is not None
-    assert not isinstance(issue, BrainLayerAlarm)
-    assert issue.code == "drain_liveness_quota_blocked"
+    assert issue is None

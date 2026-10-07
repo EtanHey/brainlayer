@@ -123,7 +123,6 @@ def test_fresh_heartbeat_does_not_hide_reported_progress_failure(state, queue_co
         drain_label="com.brainlayer.drain",
         drain_loaded=True,
         queue_count=queue_count,
-        enrichment_backlog=0,
         drain_health={
             "updated_at": now.isoformat(),
             "state": state,

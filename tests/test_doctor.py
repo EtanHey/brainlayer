@@ -1593,7 +1593,7 @@ def test_run_doctor_does_not_let_enrichment_quota_mask_durable_queue_liveness(tm
     assert issue.severity == "fatal"
     assert issue.details["backlog_count"] == 1
     assert issue.details["queue_count"] == 1
-    assert issue.details["enrichment_backlog"] == 0
+    assert "enrichment_backlog" not in issue.details
     assert not [issue for issue in result.issues if issue.code == "drain_liveness_quota_blocked"]
 
 
