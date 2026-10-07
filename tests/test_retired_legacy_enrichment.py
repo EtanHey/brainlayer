@@ -39,3 +39,9 @@ def test_legacy_runner_is_absent_and_saved_parser_remains_available():
     assert not hasattr(enrichment, "run_enrichment")
     saved = enrichment.parse_enrichment('{"summary":"Historical saved result stays readable", "importance":7}')
     assert saved["summary"] == "Historical saved result stays readable"
+
+
+def test_legacy_batch_producer_is_absent():
+    from brainlayer.pipeline import enrichment
+
+    assert not hasattr(enrichment, "enrich_batch")
