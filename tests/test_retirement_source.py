@@ -25,8 +25,14 @@ ROOT = Path(__file__).resolve().parents[1]
         "fixture.us-east-1.aws.endpoints.huggingface.cloud",
     ],
 )
-def test_model_provider_rest_hosts_are_forbidden(host):
-    assert MODEL_URL.search(f"https://{host}/model")
+@pytest.mark.parametrize("ending", ["/model", ":443/model", "?model=fixture", "#fixture"])
+def test_model_provider_rest_hosts_are_forbidden(host, ending):
+    assert MODEL_URL.search(f"https://{host}{ending}")
+
+
+@pytest.mark.parametrize("host", ["api.deepseek.com.example.invalid", "openrouter.ai.invalid", "huggingface.co"])
+def test_model_url_gate_requires_an_exact_model_provider_host(host):
+    assert not MODEL_URL.search(f"https://{host}/fixture")
 
 
 @pytest.mark.parametrize(
