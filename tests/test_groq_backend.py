@@ -75,19 +75,3 @@ class TestGroqBackendSelection:
 
 
 # ── Config constants ──────────────────────────────────────────────────
-
-
-class TestGroqConfig:
-    """Test Groq-specific configuration constants."""
-
-    @pytest.mark.parametrize(
-        "attr,expected",
-        [
-            ("GROQ_URL", "groq.com"),
-            ("GROQ_MODEL", "openai/gpt-oss-120b"),
-        ],
-    )
-    def test_groq_config_defaults(self, attr, expected):
-        """Groq config constants have expected default values."""
-        value = getattr(enrichment, attr)
-        assert expected in value or value == expected

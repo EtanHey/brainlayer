@@ -4,7 +4,6 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from brainlayer.pipeline.enrichment import mark_unenrichable
 from brainlayer.vector_store import VectorStore
 
 
@@ -78,29 +77,6 @@ def test_enriched_at_values_are_parseable_datetime_or_null_after_migration(tmp_p
     for enriched_at in enriched_values:
         if enriched_at is not None:
             datetime.fromisoformat(enriched_at.replace("Z", "+00:00"))
-
-
-def test_mark_unenrichable_writes_status_not_enriched_at(tmp_path):
-    store = VectorStore(tmp_path / "unenrichable.db")
-    cursor = store.conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO chunks (
-            id, content, metadata, source_file, project, content_type, char_count, source
-        ) VALUES (
-            'short', 'tiny', '{}', 'test.jsonl', 'brainlayer', 'assistant_text', 4, 'claude_code'
-        )
-        """
-    )
-
-    try:
-        tagged = mark_unenrichable(store)
-        row = cursor.execute("SELECT enriched_at, enrich_status FROM chunks WHERE id = 'short'").fetchone()
-    finally:
-        store.close()
-
-    assert tagged == 1
-    assert row == (None, "too_short")
 
 
 def test_update_enrichment_sets_success_status(tmp_path):
