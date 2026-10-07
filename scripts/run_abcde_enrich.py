@@ -34,7 +34,7 @@ from brainlayer.eval.abcde_enrich_runner import (  # noqa: E402
     make_http_chat_fn,
     run_batch,
 )
-from brainlayer.eval.abcde_variants import ABCDE_VARIANTS  # noqa: E402
+from brainlayer.eval.abcde_variants import select_variants  # noqa: E402
 from brainlayer.paths import get_db_path  # noqa: E402
 from brainlayer.pipeline.sanitize import Sanitizer  # noqa: E402
 
@@ -65,26 +65,6 @@ def sample_chunks(n: int, *, min_chars: int = 80, seed: int | None = None) -> li
         {"id": r[0], "content": r[1], "project": r[2] or "unknown", "content_type": r[3] or "unknown", "source": r[4]}
         for r in rows
     ]
-
-
-def select_variants(variant_filter: str | None = None) -> list:
-    """Filter ABCDE variants by comma-separated ids while preserving registry order."""
-    if not variant_filter:
-        return list(ABCDE_VARIANTS)
-
-    requested = {item.strip().upper() for item in variant_filter.split(",") if item.strip()}
-    if not requested:
-        return list(ABCDE_VARIANTS)
-
-    available = {variant.id for variant in ABCDE_VARIANTS}
-    unknown = sorted(requested - available)
-    if unknown:
-        raise SystemExit(f"Unknown variant id(s): {','.join(unknown)}")
-
-    selected = [variant for variant in ABCDE_VARIANTS if variant.id in requested]
-    if not selected:
-        raise SystemExit("No variants selected.")
-    return selected
 
 
 def resolve_api_key() -> str:
