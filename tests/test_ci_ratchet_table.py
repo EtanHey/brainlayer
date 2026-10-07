@@ -3208,9 +3208,9 @@ def test_pre_push_delete_missing_bash_is_red(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_ui_retirement_and_table_use_the_same_explicit_pr_head():
-    jobs=workflow_jobs()
+    jobs = workflow_jobs()
     for name in ("no-enrichment-render", "retirement", "table"):
-        checkouts=[s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/checkout")]
+        checkouts = [s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/checkout")]
         assert checkouts[0]["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
-    run=workflow_steps()["Collect ratchet rows"]["run"]
+    run = workflow_steps()["Collect ratchet rows"]["run"]
     assert "--retirement-report" in run and "--brainbar-render-report" in run
