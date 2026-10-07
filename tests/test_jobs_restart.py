@@ -14,7 +14,7 @@ class FakeCommands:
         self.old_keg = old_keg
         self.current_keg = current_keg
         self.commands: list[list[str]] = []
-        names = "watch drain backup-daily enrichment brainbar gemini-loopback health-check".split()
+        names = "watch drain backup-daily enrich enrichment brainbar gemini-loopback health-check".split()
         self.pids = {name: 101 + index for index, name in enumerate(names)}
         self.kegs = {name: old_keg for name in self.pids}
         self.no_keg_map_for: set[str] = set()
@@ -73,6 +73,7 @@ def test_restart_loaded_daemons_and_stale_inflight_interval(tmp_path: Path) -> N
         "gemini-loopback": {"KeepAlive": True, "ProgramArguments": ["/opt/homebrew/bin/socat", "TCP-LISTEN:48123"]},
         "brainbar": {"KeepAlive": True, "ProgramArguments": ["/Applications/BrainBar.app/Contents/MacOS/BrainBar"]},
         "enrichment": {"KeepAlive": True, "ProgramArguments": [keg_cli, "enrich"]},
+        "enrich": {"KeepAlive": True, "ProgramArguments": [keg_cli, "enrich"]},
         "unloaded": {"KeepAlive": True, "ProgramArguments": [keg_cli, "watch"]},
     }.items():
         _plist(tmp_path, name, AssociatedBundleIdentifiers=["com.brainlayer.brainbar"], **options)
@@ -86,6 +87,7 @@ def test_restart_loaded_daemons_and_stale_inflight_interval(tmp_path: Path) -> N
         "com.brainlayer.drain",
         "com.brainlayer.health-check",
     }
+    assert "com.brainlayer.enrich" in result["skipped"]
     assert "com.brainlayer.enrichment" in result["skipped"] and "com.brainlayer.unloaded" in result["skipped"]
     assert "com.brainlayer.backup-daily" in result["skipped"] and "com.brainlayer.gemini-loopback" in result["skipped"]
     assert result["skipped"]["com.brainlayer.brainbar"] == "cask-owned BrainBar job"
