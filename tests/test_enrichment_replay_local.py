@@ -63,6 +63,11 @@ def test_controller_has_no_duplicate_historical_hash_helpers():
     import ast
 
     source = Path(__file__).resolve().parents[1] / "src/brainlayer/enrichment_controller.py"
+    if not source.exists():
+        import importlib.util
+
+        assert importlib.util.find_spec("brainlayer.enrichment_controller") is None
+        return
     names = {node.name for node in ast.parse(source.read_text()).body if isinstance(node, ast.FunctionDef)}
     assert names.isdisjoint(
         {"is_meta_research", "_is_duplicate_content", "_ensure_content_hash_column", "_backfill_content_hashes"}
