@@ -994,7 +994,12 @@ def test_health_does_not_count_retired_producer_backlog(tmp_path, monkeypatch):
         pending_store_count=0,
     )
 
-    assert "enrichment_backlog_count_failed" not in [issue.code for issue in result.issues]
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert set(payload) == set(compat["health_keys"])
+    codes = {issue["code"] for issue in payload["issues"]}
+    assert codes.isdisjoint(compat["removed_codes"])
+    assert codes.isdisjoint(compat["renamed_codes"])
 
 
 @pytest.mark.parametrize(

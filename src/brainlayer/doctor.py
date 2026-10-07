@@ -247,6 +247,8 @@ class DoctorResult:
     index_completeness: dict[str, Any] | None = None
     queue_count: int | None = None
     queue_bytes: int | None = None
+    # Retired producer field: retain JSON null for one release; never measure it.
+    enrichment_backlog: None = field(default=None, init=False)
     hotlane_running: bool = False
     roundtrip_latency_seconds: float | None = None
     fts5_health: dict[str, Any] | None = None
