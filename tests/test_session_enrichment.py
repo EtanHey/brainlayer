@@ -500,7 +500,7 @@ class TestListSessionsForEnrichment:
 
     def test_list_from_chunks(self, populated_store):
         """Sessions are discovered from chunks source_file."""
-        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+        from brainlayer.pipeline.session_history import list_sessions_for_enrichment
 
         sessions = list_sessions_for_enrichment(populated_store)
         # Should find at least the test session
@@ -509,7 +509,7 @@ class TestListSessionsForEnrichment:
 
     def test_already_enriched_excluded(self, populated_store):
         """Sessions that are already enriched are excluded."""
-        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+        from brainlayer.pipeline.session_history import list_sessions_for_enrichment
 
         sid = populated_store._test_session_id
 
@@ -529,7 +529,7 @@ class TestListSessionsForEnrichment:
     @pytest.mark.parametrize("source", ["codex_cli", "cursor_cli", "gemini_cli"])
     def test_agent_cli_sessions_are_discovered_from_chunks(self, store, source):
         """Agent-session sources beyond Claude are eligible for session enrichment."""
-        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+        from brainlayer.pipeline.session_history import list_sessions_for_enrichment
 
         cursor = store.conn.cursor()
         session_id = f"{source}-session"
