@@ -1,5 +1,9 @@
 """R11 source absence applies to lazy/relative imports, not only import time."""
 
+import hashlib
+import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -119,6 +123,30 @@ def es_source_fixture(tmp_path, request):
     return tmp_path, path
 
 
+def scan_es_fixture(root, path, code):
+    path.write_text(code)
+    syntax = root / "syntax.mjs"
+    syntax.write_text(code + "\n")
+    checked = subprocess.run(
+        ["node", "--check", str(syntax)],
+        capture_output=True,
+        text=True,
+        env={key: value for key, value in os.environ.items() if key not in {"NODE_OPTIONS", "NODE_PATH"}},
+    )
+    if receipt := os.environ.get("BRAINLAYER_ES_SYNTAX_RECEIPT"):
+        with Path(receipt).open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {"code": code, "sha256": hashlib.sha256(code.encode()).hexdigest(), "exit": checked.returncode}
+                )
+                + "\n"
+            )
+    assert checked.returncode == 0, checked.stderr
+    report = source_scan(root)
+    assert not report["errors"], report["errors"]
+    return report
+
+
 @pytest.mark.parametrize("sdk", ["openai", "@google/genai", "@google/generative-ai", "@anthropic-ai/sdk"])
 @pytest.mark.parametrize(
     "form",
@@ -128,12 +156,18 @@ def es_source_fixture(tmp_path, request):
         "await import \t( \t'{sdk}' \t)",
         "import(\n'{sdk}'\n)",
         "`text ${{await import('{sdk}')}}`",
+        "await import/*local note*/('{sdk}')",
+        "await import(/*local note*/'{sdk}')",
+        "await import('{sdk}'/*local note*/)",
+        "await import(//local note\n'{sdk}')",
+        "await import('{sdk}',)",
+        "await import/*x*/(/*x*/'{sdk}'/*x*/,/*x*/)",
+        "await import('{sdk}', {{with: {{type: 'json'}}}})",
     ],
 )
 def test_dynamic_es_model_sdk_import_is_detected(es_source_fixture, sdk, form):
     root, path = es_source_fixture
-    path.write_text(form.format(sdk=sdk))
-    report = source_scan(root)
+    report = scan_es_fixture(root, path, form.format(sdk=sdk))
     assert not report["errors"], report["errors"]
     assert report["findings"] == [
         {"path": path.relative_to(root).as_posix(), "line": 1, "target": "model transport syntax"}
@@ -154,21 +188,57 @@ def test_dynamic_es_model_sdk_import_is_detected(es_source_fixture, sdk, form):
         "import helper from './local-helper';",
         "await import('./local-helper');",
         "require('./local-helper');",
+        "const example = /import('openai')/;",
+        "/import('openai')/.test(text);",
+        "const example = /[/'\"]import('openai')/g;",
+        r"const example = /import('openai')\//g;",
+        "if (flag) /import('openai')/.test(text);",
+        "if (flag) {} /import('openai')/.test(text);",
+        "const example = `value ${/import('openai')/.source}`;",
+        "function f() { return /import('openai')/; }",
+        "function f() {} /import('openai')/.test(text);",
+        "class Local {} /import('openai')/.test(text);",
+        "for (const local of /import('openai')/) {}",
+        "await import(/*local note*/'./local-helper',);",
     ],
 )
 def test_harmless_es_strings_comments_and_local_imports_are_preserved(es_source_fixture, code):
     root, path = es_source_fixture
-    path.write_text(code)
-    report = source_scan(root)
+    report = scan_es_fixture(root, path, code)
     assert not report["errors"] and not report["findings"], report
 
 
 @pytest.mark.parametrize("sdk", ["openai", "@google/genai", "@google/generative-ai", "@anthropic-ai/sdk"])
 def test_static_es_model_sdk_control_is_armed(es_source_fixture, sdk):
     root, path = es_source_fixture
-    path.write_text(f"import sdk from '{sdk}';")
-    report = source_scan(root)
+    report = scan_es_fixture(root, path, f"import sdk from '{sdk}';")
     assert not report["errors"], report["errors"]
     assert report["findings"] == [
         {"path": path.relative_to(root).as_posix(), "line": 1, "target": "model transport syntax"}
+    ]
+
+
+@pytest.mark.parametrize("sdk", ["openai", "@google/genai", "@google/generative-ai", "@anthropic-ai/sdk"])
+@pytest.mark.parametrize(
+    "form,line",
+    [
+        ("await import('{sdk}');\nconst example = /import('openai')/;", 1),
+        ("const example = /import('openai')/;\nawait import/*x*/('{sdk}',);", 2),
+        ("const example = /import('openai')/;\nconst n = 1 / (await import('{sdk}')) / 2;", 2),
+        ("const example = /import('openai')/;\nconst n = f() / (await import('{sdk}')) / 2;", 2),
+        ("const example = /import('openai')/;\nconst n = ({{n: 1}}).n / (await import('{sdk}')) / 2;", 2),
+        ("const example = /import('openai')/;\nconst n = function() {{}} / (await import('{sdk}')) / 2;", 2),
+        ("const example = /import('openai')/;\nconst n = class {{}} / (await import('{sdk}')) / 2;", 2),
+        ("const example = /import('openai')/;\nconst n = object.return / (await import('{sdk}')) / 2;", 2),
+        ("const example = /import('openai')/;\nconst of = 1; const n = of / (await import('{sdk}')) / 2;", 2),
+        ("if (flag) /import('openai')/.test(text);\nawait import('{sdk}');", 2),
+        ("if (flag) {{}} /import('openai')/.test(text);\nawait import('{sdk}');", 2),
+        ("`x ${{/import('openai')/.source}}\n${{await import/*x*/('{sdk}',)}}`", 2),
+    ],
+)
+def test_executable_imports_around_regex_are_not_masked(es_source_fixture, sdk, form, line):
+    root, path = es_source_fixture
+    report = scan_es_fixture(root, path, form.format(sdk=sdk))
+    assert report["findings"] == [
+        {"path": path.relative_to(root).as_posix(), "line": line, "target": "model transport syntax"}
     ]

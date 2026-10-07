@@ -40,13 +40,25 @@ MODEL_URL = re.compile(
     r"[a-z0-9.-]+\.endpoints\.huggingface\.cloud)(?::\d+)?(?=[/?#\s'\"]|$)",
     re.I,
 )
-# Only executable dynamic imports count; quoted examples and comments are tokens.
+# Consume trivia between import tokens; a literal first argument also covers
+# trailing commas/options without swallowing nested executable expressions.
+ES_TRIVIA = r"(?:\s|/\*[\s\S]*?\*/|//[^\r\n\u2028\u2029]*)*"
 ES_CODE_TOKEN = re.compile(
-    r"//[^\n]*|/\*[\s\S]*?\*/|"
-    r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|"
-    r"(?P<model_import>\bimport\s*\(\s*(?P<quote>['\"])(?:"
-    r"openai|@google/(?:genai|generative-ai)|@anthropic-ai/sdk)(?P=quote)\s*\))|[{}`]",
+    r"(?P<trivia>\s+|//[^\r\n\u2028\u2029]*|/\*[\s\S]*?\*/)|"
+    r"(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')|"
+    r"(?P<model_import>\bimport"
+    + ES_TRIVIA
+    + r"\("
+    + ES_TRIVIA
+    + r"(?P<quote>['\"])(?:openai|@google/(?:genai|generative-ai)|@anthropic-ai/sdk)(?P=quote))"
+    + r"(?="
+    + ES_TRIVIA
+    + r"[,\)])|(?P<word>[$\w]+)|\+\+|--|=>|[^\s]",
     re.S,
+)
+ES_REGEX_TOKEN = re.compile(
+    r"/(?:\\[^\r\n\u2028\u2029]|\[(?:\\[^\r\n\u2028\u2029]|[^\]\\\r\n\u2028\u2029])*\]|"
+    r"[^/\\[\r\n\u2028\u2029])+/[a-zA-Z]*"
 )
 ES_TEMPLATE_TOKEN = re.compile(r"\\[\s\S]|`|\$\{")
 ROOTS = ("src", "scripts", "hooks", "brain-bar/Sources", "dashboard")
@@ -121,10 +133,12 @@ def python_findings(text: str, module: str) -> list[dict]:
 
 
 def es_dynamic_findings(text: str) -> list[dict]:
-    findings, frames, position = [], [], 0
+    findings, frames, parens, braces, position = [], [], [], [], 0
+    regex_allowed, previous, before_previous = True, None, None
+    function_pending = class_pending = function_body = None
     while position < len(text):
         in_template = bool(frames) and frames[-1] is None
-        match = (ES_TEMPLATE_TOKEN if in_template else ES_CODE_TOKEN).search(text, position)
+        match = (ES_TEMPLATE_TOKEN.search if in_template else ES_CODE_TOKEN.match)(text, position)
         if match is None:
             break
         position = match.end()
@@ -132,16 +146,71 @@ def es_dynamic_findings(text: str) -> list[dict]:
         if in_template:
             if token == "`":
                 frames.pop()
+                regex_allowed, previous = False, "literal"
             elif token == "${":
                 frames.append(1)
+                regex_allowed, previous = True, "${"
+            continue
+        if match.group("trivia"):
+            continue
+        if token == "/" and regex_allowed:
+            literal = ES_REGEX_TOKEN.match(text, match.start())
+            if literal:
+                position, regex_allowed = literal.end(), False
+                before_previous, previous = previous, "literal"
+                continue
+        if match.group("model_import"):
+            findings.append({"line": text.count("\n", 0, match.start()) + 1, "target": "model transport syntax"})
+            parens.append((False, None))
+            regex_allowed = False
+        elif match.group("string"):
+            regex_allowed = False
         elif token == "`":
             frames.append(None)
-        elif frames and token in {"{", "}"}:
-            frames[-1] += 1 if token == "{" else -1
-            if frames[-1] == 0:
-                frames.pop()
-        elif match.group("model_import"):
-            findings.append({"line": text.count("\n", 0, match.start()) + 1, "target": "model transport syntax"})
+        elif token == "(":
+            parens.append(
+                (previous if previous in {"if", "while", "for", "with", "switch", "catch"} else False, function_pending)
+            )
+            function_pending, regex_allowed = None, True
+        elif token == ")":
+            control, body = parens.pop() if parens else (False, None)
+            regex_allowed = bool(control)
+            function_body = None if body is None else (body, len(parens))
+        elif token == "{":
+            if frames:
+                frames[-1] += 1
+            block = regex_allowed and previous == ")" or previous in {"else", "do", "try", "finally"}
+            if class_pending is not None and class_pending[1:] == (len(parens), len(braces)):
+                block, class_pending = class_pending[0], None
+            if function_body is not None and function_body[1] == len(parens):
+                block, function_body = function_body[0], None
+            braces.append(block)
+            regex_allowed = True
+        elif token == "}":
+            if frames:
+                frames[-1] -= 1
+                if frames[-1] == 0:
+                    frames.pop()
+                    continue
+            regex_allowed = braces.pop() if braces else False
+        elif match.group("word"):
+            statement = (
+                previous in {None, ";", "}", "export", "default"}
+                or (previous == "{" and bool(braces) and braces[-1])
+                or (previous == "async" and before_previous in {None, ";", "}", "export", "default"})
+            )
+            if token == "function":
+                function_pending = statement
+            elif token == "class":
+                class_pending = (statement, len(parens), len(braces))
+            regex_allowed = previous != "." and (
+                token
+                in {"return", "throw", "case", "delete", "void", "typeof", "new", "in", "yield", "await", "else", "do"}
+                or (token == "of" and not regex_allowed and any(control == "for" for control, _ in parens))
+            )
+        else:
+            regex_allowed = token in "=(:,[!~?+-*/%&|^<>;" or token == "=>"
+        before_previous, previous = previous, token
     return findings
 
 
