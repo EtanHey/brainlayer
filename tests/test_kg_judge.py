@@ -716,3 +716,79 @@ def test_validate_verdict_allows_null_canonical_for_d1_d2_and_split():
 
     split = {**base_verdict, "proposed_type": "Organization", "merge_disposition": "split"}
     assert validate_verdict(split, cluster_member_names=["fuzzy"])["canonical_suggestion"] is None
+
+
+def test_direct_kg_backend_is_removed():
+    from brainlayer import kg_judge
+
+    assert not hasattr(kg_judge, "_llm_for_backend")
+    assert not hasattr(kg_judge, "judge_clusters_with_backend")
+
+
+def test_kg_judge_cli_rejects_direct_backend_before_any_work(tmp_path, monkeypatch):
+    import sys
+
+    from brainlayer import kg_judge
+    from scripts import kg_entity_judge
+
+    calls = []
+    monkeypatch.setattr(kg_judge, "gather_evidence_for_cluster", lambda *a, **k: calls.append("evidence"))
+    monkeypatch.setenv("BRAINLAYER_JUDGE_BACKEND", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "synthetic-retirement-key")
+    monkeypatch.setattr(sys, "argv", ["kg_entity_judge", "--judge", "groq"])
+    with pytest.raises(SystemExit) as error:
+        kg_entity_judge.main()
+    assert error.value.code == 2
+    assert calls == []
+
+
+def test_kg_judge_cli_emit_and_collect_remain_local(judge_fixture, tmp_path, monkeypatch, capsys):
+    import sys
+
+    from scripts import kg_entity_judge
+
+    cluster = _cluster("EasySend", [{"id": "easysend-org", "name": "EasySend", "type": "organization"}])
+    flag_batch = tmp_path / "flags.json"
+    flag_batch.write_text(json.dumps({"diagnosis-flag": [cluster]}))
+    prompts = tmp_path / "prompts"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "kg_entity_judge",
+            "--flag-batch",
+            str(flag_batch),
+            "--emit-prompts",
+            str(prompts),
+            "--db",
+            str(judge_fixture["db_path"]),
+            "--gits-root",
+            str(judge_fixture["gits_root"]),
+        ],
+    )
+    kg_entity_judge.main()
+    assert "EMITTED 1 prompts" in capsys.readouterr().out
+    assert "EasySend" in next(prompts.glob("*.md")).read_text()
+
+    verdicts = tmp_path / "verdicts"
+    verdicts.mkdir()
+    (verdicts / "001.json").write_text(
+        json.dumps(
+            {
+                "stem": "EasySend",
+                "proposed_type": "Organization",
+                "identity": "Synthetic vendor.",
+                "merge_disposition": "keep",
+                "canonical_suggestion": "EasySend",
+                "confidence": "high",
+                "evidence_cited": ["linked-1"],
+                "reasoning": "Synthetic usage evidence.",
+                "evidence_degraded": False,
+            }
+        )
+    )
+    out = tmp_path / "merged.json"
+    monkeypatch.setattr(sys, "argv", ["kg_entity_judge", "--collect", str(verdicts), "--out", str(out)])
+    kg_entity_judge.main()
+    assert "COLLECTED 1 verdicts" in capsys.readouterr().out
+    assert json.loads(out.read_text())["mode"] == "collect"

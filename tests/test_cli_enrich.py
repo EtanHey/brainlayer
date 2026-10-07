@@ -181,7 +181,7 @@ def test_cli_enrich_mode_batch_submit_does_not_call_cloud_backfill(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill, raising=False)
 
     result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "submit", "--limit", "50"])
 
@@ -205,7 +205,7 @@ def test_cli_enrich_mode_batch_submit_does_not_submit_full_batch(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill, raising=False)
 
     result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "submit"])
 
@@ -238,7 +238,7 @@ def test_cli_enrich_mode_batch_drain_submit_does_not_call_cloud_backfill(monkeyp
             }
         )
 
-    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill, raising=False)
 
     result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "drain-submit", "--limit", "50"])
 
