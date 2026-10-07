@@ -13,6 +13,7 @@ import pytest
     [
         ("brainlayer.eval", {"scipy", "ranx", "numpy"}),
         ("brainlayer.pipeline.brain_graph", {"scipy", "sklearn", "numpy.testing"}),
+        ("brainlayer.pipeline.style_embed", {"scipy", "sklearn", "numpy.testing", "sentence_transformers", "torch"}),
     ],
 )
 def test_cold_import_does_not_load_optional_numeric_backends(tmp_path, module, forbidden):
