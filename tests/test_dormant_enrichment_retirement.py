@@ -11,7 +11,7 @@ import pytest
 from brainlayer.import_sweep import _child_env
 
 ROOT = Path(os.environ.get("BRAINLAYER_IMPORT_SWEEP_SOURCE_ROOT", Path(__file__).resolve().parents[1])).resolve()
-REMOVED_SCRIPTS = ()
+REMOVED_SCRIPTS = ("cloud_stream.py",)
 TRIMMED = {"cloud_stream.py": {"run_stream", "main"}}
 BLOCKED_SCRIPTS = (
     "cloud_stream.py",
@@ -76,3 +76,52 @@ exec(compile(source, str(path), 'exec'), {'__name__': '__main__', '__file__': st
     assert result.returncode == 1, result.stdout + result.stderr
     assert "GATED OFF" in result.stderr or "RETIRED" in result.stderr
     assert "AssertionError" not in result.stderr
+
+
+@pytest.mark.parametrize("script", REMOVED_SCRIPTS)
+def test_removed_script_is_absent_and_old_invocation_cannot_run(script, tmp_path):
+    path = ROOT / "scripts" / script
+    assert not path.exists(), script
+    history = tmp_path / "history.db"
+    checkpoint = tmp_path / "checkpoint.json"
+    history.write_bytes(b"synthetic retained history")
+    checkpoint.write_bytes(b'{"state":"retained"}\n')
+    env = _child_env(tmp_path)
+    env.update(GOOGLE_API_KEY="synthetic-not-a-key", GROQ_API_KEY="synthetic-not-a-key")
+    result = subprocess.run(
+        [sys.executable, "-I", str(path), "--help"], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "can't open file" in result.stderr
+    assert history.read_bytes() == b"synthetic retained history"
+    assert checkpoint.read_bytes() == b'{"state":"retained"}\n'
+
+
+def test_removed_scripts_have_no_source_or_install_references():
+    paths = [ROOT / "pyproject.toml", ROOT / "README.md"]
+    for directory in ("src", "scripts", "hooks", ".github", "docs"):
+        paths.extend(
+            path
+            for path in (ROOT / directory).rglob("*")
+            if path.is_file() and path.suffix in {".py", ".sh", ".yml", ".yaml", ".toml", ".md", ".json", ".plist"}
+        )
+    findings = []
+    for path in paths:
+        text = path.read_text()
+        for script in REMOVED_SCRIPTS:
+            if script in text:
+                findings.append((str(path.relative_to(ROOT)), script))
+        if path.suffix == ".py":
+            for node in ast.walk(ast.parse(text)):
+                if isinstance(node, ast.ImportFrom) and node.module == "scripts":
+                    for alias in node.names:
+                        if alias.name + ".py" in REMOVED_SCRIPTS:
+                            findings.append((str(path.relative_to(ROOT)), alias.name))
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if (
+                            alias.name.startswith("scripts.")
+                            and alias.name.rsplit(".", 1)[-1] + ".py" in REMOVED_SCRIPTS
+                        ):
+                            findings.append((str(path.relative_to(ROOT)), alias.name))
+    assert not findings, findings

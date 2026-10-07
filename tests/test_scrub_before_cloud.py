@@ -484,7 +484,6 @@ def test_eval_llm_judge_send_scrubs_prompt(monkeypatch, tmp_path):
         "enrich_recent.py",
         "enrichment_pilot.py",
         "batch_submit_paced.py",
-        "cloud_stream.py",
     ],
 )
 def test_legacy_unsanitized_cloud_scripts_are_gated_off(script, tmp_path):
