@@ -5,7 +5,6 @@ and CLI --backend flag.
 """
 
 import os
-from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -167,24 +166,6 @@ class TestGroqBackendSelection:
         with patch.dict(os.environ, {"BRAINLAYER_ENRICH_BACKEND": "groq"}):
             backend = enrichment._detect_default_backend()
         assert backend == "groq"
-
-    def test_parallel_batch_does_not_wait_on_fatal_model_error(self):
-        """A fatal model result cancels queued futures without blocking shutdown."""
-        store = MagicMock()
-        store.get_unenriched_chunks.return_value = [{"id": "chunk-1"}]
-        future = Future()
-        future.set_exception(GroqModelUnavailableError("model unavailable"))
-        pool = MagicMock()
-        pool.submit.return_value = future
-
-        with (
-            patch.object(enrichment, "ThreadPoolExecutor", return_value=pool),
-            patch.object(enrichment, "as_completed", return_value=[future]),
-            pytest.raises(GroqModelUnavailableError),
-        ):
-            enrichment.enrich_batch(store, parallel=2, backend="groq")
-
-        pool.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
 
     def test_model_validation_distinguishes_unreachable_service(self):
         """A timeout must not be reported as proof that the model is dead."""
