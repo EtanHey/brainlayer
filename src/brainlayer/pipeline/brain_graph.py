@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -435,6 +433,8 @@ def build_entity_relation_edges(
 
 def compute_similarity_matrix(sessions: list[dict]) -> np.ndarray:
     """Build hybrid similarity: 40% semantic + 35% file overlap + 15% temporal + 10% branch."""
+    from sklearn.metrics.pairwise import cosine_similarity
+
     n = len(sessions)
     logger.info(f"Computing {n}x{n} similarity matrix...")
     t0 = time.time()
@@ -583,6 +583,8 @@ def label_communities(
     membership: list[int],
 ) -> dict[int, str]:
     """Generate c-TF-IDF labels for each community."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
     communities = defaultdict(list)
     for idx, comm_id in enumerate(membership):
         communities[comm_id].append(idx)
