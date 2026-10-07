@@ -1,0 +1,64 @@
+{
+  "retained_for_one_release": {
+    "doctor": {
+      "enrichment_backlog": null
+    },
+    "drain_liveness_details": {
+      "enrichment_backlog": null
+    }
+  },
+  "renamed_codes": {
+    "queue_paused_enrichment": "legacy_queue_held",
+    "drain_paused": "drain_legacy_queue_held"
+  },
+  "removed_codes": [
+    "enrichment_unloaded",
+    "enrichment_idle_with_backlog",
+    "enrichment_backlog_count_failed"
+  ],
+  "doctor_keys": [
+    "checked_at",
+    "ok",
+    "exit_code",
+    "issues",
+    "chunk_count",
+    "recent_unvectored_chunks",
+    "missing_vectors",
+    "index_completeness",
+    "queue_count",
+    "queue_bytes",
+    "enrichment_backlog",
+    "hotlane_running",
+    "roundtrip_latency_seconds",
+    "fts5_health",
+    "cli_path_shadow"
+  ],
+  "health_keys": [
+    "checked_at",
+    "ok",
+    "issues",
+    "actions",
+    "hotlane_running",
+    "backlog_batch",
+    "missing_vectors",
+    "previous_missing_vectors",
+    "stalled_ticks",
+    "lock_holder",
+    "canary_ok",
+    "canary_status",
+    "canary_result_count",
+    "duration_seconds",
+    "slow_check",
+    "slow_check_stage",
+    "t3_health",
+    "jsonl_backup"
+  ],
+  "drain_health_keys": [
+    "updated_at",
+    "drain_cycles",
+    "drained_total",
+    "last_progress_at",
+    "state",
+    "reason"
+  ]
+}

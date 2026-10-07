@@ -159,7 +159,7 @@ graph LR
     BB -->|MCP socket protocol| B
 ```
 
-**Everything runs locally.** Cloud enrichment (Gemini/Groq) and Axiom telemetry are optional.
+Memory indexing, search, and the local knowledge graph run on-device. Axiom telemetry and Drive backups remain optional network integrations.
 
 | Layer | Implementation |
 |-------|---------------|
@@ -167,7 +167,6 @@ graph LR
 | **Embeddings** | `bge-large-en-v1.5` (1024 dims, CPU/MPS) |
 | **Search** | Vector similarity + FTS5, merged with Reciprocal Rank Fusion |
 | **Watcher** | Real-time JSONL indexing (~1s), 4-layer content filters, offset-persistent |
-| **Enrichment** | 15 metadata fields per chunk — Groq, Gemini, MLX, or Ollama |
 | **Knowledge Graph** | Entities, relations, co-occurrence extraction, person lookup |
 
 ## Why BrainLayer?
@@ -206,7 +205,8 @@ Background producers run with `BRAINLAYER_ARBITRATED=1` and append writes to `~/
 
 ## Recent Hardening (2026-04-15 → 2026-05-17)
 
-Two-week stability sprint behind the next presentation. Every line below traces to a merged PR.
+Historical two-week stability sprint. Every line below traces to a merged PR.
+Enrichment work listed here is retired; history: [CHANGELOG](CHANGELOG.md).
 
 **Search recall & dedup**
 - FTS recall hardened across Python, Swift BrainBar, and the watcher pipeline ([#263](https://github.com/EtanHey/brainlayer/pull/263)).
@@ -269,26 +269,14 @@ Claude Desktop, WhatsApp, and Markdown have extractors in `src/brainlayer/pipeli
 (`extract_claude_desktop.py`, `extract_whatsapp.py`, `extract_markdown.py`) but no CLI subcommand
 wired to them yet.
 
-## Enrichment
+## Enrichment (retired)
 
-Each chunk gets 15 structured metadata fields from a local or cloud LLM
-(`summary`, `key_facts`, `tags`, `importance`, `intent`, `primary_symbols`, `resolved_queries`,
-`epistemic_level`, `version_scope`, `debt_impact`, `external_deps`, `entities`, `sentiment_label`,
-`sentiment_score`, `sentiment_signals`). A sample:
+LLM chunk and session enrichment is retired. Existing metadata remains readable;
+indexing, search, offline evaluation, and the local knowledge graph remain available.
+History: [CHANGELOG](CHANGELOG.md); [retirement details](docs/enrichment.md).
 
-| Field | Example |
-|-------|---------|
-| `summary` | "Debugging Telegram bot message drops under load" |
-| `tags` | "telegram, debugging, performance" |
-| `importance` | 8 (architectural decision) vs 2 (directory listing) |
-| `intent` | `debugging`, `designing`, `implementing`, `deciding` |
-| `primary_symbols` | "TelegramBot, handleMessage, grammy" |
-| `epistemic_level` | `hypothesis`, `substantiated`, `validated` |
-
-```bash
-brainlayer enrich                    # Run enrichment on new chunks
-BRAINLAYER_ENRICH_BACKEND=groq brainlayer enrich   # Force Groq
-```
+Installed hotlane jobs may still require the Google credential gate until the release
+re-renders their plists; retain its configuration as described in [Configuration](docs/configuration.md).
 
 ## CLI Reference
 
@@ -305,7 +293,6 @@ brainlayer init               # Interactive setup wizard
 brainlayer index              # Batch index conversations
 brainlayer watch              # Real-time watcher (persistent, ~1s)
 brainlayer search "query"     # Semantic + keyword search
-brainlayer enrich             # LLM enrichment on new chunks
 brainlayer stats              # Database statistics
 brainlayer brain-export       # Brain graph JSON for visualization
 brainlayer export-obsidian    # Export to Obsidian vault
@@ -329,10 +316,7 @@ ruff check src/ && ruff format src/     # Lint + format
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BRAINLAYER_DB` | `~/.local/share/brainlayer/brainlayer.db` | Database file path |
-| `BRAINLAYER_ENRICH_BACKEND` | auto-detect | Enrichment backend (`groq`, `gemini`, `mlx`, `ollama`) |
-| `GROQ_API_KEY` | (unset) | Groq API key for cloud enrichment |
 | `AXIOM_TOKEN` | (unset) | Axiom telemetry token (optional) |
-| `BRAINLAYER_ENRICH_RATE` | `5.0` | Requests per second (5.0 = 300 RPM, AI Pro supports 500+) |
 | `BRAINLAYER_SANITIZE_EXTRA_NAMES` | (empty) | Names to redact from indexed content |
 
 See [full configuration reference](https://etanhey.github.io/brainlayer/configuration/) for all options.
@@ -344,7 +328,6 @@ See [full configuration reference](https://etanhey.github.io/brainlayer/configur
 
 ```bash
 pip install "brainlayer[brain]"       # Brain graph visualization + FAISS
-pip install "brainlayer[cloud]"       # Gemini Batch API enrichment
 pip install "brainlayer[youtube]"     # YouTube transcript indexing
 pip install "brainlayer[ast]"         # AST-aware code chunking (tree-sitter)
 pip install "brainlayer[kg]"          # GliNER entity extraction (209M params)

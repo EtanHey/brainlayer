@@ -2,6 +2,10 @@
 
 import importlib.util
 
+import pytest
+
+pytestmark = pytest.mark.retired_enrichment
+
 
 def test_retired_controller_host_is_absent():
     assert importlib.util.find_spec("brainlayer.enrichment_controller") is None
