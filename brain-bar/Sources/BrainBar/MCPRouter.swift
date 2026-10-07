@@ -730,8 +730,6 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainSupersede(arguments)
         case "brain_archive":
             return try handleBrainArchive(arguments)
-        case "brain_enrich":
-            return try handleBrainEnrich(arguments)
         case "brain_subscribe":
             return try handleBrainSubscribe(arguments)
         case "brain_unsubscribe":
@@ -1540,36 +1538,6 @@ final class MCPRouter: @unchecked Sendable {
         return ToolOutput(text: jsonEncode(payload))
     }
 
-    private func handleBrainEnrich(_ args: [String: Any]) throws -> ToolOutput {
-        let mode = args["mode"] as? String ?? "realtime"
-        let limit = max(1, min(args["limit"] as? Int ?? 25, 5_000))
-        let sinceHours = args["since_hours"] as? Int ?? 8_760
-        let phase = args["phase"] as? String ?? "run"
-        let chunkIDs = args["chunk_ids"] as? [String]
-        let stats = args["stats"] as? Bool ?? false
-        let db = try writeDB()
-
-        if stats {
-            let summary = try db.enrichmentStats()
-            let lines = [
-                "\u{250c}\u{2500} Enrichment Stats",
-                "\u{2502} Total: \(summary.totalChunks)  Enriched: \(summary.enriched) (\(summary.enrichedPercentText))  Remaining: \(summary.unenrichedEligible)  Skipped: \(summary.skippedTooShort)",
-                "\u{2502} Last 24h: \(summary.enrichedLast24Hours) enriched",
-                "\u{2514}\u{2500}",
-            ]
-            return ToolOutput(text: lines.joined(separator: "\n"))
-        }
-
-        let result = try db.enrichChunks(
-            mode: mode,
-            limit: limit,
-            sinceHours: sinceHours,
-            phase: phase,
-            chunkIDs: chunkIDs
-        )
-        return ToolOutput(text: Formatters.formatDigestResult(result: result, useColor: false))
-    }
-
     private func handleBrainSubscribe(_ args: [String: Any]) throws -> ToolOutput {
         guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
             throw ToolError.missingParameter("agent_id")
@@ -2037,22 +2005,6 @@ final class MCPRouter: @unchecked Sendable {
                     "reason": ["type": "string", "description": "Optional reason for archiving"],
                 ] as [String: Any],
                 "required": ["chunk_id"]
-            ] as [String: Any])
-        ],
-        [
-            "name": "brain_enrich",
-            "description": "Backfill summaries and enrichment metadata on existing chunks.",
-            "annotations": MCPRouter.writeAnnotations,
-            "inputSchema": MCPRouter.limitedInputSchema([
-                "type": "object",
-                "properties": [
-                    "mode": ["type": "string", "enum": ["realtime", "batch"], "description": "Enrichment mode"],
-                    "limit": ["type": "integer", "description": "Maximum number of chunks to process"],
-                    "since_hours": ["type": "integer", "description": "Only enrich chunks from the last N hours in realtime mode"],
-                    "phase": ["type": "string", "enum": ["submit", "poll", "import", "run"], "description": "Batch phase"],
-                    "chunk_ids": ["type": "array", "items": ["type": "string"], "description": "Optional explicit chunk IDs to enrich"],
-                    "stats": ["type": "boolean", "description": "Return progress statistics only"],
-                ] as [String: Any],
             ] as [String: Any])
         ],
         [

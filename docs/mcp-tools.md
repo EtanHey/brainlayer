@@ -1,9 +1,9 @@
 # MCP Tools Reference
 
-The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines **17 tools**
+The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines **16 tools**
 (`brain-bar/Sources/BrainBar/MCPRouter.swift`, `toolDefinitions`), each with ToolAnnotations.
 
-**A session boots into a core palette of 5**, not all 17: `brain_search`, `brain_store`,
+**A session boots into a core palette of 5**, not all 16: `brain_search`, `brain_store`,
 `brain_recall`, `brain_expand`, and `expand_palette` — with short descriptions, so the boot payload
 stays small. Call `expand_palette` (or set `BRAINLAYER_MCP_PROFILE=full` on the server) to expose the
 rest with their full descriptions. Calling a gated tool before expanding returns an error telling
@@ -20,7 +20,6 @@ you to expand. `brain_backup_vacuum_into` is callable regardless of profile.
 | `brain_tags` | read | |
 | `brain_digest` | write | |
 | `brain_update` | write | |
-| `brain_enrich` | write | |
 | `brain_subscribe` | write | |
 | `brain_unsubscribe` | write | |
 | `brain_ack` | write | |
@@ -29,10 +28,13 @@ you to expand. `brain_backup_vacuum_into` is callable regardless of profile.
 | `brain_supersede` | destructive | |
 | `brain_archive` | destructive | |
 
-The per-tool sections below document the main eight. For the remaining nine
-(`brain_tags`, `brain_enrich`, `brain_supersede`, `brain_archive`, `brain_subscribe`,
+The per-tool sections below document the main eight. For the remaining eight
+(`brain_tags`, `brain_supersede`, `brain_archive`, `brain_subscribe`,
 `brain_unsubscribe`, `brain_ack`, `brain_backup_vacuum_into`, `brain_maintenance_rebuild_trigram`),
 `MCPRouter.toolDefinitions` carries the authoritative schema and description.
+
+`brain_enrich` is retired and returns an unknown-tool error. Historical enrichment metadata
+remains readable; `brain_digest` continues to digest content locally.
 
 > **Which schema are these tables?** They document the **Python library handlers** under
 > `src/brainlayer/mcp/`, whose parameter sets are wider than what BrainBar puts on the wire.

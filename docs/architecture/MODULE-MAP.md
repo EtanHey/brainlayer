@@ -3,7 +3,7 @@
 > Author: brainlayerClaude-LEAD-v4, 2026-05-29. **v2 — corrected after a 3-lens critique** (boundary / contract-completeness / migration-risk; critiques stored this session). Supersedes MODULE-MAP-draft.md. Status: contract-only (Etan-agreed); no physical extraction this turn.
 
 ## ⚠️ Corrections the critique forced (the draft was wrong on these — read first)
-1. **The live MCP server is BrainBar (Swift), NOT the Python `mcp/`.** `.mcp.json` connects agents via `brainlayer-mcp-stdio-bridge` → the configured BrainBar socket (`/tmp/brainbar.sock` by default; BrainBar listens on `BRAINBAR_SOCKET_PATH`, and the bridge dials `BRAINLAYER_MCP_SOCKET`) → `brain-bar/Sources/BrainBar/MCPRouter.swift` (17 tools). For a non-default socket, set both env vars to the same path. Python `src/brainlayer/mcp/` (13 tools, incl. the Python-only `brain_resume`) is now a LIBRARY-ONLY surface — the `brainlayer-mcp` console entrypoint was deleted in [#716](https://github.com/EtanHey/brainlayer/pull/716), so nothing serves it to an agent. The contract pins **BrainBar's MCPRouter** as the surface of record while the stdio bridge keeps agent transports alive across socket replacement.
+1. **The live MCP server is BrainBar (Swift), NOT the Python `mcp/`.** `.mcp.json` connects agents via `brainlayer-mcp-stdio-bridge` → the configured BrainBar socket (`/tmp/brainbar.sock` by default; BrainBar listens on `BRAINBAR_SOCKET_PATH`, and the bridge dials `BRAINLAYER_MCP_SOCKET`) → `brain-bar/Sources/BrainBar/MCPRouter.swift` (16 tools). For a non-default socket, set both env vars to the same path. Python `src/brainlayer/mcp/` (13 tools, incl. the Python-only `brain_resume`) is now a LIBRARY-ONLY surface — the `brainlayer-mcp` console entrypoint was deleted in [#716](https://github.com/EtanHey/brainlayer/pull/716), so nothing serves it to an agent. The contract pins **BrainBar's MCPRouter** as the surface of record while the stdio bridge keeps agent transports alive across socket replacement.
 2. **The DB schema is DUAL-OWNED and ALREADY DRIFTING.** BrainBar uses **raw SQLite3 (not GRDB)** and independently CREATEs + migrates `chunks`, `chunks_fts`, `kg_*`, triggers — under the *same* migration name `atomic_brick_chunks_v1` as Python. Live drift: `chunks_fts` = **5 cols in Swift vs 7 in Python** (`key_facts`, `resolved_queries` Python-only). This is the single highest-risk surface and must be pinned.
 3. **The launch-mode contract is ALREADY pinned** — PR #361 (`BrainBarDaemonLaunchModeTests.swift`, HEAD d10bcaf6) shipped it. NOT a TODO. The real contract = UserDefaults `brainbar.launchMode` + env `BRAINBAR_LAUNCH_MODE` (rawValues `app-window`/`menu-item-daemon`); the enum lives only in the Swift target (no separate Python parser).
 4. **FABRICATION CORRECTED:** the draft called root `brainlayer.db` a "stray 9.6GB copy" — it is **0 bytes** (tracked-but-should-be-ignored). The 9.6GB is the real DB at `~/.local/share/brainlayer/`. (`/never-fabricate` miss — owned.)
@@ -24,7 +24,7 @@ Self-contained Swift (`BrainBar`, `BrainBarDaemon`, `BrainBarLifecycle`). Owns t
 
 ## The engine↔UI contract (CORRECTED — ~7 surfaces, not 4)
 1. **Shared SQLite file + schema DDL/migrations** (dual-owned; pin the column sets + the `atomic_brick_chunks_v1` migration; FIX the `chunks_fts` 5-vs-7 drift). DB path `~/.local/share/brainlayer/brainlayer.db` (+ `BRAINLAYER_DB`).
-2. **BrainBar MCPRouter tool surface** over the configured BrainBar socket (17 tools) — the surface of record; reconcile vs Python's 13.
+2. **BrainBar MCPRouter tool surface** over the configured BrainBar socket (16 tools) — the surface of record; reconcile vs Python's 13.
 3. **Hybrid-helper subprocess + socket** (BrainBar → Python): invocation `python3 -m brainlayer.brainbar_hybrid_helper --socket-path … --db-path …` with env triple `BRAINLAYER_REPO_ROOT` / `PYTHONPATH=<root>/src` / `BRAINBAR_PYTHON`; NDJSON `{method,arguments}`→`{ok,text,metadata}` (arg keys enumerated in `brainbar_hybrid_helper.py`). **Undocumented today → needs a golden-fixture contract test.**
 4. **Reverse socket** `/tmp/brainbar.sock` (Python `backup_daily.py` → BrainBar `vacuum_into`).
 5. **brain-bus event stream** (`notifications/brain-bus`, method `watch-brain-bus`): `queue_depth`/`enrich_status`/`last_chunk_id`/`db_busy`/`health_tick` (PR #360 consumer).
@@ -38,7 +38,7 @@ Driver: BrainBar hard-binds to the engine's **source-tree layout** (`<repoRoot>/
 ## Open questions for agreement
 - **A.** CLI/TUI (`cli/`, `cli_new.py`, `dashboard/`) → in brain-engine or root? **RESOLVED (provisional, orc 2026-05-29):** engine = pure library → CLI/TUI to ROOT. Physical move HELD pending Etan final confirm. Does not affect the contract-only turn.
 - **B.** Fix the `chunks_fts` 5-vs-7 drift now (small PR) or fold into the extraction? (Recommend: now — it's a live data-integrity risk.)
-- **C.** Reconcile the 17(Swift)/13(Python) MCP tool sets — which is canonical, what retires?
+- **C.** Reconcile the 16(Swift)/13(Python) MCP tool sets — which is canonical, what retires?
 
 ## Phase-0 close = contract-only deliverables
 1. This `MODULE-MAP.md` (committed to brainlayer repo, after A/B/C agreed).

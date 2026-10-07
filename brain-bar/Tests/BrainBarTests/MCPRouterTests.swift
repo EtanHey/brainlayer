@@ -221,7 +221,7 @@ final class MCPRouterTests: XCTestCase {
     func testFullAndOperatorProfilesPreserveCanonicalInventory() throws {
         let canonicalNames = MCPRouter.toolDefinitions.compactMap { $0["name"] as? String }
 
-        XCTAssertEqual(canonicalNames.count, 17)
+        XCTAssertEqual(canonicalNames.count, 16)
         XCTAssertEqual(listedToolNames(MCPRouter(profile: "full")), canonicalNames)
         XCTAssertEqual(listedToolNames(MCPRouter(profile: "operator")), canonicalNames)
     }
@@ -268,7 +268,7 @@ final class MCPRouterTests: XCTestCase {
         let firstResult = try XCTUnwrap(firstExpansion["result"] as? [String: Any])
         XCTAssertEqual(firstResult["expanded"] as? Bool, true)
         XCTAssertEqual(firstResult["already_expanded"] as? Bool, false)
-        XCTAssertEqual((firstResult["registered_tools"] as? [String])?.count, 13)
+        XCTAssertEqual((firstResult["registered_tools"] as? [String])?.count, 12)
         XCTAssertEqual(listedToolNames(router), MCPRouter.toolDefinitions.compactMap { $0["name"] as? String })
 
         let deferredAfterExpansion = router.handle(toolCall(id: 22, name: "brain_tags", arguments: [:]))
@@ -280,7 +280,7 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(secondResult["expanded"] as? Bool, false)
         XCTAssertEqual(secondResult["already_expanded"] as? Bool, true)
         XCTAssertEqual(secondResult["registered_tools"] as? [String], [])
-        XCTAssertEqual(listedToolNames(router).count, 17)
+        XCTAssertEqual(listedToolNames(router).count, 16)
     }
 
     func testToolsListReturnsAllTools() throws {
@@ -296,14 +296,14 @@ final class MCPRouterTests: XCTestCase {
         let tools = result?["tools"] as? [[String: Any]]
 
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 17, "Should have exactly 17 tools")
+        XCTAssertEqual(tools?.count, 16, "Should have exactly 16 tools")
 
         let toolNames = Set(tools?.compactMap { $0["name"] as? String } ?? [])
         let expected: Set<String> = [
             "brain_search", "brain_store", "brain_recall", "brain_entity",
             "brain_digest", "brain_update", "brain_expand", "brain_tags",
             "brain_subscribe", "brain_unsubscribe", "brain_ack",
-            "brain_get_person", "brain_supersede", "brain_archive", "brain_enrich",
+            "brain_get_person", "brain_supersede", "brain_archive",
             "brain_backup_vacuum_into", "brain_maintenance_rebuild_trigram",
         ]
         XCTAssertEqual(toolNames, expected)
@@ -337,7 +337,7 @@ final class MCPRouterTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
 
-        XCTAssertEqual(tools.count, 17)
+        XCTAssertEqual(tools.count, 16)
         for tool in tools {
             XCTAssertNotNil(
                 tool["annotations"],
@@ -391,7 +391,6 @@ final class MCPRouterTests: XCTestCase {
             "brain_tags": (true, false, true, false),
             "brain_supersede": (false, true, false, false),
             "brain_archive": (false, true, false, false),
-            "brain_enrich": (false, false, false, false),
             "brain_subscribe": (false, false, false, false),
             "brain_unsubscribe": (false, false, true, false),
             "brain_ack": (false, false, true, false),
@@ -2137,155 +2136,47 @@ No results found.
         XCTAssertTrue(text.contains("TechGym lecture"))
     }
 
-    func testBrainEnrichRealtimeBackfillsEligibleChunksAndStatsReflectIt() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
-        defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-target",
-            content: "This chunk is long enough to qualify for enrichment and should get a generated summary after backfill runs.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let enrichResponse = router.handle([
-            "jsonrpc": "2.0",
-            "id": 23,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": 1] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let enrichText = ((enrichResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(enrichText.contains("Enriched:"))
-
-        let statsResponse = router.handle([
-            "jsonrpc": "2.0",
-            "id": 24,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["stats": true] as [String: Any]
-            ] as [String: Any]
-        ])
-        let statsText = ((statsResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(statsText.contains("Enrichment Stats"))
-        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-target"))
+    func testRetiredBrainEnrichIsAbsentFromEveryPalette() throws {
+        for profile in ["core", "full", "operator"] {
+            let router = MCPRouter(profile: profile)
+            XCTAssertFalse(listedToolNames(router).contains("brain_enrich"))
+            _ = router.handle(toolCall(id: 90, name: "expand_palette", arguments: [:]))
+            XCTAssertFalse(listedToolNames(router).contains("brain_enrich"))
+        }
     }
 
-    func testBrainEnrichRealtimeSkipsTerminalEnrichStatusChunks() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-terminal-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
+    func testRetiredBrainEnrichRejectsCallsAndPreservesMetadata() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbPath = tempDir.appendingPathComponent("retirement.db").path
+        let db = BrainDatabase(path: dbPath)
         defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-pending",
-            content: "This chunk is long enough to qualify for enrichment and should be processed.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-        try db.insertChunk(
-            id: "enrich-duplicate",
-            content: "This duplicate terminal chunk is long enough but should not be processed again.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-        db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'enrich-duplicate'")
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let response = router.handle([
-            "jsonrpc": "2.0",
-            "id": 28,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": 5] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(text.contains("Attempted: 1"))
-        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-pending"))
-        XCTAssertNil(try chunkEnrichedAt(path: tempDB, id: "enrich-duplicate"))
-    }
-
-    func testBrainEnrichClampsNegativeLimit() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-limit-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
-        defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-limit-target",
-            content: "This chunk is also long enough to qualify for enrichment even if the requested limit is negative.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let response = router.handle([
-            "jsonrpc": "2.0",
-            "id": 25,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": -100] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(text.contains("Enriched:"))
-        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-limit-target"))
-    }
-
-    func testBrainEnrichEmptyChunkIDsDoesNotBroadenScope() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-empty-ids-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
-        defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-empty-ids-target",
-            content: "This chunk should stay untouched when brain_enrich receives an explicit empty chunk_ids list.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let response = router.handle([
-            "jsonrpc": "2.0",
-            "id": 27,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": 5, "chunk_ids": []] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(text.contains("Attempted: 0"))
-        XCTAssertTrue(text.contains("Enriched: 0"))
-        XCTAssertNil(try chunkEnrichedAt(path: tempDB, id: "enrich-empty-ids-target"))
+        try db.insertChunk(id: "pending", content: String(repeating: "Synthetic memory. ", count: 10),
+                           sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "historical", content: "Previously enriched synthetic memory",
+                           sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        db.exec("UPDATE chunks SET summary = 'Retained summary', enriched_at = '2026-01-01', enrich_status = 'success' WHERE id = 'historical'")
+        let before = try db.enrichmentStats()
+        for profile in ["core", "full", "operator"] {
+            let router = MCPRouter(profile: profile, dbPath: dbPath)
+            router.setDatabase(db)
+            _ = router.handle(toolCall(id: 90, name: "expand_palette", arguments: [:]))
+            for arguments: [String: Any] in [
+                ["mode": "realtime", "limit": 5],
+                ["mode": "batch", "phase": "submit", "chunk_ids": ["pending"]],
+                ["stats": true],
+            ] {
+                let response = router.handle(toolCall(id: 91, name: "brain_enrich", arguments: arguments))
+                XCTAssertEqual((response["error"] as? [String: Any])?["code"] as? Int, -32601)
+                XCTAssertNil(response["result"])
+            }
+        }
+        XCTAssertNil(try chunkEnrichedAt(path: dbPath, id: "pending"))
+        XCTAssertEqual(try chunkEnrichedAt(path: dbPath, id: "historical"), "2026-01-01")
+        XCTAssertEqual(try db.getChunk(id: "historical")?["summary"] as? String, "Retained summary")
+        let after = try db.enrichmentStats()
+        XCTAssertEqual(after.enriched, before.enriched)
+        XCTAssertEqual(after.unenrichedEligible, before.unenrichedEligible)
     }
 
     // MARK: - brain_store queue fallback

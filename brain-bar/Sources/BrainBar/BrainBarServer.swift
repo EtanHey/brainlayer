@@ -641,9 +641,6 @@ final class BrainBarServer: @unchecked Sendable {
                 if toolCall.name == "brain_store", !isToolError(response) {
                     publishStoredChunks(response: response, arguments: toolCall.arguments)
                 }
-                if toolCall.name == "brain_enrich", !isToolError(response) {
-                    brainBus.publish(.enrichStatus("running"))
-                }
                 return response
             }
         }

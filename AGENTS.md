@@ -60,13 +60,13 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 - Canonical DB: `~/.local/share/brainlayer/brainlayer.db`
 
 ## MCP Tools
-Served by BrainBar (`MCPRouter.toolDefinitions`), 17 total. A session boots into the **core
+Served by BrainBar (`MCPRouter.toolDefinitions`), 16 total. A session boots into the **core
 palette** — `brain_search`, `brain_store`, `brain_recall`, `brain_expand`, plus `expand_palette`.
 Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 
 - Core: `brain_search`, `brain_store`, `brain_recall`, `brain_expand`
 - Gated: `brain_entity`, `brain_get_person`, `brain_tags`, `brain_digest`, `brain_update`,
-  `brain_enrich`, `brain_supersede`, `brain_archive`, `brain_subscribe`, `brain_unsubscribe`,
+  `brain_supersede`, `brain_archive`, `brain_subscribe`, `brain_unsubscribe`,
   `brain_ack`, `brain_backup_vacuum_into`, `brain_maintenance_rebuild_trigram`
 - `brain_backup_vacuum_into` is callable regardless of profile (owner-only socket is the trust
   boundary), but stays out of the advertised core inventory.
@@ -318,7 +318,7 @@ brainlayer enrich
 - Operational state at the 2026-09-23 P0 handoff: enrichment is deliberately paused. This release metadata change does not resume it.
 - Adds 15 metadata fields (summary, key_facts, tags, importance, intent, primary_symbols, resolved_queries, epistemic_level, version_scope, debt_impact, external_deps, entities, sentiment_label, sentiment_score, sentiment_signals); session enrichment captures decisions/corrections
 
-<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 17 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
+<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 16 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
 ## Interfaces
 - **There is no HTTP API.** The FastAPI daemon and its `/health`, `/stats`, `/search`, `/brain/graph`,
   `/backlog/items` routes were removed. Anything still calling them is calling a surface that is gone.
