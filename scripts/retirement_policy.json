@@ -3336,6 +3336,16 @@
         "target": "subprocess.CalledProcessError"
       }
     },
+    "bc1a651c0c5bc2411ba6c8cc0a684e22568069184c6604fcac64ffb87ea3175c": {
+      "non_cloud_purpose": "Private installed-wheel retirement proof loads the exact wheel-packaged local hotlane module (force-included from scripts by pyproject.toml); source-only trees lack brainlayer.launchd. This constant import exercises the preserved local embedding entrypoint under the armed OS/transport boundary; no cloud model caller.",
+      "site": {
+        "call_sha256": "41a9ae1f48c9d409b8f2070d673f0278bd7f99b8c471082a246af52cc2fedc9d",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.installed_surfaces",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "importlib.import_module"
+      }
+    },
     "bc20e7a6a03aab640a2160667dee167f2c6a0f80a1417c60ac225a8571b8d68a": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_tag_contains.py <module>._run subprocess.CompletedProcess.",
       "site": {
@@ -3734,6 +3744,16 @@
         "owner": "<module>.hooks",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "import subprocess"
+      }
+    },
+    "d1360496ed5dbe116f92b78f65693d01c4bba6419f45df01e9b9b8c5c6ed01ca": {
+      "non_cloud_purpose": "Private installed-wheel retirement proof loads the exact wheel-packaged local hotlane module (force-included from scripts by pyproject.toml); source-only trees lack brainlayer.launchd. This constant import exercises the preserved local embedding entrypoint under the armed OS/transport boundary; no cloud model caller.",
+      "site": {
+        "call_sha256": "cd3245cee1a23e73848f27fb0b87ab0dd22598d7df3ae6ecb0388171459e3c6f",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_surfaces.py",
+        "target": "from importlib import import_module"
       }
     },
     "d15252b9d7aa433c1a2937863887aaabad41d7a86bbe38eacffb0460f243f035": {
