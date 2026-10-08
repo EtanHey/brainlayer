@@ -135,6 +135,31 @@ final class BrainBarAccountLifecycleTests: XCTestCase {
         }
     }
 
+    func testInitialSameAccountWrongExecutableIsNotKickstarted() throws {
+        let processes = Processes()
+        processes.identities[111] = .init(uid: 502, realUID: 502, startedSeconds: 1,
+                                         startedMicroseconds: 0, executablePath: "/other/BrainBar")
+        try run(processes)
+        XCTAssertTrue(processes.result().0.isEmpty)
+        XCTAssertEqual(processes.result().1, 0, "kickstart -k must not kill an unmatched same-account peer")
+    }
+
+    func testAbsentPeerStillRequestsLaunch() throws {
+        let processes = Processes()
+        try run(processes, pids: [])
+        XCTAssertTrue(processes.result().0.isEmpty)
+        XCTAssertEqual(processes.result().1, 1)
+    }
+
+    func testForeignAccountCandidateDoesNotBlockOwnLaunch() throws {
+        let processes = Processes()
+        processes.identities[111] = .init(uid: 501, realUID: 501, startedSeconds: 1,
+                                         startedMicroseconds: 0, executablePath: "/test/BrainBar")
+        try run(processes)
+        XCTAssertTrue(processes.result().0.isEmpty)
+        XCTAssertEqual(processes.result().1, 1)
+    }
+
     func testOwnedHungPeerStillReceivesBothSignalsAndRelaunch() throws {
         let processes = Processes()
         processes.identities[111] = ownedIdentity()
@@ -201,7 +226,7 @@ final class BrainBarAccountLifecycleTests: XCTestCase {
         .init(uid: 502, realUID: 502, startedSeconds: start, startedMicroseconds: 0, executablePath: "/test/BrainBar")
     }
 
-    private func run(_ processes: Processes) throws {
+    private func run(_ processes: Processes, pids: [pid_t] = [111]) throws {
         let directory = try scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("heartbeat").path
@@ -210,7 +235,7 @@ final class BrainBarAccountLifecycleTests: XCTestCase {
         let watchdog = BrainBarLifecycleWatchdog(
             configuration: .init(watchedName: "BrainBar", heartbeatPath: path, terminateGraceInterval: 0.01,
                                  relaunchCommand: .launchctlKickstart(label: "never-run"), expectedExecutablePath: "/test/BrainBar"),
-            processProvider: { [111] }, terminateProcess: { processes.signal($0, $1) }, relaunch: { _ in processes.launch() },
+            processProvider: { pids }, terminateProcess: { processes.signal($0, $1) }, relaunch: { _ in processes.launch() },
             clock: .init(wallNow: { Date() }, uptimeNanos: { 70_000_000_000 }, bootSession: { "test" }),
             ownerUID: 502, processIdentity: { processes.read($0) }
         )
