@@ -2000,6 +2000,78 @@ def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row], corp
     return attest_flags_problem(args) or attest_checkout_problem(args.main_sha, probe, rows, corpus)
 
 
+def row_watcher_heartbeat(report: Path | None, unavailable: str | None, measured_sha: str | None) -> Row:
+    from scripts.brainbar_source_identity import source_identity
+    from scripts.watcher_heartbeat_ratchet import (
+        CASES,
+        SOURCES,
+        digest,
+        validate_artifact,
+        validate_completion,
+        validate_stores,
+    )
+    from scripts.watcher_heartbeat_ratchet import ROOT as heartbeat_root
+
+    name = "Watcher heartbeat freshness and recovery"
+    method = "private Python producer -> compiled Swift consumer"
+    notes = "Preserves genuine silence; independent agent stores cannot revive the watcher. Not a load or installed-UI measurement."
+    if report is None and unavailable:
+        return Row(name, NA, f"n/a — {unavailable}", method, notes)
+    try:
+        if report is None:
+            raise ValueError("missing producer/consumer report")
+        data = json.loads(report.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("report must be an object")
+        if (
+            type(data.get("schema")) is not int
+            or data["schema"] != 2
+            or data.get("status") != "measured"
+            or data.get("head") != measured_sha
+            or not measured_sha
+            or not SHA_PATTERN.fullmatch(measured_sha)
+        ):
+            raise ValueError("unmeasured or wrong-head report")
+        identity = source_identity(heartbeat_root)
+        if identity["head"] != measured_sha or identity["dirty"]:
+            raise ValueError("actual checkout is dirty or differs from measured head")
+        if data.get("sources") != {p: digest(heartbeat_root / p) for p in SOURCES}:
+            raise ValueError("source hashes do not match checkout")
+        if not isinstance(data.get("binary_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", data["binary_sha256"]):
+            raise ValueError("missing compiled binary identity")
+        validate_artifact(data, report.parent)
+        validate_stores(data["stores"])
+        cases = data["cases"]
+        expected = {
+            k: "running" for k in ("fresh", "refresh_recovery", "boundary_300", "future", "timezone", "scan_recovery")
+        }
+        expected.update({k: "degraded" for k in ("stale", "unrelated_store", "boundary_over_300", "scan_in_progress")})
+        expected.update(missing="unknown", malformed="unknown", stopped="stopped")
+        if len(cases) != len(expected) or {c["name"] for c in cases} != set(expected) or CASES != set(expected):
+            raise ValueError("missing or duplicate freshness case")
+        if any(c["expected"] != expected[c["name"]] or c["observed"] != expected[c["name"]] for c in cases):
+            raise ValueError("freshness contract failed")
+        counts = data["producer_poll_counts"]
+        if len(counts) != 2 or any(type(n) is not int for n in counts) or counts[0] < 1 or counts[1] != counts[0] + 1:
+            raise ValueError("producer progress not measured")
+        if type(data["watcher_queued_chunks"]) is not int or data["watcher_queued_chunks"] < 1:
+            raise ValueError("watcher bridge did not emit ingest")
+        validate_completion(data["completed_health"], counts[1])
+        scan = data["scan_progress"]
+        if type(scan["delay_seconds"]) is not float or not 1 <= scan["delay_seconds"] < 10:
+            raise ValueError("controlled filesystem delay not measured")
+        if (
+            any(type(scan[key]) is not int for key in ("stat_calls", "independent_stores", "completed_poll"))
+            or scan["stat_calls"] < 1
+            or scan["independent_stores"] != len(data["stores"][1:])
+            or scan["completed_poll"] != data["completed_health"]["poll_count"]
+        ):
+            raise ValueError("delayed scan and independent stores not measured")
+    except Exception as error:
+        return Row(name, RED, str(error), method, notes)
+    return Row(name, GREEN, f"{len(cases)} cases; polls {counts[0]} -> {counts[1]}", method, notes)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--wheel", type=Path, help="Wheel built from the checked-out tree (provenance row)")
@@ -2089,6 +2161,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--brainbar-render-report", type=Path, help="Actual no-enrichment view evidence; missing is RED"
     )
+    parser.add_argument(
+        "--watcher-heartbeat-report", type=Path, help="Actual private producer/compiled consumer evidence"
+    )
+    parser.add_argument("--watcher-heartbeat-unavailable", help="Explicit reason the native probe was not triggered")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -2122,6 +2198,10 @@ def main(argv: list[str] | None = None) -> int:
     # Every normal/PR collector run requires this render row, including absent reports.
     if not args.attest_out or args.brainbar_render_report:
         rows.append(row_brainbar_no_enrichment(args.brainbar_render_report, probe.head_sha))
+    if not args.attest_out or args.watcher_heartbeat_report or args.watcher_heartbeat_unavailable:
+        rows.append(
+            row_watcher_heartbeat(args.watcher_heartbeat_report, args.watcher_heartbeat_unavailable, probe.head_sha)
+        )
     if args.quiesce_report or args.quiesce_unavailable:
         rows.append(row_quiesce(args.quiesce_report, args.quiesce_unavailable, args.measured_sha))
     if args.retirement_report or args.measured_sha:
