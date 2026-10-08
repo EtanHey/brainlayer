@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -590,6 +591,50 @@ def test_update_brainbar_documents_recovery_no_sudo_path() -> None:
     assert "Contents/Resources/LaunchAgents" in script
     assert "com.brainlayer.brainbar-daemon" in script
     assert "com.brainlayer.brainbar" in script
+
+
+def test_update_brainbar_help_renders_recovery_templates_and_stops_on_missing_prerequisites(tmp_path: Path) -> None:
+    result = subprocess.run(
+        ["/bin/bash", str(UPDATE_SCRIPT), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr
+    recovery = result.stdout.split("recovery-no-sudo:", 1)[1]
+    assert 'test -x "$venv/bin/python" && test -x "$venv/bin/brainlayer" || exit' in recovery
+    assert 'test -f "$app/Contents/Resources/install-services.py" || exit' in recovery
+    command = next(line.strip() for line in recovery.splitlines() if line.strip().startswith('"$venv/bin/python" -I '))
+    assert shlex.split(command) == [
+        "$venv/bin/python",
+        "-I",
+        "$app/Contents/Resources/install-services.py",
+        "--app",
+        "$app",
+        "--python",
+        "$venv/bin/python",
+        "--cli",
+        "$venv/bin/brainlayer",
+        "--socket",
+        "$socket",
+        "--db",
+        "$db",
+        "--install",
+        "||",
+        "exit",
+    ]
+    assert "existing approved current-account" in recovery
+    assert "do not substitute a PATH Python or create a new setup" in recovery
+    assert 'cp "$agents/' not in recovery
+    assert "__HOME__" not in recovery
+    activation = [line.strip() for line in recovery.splitlines() if line.strip().startswith("launchctl ")]
+    assert activation == [
+        'launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/com.brainlayer.brainbar-daemon.plist"',
+        'launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/com.brainlayer.brainbar.plist"',
+        'launchctl kickstart -k "$domain/com.brainlayer.brainbar-daemon"',
+        'launchctl kickstart -k "$domain/com.brainlayer.brainbar"',
+    ]
 
 
 def test_dedupe_brainbar_dry_run_makes_no_filesystem_changes(tmp_path: Path) -> None:
