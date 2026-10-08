@@ -160,6 +160,24 @@ final class BrainBarAccountLifecycleTests: XCTestCase {
         XCTAssertEqual(processes.result().0, [SIGTERM])
     }
 
+    func testDifferentExecutableReplacementAfterTERMIsNeitherKilledNorKickstarted() throws {
+        try assertChangedExecutableAfterTERMIsPreserved(start: 2)
+    }
+
+    func testExecChangedExecutableWithSameStartAfterTERMIsNeitherKilledNorKickstarted() throws {
+        try assertChangedExecutableAfterTERMIsPreserved(start: 1)
+    }
+
+    private func assertChangedExecutableAfterTERMIsPreserved(start: UInt64) throws {
+        let processes = Processes()
+        processes.identities[111] = ownedIdentity()
+        processes.replacementAfterTERM = .init(uid: 502, realUID: 502, startedSeconds: start,
+                                             startedMicroseconds: 0, executablePath: "/replacement/BrainBar")
+        try run(processes)
+        XCTAssertEqual(processes.result().0, [SIGTERM], "Direct KILL must reject the changed executable")
+        XCTAssertEqual(processes.result().1, 0, "kickstart -k must not kill the changed executable either")
+    }
+
     func testIdentityChangesBeforeTERMNeverReceiveEitherSignal() throws {
         for replacement in [ownedIdentity(start: 2), Identity(uid: 501, realUID: 501, startedSeconds: 2, startedMicroseconds: 0, executablePath: "/test/BrainBar")] {
             let processes = Processes()

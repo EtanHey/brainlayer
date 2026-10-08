@@ -243,7 +243,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             // kickstart -k also terminates: never restart a newly discovered replacement.
             let replacement = self.processProvider().contains { pid in
                 guard let current = self.processIdentity(pid) else { return true }
-                guard self.isOwned(current) else { return false }
+                // A same-account executable mismatch must also veto the kill-bearing relaunch.
+                guard current.uid == self.ownerUID && current.realUID == self.ownerUID else { return false }
                 return !identities.contains { $0.0 == pid && $0.1 == current }
             }
             if !replacement { self.relaunch(self.configuration.relaunchCommand) }
