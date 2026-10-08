@@ -56,6 +56,7 @@ jobs:
       signatures: ${{ steps.decide.outputs.signatures }}
       reason: ${{ steps.decide.outputs.reason }}
       quiesce: ${{ steps.decide.outputs.quiesce }}
+      heartbeat: ${{ steps.decide.outputs.heartbeat }}
     steps:
       # fetch-depth 0 so the base commit is present for the diff below. `gh api
       # repos/.../pulls/N/files` was the obvious way to list changed files and it is WRONG here:
@@ -116,6 +117,46 @@ jobs:
             quiesce=true
           fi
           echo "quiesce=$quiesce" >> "$GITHUB_OUTPUT"
+          heartbeat=false
+          if jq -e 'index("ratchet:heartbeat")' <<<"$LABELS" > /dev/null || \
+             grep -Eq '^(src/brainlayer/(watcher(_bridge)?|queue_io)\.py|brain-bar/Sources/BrainBar/Dashboard/(WatcherHealthStatus|DashboardMetricFormatter|PipelineState)\.swift|scripts/(watcher_heartbeat_.*|ci_ratchet_table\.py)|tests/test_watcher_heartbeat_.*\.py|\.github/workflows/ratchet\.yml)$' "$changed"; then
+            heartbeat=true
+          fi
+          echo "heartbeat=$heartbeat" >> "$GITHUB_OUTPUT"
+
+  heartbeat:
+    name: watcher heartbeat freshness and recovery
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.heartbeat == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.measure.outputs.report }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install .
+      - name: Measure private producer and compiled consumer
+        id: measure
+        run: |
+          mkdir -p "${RUNNER_TEMP}/heartbeat"
+          python scripts/watcher_heartbeat_ratchet.py --out "${RUNNER_TEMP}/heartbeat/heartbeat.json"
+          echo "report=$(jq -c . "${RUNNER_TEMP}/heartbeat/heartbeat.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Retain measured compiled consumer and report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-heartbeat-evidence
+          path: ${{ runner.temp }}/heartbeat/
+          if-no-files-found: error
 
   quiesce:
     name: quiesce revival (real launchd)
@@ -425,7 +466,7 @@ jobs:
     # `needs` ORDERS these; the job-level `if` is what keeps the table unconditional. A skipped
     # `signatures` job would otherwise skip `table` too, leaving the previous commit's table
     # standing on the PR -- the same crime as printing an unmeasured number, committed by omission.
-    needs: [gate, signatures, quiesce, retirement, no-enrichment-render]
+    needs: [gate, signatures, quiesce, retirement, no-enrichment-render, heartbeat]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -682,6 +723,14 @@ jobs:
           name: brainbar-no-enrichment-render
           path: ${{ runner.temp }}/brainbar-render
 
+      - name: Read compiled heartbeat evidence
+        if: ${{ !cancelled() && needs.gate.outputs.heartbeat != 'false' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: watcher-heartbeat-evidence
+          path: ${{ runner.temp }}/heartbeat
+
       - name: Collect ratchet rows
         id: collect
         if: ${{ !cancelled() }}
@@ -690,6 +739,10 @@ jobs:
           QUIESCE_RESULT: ${{ needs.quiesce.result }}
           QUIESCE_GATE: ${{ needs.gate.outputs.quiesce }}
           RETIREMENT_RESULT: ${{ needs.retirement.result }}
+          RENDER_RESULT: ${{ needs.no-enrichment-render.result }}
+          HEARTBEAT_RESULT: ${{ needs.heartbeat.result }}
+          HEARTBEAT_GATE: ${{ needs.gate.outputs.heartbeat }}
+          TRIGGER_RESULT: ${{ needs.gate.result }}
         run: |
           set -euo pipefail
           # One arg per line, read back as an array: the gate's reason is free prose and must never
@@ -735,6 +788,18 @@ jobs:
             mkdir -p "${RUNNER_TEMP}/retirement"
             printf '{}' > "${RUNNER_TEMP}/retirement/retirement-report.json"
           fi
+          if [[ "$RENDER_RESULT" != success ]]; then
+            mkdir -p "${RUNNER_TEMP}/brainbar-render"
+            printf '{}' > "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json"
+          fi
+          HEARTBEAT_ARGS=(--watcher-heartbeat-unavailable 'macOS native probe trigger-gated: no affected path or ratchet:heartbeat label')
+          if [[ "$HEARTBEAT_GATE" != false || "$TRIGGER_RESULT" != success ]]; then
+            mkdir -p "${RUNNER_TEMP}/heartbeat"
+            if [[ "$HEARTBEAT_RESULT" != success || "$TRIGGER_RESULT" != success ]]; then
+              printf '{}' > "${RUNNER_TEMP}/heartbeat/heartbeat.json"
+            fi
+            HEARTBEAT_ARGS=(--watcher-heartbeat-report "${RUNNER_TEMP}/heartbeat/heartbeat.json")
+          fi
           QUIESCE_ARGS=(--quiesce-unavailable 'macOS replay trigger-gated: no affected path or ratchet:quiesce label')
           if [[ "$QUIESCE_GATE" != false ]]; then
             printf '%s' "$QUIESCE_REPORT" > "${RUNNER_TEMP}/quiesce.json"
@@ -748,6 +813,7 @@ jobs:
             "${ATTESTATION_ARGS[@]}" \
             "${SIGNATURE_ARGS[@]}" \
             "${QUIESCE_ARGS[@]}" \
+            "${HEARTBEAT_ARGS[@]}" \
             --retirement-report "${RUNNER_TEMP}/retirement/retirement-report.json" \
             --brainbar-render-report "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
