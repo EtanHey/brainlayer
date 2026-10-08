@@ -370,6 +370,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_maintenance_code_freshness.py",
         "test_release_tag_contains.py",
         "test_retirement_artifact.py",
+        "test_retirement_dependency.py",
         "test_run_tests_script.py",
         "test_version_consistency.py",
     }
