@@ -222,16 +222,20 @@ final class MCPRouter: @unchecked Sendable {
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
     private static let defaultStringArrayMaxItems = 100
+    // Legacy index_new IDs contain the full source path plus a numeric position.
+    // Budget for a 4096-character path + suffix, with opaque-ID headroom; retain
+    // a finite protocol cap rather than truncating or rewriting persisted IDs.
+    private static let chunkIdentifierMaxLength = 8_192
     private static let stringMaxLengths: [String: Int] = [
         "action": 64,
         "agent_id": 128,
-        "chunk_id": 128,
+        "chunk_id": chunkIdentifierMaxLength,
         "content": 200_000,
         "detail": 16,
         "mode": 32,
         "name": 256,
-        "new_chunk_id": 128,
-        "old_chunk_id": 128,
+        "new_chunk_id": chunkIdentifierMaxLength,
+        "old_chunk_id": chunkIdentifierMaxLength,
         "project": 256,
         "query": 4_096,
         "reason": 1_024,
@@ -241,7 +245,7 @@ final class MCPRouter: @unchecked Sendable {
         "target_path": 4_096
     ]
     private static let stringArrayLimits: [String: (maxItems: Int, itemMaxLength: Int)] = [
-        "chunk_ids": (maxItems: 500, itemMaxLength: 128),
+        "chunk_ids": (maxItems: 500, itemMaxLength: chunkIdentifierMaxLength),
         "tags": (maxItems: 100, itemMaxLength: 128)
     ]
 
