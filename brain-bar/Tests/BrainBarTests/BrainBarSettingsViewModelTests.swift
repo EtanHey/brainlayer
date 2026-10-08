@@ -14,14 +14,14 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
                 config: config, watcher: .running(heartbeatAt: fixedNow), now: fixedNow
             )
             XCTAssertTrue(config.enrichmentIsOff)
-            XCTAssertTrue(footer.locality.contains("Enrichment off"))
+            XCTAssertFalse(footer.locality.localizedCaseInsensitiveContains("enrich"))
             XCTAssertFalse(footer.locality.contains("Gemini"))
             XCTAssertNotEqual(footer.symbol, "icloud")
             let queue = BrainBarQueueDirectionPresentation.derive(
-                .growing, backlogCount: 42
+                .growing
             )
-            XCTAssertEqual(queue.label, "Enrichment retired · 42 unenriched")
-            XCTAssertEqual(queue.tone, .neutral)
+            XCTAssertEqual(queue.label, "Queue growing")
+            XCTAssertEqual(queue.tone, .warning)
         }
     }
 
@@ -32,7 +32,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(cloud.state.title, "Watcher running")
         XCTAssertNil(cloud.detail)
         XCTAssertTrue(cloud.locality.contains("Memory on this Mac"))
-        XCTAssertTrue(cloud.locality.contains("Enrichment off"))
+        XCTAssertFalse(cloud.locality.localizedCaseInsensitiveContains("enrich"))
         XCTAssertFalse(cloud.locality.contains("Gemini"))
         XCTAssertFalse(cloud.locality.contains("Local enrichment"))
         XCTAssertFalse(cloud.showsLock)
@@ -48,7 +48,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         config.launchdJobs[.maintenanceWeekly]?.enabled = false
         let local = BrainBarSettingsFooterPresentation(config: config, watcher: unknown, now: fixedNow)
         XCTAssertTrue(local.locality.contains("Memory on this Mac"))
-        XCTAssertTrue(local.locality.contains("Enrichment off"))
+        XCTAssertFalse(local.locality.localizedCaseInsensitiveContains("enrich"))
         XCTAssertTrue(local.locality.contains("Backups off"))
         XCTAssertTrue(local.showsLock)
         XCTAssertEqual(local.symbol, "lock")
@@ -57,7 +57,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertEqual(local.detail, "Watcher is running, but its health file is missing at /x.")
 
         let unreadable = BrainBarSettingsFooterPresentation(config: nil, watcher: nil)
-        XCTAssertTrue(unreadable.locality.contains("Enrichment off (retired)"))
+        XCTAssertFalse(unreadable.locality.localizedCaseInsensitiveContains("enrich"))
         XCTAssertTrue(unreadable.locality.contains("Backups unknown"))
         XCTAssertFalse(unreadable.showsLock)
         XCTAssertEqual(unreadable.symbol, "questionmark.circle")
@@ -74,7 +74,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.reloadConfigFromDisk())
         XCTAssertFalse(viewModel.configReadSucceeded)
         let footer = viewModel.footerPresentation
-        XCTAssertTrue(footer.locality.contains("Enrichment off (retired)"))
+        XCTAssertFalse(footer.locality.localizedCaseInsensitiveContains("enrich"))
         XCTAssertTrue(footer.locality.contains("Backups unknown"))
         XCTAssertEqual(footer.state, .unavailable)
     }

@@ -198,7 +198,6 @@ struct PipelineIndicator: Sendable, Equatable {
 
 struct PipelineIndicators: Sendable, Equatable {
     let indexing: PipelineIndicator
-    let enriching: PipelineIndicator
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> PipelineIndicators {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
@@ -219,8 +218,7 @@ struct PipelineIndicators: Sendable, Equatable {
         }
 
         return PipelineIndicators(
-            indexing: PipelineIndicator(name: "Indexing", status: indexingStatus),
-            enriching: PipelineIndicator(name: "Enrichment retired", status: .idle)
+            indexing: PipelineIndicator(name: "Indexing", status: indexingStatus)
         )
     }
 }
@@ -376,7 +374,6 @@ struct DashboardFlowLane: Sendable, Equatable {
 
 struct DashboardQueueSummary: Sendable, Equatable {
     let status: DashboardQueueStatus
-    let backlogCount: Int
     let storeHealth: DashboardStoreQueueHealth
     let storeHealthText: String
     let storeDepth: Int
@@ -399,7 +396,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let ingress: DashboardFlowLane
     let agentWriteReadability: MetricEvidenceReadability
     let queue: DashboardQueueSummary
-    let enrichment: DashboardFlowLane
     let watcherFlowState: WatcherFlowState
     /// The one watcher-health truth every surface renders (#966).
     let watcherStatus: WatcherHealthStatus
@@ -407,7 +403,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let watcherStatusReason: String?
 
     var isUnavailable: Bool {
-        ingress.status == .unavailable || enrichment.status == .unavailable || queue.status == .unavailable
+        ingress.status == .unavailable || queue.status == .unavailable
     }
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> DashboardFlowSummary {
@@ -415,10 +411,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let allCommitsColor = BrainBarDesignTokens.Colors.accentBright
         let agentStoresColor = BrainBarDesignTokens.Colors.seriesAgent
         let jsonlWatcherColor = BrainBarDesignTokens.Colors.seriesWatcher
-        let enrichmentColor = BrainBarStateTheme.idle.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
-        let backlogCount = stats.pendingEnrichmentCount
         let storeOldestAgeSeconds = stats.pendingStoreOldestQueuedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
         let storeHealth = storeQueueHealth(depth: stats.pendingStoreQueueDepth, oldestAgeSeconds: storeOldestAgeSeconds)
         let watcherProcess = stats.watcherProcessProbeResult
@@ -443,12 +437,15 @@ struct DashboardFlowSummary: Sendable, Equatable {
             ingressStatus = .idle
         }
 
-        // Completion timestamps are historical metadata, not a running producer.
-        let enrichmentStatus: DashboardFlowLaneStatus = .idle
-        let queueStatus: DashboardQueueStatus = backlogCount > 0 ? .stable : .empty
+        let queueStatus: DashboardQueueStatus = switch storeHealth {
+        case .empty: .empty
+        case .activeDraining: .draining
+        case .backlogAccumulating: .growing
+        case .writerStuck: .backlogged
+        }
         let headline = ingressStatus == .live ? "Local indexing active"
             : (ingressStatus == .recent ? "Recent local writes" : "Local indexing idle")
-        let detail = "\(DashboardMetricFormatter.integerString(stats.recentWriteCount)) writes in \(windowLabel.lowercased()). Enrichment retired."
+        let detail = "\(DashboardMetricFormatter.integerString(stats.recentWriteCount)) writes in \(windowLabel.lowercased())."
 
         return DashboardFlowSummary(
             headline: headline,
@@ -524,7 +521,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
             agentWriteReadability: stats.agentWriteReadability,
             queue: DashboardQueueSummary(
                 status: queueStatus,
-                backlogCount: backlogCount,
                 storeHealth: storeHealth,
                 storeHealthText: storeHealth.label,
                 storeDepth: stats.pendingStoreQueueDepth,
@@ -545,7 +541,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     storeHealth: storeHealth
                 ),
                 detail: queueDetail(
-                    backlogCount: backlogCount,
                     storeHealth: storeHealth,
                     storeDepth: stats.pendingStoreQueueDepth,
                     storeFlushDepth: stats.pendingStoreFlushQueueDepth,
@@ -554,37 +549,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     storeFlushRatePerMinute: stats.pendingStoreFlushRatePerMinute,
                     stats: stats
                 )
-            ),
-            enrichment: DashboardFlowLane(
-                name: "Enrichment history",
-                status: enrichmentStatus,
-                statusText: "Enrichment retired",
-                windowLabel: windowLabel,
-                activityWindowMinutes: stats.activityWindowMinutes,
-                rateText: DashboardMetricFormatter.rateString(
-                    totalEvents: stats.recentEnrichmentCount,
-                    activityWindowMinutes: stats.activityWindowMinutes
-                ),
-                volumeText: DashboardMetricFormatter.activitySummaryString(
-                    totalEvents: stats.recentEnrichmentCount,
-                    activityWindowMinutes: stats.activityWindowMinutes
-                ),
-                lastEventText: DashboardMetricFormatter.lastEventString(
-                    lastEventAt: stats.lastEnrichedAt,
-                    activityWindowMinutes: stats.activityWindowMinutes,
-                    now: now
-                ),
-                values: stats.recentEnrichmentBuckets,
-                sparklineLabel: "Historical enrichment completions over \(windowLabel)",
-                latestBucketName: "latest successful-enrichment bucket",
-                accentColor: enrichmentColor,
-                primarySeriesLabel: "Historical enrichment completions",
-                secondaryValues: [],
-                secondarySeriesLabel: nil,
-                secondaryAccentColor: nil,
-                tertiaryValues: [],
-                tertiarySeriesLabel: nil,
-                tertiaryAccentColor: nil
             ),
             watcherFlowState: watcherFlowState,
             watcherStatus: watcherStatus,
@@ -672,11 +636,10 @@ struct DashboardFlowSummary: Sendable, Equatable {
         if storeHealth != .empty {
             return "Queue \(storeHealth.label)"
         }
-        return "Enrichment retired"
+        return "Pending stores empty"
     }
 
     private static func queueDetail(
-        backlogCount: Int,
         storeHealth: DashboardStoreQueueHealth,
         storeDepth: Int,
         storeFlushDepth: Int,
@@ -699,20 +662,18 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "\(stats.replayDebtBreakdown.detailText)."
         }
 
-        return "Enrichment retired · \(DashboardMetricFormatter.integerString(backlogCount)) chunks without enrichment metadata."
+        return "No pending stores or replay debt."
     }
 }
 
 /// The independent flow series the redesigned dashboard plots as separately
 /// scaled cards. `allCommits` is the legacy internal case for source-time chunk rows;
 /// `agentStores` and `jsonlWatcher` remain source-specific slices so watcher
-/// peaks do not crush the agent series flat. `enrichment` reuses the existing
-/// enrichment lane.
+/// peaks do not crush the agent series flat.
 enum PipelineSeries: String, Sendable, Equatable, CaseIterable, Identifiable {
     case allCommits
     case agentStores
     case jsonlWatcher
-    case enrichment
 
     var id: String { rawValue }
 }
@@ -729,10 +690,6 @@ extension DashboardFlowSummary {
         switch series {
         case .allCommits:
             return allCommits
-        case .enrichment:
-            // Reuse the existing enrichment lane verbatim (keeps its
-            // sparklineReferenceValue benchmark behaviour downstream).
-            return enrichment
         case .agentStores:
             let agentValues = ingress.values
             let agentTotal = agentValues.reduce(0, +)

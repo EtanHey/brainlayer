@@ -57,7 +57,6 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         let chunkRows = summary.lane(for: .allCommits)
         let agentOrigin = summary.lane(for: .agentStores)
         let watcherIngested = summary.lane(for: .jsonlWatcher)
-        let enriched = summary.lane(for: .enrichment)
 
         XCTAssertEqual(chunkRows.name, "Chunk rows")
         XCTAssertEqual(chunkRows.sparklineLabel, "Chunk rows by source time over Last 1h")
@@ -68,8 +67,6 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertEqual(watcherIngested.name, "Watcher-ingested chunks")
         XCTAssertEqual(watcherIngested.sparklineLabel, "Watcher-ingested chunks by ingest time over Last 1h")
         XCTAssertEqual(watcherIngested.statusText, "FLOWING")
-        XCTAssertEqual(enriched.name, "Enrichment history")
-        XCTAssertEqual(enriched.sparklineLabel, "Historical enrichment completions over Last 1h")
     }
 
     func testOnePageDoesNotPresentEnrichmentAsAnActiveFlow() throws {

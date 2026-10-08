@@ -3,16 +3,12 @@ import XCTest
 @testable import BrainBar
 
 final class BrainBarOnePagePresentationTests: XCTestCase {
-    func testHistoricalMetadataCountIsNeutralForEveryAvailableDirection() {
-        for status in [DashboardQueueStatus.growing, .draining, .stable, .backlogged] {
-            let count = BrainBarQueueDirectionPresentation.derive(status, backlogCount: 42)
-            XCTAssertEqual(count.label, "Enrichment retired · 42 unenriched")
-            XCTAssertEqual(count.tone, .neutral)
+    func testActiveQueueDirectionsContainNoRetiredStatus() {
+        for status in [DashboardQueueStatus.growing, .draining, .stable, .backlogged, .unavailable, .empty] {
+            let presentation = BrainBarQueueDirectionPresentation.derive(status)
+            XCTAssertEqual(presentation.label, "Queue \(status.label)")
+            XCTAssertFalse(presentation.label.localizedCaseInsensitiveContains("enrich"))
         }
-        let offline = BrainBarQueueDirectionPresentation.derive(.unavailable, backlogCount: 42)
-        XCTAssertEqual(offline.label, "Queue offline")
-        XCTAssertEqual(offline.tone, .error)
-        XCTAssertEqual(BrainBarQueueDirectionPresentation.derive(.empty).label, "Queue empty")
     }
 
     @MainActor
@@ -23,8 +19,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             stats: collector.stats,
             now: BrainBarDashboardFixture.fetchedAt
         )
-        XCTAssertEqual(flow.queue.status, .stable)
-        XCTAssertEqual(flow.queue.backlogCount, 12_840)
+        XCTAssertEqual(flow.queue.status, .growing)
+        XCTAssertEqual(flow.queue.storeDepth, collector.stats.pendingStoreQueueDepth)
     }
 
     @MainActor
