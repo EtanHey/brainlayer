@@ -1,0 +1,3038 @@
+{
+  "baseline": "R11 Opus r1 narrowing adopted by lead; preserved purposes for unchanged transport import/call sites; round2 review pending",
+  "schema_version": 1,
+  "sites": {
+    "01190a0b394b0984d5c7bcc43696116748db1e4cbbb918c30c7115aae957e8a6": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge",
+      "site": {
+        "call_sha256": "8a877f1902a28914bc5b150292bfba78cb9a89477c6231a0518b8e162d9dac5b",
+        "kind": "generic_send",
+        "owner": "<module>.run_bridge",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "sock.send"
+      }
+    },
+    "01de005383a5bd942b899fd451e09bd0823f07d3dcf4c79d42972baa46be07a6": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "c8f377425d2efd0c91ee81c31324e143a3fef8e4e0de5bd009d3d9ea562e0a97",
+        "kind": "generic_send",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.post"
+      }
+    },
+    "041e3b7ae74566732035e7acf8ffc81febd89724aabf4d2417b62110aecbdbcd": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._git_toplevel",
+      "site": {
+        "call_sha256": "f967a8a010c2034b2253af889a6f5699cd7ac3b0d2b65abf278b7a0b8c1a0862",
+        "kind": "child_process",
+        "owner": "<module>._git_toplevel",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "04744fdc6035eb914dfa3246ebdf08f14455b6b924d3b078e1aa36e712d472a3": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/quarantine_noise.py <module>._connect",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>._connect",
+        "path": "scripts/quarantine_noise.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "062e096a44e8f63c1d329c9ec3500133905d9747ed03d5afac4e26d632cc13c4": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "4f9a81c7a8bc291870ea3515dcb250d85f0cbef086c2eb8a06d4763e97966510",
+        "kind": "generic_send",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "httpx.AsyncClient().send"
+      }
+    },
+    "08812b9decf92405afe35f186f6b49f065c4ea36a62a40b64e46440bada87c3b": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "d58f4a781306aa988c2a48663bae1b9c9f8057e04c8f1f102adaea8473a930a5",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "import ssl"
+      }
+    },
+    "0e51ab70ae6658dc3aec80b0aff78357b0e9819ee23f8df097a28f2eb737ad6f": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "7310a83a0dff6ba4d424e81c676aab44c1fc2f8f1bfcb261745ff2a5d78c4520",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+      }
+    },
+    "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_launchctl",
+      "site": {
+        "call_sha256": "faa01a640a65dad558b66a285b99f2b68e41a2e85b5740ad5fbc986f127d87ee",
+        "kind": "child_process",
+        "owner": "<module>._run_launchctl",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.run"
+      }
+    },
+    "0eb816f34d178e4c034cc5c288257fde6e30c6ee08eb361215c6451e261bcbae": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/git_overlay.py <module>.get_git_context",
+      "site": {
+        "call_sha256": "9920ad7b261e8fb6f2319737d5c0290ea084cbd3ae7ed49333a9fdc9ffe968ec",
+        "kind": "child_process",
+        "owner": "<module>.get_git_context",
+        "path": "src/brainlayer/pipeline/git_overlay.py",
+        "target": "subprocess.run"
+      }
+    },
+    "0ee754e3e853a6317d6df6dbcf38cefcd9b4c062c354aa77090c72c564c3623a": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/benchmark_runtime_store_open.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/benchmark_runtime_store_open.py",
+        "target": "import subprocess"
+      }
+    },
+    "0fb5e1d2b569a5ba6bc46f8341f968eb62c89de9484e29798669ef0b7da37a3e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_cleanup_apply.py <module>.main",
+      "site": {
+        "call_sha256": "5eeaf751e0f55c9f86121437b91c85086ac0ee59971789a4d7cb0867b87eee37",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "scripts/kg_cleanup_apply.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "1145d01dadd4a02262ac80b6f95bdeb2808dfeeb2662f7580ee1dc317bc0fe4c": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/git_overlay.py <module>._git_cmd",
+      "site": {
+        "call_sha256": "14d6b984e77dbe06b63c75f42fb42d0a1aa6c55945ddbc8b7e2ef3a036d8b3fb",
+        "kind": "child_process",
+        "owner": "<module>._git_cmd",
+        "path": "src/brainlayer/pipeline/git_overlay.py",
+        "target": "subprocess.run"
+      }
+    },
+    "117df9e9806bef51cc3d725a91dcda7c6aca001d36328707cee4a935e138ad95": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/kg_promotion.py <module>._ReadOnlyPromotionStore.__init__",
+      "site": {
+        "call_sha256": "78924cdda31fa49f7663204bb3665816949dfa42953e759b975d40bf8914ad13",
+        "kind": "generic_send",
+        "owner": "<module>._ReadOnlyPromotionStore.__init__",
+        "path": "src/brainlayer/kg_promotion.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "1343d9c6397cf178c891dfe9799aee09d20625afb231787803bf8b0f89fdaa72": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.cleanup_stale_mcp",
+      "site": {
+        "call_sha256": "8541987cc23ef9cf46700e98742a7fa9e6d2407dd4a2409f0fb1cdb3ef3490c8",
+        "kind": "child_process",
+        "owner": "<module>.cleanup_stale_mcp",
+        "path": "hooks/session-cleanup.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "138ec0749fa72422762f258a4e33be98f929e54ae53340a274c70909ba04618d": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/ratchet_quiesce.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ratchet_quiesce.py",
+        "target": "import subprocess"
+      }
+    },
+    "144313d42ca4e179b5cfb3a71f665977ceb5367d1c5f84fd5bb14570bd25a010": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/kg_session_finish.py <module>._apply_passes",
+      "site": {
+        "call_sha256": "648e6fb8893456e2db6d664b42167734a787c9c5a71fdd5770d4bcd99c659743",
+        "kind": "child_process",
+        "owner": "<module>._apply_passes",
+        "path": "src/brainlayer/kg_session_finish.py",
+        "target": "subprocess.run"
+      }
+    },
+    "14e0f762f024d3ba238f5ed5740f4712a97bdaab2d3f667290f7022df76755e6": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/wal_checkpoint.py <module>.checkpoint",
+      "site": {
+        "call_sha256": "be5aeb12a3fe880a0e66fb4b6fba161c6a587d04fbbcce0917b27f937d1ebb41",
+        "kind": "generic_send",
+        "owner": "<module>.checkpoint",
+        "path": "src/brainlayer/wal_checkpoint.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "15890b091768ecc1b679b56e711988d0d1cdc4453936901faf0ebb6b0af9d956": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "0ac17114ac37387019303010606a6dfc560ff78b3944e8d812c8e535e3691fab",
+        "kind": "child_process",
+        "owner": "<module>.snapshot",
+        "path": "scripts/retirement_artifact.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "15e798ed32241b6ac85dfa71ae09b673928f92dbd92ea99314b0b53133c5da1e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainbar-stop-index.py <module>.main",
+      "site": {
+        "call_sha256": "a40fe2fb2ec54e3ee78edd4c0f0b671eb5b13a9c5cb865919f538ab0e5dc9d0d",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "hooks/brainbar-stop-index.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "1601e2092730c4eeddf167f6ac71c448f4901d3aa2149507e694d6956d1a4ed1": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/eval/experiment_store.py <module>.ExperimentStore.__init__",
+      "site": {
+        "call_sha256": "4a36577fc66b168276501e5a7317cd6d47c7ec0c7901b2ad68130a2adf5e67db",
+        "kind": "generic_send",
+        "owner": "<module>.ExperimentStore.__init__",
+        "path": "src/brainlayer/eval/experiment_store.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "1699bc9f7f227cf52e3b895480f6355658fbdb645e6f5519473c5a18e7b539dc": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "19cad813dd36e7d2d28e34158c09f15d31fc9763ab13c9e42e639b952e3b32f6",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import importlib.metadata"
+      }
+    },
+    "17830c2623b8b3dcb141cbdb24652abe46d89ba861c8aeacf9c2302be9abe990": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "a6a06c7262adc677a63db7638bb867a59a4c4e1eba69e1812749f04020f6593c",
+        "kind": "child_process",
+        "owner": "<module>._request_macos_purge",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "1790dedd59dfee6d619651ee9b864b16bba1abcf6c1d4321c9617ebbd2d35904": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/write_queue.py <module>.WriteQueue.stop",
+      "site": {
+        "call_sha256": "d9e0312ae0cc70b17e12cc0a9bb76b0fb3c7ffce502281eaec7cf97bfd7fcfd6",
+        "kind": "generic_send",
+        "owner": "<module>.WriteQueue.stop",
+        "path": "src/brainlayer/pipeline/write_queue.py",
+        "target": "self._queue.put"
+      }
+    },
+    "189ac3d93a99db26994efb4c238f999cb8620507da702d06d232987368ce534d": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "6e0f76526c6d4c47fb54fd80b1a9075af18e040d8abcba786757ca55a9676c61",
+        "kind": "import_binding",
+        "owner": "<module>._fetch_json3_transcript",
+        "path": "scripts/index_youtube.py",
+        "target": "import urllib.request"
+      }
+    },
+    "194282e3fc48c47369582785bfca1e6d1d76b57fce82a9cbef7cf72c6342a1d2": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._status_count_unembedded",
+      "site": {
+        "call_sha256": "a18e99c3710fd042f68e826b64501fd6b70ac4f7264b4e58e286ea30fe325d9b",
+        "kind": "generic_send",
+        "owner": "<module>._status_count_unembedded",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "1956f1954247ebafc792aa2c5ca3d98deb30a106e91a7d18474716eec0c7cf0b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/extract_whatsapp.py <module>.get_contact_info",
+      "site": {
+        "call_sha256": "8bdc6030ab6cff720f9cb3c926326d39e6f412756a755ee0800d73cbd1928205",
+        "kind": "generic_send",
+        "owner": "<module>.get_contact_info",
+        "path": "src/brainlayer/pipeline/extract_whatsapp.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "1a75b46eeb3d83b4068042dc19f7a1dc74ba77aae4e41476409f901f455ce48c": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp/_shared.py <module>._detected_default_read_pool_size",
+      "site": {
+        "call_sha256": "65d0f757d545f05e8e932bb16c35e0fdc0c94f4000178371d52bb4f3db4739c9",
+        "kind": "child_process",
+        "owner": "<module>._detected_default_read_pool_size",
+        "path": "src/brainlayer/mcp/_shared.py",
+        "target": "subprocess.run"
+      }
+    },
+    "1c98642c6145b590cc0bf02ff5a24375311872ad48b2b76da54df5b492df4e3d": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import importlib"
+      }
+    },
+    "1ca72890f3d0ccc21e8d2e4d88f0e88076f463b08a513a990c48c638a76b2f88": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/jobs.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/jobs.py",
+        "target": "import subprocess"
+      }
+    },
+    "20797ab7cdc02149f2c24b2428930d8b1baf000a12218480d524d52d0ff20197": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp/_shared.py <module>._initialize_search_vector_store_pool",
+      "site": {
+        "call_sha256": "f50b86ba289c3fc0a1c523f505915fd8772af9ef364deedcc082cc44c059053b",
+        "kind": "generic_send",
+        "owner": "<module>._initialize_search_vector_store_pool",
+        "path": "src/brainlayer/mcp/_shared.py",
+        "target": "pool.put"
+      }
+    },
+    "210fcc6a8affcec7afa85134460f5a00ec201b5a87d47d6e49885a45e0b37133": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/benchmark_runtime_store_open.py <module>.benchmark_legacy_open",
+      "site": {
+        "call_sha256": "6da01ebbba9a38357424ac353dfbf49b3ca07332f4b7be4c7e4fd53574d7d168",
+        "kind": "child_process",
+        "owner": "<module>.benchmark_legacy_open",
+        "path": "scripts/benchmark_runtime_store_open.py",
+        "target": "subprocess.run"
+      }
+    },
+    "213b2a7bdcffbc09ed4201aaa18711b6515786de93140bf5f3d292403cd47f4d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/code_intelligence.py <module>.enrich_projects",
+      "site": {
+        "call_sha256": "88efba7df7d260ffb69b943965bee430995e913b50513c668c802922b3ea6c73",
+        "kind": "generic_send",
+        "owner": "<module>.enrich_projects",
+        "path": "src/brainlayer/pipeline/code_intelligence.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "215705f761087ae1dbe23e96daabfdbd09f2476c2f2744207202c40167dd66c9": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "6a8485af6d9bad7be01cd2fb88106961f3fe24337dd63d22d5380ca6a0804fa7",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "import requests"
+      }
+    },
+    "216b14be67edd874de5757512322a2a12051fde88c1f22521a0542af4b6938c9": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/launchd/throughput-watchdog.py <module>._bounded_nul_paths",
+      "site": {
+        "call_sha256": "efe9cb7500297d3a0eb870e82940ecfa5195a99785d6eec3825910a0ca125e15",
+        "kind": "child_process",
+        "owner": "<module>._bounded_nul_paths",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "2227e39aef79184a86d4f35b4ef99c2519739216877c2ceccfe73509d238e904": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/sprint_gate.py <module>",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/sprint_gate.py",
+        "target": "import socket"
+      }
+    },
+    "24dd1ce1e18348f57da42cee504971386e395583fc3f2229ff6ced4bfd02989e": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.init",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>.init",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "import subprocess"
+      }
+    },
+    "253de0d62b459ed6f9591ed1a62f25c883074a82fd02fc5b555f90502f2ddb53": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/setup.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/setup.py",
+        "target": "import subprocess"
+      }
+    },
+    "2550acade2eaf179a0d00001512b757c13b3a8760cda44896b81b50e0d0df7d9": {
+      "non_cloud_purpose": "Read-only evaluation observations, not a model generation API",
+      "site": {
+        "call_sha256": "6e0f76526c6d4c47fb54fd80b1a9075af18e040d8abcba786757ca55a9676c61",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "import urllib.request"
+      }
+    },
+    "260efa4ef1d0559a90253dd31a78153cd688f0d2bb80a2cb413d496b330e7ec1": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.MCPClient.initialize",
+      "site": {
+        "call_sha256": "dbdd3034e08ae8ba3f576874ca8bc5ca22460f8a8c5d327dfa7e9ccd666f8096",
+        "kind": "generic_send",
+        "owner": "<module>.MCPClient.initialize",
+        "path": "scripts/sprint_gate.py",
+        "target": "self.request"
+      }
+    },
+    "281f82b981848c9bbb935fd8ccb18f9f2399321e0e375097dc949c1f44f8044e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/chunk_origin_wipe.py <module>.wipe_legacy_model_chunk_origins",
+      "site": {
+        "call_sha256": "5567932351f924de3f0b573c3c51e5f68797e99a2216db6588948b9534f76ee4",
+        "kind": "generic_send",
+        "owner": "<module>.wipe_legacy_model_chunk_origins",
+        "path": "src/brainlayer/chunk_origin_wipe.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "28fc5950909db3388f89e29e6f2b5d763286c4122ff60847051b7b817691d501": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.setup",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>.setup",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "import subprocess"
+      }
+    },
+    "29a4557405fe2d0b206f1b8c0f51a2fb440705353263a5dad4847ecf8f9288e3": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/search_handler.py <module>",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/mcp/search_handler.py",
+        "target": "import socket"
+      }
+    },
+    "29e5d7bc28738e7908a72c573af6bbc8ccabf39eb5b88b1ea9438f419a482aab": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "import subprocess"
+      }
+    },
+    "2a8f6c37d2565ec4d0e85b646e0902eaa3922a499ab2622316d69c6fcaf9ff7f": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/reembed_backfill.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/reembed_backfill.py",
+        "target": "import subprocess"
+      }
+    },
+    "2d018285dd33dbedf6133206bf8bd08e6390add209cf90125a858e4981804a33": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import socket"
+      }
+    },
+    "2d59cd22d1a8ba719145c15300e8f4c51b9e58cdaf48fce5f78c59b232418e7f": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "360492f7d7b55e2445320a0edad1aa4ad5de15b8ee37c0733ab2d1bf89bdb573",
+        "kind": "child_process",
+        "owner": "<module>.resolve_machine_id",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "2d81f86c7f960dd55f7655138bd445cc16fce8cf165a4cacde02e26c8b9514b8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/observability_surface.py <module>._build_document",
+      "site": {
+        "call_sha256": "db797196adee360766d8384d2e435c018f484af94f2c629f3d49429f219d7c88",
+        "kind": "generic_send",
+        "owner": "<module>._build_document",
+        "path": "src/brainlayer/observability_surface.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "2df98a842c0139a5733568c0f508b667e391b0f97e36df9c708ab23a6a01bdbb": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/mine_frustrations.py <module>.main",
+      "site": {
+        "call_sha256": "7ace1d2057b550d58c9d6fc7412f8e3643d3394b8e900a3080c8b416ab5873a7",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "scripts/mine_frustrations.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "2e2d573bb07c9f0f34cc40f93d413e484ee300689d3544146ae41eab43cba237": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "e853f355ca3883026ad163e342714f5ecb480317819297204e94bde8c2c0f778",
+        "kind": "child_process",
+        "owner": "<module>.native_probe",
+        "path": "scripts/retirement_native.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "2e4f722d3b12ffd96339d0c8edd4af13b26b6719ea3a92e8fe72cbf4f43266de": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.run_with_timeout.target",
+      "site": {
+        "call_sha256": "1420489e5727190bdc9bc84b48b6c84d1167f25f8155668e79a04ae9eb138244",
+        "kind": "generic_send",
+        "owner": "<module>.run_with_timeout.target",
+        "path": "hooks/brainlayer-prompt-search.py",
+        "target": "results.put"
+      }
+    },
+    "2f44f13ed652b1ac628d9246ef833606efa30dafbf1acf45fe5e1461925614fe": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/eval/experiment_store.py <module>.ExperimentStore._open_snapshot_readonly",
+      "site": {
+        "call_sha256": "c089f79112c0ef94c71dad15970fa70344300b8700bcd91d16e83dae5c7ec7c9",
+        "kind": "generic_send",
+        "owner": "<module>.ExperimentStore._open_snapshot_readonly",
+        "path": "src/brainlayer/eval/experiment_store.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "2fb566a3714dc8219451f4079199ff098bdf8471455811ee4e9d8734328dc34f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/style_index.py <module>._style_dependencies",
+      "site": {
+        "call_sha256": "42a640ce36465f7e393772648825bdae5ed79ae41dfc3fdd63e456bb1b4fc4f1",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>._style_dependencies",
+        "path": "src/brainlayer/pipeline/style_index.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "2fc53e763b3dc73c6e67959a7b89e7825ad7f1de90a4c2b2cf8925c108b06c6e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/cleanup_stale_mcp.py <module>.parent_has_active_session",
+      "site": {
+        "call_sha256": "c8efa0d79aced689d18de44fae0627dd68c8ce7fb8debd925eb5be1fbbf6b7b2",
+        "kind": "child_process",
+        "owner": "<module>.parent_has_active_session",
+        "path": "scripts/cleanup_stale_mcp.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "2fe5979937b5065a836430b205b2756767f2c90ee0da167f49759cd58fbfd1f8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
+      "site": {
+        "call_sha256": "376f80442594e8524cbfa22e160cafb6ecd60687503f971cf503081dce36cb42",
+        "kind": "generic_send",
+        "owner": "<module>.send_brainbar_search_canary",
+        "path": "src/brainlayer/health_check.py",
+        "target": "client.sendall"
+      }
+    },
+    "31e136a8a241ce7569ae64a4ffe2a812e59e4adc81ce312407c53676cc89a2a2": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/git_learning.py <module>._iter_commits",
+      "site": {
+        "call_sha256": "389b5974d91e8452be061663c9975ed97f5fbf862ce637f754e6c8991e9fc100",
+        "kind": "child_process",
+        "owner": "<module>._iter_commits",
+        "path": "src/brainlayer/git_learning.py",
+        "target": "subprocess.run"
+      }
+    },
+    "32651ade620824ba8aff0a6267d1e8b1d612abd9400e72a42e3ed9c24ac0724e": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/job_alerts.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/job_alerts.py",
+        "target": "import subprocess"
+      }
+    },
+    "326d8bf60fcc4657452b0f538f6db6896c5b70092ad0632f1b8d5d3fc057300f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._read_only_count",
+      "site": {
+        "call_sha256": "98e7c59054b30966c6b8ddfd4412a23b25c6f2455a0fc787aec6d7cc8d28f27b",
+        "kind": "generic_send",
+        "owner": "<module>._read_only_count",
+        "path": "src/brainlayer/health_check.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "33b70ed042c36749cd1c72d2d8a59f716cb520fc45f81cbfc694429b48fc2bc7": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._run_bounded_weekly_backup",
+      "site": {
+        "call_sha256": "e99971d17e8a0221b43c294cef770a0b5e87a734b0ec604d57e6201878974cd8",
+        "kind": "child_process",
+        "owner": "<module>._run_bounded_weekly_backup",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "3422b3fef4419bbb6b9b2791a0052e0f5962039faa61ab3b8e855f3c8d65d556": {
+      "non_cloud_purpose": "Local Git merge-base resolves the immutable dependency baseline; no shell, network, or model send.",
+      "site": {
+        "call_sha256": "1d2ed7d35d37163211850153434e12f8ba1a87fa793ee115f6b8dd6541d9b47a",
+        "kind": "child_process",
+        "owner": "<module>.resolve_dependency",
+        "path": "scripts/retirement_run.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "347a67e5cfb508278af356bc86e03036fa38fdb81aa0f9667a671dddba0f25a3": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/build_observability_fixture.py <module>.build_fixture_bundle",
+      "site": {
+        "call_sha256": "8183d111887a148bedf4f460759ead6a0a9c525c03cfaa1d63817d59f421d7e6",
+        "kind": "generic_send",
+        "owner": "<module>.build_fixture_bundle",
+        "path": "scripts/build_observability_fixture.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "34b76c98650a82db6cc2ab9cea3cd5ad27421d0a64fd90efa9fa005fa2d161ce": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import socket"
+      }
+    },
+    "3575c7a4f7898a2f8d57c3d03896a4423c633fd0ed0b64df42d0717b3e86515f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/dedupe_merge.py <module>.rollback_migration",
+      "site": {
+        "call_sha256": "5567932351f924de3f0b573c3c51e5f68797e99a2216db6588948b9534f76ee4",
+        "kind": "generic_send",
+        "owner": "<module>.rollback_migration",
+        "path": "src/brainlayer/dedupe_merge.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "3680f7f7a50ae9afc104b77047cdbb5486b9bd11e85ef8c7961f7e48f082c647": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/doctor.py <module>._index_completeness",
+      "site": {
+        "call_sha256": "bc0f9808f21bbea12a4f7b92d604165c358200c0f51db4ca2125ffda8efa42ce",
+        "kind": "generic_send",
+        "owner": "<module>._index_completeness",
+        "path": "src/brainlayer/doctor.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "369b374a940d6f1b109fc01b4e6abff8caad745a56dd0cd859cc5ce18e14c846": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/tag_normalization.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/tag_normalization.py",
+        "target": "import subprocess"
+      }
+    },
+    "3776506f391a3f811f52930fd25529201b33919de166e11fe9eb6f331998805c": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/cleanup_stale_mcp.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/cleanup_stale_mcp.py",
+        "target": "import subprocess"
+      }
+    },
+    "39d56b4b3dc4758b6bf3129fa75de86c3516d1b6d6f161cf8ec8239999851d5e": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "701e2e4fc232f8ce324bc5f6b1a171cd618320d6d4f79ea87510db303dc4a140",
+        "kind": "child_process",
+        "owner": "<module>._important_usage_capacity_bytes",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "3b1ef3bc7d845a1c69ffd7f38b372442d4d221bb30e2140da7eace267966bd2e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/brain_graph.py <module>.build_entity_session_edges",
+      "site": {
+        "call_sha256": "4f5357a53d6299fb12bc258862c63479f124d8355c4697beb9ae83218b798160",
+        "kind": "generic_send",
+        "owner": "<module>.build_entity_session_edges",
+        "path": "src/brainlayer/pipeline/brain_graph.py",
+        "target": "file_to_session_id.get"
+      }
+    },
+    "3b6a5d2a999ed5b87b5e4dbe944d0d3dc47a6d884bd9b0054d4441201d02ca36": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/git_overlay.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/git_overlay.py",
+        "target": "import subprocess"
+      }
+    },
+    "3bdd6fd701295aa4346da8a45ee40bc10968684ebb99e16a17540434f38f3afc": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg_judge.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/kg_judge.py",
+        "target": "import subprocess"
+      }
+    },
+    "3c8640922f60c409db0dd5e71fbcb6c5503f74b201e03b4d0783b1cac0fa3b4b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.served_package",
+      "site": {
+        "call_sha256": "38d5a5fc7fec08463853514e05f59fda6d3389e43b17d916c570e7673e824619",
+        "kind": "child_process",
+        "owner": "<module>.served_package",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "3c9149998aa0e6a5c17ca65af694f02d71555d08fa92264220230c3a94a50db4": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "3a4e14f3261f048c6da22a11bc4655c93db022a639f1a956e690b1a6d6bee71d",
+        "kind": "non_python_source",
+        "path": "scripts/smoke/firstturn-brainlayer-smoke.sh"
+      }
+    },
+    "3cfa1e9476fcb597dff155aae72aa5662a1b221eef3cbcaa264b2e0f43a570a8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/timestamp_iso.py <module>.normalize_timestamps",
+      "site": {
+        "call_sha256": "5567932351f924de3f0b573c3c51e5f68797e99a2216db6588948b9534f76ee4",
+        "kind": "generic_send",
+        "owner": "<module>.normalize_timestamps",
+        "path": "src/brainlayer/timestamp_iso.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "3d4cb5c1c43edc9d75ecc75d0dceedd7483a23de930feb6ac3d931c53e2b63b1": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/observability_eval.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/observability_eval.py",
+        "target": "import subprocess"
+      }
+    },
+    "3f6b2413a51f5ce41ba4ba9a57b93a327537f217453b58a316a49f2d78082e91": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._process_command_line",
+      "site": {
+        "call_sha256": "6edfbac63aad39e118f5a82db74984313f36609d692956bef6e60795d32891ff",
+        "kind": "child_process",
+        "owner": "<module>._process_command_line",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "3f733c5e3e7dfaaedd4d200f509f2bf4281f4215df85119fd05dc0f6e3f598a2": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/clustering.py <module>",
+      "site": {
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/clustering.py",
+        "target": "import importlib"
+      }
+    },
+    "3fcf4b17fa2e2bbe372afda5bee793d0113b90853d55d89643e701681831a06a": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/git_learning.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/git_learning.py",
+        "target": "import subprocess"
+      }
+    },
+    "3fd89fea661edef8d022a3c86109be3f3f6d7c8f8936736d8954b3fe1c2a12c9": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/deploy_drift.py <module>.commit_is_ancestor",
+      "site": {
+        "call_sha256": "3ec7026f80678cf56e950bcbf35c6d09402c0e323bb6176d9e548907ccb24768",
+        "kind": "child_process",
+        "owner": "<module>.commit_is_ancestor",
+        "path": "src/brainlayer/deploy_drift.py",
+        "target": "subprocess.run"
+      }
+    },
+    "3fe6da947d069a7611fdebd33f3302f0cc567efe9267d18b7d50536fc573fcb1": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/eval/enrichment_quality_benchmark.py <module>._connect_readonly",
+      "site": {
+        "call_sha256": "faaa7c2de9dbd5a92aa9401a900c523bd14c337911fe31e9b2ea33a95ad75263",
+        "kind": "generic_send",
+        "owner": "<module>._connect_readonly",
+        "path": "src/brainlayer/eval/enrichment_quality_benchmark.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "42a3f3aaa43f52be8326c9e58ce2a4c4c5c00e5d2c79a34cac8661d8af497f78": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "d48a036b81f05f1d1e551047d28abdb8214376ddb8dde3ce2103d0eb83a6e0fe",
+        "kind": "child_process",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "42fb6849d53a76148b951f5540baada1753f0887d32758827e1d9bf5488581ad": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "import subprocess"
+      }
+    },
+    "443387d4d73eb75e9c20e6df1c179f3fc0f5429306acdaeb61759d8857dc2906": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "058ff3fb45726c487bee4cd82a142e42b29d9ed6bfd86e59fb28be16dd2e0a2e",
+        "kind": "generic_send",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "sock.connect_ex"
+      }
+    },
+    "45e22878748a1b01fb5453beef092207ae4976194d56b033331bd42603647e8d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/index_completeness.py <module>.rollback_repair",
+      "site": {
+        "call_sha256": "bf93c7661afffa9ef37f73bfda4c5b4330ef847d12b6abd82d5c743683d921a7",
+        "kind": "generic_send",
+        "owner": "<module>.rollback_repair",
+        "path": "src/brainlayer/index_completeness.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "46512a1d5ab12c3a36709692837a591eadc6bd545bdce4857bfd981a7022767e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/p0_longitudinal_count.py <module>._run_count_with_error",
+      "site": {
+        "call_sha256": "85ff2de83c69d7caaa8b4ccbd4fc3da905db2d78fc85aed1cce5d016c9edaab9",
+        "kind": "generic_send",
+        "owner": "<module>._run_count_with_error",
+        "path": "src/brainlayer/p0_longitudinal_count.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "46ff106c7cfc7ab02276fb891215559d06247aa5b5016dffc538f66709177a4d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/timestamp_iso.py <module>._detect_git_sha",
+      "site": {
+        "call_sha256": "32edea5e87495251c69b02b354110f0e99929d72a1c804edceda2aea75428b1b",
+        "kind": "child_process",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/timestamp_iso.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "47613e1f656c88dc4cf970b789c2060fcf23531520194e495636bacae230a22d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>.socket_owner_binary",
+      "site": {
+        "call_sha256": "07066b5953ecd4633e4cd5702d4a737a64d1afb87725ec3bd3413a71992ca5f6",
+        "kind": "child_process",
+        "owner": "<module>.socket_owner_binary",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.run"
+      }
+    },
+    "47e3958da22f3b9d2d33f2ee99705078753e7f7582c9095ac54c2f22e0970bea": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/launchd/throughput-watchdog.py <module>.read_watcher_progress",
+      "site": {
+        "call_sha256": "ff8d63f8aec025a687547c035b0366dc68077f0ac042031069b03fa7607fce5d",
+        "kind": "generic_send",
+        "owner": "<module>.read_watcher_progress",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "4898f8475525eb19152098cd119c73abf2fd7bfe14ca550692c42485657e8337": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "7320accd6b1012daca3c4aa92395c1b8ba6cfccf509331cdf654c05e42154fc2",
+        "kind": "generic_send",
+        "owner": "<module>._send_brainbar_json_request",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "client.connect"
+      }
+    },
+    "4997b6e8a1b1593dc22be1f360b927424ada7ba43c6f66fd207261c94f76a626": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/watcher.py <module>.JSONLWatcher._db_realtime_inserts_since_window_start",
+      "site": {
+        "call_sha256": "c8b8ac10fefc7b2a20e393ea74f41a66627e2acafed27f76e74c0b023564b9a2",
+        "kind": "generic_send",
+        "owner": "<module>.JSONLWatcher._db_realtime_inserts_since_window_start",
+        "path": "src/brainlayer/watcher.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "4af5fe0f4e14dac652231ffe290945674586c25b9dbf74783c2d3b9ea216f571": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/fallback_replay.py <module>._git_root_uncached",
+      "site": {
+        "call_sha256": "6bd7d7f26d1619496c1b47ea24b0b3764d07c73f728afe674b4feb800f639f04",
+        "kind": "child_process",
+        "owner": "<module>._git_root_uncached",
+        "path": "src/brainlayer/fallback_replay.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "4b50f772bb043cb474d3ea67b7fe437ccd37cacb9b930e048c1526d5bd109be2": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp_stdio_bridge.py <module>.run_bridge.start_connect",
+      "site": {
+        "call_sha256": "0b7d3dd9af314cd697b31518073f506f89c69771f013144f628c1e6c284ecc79",
+        "kind": "generic_send",
+        "owner": "<module>.run_bridge.start_connect",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "candidate.connect"
+      }
+    },
+    "4ca3ef7c8fdf6bed5029ce4ca3f70154cc0cfb7247c3fbcc4066e30d9941d5bf": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/deploy_drift.py <module>._git_stdout",
+      "site": {
+        "call_sha256": "d1ac0cf97057e0bbf6b38e815b0992641bdf57b15bddcad44db33658ff17c91b",
+        "kind": "child_process",
+        "owner": "<module>._git_stdout",
+        "path": "src/brainlayer/deploy_drift.py",
+        "target": "subprocess.run"
+      }
+    },
+    "4d0804ab4265b75dfa639328f8eb873218858ff3a5bcdfa8ec88133ebb5382a3": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/ci/run_with_deadline.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "import subprocess"
+      }
+    },
+    "4d280e84087655cf076cedd02d707eb48d1c25bf90783bbbf870a34329987e34": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "94c94031351f548a833ba524d4335c140ecaec113cbebdebf1b279cd6269f024",
+        "kind": "child_process",
+        "owner": "<module>.probe_profile",
+        "path": "scripts/retirement_run.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "4e69eccb163b762d4cba5a290d2f5004897ddf05246d50e49f5e6856330a858a": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_run.py",
+        "target": "import subprocess"
+      }
+    },
+    "504a2b68728c000a140561a4622af27e1b3ee992b6197973d739c9a7947ca2f5": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/code_intelligence.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/code_intelligence.py",
+        "target": "import subprocess"
+      }
+    },
+    "5052a4ac35079e53d3142bb0a57382e108b09cd69560166dd7fcaabd18d5942e": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "import subprocess"
+      }
+    },
+    "53194c405c6e21cdd0368bdb7d0bf42b22c1eb1a6111bc6b14fa0cf919b7ce27": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_artifact.py",
+        "target": "import subprocess"
+      }
+    },
+    "5458c970b5e99f03bcd3f851c87aa71123936dc84cc307204f04c2572467f7ea": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "e5b634c894f32272c37a029b3ba37242f22ec74c4575ec3aa4d80584ddaa2e0d",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "555e4ceded5bd53ac1c47bfe96fa2351bef6db0b063f2251c1aced90fa0c6538": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/observability_eval.py <module>._run_case",
+      "site": {
+        "call_sha256": "688eca6e4ea91cf2c9d206d21190f078e1efbfcc944b4d6b6bc48d4f8c28e651",
+        "kind": "child_process",
+        "owner": "<module>._run_case",
+        "path": "scripts/observability_eval.py",
+        "target": "subprocess.run"
+      }
+    },
+    "5630892589a1470c03d492afad92f5386c3b60e4b48496eaa700dcd6808be4bb": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ratchet_quiesce.py <module>.launchctl",
+      "site": {
+        "call_sha256": "2ac1e4ab0b897abfe4cfbffbef4b1160ba4e37579d439a67ff1311fd95d44950",
+        "kind": "child_process",
+        "owner": "<module>.launchctl",
+        "path": "scripts/ratchet_quiesce.py",
+        "target": "subprocess.run"
+      }
+    },
+    "5636a79c670c6d0d5091ab4363a3c04a73334bb72509c018f8cb2ad9873ecd6e": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "b001c1532151c0f7d43b4d08149758c9af1a709d43e1b3a915ec52f6ed44ce14",
+        "kind": "generic_send",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "sock.connect"
+      }
+    },
+    "5871daa3fffbfcd8d6d7b5c13e1b5bb817819b5f5e110b7b0d481f7abaabb8bd": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "db797196adee360766d8384d2e435c018f484af94f2c629f3d49429f219d7c88",
+        "kind": "generic_send",
+        "owner": "<module>._database_logical_size_bytes",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "5bbb0cda3cd45afe2ee0c349bd0a3b36d68eb1a26bfeb45c43d8ea124916c439": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.run_fts_search",
+      "site": {
+        "call_sha256": "8b40476a34e79505bbc35e6f1fc6e29aaa3cf8e2659a44028b6d0f090cab35c0",
+        "kind": "generic_send",
+        "owner": "<module>.run_fts_search",
+        "path": "hooks/brainlayer-prompt-search.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "5de05ca5f77b450fa9a13bf0198d3f929f4a7061db76d3c08bb391c937d9b008": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg_session_harvest.py <module>",
+      "site": {
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/kg_session_harvest.py",
+        "target": "import importlib.util"
+      }
+    },
+    "5e39eba7ef504b91db45d7c0f0b4a8d4908f01d95537d469024ed6cc61f6fac8": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>._count_chunks",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "5f5db29e7a86c3bb73b7f94e72b87fe58772f065ec7152c7709c631157211737": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/d2_project_backfill.py <module>.backfill_numeric_projects",
+      "site": {
+        "call_sha256": "e4f76bba87a63aff17d0bc3a9d2797b3fe331f32bcfc59f63f0be003c185f9ea",
+        "kind": "generic_send",
+        "owner": "<module>.backfill_numeric_projects",
+        "path": "scripts/d2_project_backfill.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "5f6ba7f5fbc6c4b1f9da10fe8cddee0538ab6a0c882268777803f32bfb3c79c5": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_source.py",
+        "target": "import importlib.util"
+      }
+    },
+    "5f6bcb8a8fdecbb3d378815aa02f301aabe7532c9ff973976d52e8cf336ccd7b": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/dedupe_merge.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/dedupe_merge.py",
+        "target": "import subprocess"
+      }
+    },
+    "5fdb89dca15e912202ad05d98829d12f449f6548d6a7884a843602ea11f91b7b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/jobs.py <module>._run",
+      "site": {
+        "call_sha256": "e6e4319857b7d0a6a63a65ddd2edf215e9ce654183cdf80b54908f490e2d35d0",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "src/brainlayer/jobs.py",
+        "target": "subprocess.run"
+      }
+    },
+    "60486f2c31fbd4af28db336ce804bcb712e79d01ad7cb847ddbcf4c8e6354b2d": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "c29043e777f09f403ce15d3e280e63478d7f6e773801ef58fedaf8e3ad986c2c",
+        "kind": "child_process",
+        "owner": "<module>._optional_sqlite_pragma_check",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "6069cba704c6838af9ece59a7c5bfdf5da10cb0f0f4f70d78e1a2c8fdea7b022": {
+      "non_cloud_purpose": "Retained local longitudinal analysis; Ollama restricted to numeric loopback, no proxies or redirects",
+      "site": {
+        "call_sha256": "17a083ebe66c082001178798abda2b30d0b284f10fad9fca49640c273853ec47",
+        "kind": "generic_send",
+        "owner": "<module>._ollama_generate",
+        "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
+        "target": "client.post"
+      }
+    },
+    "60c5ff4a2f8d2d8b5b830bca9e1ac3d3a957568f57162f2de06291d67a442733": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/dedupe_merge.py <module>.merge_duplicates",
+      "site": {
+        "call_sha256": "5567932351f924de3f0b573c3c51e5f68797e99a2216db6588948b9534f76ee4",
+        "kind": "generic_send",
+        "owner": "<module>.merge_duplicates",
+        "path": "src/brainlayer/dedupe_merge.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "61b5adfeca4a31ec577317ba2ee1e4a7f4ed7804bb53f5a81cd3b7f10f71a351": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/git_learning.py <module>._iter_commits",
+      "site": {
+        "call_sha256": "c0201e18ce40ddb4c2dc4e3256bb9da13b96ce879c2183646c6c820157faa915",
+        "kind": "child_process",
+        "owner": "<module>._iter_commits",
+        "path": "src/brainlayer/git_learning.py",
+        "target": "subprocess.run"
+      }
+    },
+    "61e2cb81cdab2bbd22805c2f39cb6c86c4c11472f7635e2e5fc9029f2c3cb4f5": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.working_tree_provenance",
+      "site": {
+        "call_sha256": "6db3b2cbe10807a7ec92500e2b527a94a17a9b99ce70c6c8feeec7ba0e0e610a",
+        "kind": "child_process",
+        "owner": "<module>.working_tree_provenance",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "61f334fffaa658c9e459fa44928297c3bd5d5e6d8e9b46dcab75cd9aca1a86c0": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._git_head_sha",
+      "site": {
+        "call_sha256": "78f37f6e30cc3ca8fe5693dedf60d2eb8f893a8f4604fe67711d2da37cfa84cf",
+        "kind": "child_process",
+        "owner": "<module>._git_head_sha",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "62fbaece3793c13e51d03b18e1cc23af7a77d3a71193fe5234582a828ffcad51": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
+      "site": {
+        "call_sha256": "9c0930d30b80a5bdae30ae1827141a137f901a7311c5bb5434f827f475f8cb5a",
+        "kind": "generic_send",
+        "owner": "<module>.verify_mcp_transport",
+        "path": "src/brainlayer/setup.py",
+        "target": "send"
+      }
+    },
+    "63bfd8bf1cf2368c32551fcd3655f613e82430f5901293628422e480e7d808b4": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.MCPClient.call",
+      "site": {
+        "call_sha256": "bd2d792da41f322782380bd1957fae0941ecb5ffecf42cedbe8e07f5f273f070",
+        "kind": "generic_send",
+        "owner": "<module>.MCPClient.call",
+        "path": "scripts/sprint_gate.py",
+        "target": "self.request"
+      }
+    },
+    "63d44e1d2d79f0029e7d6dc4ccc839531d2d65adcd8b0374c89580326b5a17cb": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "41f551dfbae446e5179ad79901e51babbfef7e64ae11b030784ffe4e1400a93f",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
+      }
+    },
+    "64e385b7c16a15500e8da69f55a524fd0ba589fd6a21509c08f1a71f681df1d2": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/check_observability_golden_inputs.py <module>._metadata",
+      "site": {
+        "call_sha256": "b87dbbde46293e1b366d7daeb2138c9492fd509c1c7ebfcfc838d6dfb7ad9d41",
+        "kind": "generic_send",
+        "owner": "<module>._metadata",
+        "path": "scripts/check_observability_golden_inputs.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "65030a3f6c8069d939423e38db9faf0ffddab4adf15657f68c8f09d50916aee9": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "52eb483059f44f20bfee85259fc50895d8c1557ed4560ce723d0c766604e69fc",
+        "kind": "child_process",
+        "owner": "<module>.snapshot",
+        "path": "scripts/retirement_artifact.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "663f8e3260afd2782569d1dca82aa43a95e1a92ebadafb16538db00596a63f42": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/derive_observability_goldens.py <module>._input",
+      "site": {
+        "call_sha256": "5622e0f3acbefe9bc70e347ff218b0f202453a22e65835469c36b26c0c07a670",
+        "kind": "generic_send",
+        "owner": "<module>._input",
+        "path": "scripts/derive_observability_goldens.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "66b39fc55a31fe0850420973bc0dc223def7df19e136dd9c5e7075abfcf159e7": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/vector_store.py <module>.VectorStore._pid_start_time",
+      "site": {
+        "call_sha256": "e412c71ccf6a4fae8d3881ae50ec7d498e20eff9aadd611732d3e5c35402f143",
+        "kind": "child_process",
+        "owner": "<module>.VectorStore._pid_start_time",
+        "path": "src/brainlayer/vector_store.py",
+        "target": "subprocess.run"
+      }
+    },
+    "6706d5bd735ff60ea2b86f2a9085a953fa9840590cd445ac9753a325851c4d8f": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/import_sweep.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/import_sweep.py",
+        "target": "import subprocess"
+      }
+    },
+    "67d441d26675f16651da35262ac1e6709af9bb49e88c521dd0ff577a7cf4f262": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/build_observability_fixture.py <module>._build_db",
+      "site": {
+        "call_sha256": "faaa7c2de9dbd5a92aa9401a900c523bd14c337911fe31e9b2ea33a95ad75263",
+        "kind": "generic_send",
+        "owner": "<module>._build_db",
+        "path": "scripts/build_observability_fixture.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "68c7c83014200612706e305514d8ec1b0566f89b91c07296a32f37238c5e632e": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg_session_finish.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/kg_session_finish.py",
+        "target": "import subprocess"
+      }
+    },
+    "698a99706adc5b2c0b9cbf88cc98536240295abaeb8183245ecb3c121de25900": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/observability_eval.py <module>.main",
+      "site": {
+        "call_sha256": "af4a32e88e081d3d39f3f77420a27f81bbc59e9769b9ada8dce7f1c3fd83354a",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/observability_eval.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "69e30186b8ce351d4ad630722c3f8f9a8a5bf6fc1db073c2dc6d47b0878ac7c8": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/health_check.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/health_check.py",
+        "target": "import subprocess"
+      }
+    },
+    "6a3da99c3707117fbf77b71c2b96cd67a957d6775fffe01609c340ea90fdab2e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/check_tracked_privacy_exports.py <module>.main",
+      "site": {
+        "call_sha256": "fe27f25b232a884fa109695147a7bf1f83783ca290ac67cf202568efa04a144e",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/check_tracked_privacy_exports.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "6af97d75a3bf8fef459b5629fcda0276fc1a4e0482f29747a743de9640882828": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/job_alerts.py <module>._notify",
+      "site": {
+        "call_sha256": "114ad7e2890a9936fc01b38f25a9b8c7724c0aa42dd40c389052c067f0118455",
+        "kind": "child_process",
+        "owner": "<module>._notify",
+        "path": "src/brainlayer/job_alerts.py",
+        "target": "subprocess.run"
+      }
+    },
+    "6b497e74019beb502d58b936ec91eff28bbf6fadfade5b3fbab2f779729b0850": {
+      "non_cloud_purpose": "Retained module dependency binding: hooks/session-cleanup.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "hooks/session-cleanup.py",
+        "target": "import subprocess"
+      }
+    },
+    "6b60fdb97f602c9b07783660272f1f9925e92ddb3d2551bcf8001bfafef0084d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._vacuum",
+      "site": {
+        "call_sha256": "8183d111887a148bedf4f460759ead6a0a9c525c03cfaa1d63817d59f421d7e6",
+        "kind": "generic_send",
+        "owner": "<module>._vacuum",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "6c1eda9f9d1cb09d1decab47577371ceb462bcc646133aca8db3f391977c7e06": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/brainbar_hybrid_helper.py <module>.HybridSearchHelper._handle_connection",
+      "site": {
+        "call_sha256": "fa065fe0e611c21cb6c09aa0d7dd2d1a1fd7b2bd09244ffed4520a1318e72f17",
+        "kind": "generic_send",
+        "owner": "<module>.HybridSearchHelper._handle_connection",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "conn.sendall"
+      }
+    },
+    "6c220dcbe70071b1e21545aae39fc3fb8ba72bd9a2c43871eccaff0dbecf0c9e": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "3f0f023889865000cfd6009c5b84f2eaeb7c36c8c8eb9f8dbcc401a57e0e0d91",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/HybridSearchHelperClient.swift"
+      }
+    },
+    "6d59c1ba939a8c2949a0a4bef600091b2b9bbfa57d9b9cafc6a1b362f4194e3e": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/timestamp_iso.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/timestamp_iso.py",
+        "target": "import subprocess"
+      }
+    },
+    "6de58c6a2f9376b9c74af3820ba7d3387d899ccc8de67a6e55452ad0ed5d8bb8": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "import subprocess"
+      }
+    },
+    "6e2a9480b27a20e366ff8084e1872b0e0bc8e3b97e2cfd54539f2c8b1677a9ad": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/vector_store.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/vector_store.py",
+        "target": "import subprocess"
+      }
+    },
+    "6ea2bed6654b561e49885df4581d29d919e3d2d04873e7ecb8e5cd4022d1ee90": {
+      "non_cloud_purpose": "Read-only evaluation observations, not a model generation API",
+      "site": {
+        "call_sha256": "40d1040049769bdc52defb6cc883a6ad22596d986f6c1641c6fb0029792b5ab1",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "import urllib.parse"
+      }
+    },
+    "6f3c969008876a9829a61f4b1b253337728c953f18ea0bb59a439a12104459dd": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "5e79d1ca28b949c6fb359e174124dca73903f625dffa94c6e9832ed588e668a6",
+        "kind": "child_process",
+        "owner": "<module>.command",
+        "path": "scripts/retirement_artifact.py",
+        "target": "subprocess.run"
+      }
+    },
+    "6f58e527ef4085d39ddd66b16b2f29c6b02ce8d930a4e6b42577d998def01177": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "1894168298f47563bb47c74859867da43642f11bae3b5944d92c15ed6a85ffe7",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBusClient.swift"
+      }
+    },
+    "70f15708de023b2035d1f6286b354c97aae2f697dd658d82126ca59d297bf2fa": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/maintenance.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "import subprocess"
+      }
+    },
+    "74928325a3b02c1e9761a65ed08586d553cf72b2a8a92ccf52676c6c11f04cd9": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
+      "site": {
+        "call_sha256": "2bae2a921ea3dae3e8e927d39ff4aff00b2baec7736b717102b0dab2448db99c",
+        "kind": "generic_send",
+        "owner": "<module>.verify_mcp_transport",
+        "path": "src/brainlayer/setup.py",
+        "target": "send"
+      }
+    },
+    "75430fc442439c95e27e0131fe4a33c1f67ad55c94c2d43b3fd8f298fdc74200": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/archive_collapse.py <module>.collapse_archive_representations",
+      "site": {
+        "call_sha256": "5567932351f924de3f0b573c3c51e5f68797e99a2216db6588948b9534f76ee4",
+        "kind": "generic_send",
+        "owner": "<module>.collapse_archive_representations",
+        "path": "src/brainlayer/archive_collapse.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "7682ed1b976e3e3a13acb5b7d1ff74a6a4da858dc7d3e9da1c5a6210a8fafb84": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainbar-postcompact.py <module>.main",
+      "site": {
+        "call_sha256": "a40fe2fb2ec54e3ee78edd4c0f0b671eb5b13a9c5cb865919f538ab0e5dc9d0d",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "hooks/brainbar-postcompact.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "7d586f3e7e97e739f34db5656a6f775f925856c1ab0beaafe16d63b9aa618ab6": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/launchd_primitive.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/launchd_primitive.py",
+        "target": "import subprocess"
+      }
+    },
+    "7e449b3e2158177d0feaa76be9d7fc3395b706a06d4e2f67285d57101dfea9bf": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.record_injection_event",
+      "site": {
+        "call_sha256": "21c4069a6855f865c9ca54baecdee1f2489b6daf71f937d4f0be9492583df7a4",
+        "kind": "generic_send",
+        "owner": "<module>.record_injection_event",
+        "path": "hooks/brainlayer-prompt-search.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "7e58ce817a1799a81c60eaea3c80e6dc62ab4de220dfa6468345916831f1f7c5": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/unified_timeline.py <module>.load_whatsapp_messages",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>.load_whatsapp_messages",
+        "path": "src/brainlayer/pipeline/unified_timeline.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "7f473b9df716b6697971d1b0573a23c86bcd4cde3438f886459a3fc4d9f0819f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/ingest/t3.py <module>.T3Reader._connect",
+      "site": {
+        "call_sha256": "9033b1e6552a950833a1a01c9d67af314c6578526f85664f731321365fbd46e9",
+        "kind": "generic_send",
+        "owner": "<module>.T3Reader._connect",
+        "path": "src/brainlayer/ingest/t3.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "8072101ec244d4ac2ecebc8ecc05a541a757e81ee5a94626b0c45457ec4df1f6": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/launchd/throughput-watchdog.py <module>._default_command_runner",
+      "site": {
+        "call_sha256": "806458a9e00dc018e52b303c267d27e49ed6019b6aade5bc2a730be9ec72fbe3",
+        "kind": "child_process",
+        "owner": "<module>._default_command_runner",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "subprocess.run"
+      }
+    },
+    "809f2b48763e44cd5470a3279dd48bb87df6cecba63d71290688a34556b1170a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/source_class_migration.py <module>.migrate_source_class",
+      "site": {
+        "call_sha256": "429a0ab651b99b6a46ffacd67fd61520cc920bc5210467bba41e47d6028b30d3",
+        "kind": "generic_send",
+        "owner": "<module>.migrate_source_class",
+        "path": "src/brainlayer/source_class_migration.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "824aebabf6b6b19d74e5a7bd33fe2e018309331ef9da395dcb3416d114b89888": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/dedupe_merge.py <module>._detect_git_sha",
+      "site": {
+        "call_sha256": "32edea5e87495251c69b02b354110f0e99929d72a1c804edceda2aea75428b1b",
+        "kind": "child_process",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/dedupe_merge.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "82bc6bba3e265d016166f33ed43cce08dd2c340fe04ca0c0a95abfb7a1ff5006": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
+      "site": {
+        "call_sha256": "68175084ac5364b03c4a4b2cd860cc4fcc5c8542060f34e26339c1ce11ffc217",
+        "kind": "generic_send",
+        "owner": "<module>.send_brainbar_search_canary",
+        "path": "src/brainlayer/health_check.py",
+        "target": "client.connect"
+      }
+    },
+    "84c0c675ede8b44e1bf3b8d63846088595a241f1ad698fff27b785cb0589f5a2": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/brain_graph.py <module>.compute_entity_positions",
+      "site": {
+        "call_sha256": "9318e4c514c260aa935e98458de673a482fa2cee364852cc565a50da7bbbbe6f",
+        "kind": "generic_send",
+        "owner": "<module>.compute_entity_positions",
+        "path": "src/brainlayer/pipeline/brain_graph.py",
+        "target": "kg_data['entity_sessions'].get"
+      }
+    },
+    "8596d8b68928996defcf69aa4f78c34d259fc55abe6f5b93af4ee8c982326208": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/plan_linking.py <module>.match_session_to_plan",
+      "site": {
+        "call_sha256": "0d8455935ee6832d9451b833760d275894b6927bb9e06f699a9add76ed24d9b2",
+        "kind": "generic_send",
+        "owner": "<module>.match_session_to_plan",
+        "path": "src/brainlayer/pipeline/plan_linking.py",
+        "target": "session.get"
+      }
+    },
+    "8670771ec5de78de96ff3727d306c32b3e13605688ea34ec4fda03639ba0c865": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "call_sha256": "77879f6b790ad5e362f2ce51bf713408f93f3848bc76ade2d46f07c43cb8c51e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "from urllib.parse import unquote, urlsplit"
+      }
+    },
+    "8678196531fa7daa0235a0d092f4acb055b5a01d9002ef1dda343d24c7a40d37": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/eval/enrichment_quality_benchmark.py <module>._connect_readonly",
+      "site": {
+        "call_sha256": "2313070629b5acb42d14fed99b6cf70780437308c0d313e8c297240e0a990c98",
+        "kind": "generic_send",
+        "owner": "<module>._connect_readonly",
+        "path": "src/brainlayer/eval/enrichment_quality_benchmark.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "86d3fbc65f2b9765d76b14f567e431efa467e979468aa60f838e4882ac198e3f": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import importlib.util"
+      }
+    },
+    "8806b83a40d614e32975d9abe74945944c18603a063b925d3c2065c47f4ca96e": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "35d59b857a88dcab25033bd3393a91afc1eb38ac2cb756024996662b6596af53",
+        "kind": "generic_send",
+        "owner": "<module>._validate_backup_target",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "88107aac5ef0c8e672f82ff687360257f752e53120bb7360a095100e0f111861": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/hooks/indexer.py <module>.RealtimeIndexer._init_db",
+      "site": {
+        "call_sha256": "3f8a3cfaffbc3f977341dea4824e634f58a9f9b95c005b2a380eb7aa049d44ce",
+        "kind": "generic_send",
+        "owner": "<module>.RealtimeIndexer._init_db",
+        "path": "src/brainlayer/hooks/indexer.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "888b2fddabcaea9132e1e8d15d86c4cde6be134b0150f5e02c7b5e22f5618b91": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/launchd_primitive.py <module>._default_command_runner",
+      "site": {
+        "call_sha256": "faa01a640a65dad558b66a285b99f2b68e41a2e85b5740ad5fbc986f127d87ee",
+        "kind": "child_process",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/launchd_primitive.py",
+        "target": "subprocess.run"
+      }
+    },
+    "89b94212103d4fa59c52fe8cd61b06fc971a3a32e8783223c04cf48931349313": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._default_ps_output",
+      "site": {
+        "call_sha256": "8f95dc6304b9e5d031b599056afc6b623e1beff8d370f106b1eaa85658a357b7",
+        "kind": "child_process",
+        "owner": "<module>._default_ps_output",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.run"
+      }
+    },
+    "89c35480d5f474d7376627fd8d27f53a21439a0d880eb5e9bc58e414d6dd9bc3": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/observability_backup.py",
+        "target": "import subprocess"
+      }
+    },
+    "89e1c71d85693251bc587ad61efe5198720861df9d33d39eef4b7560f67c6c70": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/clustering.py <module>._optional_brain_dependency",
+      "site": {
+        "call_sha256": "15533b5f8b35c10415b6db0a430b8dbd3dd707576fe50ab20ba128ac309d841f",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>._optional_brain_dependency",
+        "path": "src/brainlayer/clustering.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "8ad5b9603a04f422d708da16d89156dfdbe8d21025b2b059f01b38a846ccc1f7": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>.collect_lsof_entries",
+      "site": {
+        "call_sha256": "5f7f80b17c47bdde110f93570a9efbe18e426c8fc687ddc56f67805f8752d481",
+        "kind": "child_process",
+        "owner": "<module>.collect_lsof_entries",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "8b0a1c47155a53d3f457a6e19ec0dabcf677d0dd2101c7e2fae1edc99addced8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/plan_linking.py <module>.match_session_to_plan",
+      "site": {
+        "call_sha256": "a08694f108e5172782d611a1c41e66f9a816368f3d5a268417f27531954b7287",
+        "kind": "generic_send",
+        "owner": "<module>.match_session_to_plan",
+        "path": "src/brainlayer/pipeline/plan_linking.py",
+        "target": "session.get"
+      }
+    },
+    "8bdd8bc99bfbae604ca6c7e873da8f799e87da6d3477735b38bd2050baa80724": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "3f0f023889865000cfd6009c5b84f2eaeb7c36c8c8eb9f8dbcc401a57e0e0d91",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/HybridSearchHelperClient.swift"
+      }
+    },
+    "8c493123d5f29663faf8affb818262b594a647580837c2a0a8f27b49646d2910": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/post-commit.py <module>.main",
+      "site": {
+        "call_sha256": "bb9e1bb24cd053117599834eaf77393218b35daf5064969831b07895b7fa16b6",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "hooks/post-commit.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "8c66987ed1c2722eefdb16af31a13783fa61ce656c5f7785d49860477ea7ed59": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/release_tag_contains.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/release_tag_contains.py",
+        "target": "import subprocess"
+      }
+    },
+    "8c867487a3da9c54a2dc2b227b0f45bb8ef8890c555a3b994200214d7fa0acb0": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp/search_handler.py <module>._forward_to_helper",
+      "site": {
+        "call_sha256": "9061d4f4e8b8a1e35c90850805b23da38c60866b173857754aac1967904dacd1",
+        "kind": "generic_send",
+        "owner": "<module>._forward_to_helper",
+        "path": "src/brainlayer/mcp/search_handler.py",
+        "target": "client.sendall"
+      }
+    },
+    "8d62779434448bc0c806048055edb1bef58cf0812ca6a420de57b456c2d27d72": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/chunk_origin_backfill.py <module>.backfill_chunk_origin_provenance",
+      "site": {
+        "call_sha256": "0d7cea74edb79173518b67787646818f97336392150abb52d0b54fee936a4ddb",
+        "kind": "generic_send",
+        "owner": "<module>.backfill_chunk_origin_provenance",
+        "path": "src/brainlayer/chunk_origin_backfill.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "8e5d7ecb281462574f316ee22dd1d399b688089a1ab3cba63c324c5ccb43398a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/frustration_mining.py <module>.mine_frustration_qrels",
+      "site": {
+        "call_sha256": "3e7563c48472ee07b0bb0643198a80c8d18e58d8a8102e0ec5b87a9376dd9e15",
+        "kind": "generic_send",
+        "owner": "<module>.mine_frustration_qrels",
+        "path": "src/brainlayer/pipeline/frustration_mining.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "8ecd96d695d13d204302846617a99b4237c6ad87d183b7a980e0b54f566e3c65": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._git_merged_head_sha",
+      "site": {
+        "call_sha256": "945fa6cbefbdfe9198b9e76ed53b927952f079c7deec0e84d0306d91e1cc74d7",
+        "kind": "child_process",
+        "owner": "<module>._git_merged_head_sha",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "8ef41906950751d95ee4c045e49e78b2ff1a138c0b6725320225f671899b7698": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>.consolidate",
+      "site": {
+        "call_sha256": "2086ce5ac27b423ebe85fc4666db7abc23e302f9202222c61456b83fccbb4ac8",
+        "kind": "child_process",
+        "owner": "<module>.consolidate",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.run"
+      }
+    },
+    "90276fddd3be39f7ad2915552bd70babab966a2d520a1e2c69b655cfcac0c70f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/t3_provenance.py <module>.t3_app_codex_session_ids",
+      "site": {
+        "call_sha256": "a0e3ac87abbbc206887be7994a42730236616f008f4831362a866c2a50ec662e",
+        "kind": "generic_send",
+        "owner": "<module>.t3_app_codex_session_ids",
+        "path": "src/brainlayer/t3_provenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "90527e4bc3ac91388ddd254c9e76671904968e73cb1d74defb6c6ce6f7a63970": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/index_completeness.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/index_completeness.py",
+        "target": "import subprocess"
+      }
+    },
+    "92c62d93c1ab5d6fa468d1fb5975ab5ebe7508516fa56f0c698239ff2d2e380d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>.hooks",
+      "site": {
+        "call_sha256": "aadfdb72843c1f401bc3c5866b332f455b012d9da7849e1fe82de383fe6a0757",
+        "kind": "child_process",
+        "owner": "<module>.hooks",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "93b0dcb16c7188b3190271eb1f1af530f46e40b1b02afec61e67fa068e40699a": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/health_check.py <module>",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/health_check.py",
+        "target": "import socket"
+      }
+    },
+    "946c267aad430ab47a6d790e1ad8271bd16d88a8a794f932d3efdd7cf6465bdb": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "7310a83a0dff6ba4d424e81c676aab44c1fc2f8f1bfcb261745ff2a5d78c4520",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
+      }
+    },
+    "94750005d4ab902ca2c076c64498d3bae1c308a331089e2419cbc0f4c925113d": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "5f9e808b529b2889e35b5a70c6e9e44384b6b471d996b8cd01501fc887decb51",
+        "kind": "generic_send",
+        "owner": "<module>._fetch_vtt_transcript",
+        "path": "scripts/index_youtube.py",
+        "target": "urllib.request.urlopen"
+      }
+    },
+    "9562e7c85a01e79f3966b00a14c7feb551e6330ad0aa140d938c2935390d236a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/index_completeness.py <module>.repair_index_completeness",
+      "site": {
+        "call_sha256": "bf93c7661afffa9ef37f73bfda4c5b4330ef847d12b6abd82d5c743683d921a7",
+        "kind": "generic_send",
+        "owner": "<module>.repair_index_completeness",
+        "path": "src/brainlayer/index_completeness.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "96fc029fb9849f69bdac59d6787159030ac33dbf5fa5abd3051ff85b272c48c3": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import subprocess"
+      }
+    },
+    "9772a05e5860760c38504fd0291620c4fa99775dbb96fd1344694b46d9b3f388": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "a1e62aff4fbc8934759d9b6429a137fc04919a84ef7466684ef6c8c9b40953ab",
+        "kind": "child_process",
+        "owner": "<module>.download_audio",
+        "path": "scripts/diarize_episodes.py",
+        "target": "subprocess.run"
+      }
+    },
+    "97eacb7c49afb380fd31575c8ec53ab2bc76bc09e51784f389ea22702216b3ac": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/reembed_backfill.py <module>.find_heavy_ml_processes",
+      "site": {
+        "call_sha256": "37fb12ddbbf1fc724f8275e7f96f9bc93cbdb23d66ba0227fd63b8e0f8c7e3e8",
+        "kind": "child_process",
+        "owner": "<module>.find_heavy_ml_processes",
+        "path": "src/brainlayer/reembed_backfill.py",
+        "target": "subprocess.run"
+      }
+    },
+    "98b5e9582d7fd02cfb5069a3982232ea54d805f1308184025685bb55455018d5": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/check_tracked_privacy_exports.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/check_tracked_privacy_exports.py",
+        "target": "import subprocess"
+      }
+    },
+    "999a0a5c6d4d3a42eb85c8fcad01356d992f81338f313d248706fdf0c66732cc": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/eval/benchmark.py <module>.ReadOnlyBenchmarkStore.__init__",
+      "site": {
+        "call_sha256": "2313070629b5acb42d14fed99b6cf70780437308c0d313e8c297240e0a990c98",
+        "kind": "generic_send",
+        "owner": "<module>.ReadOnlyBenchmarkStore.__init__",
+        "path": "src/brainlayer/eval/benchmark.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "9b3fdee53851187f86edf2c34f92faf3dd99c5a4c1bfbacf420626089113ac6b": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/drive_credentials.py",
+        "target": "import socket"
+      }
+    },
+    "9b776b7e38076ad52d4d9ee3fc279f996d8b78e9b023a5e4402ffdba80fceef3": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "5f9e808b529b2889e35b5a70c6e9e44384b6b471d996b8cd01501fc887decb51",
+        "kind": "generic_send",
+        "owner": "<module>._fetch_json3_transcript",
+        "path": "scripts/index_youtube.py",
+        "target": "urllib.request.urlopen"
+      }
+    },
+    "9c482eec20d17ec76b47faeb12b4aa093cc0629179d5f40bd302ec8cf416e2c2": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "690e6d8c7d71793cdfee54c1895477c1c9cc687f59f054ebd0d62d4ff2a9993a",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "builtins.__import__"
+      }
+    },
+    "9d16b5a2c61909b494787bcaee7e2d70b3d1f95a24ffba252601b1fe95867b12": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.find_helper",
+      "site": {
+        "call_sha256": "6417757d46e6767c264da38bf17c86ec0e168af7375af6bfffdfb47f9e260cbd",
+        "kind": "child_process",
+        "owner": "<module>.find_helper",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "9d5245620cacd542a6da2fc666bb6b996d3c69241ebc51f42dba97a0eb57fb3f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.ps_sample",
+      "site": {
+        "call_sha256": "65210ce59967d6ef30f80ebd14cc61e4f0374666b7325fe62a155254072787ef",
+        "kind": "child_process",
+        "owner": "<module>.ps_sample",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "9efe6e400a352a5c11b536f14719b6917b9eb343d3fc70e5991682753e77cf90": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.db_provenance",
+      "site": {
+        "call_sha256": "db797196adee360766d8384d2e435c018f484af94f2c629f3d49429f219d7c88",
+        "kind": "generic_send",
+        "owner": "<module>.db_provenance",
+        "path": "scripts/sprint_gate.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "a02ded347dbbdc50a0bbaed42dab767dc2a8e2074acee991df693ac64fc73242": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.run_with_timeout.target",
+      "site": {
+        "call_sha256": "90989ee2cbef7ef8edbbb8fd510885e13fcf757ba0b33bd289f2c39dc18562c3",
+        "kind": "generic_send",
+        "owner": "<module>.run_with_timeout.target",
+        "path": "hooks/brainlayer-prompt-search.py",
+        "target": "results.put"
+      }
+    },
+    "a0e41b553c0c9c33422f94d6cc520a01436fad65a9427bc596cfb43dc9756d03": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/cleanup_stale_mcp.py <module>.get_mcp_processes",
+      "site": {
+        "call_sha256": "22fe977ed5b5da8a2bbf1b7246c560360979b8c267a96e17e7fbc00449dc2db5",
+        "kind": "child_process",
+        "owner": "<module>.get_mcp_processes",
+        "path": "scripts/cleanup_stale_mcp.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "a0f252469a3e4e5a6476446446a5b731f0be64cef17a99b37735906c91b1904e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
+      "site": {
+        "call_sha256": "4b3b46adafe36bdcfee74e8c7376b0c77aab17b561f439abdf13ee94dbd6061c",
+        "kind": "generic_send",
+        "owner": "<module>.verify_mcp_transport",
+        "path": "src/brainlayer/setup.py",
+        "target": "send"
+      }
+    },
+    "a11d4345a12f0fe7569528d49d9ce8522e1194eae6579dd71a86b36515b492e4": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>.replay_pre_push",
+      "site": {
+        "call_sha256": "e73393433d017ba00651e28144dffa9d174c009fe7052cbb472b8beda6d24462",
+        "kind": "child_process",
+        "owner": "<module>.replay_pre_push",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.run"
+      }
+    },
+    "a148e9c21bd5d9b213949123d3595c100fea040e92864c0c2e7fb4a565376720": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.cleanup_stale_mcp",
+      "site": {
+        "call_sha256": "e7e9c40e0119e9f4421551fd020682c9bc05bb5ebe0805993b6090b4ef224154",
+        "kind": "child_process",
+        "owner": "<module>.cleanup_stale_mcp",
+        "path": "hooks/session-cleanup.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "a307dcc8458988ecf547cc5fa24f62df86734596ba3ca9d14896ea2dddbf4df1": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "a1e62aff4fbc8934759d9b6429a137fc04919a84ef7466684ef6c8c9b40953ab",
+        "kind": "child_process",
+        "owner": "<module>.reindex_episode",
+        "path": "scripts/diarize_episodes.py",
+        "target": "subprocess.run"
+      }
+    },
+    "a479729af0d59b85b2a485823834511fa433e37765a5c41bf5e1a0fc93de2190": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.cleanup_stale_mcp",
+      "site": {
+        "call_sha256": "7da08a5d9068bdd2207d64327260a3175157e515f37fbc6dfc4cf5a67ef31b83",
+        "kind": "child_process",
+        "owner": "<module>.cleanup_stale_mcp",
+        "path": "hooks/session-cleanup.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "a49ffc62e9f98ba4c278979471dea6c23f23f53c57e91c582a48531abe6e72a7": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "df9c85562fc37b27faa5db639dd1d2be325fde3cba4a45b44018d9f83c3f7b17",
+        "kind": "generic_send",
+        "owner": "<module>._drive_put_with_deadline.perform",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "session.put"
+      }
+    },
+    "a5071046c464e0617a34b0c3cb5dc4d8a715363e6f57e8fd8b7e58c08bf82ed8": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "4ff52d3a3088a2a61ab9c1742e6f4ac63c09187bf6091f9a4fb69dd7559a9bb7",
+        "kind": "non_python_source",
+        "path": "scripts/generate-fixtures.sh"
+      }
+    },
+    "a5a95ab5b2e4445601fb6e909d58d73a65647d3630e6cbf1e152e25a470ac5e5": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/deploy_drift.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/deploy_drift.py",
+        "target": "import subprocess"
+      }
+    },
+    "a6778de69bab377b520f1872e023a0b11055fe88e79d2fe838273f8e3932c9aa": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "import socket"
+      }
+    },
+    "a69b44dbbfa761704031ac9b3be18192716f767bfb3005ebeb13b1edca0ef690": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/cleanup-profanity-chunks.py <module>.run_cleanup",
+      "site": {
+        "call_sha256": "8183d111887a148bedf4f460759ead6a0a9c525c03cfaa1d63817d59f421d7e6",
+        "kind": "generic_send",
+        "owner": "<module>.run_cleanup",
+        "path": "scripts/cleanup-profanity-chunks.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "a7b652380ad7ca586ab6ff4d20a7827225c89f0a8336295fd6cf806befc35f4f": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/launchd/throughput-watchdog.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/launchd/throughput-watchdog.py",
+        "target": "import subprocess"
+      }
+    },
+    "a7db365efd79fa3dd59d0dfd5a5c908255212ed0d4907abae0a44038f7dc24da": {
+      "non_cloud_purpose": "Retained local longitudinal analysis; Ollama restricted to numeric loopback, no proxies or redirects",
+      "site": {
+        "call_sha256": "7f6d2de520ba06bee6c9a0ce4b82e28e111014f95ae8adfe098303d46ce04b21",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
+        "target": "from urllib.parse import urlsplit"
+      }
+    },
+    "a7fae5234db1039296c960ffd772cd5b3e1e30bf3186d6402c5e6c8b5652210f": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/diarize_episodes.py",
+        "target": "import subprocess"
+      }
+    },
+    "a80d0c2bb8ee03a28e489515deec263193969bc793544fe414bc18770e0eef6b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp/search_handler.py <module>._forward_to_helper",
+      "site": {
+        "call_sha256": "ff98e41aa5e66f40e3fc286d1319b65c827cc2f6e6e9f9117d603aa499cedbdb",
+        "kind": "generic_send",
+        "owner": "<module>._forward_to_helper",
+        "path": "src/brainlayer/mcp/search_handler.py",
+        "target": "client.connect"
+      }
+    },
+    "aaec04afd5254f328e629432cdeb7e069ed9e6b8ed5a31bb42ff206c4dd08e0f": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/setup.py <module>",
+      "site": {
+        "call_sha256": "fcb956e81f69c700e1e270813fa8646a2f7c4a7af9f758ec707e2990bbb87cc2",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/setup.py",
+        "target": "from importlib import resources"
+      }
+    },
+    "aafcfae5bbbe76d4d193518eddf7c566d05d4dcbc743b5464e61a93598e2bb7a": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "5b5e2475e238f66b4b7e53bc61b9d3357bd5fdf86a044ca9d6f49f628f5f7d1d",
+        "kind": "child_process",
+        "owner": "<module>.verify_jsonl_bundle",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "abf1c9fa47ecc5a79385f9c45825af864d2a90e90d59c6fd85a90fc7d1863d22": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_status_doctor_cli",
+      "site": {
+        "call_sha256": "3899b3845012f8f19869b7df5299ca88bd9bdff27181bd12b6fb1df3ddee45e0",
+        "kind": "child_process",
+        "owner": "<module>._run_status_doctor_cli",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.run"
+      }
+    },
+    "ac2c7a44e2c20b4aa1592d8d661eb4f4b5d58784942df7da893c2ff106ee47b7": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.MCPClient.__init__",
+      "site": {
+        "call_sha256": "93eb01deff79390704ae98953dd2478f5a201c84d8edba7f30c4cdf64f060758",
+        "kind": "generic_send",
+        "owner": "<module>.MCPClient.__init__",
+        "path": "scripts/sprint_gate.py",
+        "target": "self.sock.connect"
+      }
+    },
+    "ad6522adc4bc39857a4d36d679d90aa650e061e10c9246d5289d36ffce90ccd9": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "cad5df9d29dba97d214bc69e2ff60ce46282049c1749ffbb51497db6b6257718",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "add5f30ae4d78c5a32561b87d5e8834c45dec81a235d1acf1c6bfe9825615c89": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "0c6de6e8c18604a75b6405a8bca55d88f47b991a56d837475ff535c37adc27fe",
+        "kind": "generic_send",
+        "owner": "<module>._drive_put_with_deadline.perform",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "outcome.put"
+      }
+    },
+    "ae24bb8b2d63840b8ef6b219fa41d7bb9925743a9cd137c207a0822add866e6d": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/post-commit.py <module>.main",
+      "site": {
+        "call_sha256": "5624b6dffc022439a7c7d0d0544953918a547d7385f2f831c1e9b47b73f2a6e2",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "hooks/post-commit.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "aed9b5dea2412a92d4cd4b5defb4ace626bbe2554309872f7bd632c1e5678598": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "376f80442594e8524cbfa22e160cafb6ecd60687503f971cf503081dce36cb42",
+        "kind": "generic_send",
+        "owner": "<module>._send_brainbar_json_request",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "client.sendall"
+      }
+    },
+    "af590c54442cf25c4ed1157f5d66ff254a54096665634c7226085f979d90dabd": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci/run_with_deadline.py <module>.main",
+      "site": {
+        "call_sha256": "54673820a88319d8d6c261ba8467b7faa5d642ef1936b173f3c4ca4da269ee8c",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ci/run_with_deadline.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "af643a38e080a55652075b8ecc63c50660aafa4e1321ca4b9e6d6ff96606daf9": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/reembed_bgem3.py <module>._open_apsw",
+      "site": {
+        "call_sha256": "8183d111887a148bedf4f460759ead6a0a9c525c03cfaa1d63817d59f421d7e6",
+        "kind": "generic_send",
+        "owner": "<module>._open_apsw",
+        "path": "scripts/reembed_bgem3.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "af68fae6b69d4d59350e7bb31fbe2b41463548e2e418d6abfb7e796a01368972": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import subprocess"
+      }
+    },
+    "b01f941f773c592d9c51561ca7deb43c5c18d73a127815c50e8195030b26c29d": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/config.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/config.py",
+        "target": "import subprocess"
+      }
+    },
+    "b0c6e48d86b1499cd5ee0a1e7c1270aeed6f918904e265cf7058bc10b82c8812": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>._sqlite_pragma_check",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "b2b851040fd90aaf8421ca58f0d2031f3424a28c7eacade3996819ed25390529": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/retag_t3_app_provenance.py <module>.rollback_t3_app_chunks",
+      "site": {
+        "call_sha256": "3cc1855f59227043c8393ca1f05b0109581bf2b46a2b1e89ed071a02f9b609a4",
+        "kind": "generic_send",
+        "owner": "<module>.rollback_t3_app_chunks",
+        "path": "scripts/retag_t3_app_provenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "b3c5692d01029a2af49f22a547fe7cd3b2f6460e9bc1326ccf810ded1e88b434": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.check_mcp",
+      "site": {
+        "call_sha256": "e618badcbd0b7f90e65eb9e8c34952f68acee8ca8f4dc7ed26a4c3dd904a29c6",
+        "kind": "generic_send",
+        "owner": "<module>.check_mcp",
+        "path": "scripts/sprint_gate.py",
+        "target": "client.request"
+      }
+    },
+    "b5370172bcd7be633f6f921a7f3711eac5441176182f0890c7ab7ffa3675781b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/retag_t3_app_provenance.py <module>.retag_t3_app_chunks",
+      "site": {
+        "call_sha256": "bfb8f409e3ccbe7c2ab695ecafe23765759f48258a9c2ce055e5030867832648",
+        "kind": "generic_send",
+        "owner": "<module>.retag_t3_app_chunks",
+        "path": "scripts/retag_t3_app_provenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "b61530563b3442fc0ca7ad06d6d4fffb44b4a4cecbada58ccff0b3f30cdf8a02": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/kg_judge.py <module>._read_repo_evidence",
+      "site": {
+        "call_sha256": "66b1e120ae7cf93207988d45f9919e06cb5d62c36859734fe82c38dc2ed0834d",
+        "kind": "child_process",
+        "owner": "<module>._read_repo_evidence",
+        "path": "src/brainlayer/kg_judge.py",
+        "target": "subprocess.run"
+      }
+    },
+    "b8776f9dd67b2bd7925b2dc3158939941eea4c9697c21663c9df02ddf6c1a71f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli_new.py <module>._has_readonly_schema",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>._has_readonly_schema",
+        "path": "src/brainlayer/cli_new.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "ba6e61a03dbe573db8b9952b30d1e5eb53d6a8f3ee1313d291a74f0e4d95d6b9": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/brainbar_hybrid_helper.py <module>",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/brainbar_hybrid_helper.py",
+        "target": "import socket"
+      }
+    },
+    "ba70d7d501d1205f71aaaf925a8fe0fca8e6188491a2c64ef55509de20ba8376": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "d58f4a781306aa988c2a48663bae1b9c9f8057e04c8f1f102adaea8473a930a5",
+        "kind": "import_binding",
+        "owner": "<module>._get_ssl_context",
+        "path": "scripts/index_youtube.py",
+        "target": "import ssl"
+      }
+    },
+    "ba90ca97784e7cbe8d51b579ad35d6dc500bf0a3cbd8a12fc725bdab8de2166b": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.consolidate",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>.consolidate",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "import subprocess"
+      }
+    },
+    "baf511dcff573e55fb6cbf3220478b8cba3f3198aace26afc8214ffd29de0470": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "537907594752293ae4ed8a1e95ae04e2a9bad72fc28d553a249740c8f68d23dd",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "bb4feb9ffc2955a688b09d655d3f2279767270a3e33df698a382b4edd357d988": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "61f55b3f4c135ecb5fa9358b3b20838721c1a91f7acb58a9b3ff1164839b5e25",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_retention_invariant.py",
+        "target": "from urllib.parse import parse_qs, urlsplit"
+      }
+    },
+    "bb5ffddc885ce4e7034b87c30d6b5fb12f394737410d438646725b0fbd9a2285": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/agent_enrichment.py <module>.enrich_agents",
+      "site": {
+        "call_sha256": "8183d111887a148bedf4f460759ead6a0a9c525c03cfaa1d63817d59f421d7e6",
+        "kind": "generic_send",
+        "owner": "<module>.enrich_agents",
+        "path": "src/brainlayer/pipeline/agent_enrichment.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "bc611dc9d29a86fc3c2c956d9b55986067fcf18b9ab88ac12982e563395a4cec": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>",
+      "site": {
+        "call_sha256": "7dc0ade10c8f9b08ffd41aad547a37a2912e402d82c1a7fbe3401e7c155f336d",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "import socket as socket_module"
+      }
+    },
+    "bcd5b1258d871efc6bb5be61f65ccaa77b5a624bf8da242cfb262803c88b6814": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.main",
+      "site": {
+        "call_sha256": "8b40476a34e79505bbc35e6f1fc6e29aaa3cf8e2659a44028b6d0f090cab35c0",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "hooks/brainlayer-prompt-search.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "bdc0d591f1446f10db50820e0125ce44f106be0547f408158836b6396c39ca1c": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-session-start.py <module>.main",
+      "site": {
+        "call_sha256": "8b40476a34e79505bbc35e6f1fc6e29aaa3cf8e2659a44028b6d0f090cab35c0",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "hooks/brainlayer-session-start.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "bdd62edcb4b7fb8e8fef6d302ad1e77b716d4c0ad4652a5db9d5e02005ac4283": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.helper_python",
+      "site": {
+        "call_sha256": "5b5f73fb1ac86427a80e4d8b6630d994853c2444fb288271d81ef6779f31e5b7",
+        "kind": "child_process",
+        "owner": "<module>.helper_python",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "be2e7bf812f360e6552d1d7ec3ba7c5f5ab9cca8fc768123fbb94c51734e56db": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
+      "site": {
+        "call_sha256": "e2330791357034316d92a5a68ed8f9826f6bba239331c407c3756658a12ff6f2",
+        "kind": "generic_send",
+        "owner": "<module>.verify_mcp_transport",
+        "path": "src/brainlayer/setup.py",
+        "target": "send"
+      }
+    },
+    "be4ccac9b71f610e4f986f8d2c0c3eaccbe0f2991d961d61d395c1ca2c6e6e16": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/quarantine_noise.py <module>._connect",
+      "site": {
+        "call_sha256": "8183d111887a148bedf4f460759ead6a0a9c525c03cfaa1d63817d59f421d7e6",
+        "kind": "generic_send",
+        "owner": "<module>._connect",
+        "path": "scripts/quarantine_noise.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "bed6903be866870ca1217f648d3d1b4b60ea37a5e916c9664536cd4efdbb177a": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/import_sweep.py <module>",
+      "site": {
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/import_sweep.py",
+        "target": "import importlib.util"
+      }
+    },
+    "bedb851f964db3ad17f6f8625da66cb6230603b36c2d89974a67c140926f696e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/import_sweep.py <module>.run_target",
+      "site": {
+        "call_sha256": "19b855006497c6696376a466d2e124b524ad1000d3aafa9c7c18fe0386f66116",
+        "kind": "child_process",
+        "owner": "<module>.run_target",
+        "path": "src/brainlayer/import_sweep.py",
+        "target": "subprocess.run"
+      }
+    },
+    "bf289bc2be43ce119e11624fa54df9e71204bf1d338865cf68234707a07fc37d": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "98779b142140209f35e34cf5639ced616560abf7f8c0f8e1aa3f77155604066a",
+        "kind": "child_process",
+        "owner": "<module>._gunzip_test",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
+    "bf4fb70996cfb6f64cfe5814ea8a81bbf2c3b7b0ac47839dc61da38febb1c62b": {
+      "non_cloud_purpose": "Retained local longitudinal analysis; Ollama restricted to numeric loopback, no proxies or redirects",
+      "site": {
+        "call_sha256": "6a8485af6d9bad7be01cd2fb88106961f3fe24337dd63d22d5380ca6a0804fa7",
+        "kind": "import_binding",
+        "owner": "<module>._ollama_generate",
+        "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
+        "target": "import requests"
+      }
+    },
+    "c20d960bbd50f00b2160f5f55dfa8eb308fed6bcda4901cff1816d186605f4cf": {
+      "non_cloud_purpose": "Private early guard: missing lscpu returns its real unavailable-capability error without launching a child; all sends still refused",
+      "site": {
+        "call_sha256": "866a97c0a29d398dc2bf8a74409548dccd9bb5221f4bf0f58ad1a37ef83e5260",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_guard.py",
+        "target": "import importlib.util"
+      }
+    },
+    "c3f31975fdedf30b5dd9253999a17e722206e3420e19e1403512910dc958d366": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/mcp/_shared.py",
+        "target": "import subprocess"
+      }
+    },
+    "c460969638192df7a669d567d0b379f028bc748458ddef31e80d55171a279a02": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.helper_env.command_line",
+      "site": {
+        "call_sha256": "b12382334735d928b2d71ec58ed94bb544398402267e2b09482dd18e1e74a784",
+        "kind": "child_process",
+        "owner": "<module>.helper_env.command_line",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "c565669c44ecfd5ff27d100737fa63cf71e374db4cd0a1baf5b2892eaac0f77b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cloud_backfill.py <module>.ReadOnlyBackfillStore.__init__",
+      "site": {
+        "call_sha256": "a10c90848d53645f45f81c7a319490422ea26e67c8004642fb6404fb8294010f",
+        "kind": "generic_send",
+        "owner": "<module>.ReadOnlyBackfillStore.__init__",
+        "path": "src/brainlayer/cloud_backfill.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "c5f4e312874fdb4f9ab464de66c23b53b5bd72fa98c548fef2c29d1d294e201b": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>.run_command",
+      "site": {
+        "call_sha256": "bf7b2a20e825160ac8d2e5194ccb170b2778d6caaeb4c518e69727292cf16789",
+        "kind": "child_process",
+        "owner": "<module>.run_command",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "c614ab7823c9c4b0fde1c0432db80cf962ed22654b87111b7a6fe3a4da300b8a": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "3dc59a073f7f07d41e731bc82bf61a66eb50231dee6c41ae655e26f6215979a4",
+        "kind": "generic_send",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "sock.sendto"
+      }
+    },
+    "c63154b2a0c2b96a56aa5228590d1a56a1af46e7f618fac126b7578857684741": {
+      "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
+      "site": {
+        "call_sha256": "6e0f76526c6d4c47fb54fd80b1a9075af18e040d8abcba786757ca55a9676c61",
+        "kind": "import_binding",
+        "owner": "<module>._fetch_vtt_transcript",
+        "path": "scripts/index_youtube.py",
+        "target": "import urllib.request"
+      }
+    },
+    "c65893f306c8cf9f783a47143b9591ba419754d0b7805289dac8f2c878d829f0": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/style_index.py <module>",
+      "site": {
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/style_index.py",
+        "target": "import importlib"
+      }
+    },
+    "c7fdd0d8c183be0d0888c0b901685e6babaca0fec219247fe80efa9d7adc93ba": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>.socket_owner_binary",
+      "site": {
+        "call_sha256": "aafd32ff1236602144601c074094bb737325a767dbddeb8a3cfd7960c80d04c8",
+        "kind": "child_process",
+        "owner": "<module>.socket_owner_binary",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.run"
+      }
+    },
+    "c926b94f1f065087541cf52f53244e67a4610a51a96b2fd6a7dd6ba3eb2edb13": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "3a2e93b43f7991a7c6248afd026ab5cd3fb711379de5826194b48c8be8e47616",
+        "kind": "child_process",
+        "owner": "<module>.verify_jsonl_bundle",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "ca6e8ac93b9deaa32ef4c0cf8c423094e192dce322bc02fb37d25c89e3004999": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/post-commit.py <module>.main",
+      "site": {
+        "call_sha256": "c84fd9c6a01b3ca0dafd2c16a6d4345e3beccc77670cdd4804fe3d4c20fc3d40",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "hooks/post-commit.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "cabc97733f97f9ba3008ac7c4f72eb8965265c2ab121d6c5dfd7cd697580ae65": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>._load_entity_cache",
+      "site": {
+        "call_sha256": "7e5ae260ab334fb695a29f138b64d456a232938e8825de52a1f166b6a09e2677",
+        "kind": "generic_send",
+        "owner": "<module>._load_entity_cache",
+        "path": "hooks/brainlayer-prompt-search.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "cc8148484d0ed72743624b0b1851c4eb1ba3285b8efe7d45c8215f99e06e5e94": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/kg_judge.py <module>._connect_readonly",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>._connect_readonly",
+        "path": "src/brainlayer/kg_judge.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "ccf853038cea4cb534da6182e5863bddb97fe6ca28802d9e99c679a78f2da44e": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_cleanup_dryrun.py <module>.main",
+      "site": {
+        "call_sha256": "499547d7def8f3efb0aaf60bec2d56f61650f52687f11f07c47377faa1cf05ec",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "scripts/kg_cleanup_dryrun.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "cdcc63addff8f040fb82a3c4166f155404fec214eb914c2ebe2ce1edee9d532a": {
+      "non_cloud_purpose": "Retained module dependency binding: hooks/post-commit.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "hooks/post-commit.py",
+        "target": "import subprocess"
+      }
+    },
+    "cfa57df0265aa2cf5b087e6d11cb904663e9b7919f10632de919f04d7fcd3779": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>._default_command_runner",
+      "site": {
+        "call_sha256": "5d639c991fd2ed6c4f1eaa7a99b48eb362ae1fbb115e0da01e0f5ac35847af41",
+        "kind": "child_process",
+        "owner": "<module>._default_command_runner",
+        "path": "src/brainlayer/health_check.py",
+        "target": "subprocess.run"
+      }
+    },
+    "d06212e49c5343c03fc699c334c6f9c938ef9ec6418d6846f68fee6dca3d4e8a": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/cli/__init__.py <module>.hooks",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>.hooks",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "import subprocess"
+      }
+    },
+    "d15252b9d7aa433c1a2937863887aaabad41d7a86bbe38eacffb0460f243f035": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/mcp/_shared.py <module>._search_store_checkout",
+      "site": {
+        "call_sha256": "e4800651674a270fb28e1a17cda08d86fb7af6119f1c35a4ca4f61a2f44969ed",
+        "kind": "generic_send",
+        "owner": "<module>._search_store_checkout",
+        "path": "src/brainlayer/mcp/_shared.py",
+        "target": "_search_vector_store_pool.put"
+      }
+    },
+    "d1d09895f955fbf84c4be207a7765939fcae0d6e4bf1c3fcc7611ce293a422d3": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/config.py <module>._resolve_op_read_value",
+      "site": {
+        "call_sha256": "033566c496fc4486b1533d1077356682b8b65f18c64719d413c01c17e8f51f59",
+        "kind": "child_process",
+        "owner": "<module>._resolve_op_read_value",
+        "path": "src/brainlayer/config.py",
+        "target": "subprocess.run"
+      }
+    },
+    "d2e907c604fea6a6db78faf2f7774c5bc6910cf7f8b2f88d3c40fe34983a00bf": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "b90bce92982a5cbeb7e53c21eeb7ffa200f3bd274eab65d7cf015d0b182dc036",
+        "kind": "child_process",
+        "owner": "<module>.snapshot",
+        "path": "scripts/retirement_artifact.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "d32838d57b6036343c1b6d487ac4b43cbe60ce9d8aeda07fbdb0d31b269d0532": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ci_ratchet_table.py <module>._git",
+      "site": {
+        "call_sha256": "4d7e95131d42a251964c79444988bf3a086c38f104f3bebb40d083892a4c9214",
+        "kind": "child_process",
+        "owner": "<module>._git",
+        "path": "scripts/ci_ratchet_table.py",
+        "target": "subprocess.run"
+      }
+    },
+    "d7a13d716b3275ee778327bb991a35a115eed80fe0a00f162e852e8e138624ff": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/pipeline/semantic_style.py <module>",
+      "site": {
+        "call_sha256": "9c65a885b9029568a3c53a3911317f92d78dc023d1f9969a0efb67ad9f436f31",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/semantic_style.py",
+        "target": "import importlib.util as _importlib_util"
+      }
+    },
+    "d86e7eb6ae85d044634d31012fb19c7630b0bceba2d94580aca2809f640dab81": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "0bbd9bdfa71ce577b1eb565915d12997aaa1df8469e6d8e97497907a3313be38",
+        "kind": "generic_send",
+        "owner": "<module>._drive_put_with_deadline.perform",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "outcome.put"
+      }
+    },
+    "d8902d8a4ab01e02355a12a4bd2e8e5800ad46f003b82816e9cd8b730a93a531": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/retag_t3_app_provenance.py <module>.retag_t3_app_chunks",
+      "site": {
+        "call_sha256": "a0e3ac87abbbc206887be7994a42730236616f008f4831362a866c2a50ec662e",
+        "kind": "generic_send",
+        "owner": "<module>.retag_t3_app_chunks",
+        "path": "scripts/retag_t3_app_provenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "da267e005f503413fc43e4356b80da77dabcc3f4fc7ff0db5ce5b317ac2e44b1": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/tag_normalization.py <module>.taxonomy_git_sha",
+      "site": {
+        "call_sha256": "ab960e07e4c36fd719a1f29eb12f0b77df5e7111a4d96a7df479fe9e360f13dc",
+        "kind": "child_process",
+        "owner": "<module>.taxonomy_git_sha",
+        "path": "src/brainlayer/tag_normalization.py",
+        "target": "subprocess.run"
+      }
+    },
+    "da8a2b3ed55829c503b889ae4f07d6d57af82eb08d29f8fe620fc8b940bd49b3": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/archive_collapse.py <module>._detect_git_sha",
+      "site": {
+        "call_sha256": "32edea5e87495251c69b02b354110f0e99929d72a1c804edceda2aea75428b1b",
+        "kind": "child_process",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/archive_collapse.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "db97b9ce7920e3c0f4edb293648b881f444d167786c82b1cfa512d3cd89ac8da": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "ea16204f949e93abb8443713e18c705998a9e493a99ac344f135ad355bf3c33c",
+        "kind": "generic_send",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "httpx.Client().send"
+      }
+    },
+    "dbe65e09e6f75cd764e75c871988f797270a353bb00b81c5b340d375a89a72e1": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
+      "site": {
+        "call_sha256": "36b833c8628f2aa1f0fc019165f776aaa8edd62af930b00bf70dfd8df837ba0b",
+        "kind": "child_process",
+        "owner": "<module>.verify_mcp_transport",
+        "path": "src/brainlayer/setup.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "dc39cf809d91550920bc9cf822621f7a2520f875e533a4c1cb41e94b50b581c8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._verify_search_latency",
+      "site": {
+        "call_sha256": "8b40476a34e79505bbc35e6f1fc6e29aaa3cf8e2659a44028b6d0f090cab35c0",
+        "kind": "generic_send",
+        "owner": "<module>._verify_search_latency",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "dccc1f26c2c087955ff1165fe8b3852ad9abc565b2fd71d6c3e1a9f89f4e5eef": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.helper_started_at",
+      "site": {
+        "call_sha256": "54ac187ae244dc9587ab9b97b57e1086f1d611ffdb6f41a1a875b1a09896a14d",
+        "kind": "child_process",
+        "owner": "<module>.helper_started_at",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "e1da2d586c38446168d11a75e953d137bbf712a97b464026686b7594365e1c61": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/code_intelligence.py <module>._pid_start_time",
+      "site": {
+        "call_sha256": "e412c71ccf6a4fae8d3881ae50ec7d498e20eff9aadd611732d3e5c35402f143",
+        "kind": "child_process",
+        "owner": "<module>._pid_start_time",
+        "path": "src/brainlayer/pipeline/code_intelligence.py",
+        "target": "subprocess.run"
+      }
+    },
+    "e201ff3b666e0d349fd68547f6139243594c3283c2d792d5267d5d81e53b9dd2": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
+      "site": {
+        "call_sha256": "f121cfef57a60c3c07069d8bae3668395532a4226ece43b6441cd266a0b64a8c",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.controls",
+        "path": "scripts/retirement_probe.py",
+        "target": "builtins.__import__"
+      }
+    },
+    "e23307232d30ae64f6ace0d5a9341c687e12ac54a4c3cf347fd7c17135db7992": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp_stdio_bridge.py <module>",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/mcp_stdio_bridge.py",
+        "target": "import socket"
+      }
+    },
+    "e5e8028f85119139fa276395b4258dd799409f3924fbc88982b2168985dce3c3": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/style_index.py <module>._style_dependencies",
+      "site": {
+        "call_sha256": "9bbbda3151ae64200d2cc83fd4b6e336afbcd38e7f059bdb9db432dbf91e98f2",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>._style_dependencies",
+        "path": "src/brainlayer/pipeline/style_index.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "e78c21d92b37be23eba1a89c3a97b1a18771a3b6d1b0c48bc37ded6d11bb27a4": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "53847d00a54b40205c6049114a05ad52580987cd9bc8c02895bc5f6b24bb6d32",
+        "kind": "child_process",
+        "owner": "<module>._icloud_item_state",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "e7ffc8074bdc27c60298bc17b754b873149da3186dae6396cf7f20d72dbc880d": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "babe2170ce73b56a3fc58859ab187c046bf37865f7568a1fec2dc9fe12ee16a0",
+        "kind": "child_process",
+        "owner": "<module>.build_backups_section",
+        "path": "src/brainlayer/observability_backup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "e806a19e306aa579f83109ecb6256d32e5021ed14e65a86bf54fd38ec993af79": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/git_learning.py <module>._iter_commits",
+      "site": {
+        "call_sha256": "1ca21944147d115a2c44d2015b96a2480f1882fa94b1a5917278194b009b7454",
+        "kind": "child_process",
+        "owner": "<module>._iter_commits",
+        "path": "src/brainlayer/git_learning.py",
+        "target": "subprocess.run"
+      }
+    },
+    "e8089a6daaaff026a92574e45639e9a1d00982b9d96c26f5e8f88ba3566eab2f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/index_completeness.py <module>._detect_git_sha",
+      "site": {
+        "call_sha256": "1fd0bda0e69a1d4bb90ab75fa7a711e4dcb25494f3bfd7e2f7383ad0dcd66402",
+        "kind": "child_process",
+        "owner": "<module>._detect_git_sha",
+        "path": "src/brainlayer/index_completeness.py",
+        "target": "subprocess.run"
+      }
+    },
+    "ea84f6d1cecc87fe4a368e41e5b4c5888161fb0999d8042713f13d95772f6e66": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_flag_batch.py <module>.main",
+      "site": {
+        "call_sha256": "499547d7def8f3efb0aaf60bec2d56f61650f52687f11f07c47377faa1cf05ec",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "scripts/kg_flag_batch.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "eaab538dc0a4d5cb2744a3016d16f6837ae516f45e0c1c5dbee5f5199334edf8": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "db82199611550bf5b1f12c8764f9c8871055bbc08f2f9f3eba2e1cc291662fc7",
+        "kind": "child_process",
+        "owner": "<module>._supervise_backup_process",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.Popen"
+      }
+    },
+    "eb383dc4d1dc91e9ba8553b0c1aef1db327d2a3c3ff714ae4d80b88b8df1e5f5": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/doctor.py <module>._ro_conn",
+      "site": {
+        "call_sha256": "98e7c59054b30966c6b8ddfd4412a23b25c6f2455a0fc787aec6d7cc8d28f27b",
+        "kind": "generic_send",
+        "owner": "<module>._ro_conn",
+        "path": "src/brainlayer/doctor.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "eb50dea252a1dc356716996f2e129288df1b8879e176b2c5d38ad4182dd9d7ce": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/index_completeness.py <module>.main",
+      "site": {
+        "call_sha256": "ec6f8343c555a2775d4f32014005c3061a686cca2f14669f842093902054d4d4",
+        "kind": "generic_send",
+        "owner": "<module>.main",
+        "path": "src/brainlayer/index_completeness.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "ec3ce1d0d07f150fa4931bf0e40cbd40ee4043edf0da35196f8a1fc3a0188ef9": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "20dd306b163f704835a4d8a0b38ad62a3a816de1a848abef67a957450ae3afab",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_probe.py",
+        "target": "import importlib"
+      }
+    },
+    "eeafab348ca471c014c0ff0b0a02740c232da06df354b3786ba36f9f6c65a8ef": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "5b9758f0491c349e9f47fe9d83ca05783f57a236e16932fdfb0ca40fdd500bc8",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.run",
+        "path": "scripts/retirement_probe.py",
+        "target": "importlib.import_module"
+      }
+    },
+    "ef51606440448632ea342fa0d256ffa75f29405ebfcc6b75af1bdf68b01d732f": {
+      "non_cloud_purpose": "Private retirement build/probe/validation harness; blocked transport controls and actual installed local fixtures",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/retirement_native.py",
+        "target": "import subprocess"
+      }
+    },
+    "ef6e2467162e748e3a0d2ff43d8b9a08d067d7502badaedc34471cb37305acb8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/ratchet_quiesce.py <module>.main",
+      "site": {
+        "call_sha256": "eb193e07f8ab3e3ac13577fbd16853e5b1cdacbecb5cc3825a2b5d8aa7a3d045",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "scripts/ratchet_quiesce.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "eff1534f83d2b845bd7c63aa0f517a01d89dd81e456f12d11e557772be9fdb4f": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/post-commit.py <module>.main",
+      "site": {
+        "call_sha256": "aadfdb72843c1f401bc3c5866b332f455b012d9da7849e1fe82de383fe6a0757",
+        "kind": "child_process",
+        "owner": "<module>.main",
+        "path": "hooks/post-commit.py",
+        "target": "subprocess.check_output"
+      }
+    },
+    "f057e3cc75673bfb05d58c9b1b381c16787856c989d5b99a22ab3c3b082167bb": {
+      "non_cloud_purpose": "Read-only evaluation observations, not a model generation API",
+      "site": {
+        "call_sha256": "9fa690f7580cb48f7c6caf208c3aeb9c931f2db5e446918aede4fa98f6f42d60",
+        "kind": "generic_send",
+        "owner": "<module>.PhoenixRestClient._get_json",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "urllib.request.urlopen"
+      }
+    },
+    "f090101d5077fecd7f944369c7a9d3fd418e46442efe9db55b9f3aff547f5b34": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/write_queue.py <module>.WriteQueue.submit",
+      "site": {
+        "call_sha256": "5d89f93aae50c444b112cee14e538c2d76cf0efe3fa35af3159154e11894354c",
+        "kind": "generic_send",
+        "owner": "<module>.WriteQueue.submit",
+        "path": "src/brainlayer/pipeline/write_queue.py",
+        "target": "self._queue.put"
+      }
+    },
+    "f180996fcf4e66be613dcba188bcc334e19f816c5abaa9d9f6ab5531e4b40e16": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/derive_observability_goldens.py <module>._db_sections",
+      "site": {
+        "call_sha256": "faaa7c2de9dbd5a92aa9401a900c523bd14c337911fe31e9b2ea33a95ad75263",
+        "kind": "generic_send",
+        "owner": "<module>._db_sections",
+        "path": "scripts/derive_observability_goldens.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "f1ae97e9625f17d53a3eca29afaace56f617e5ef46431216dc8785f7379ab4d3": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/kg_promotion.py <module>",
+      "site": {
+        "call_sha256": "bca7e30a1e4a28d4d274b7904311bc9cb7326e7d73eaeb9605a3d767f74b1aa3",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/kg_promotion.py",
+        "target": "from urllib.parse import quote"
+      }
+    },
+    "f1ceb6932bf2c6da98ab76b44cc84f053aefa186260c217811a345306f03a495": {
+      "non_cloud_purpose": "Read-only evaluation observations, not a model generation API",
+      "site": {
+        "call_sha256": "532ccfe0e99dc9f7dd9a19d39a519260f8bf1f46371d3201bb6e5911bc220869",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/eval/phoenix_gate/phoenix_client.py",
+        "target": "import urllib.error"
+      }
+    },
+    "f280daab567b90239f3ba6799c15f1a31f403504ba5b9e47d1b00fb6cca32fb7": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.working_tree_provenance",
+      "site": {
+        "call_sha256": "1845dec2659683e7f4eb9d863b94e752fe0be8ef19152a6433e317490d05eae3",
+        "kind": "child_process",
+        "owner": "<module>.working_tree_provenance",
+        "path": "scripts/sprint_gate.py",
+        "target": "subprocess.run"
+      }
+    },
+    "f2cd62cfb1f28d9c20e71de5ec0c970b3a6b9cca3e3a80deee341510cdc625ce": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/fallback_replay.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/fallback_replay.py",
+        "target": "import subprocess"
+      }
+    },
+    "f2d188bb875af1b7187ac1e6f7529de12e390985f4b462fae6e83b7d06ea1e1f": {
+      "non_cloud_purpose": "Local optional embedding-package availability metadata; find_spec never imports or executes a model client.",
+      "site": {
+        "call_sha256": "92511dd6efab44d6f1519ed7569c0436b726053ff867b420db9c1266f42a8b49",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/pipeline/style_embed.py",
+        "target": "from importlib.util import find_spec"
+      }
+    },
+    "f386188d7f0fc6b517c7011f286de7c0da3b2c26c107b332ed970e7f6209cdf8": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/extract_whatsapp.py <module>.extract_whatsapp_messages",
+      "site": {
+        "call_sha256": "d7c8f92185c7d7a3310c38077dbc7809651d8bb5b60722dad01ef0ccdf26de8f",
+        "kind": "generic_send",
+        "owner": "<module>.extract_whatsapp_messages",
+        "path": "src/brainlayer/pipeline/extract_whatsapp.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "f43238c6c57ba20062361bbebdbe5beb276bd7c4bf9ed39dd26c9d9e0d425baa": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/release_tag_contains.py <module>._run",
+      "site": {
+        "call_sha256": "15185970fce84f524bc19b368ae6643f303e5aabd9c30537deefae3bbb9d2779",
+        "kind": "child_process",
+        "owner": "<module>._run",
+        "path": "scripts/release_tag_contains.py",
+        "target": "subprocess.run"
+      }
+    },
+    "f6b5e021dfc704712932e71df0256b4372cda72151a8a5a005c1da06c9a19b50": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_entity_dedup.py <module>.clone_kg_subset",
+      "site": {
+        "call_sha256": "cf84c78471be4f6546fd338733c94579bcc637dc30e69a15c26964e1dd951cfb",
+        "kind": "generic_send",
+        "owner": "<module>.clone_kg_subset",
+        "path": "scripts/kg_entity_dedup.py",
+        "target": "sqlite3.connect"
+      }
+    },
+    "f780066f88823951db15ddcf6efc67992a5d7a847b568114dd82fffea3efc9ec": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.install_launchd",
+      "site": {
+        "call_sha256": "35ed636c56a3de3fe6428da061c6e62b150d29ad5ad04e89097efa4b79522919",
+        "kind": "child_process",
+        "owner": "<module>.install_launchd",
+        "path": "src/brainlayer/setup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "f7dbcb00cb0143c66eec160a222f62d7ba48405ef1502c0aaed8153c3cbd226a": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._git_merged_head_sha",
+      "site": {
+        "call_sha256": "accd91c9b8051874959563cd098bef23cf773dcf73f5c4919de74a9fa360fcb5",
+        "kind": "child_process",
+        "owner": "<module>._git_merged_head_sha",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.run"
+      }
+    },
+    "fbf4405e1f058504bcc6cba1838751f128c782ac13c0fdc7c8519e80e9693703": {
+      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
+      "site": {
+        "call_sha256": "75956ec3b1368d67a281ce9dff2cf92c0e5d30a1de2adc0e3b703ca868fbc7d2",
+        "kind": "child_process",
+        "owner": "<module>._trash_icloud_item",
+        "path": "src/brainlayer/jsonl_backup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "fd03d5962e54721eacf6a27bfbe88ae9f41305171fc030530609a8f42e0b4432": {
+      "non_cloud_purpose": "Retained module dependency binding: scripts/sprint_gate.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/sprint_gate.py",
+        "target": "import subprocess"
+      }
+    },
+    "fe052773b013154e0b265f48da94b8e33bab53d829cd32606b221a09616a42fb": {
+      "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/archive_collapse.py <module>",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/archive_collapse.py",
+        "target": "import subprocess"
+      }
+    },
+    "fe0f775b20760e1870a27084d094aa11b341dab7559daeafc770dbcf30eb95a7": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "1894168298f47563bb47c74859867da43642f11bae3b5944d92c15ed6a85ffe7",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBusClient.swift"
+      }
+    },
+    "ff3854eb46455c3b00338247cee676d542a6dc04ac7f20f06cfa6a76f8028499": {
+      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.wal_checkpoint",
+      "site": {
+        "call_sha256": "a40fe2fb2ec54e3ee78edd4c0f0b671eb5b13a9c5cb865919f538ab0e5dc9d0d",
+        "kind": "generic_send",
+        "owner": "<module>.wal_checkpoint",
+        "path": "hooks/session-cleanup.py",
+        "target": "sqlite3.connect"
+      }
+    }
+  }
+}
