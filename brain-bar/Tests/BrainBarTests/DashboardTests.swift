@@ -978,8 +978,13 @@ final class DashboardTests: XCTestCase {
         let server = try brainBarSourceFile("Sources/BrainBar/BrainBarServer.swift")
         let daemon = try brainBarSourceFile("Sources/BrainBarDaemon/BrainBarDaemonMain.swift")
 
-        XCTAssertTrue(watchdog.contains("brainbar-ui.heartbeat"))
-        XCTAssertTrue(watchdog.contains("brainbar-daemon.heartbeat"))
+        let home = "/Users/account502"
+        XCTAssertEqual(BrainBarLifecycleWatchdog.heartbeatPath("ui", home: home),
+                       home + "/Library/Application Support/BrainBar/ui.heartbeat")
+        XCTAssertEqual(BrainBarLifecycleWatchdog.heartbeatPath("daemon", home: home),
+                       home + "/Library/Application Support/BrainBar/daemon.heartbeat")
+        XCTAssertTrue(watchdog.contains("heartbeatPath(\"ui\", home: NSHomeDirectory())"))
+        XCTAssertTrue(watchdog.contains("heartbeatPath(\"daemon\", home: NSHomeDirectory())"))
         XCTAssertTrue(watchdog.contains("SIGTERM"))
         XCTAssertTrue(watchdog.contains("SIGKILL"))
         XCTAssertTrue(watchdog.contains("launchctl"))
@@ -1043,7 +1048,8 @@ final class DashboardTests: XCTestCase {
                 staleTimeout: 45,
                 checkInterval: 10,
                 terminateGraceInterval: 0.02,
-                relaunchCommand: .openBundle("/tmp/TestBrainBar.app")
+                relaunchCommand: .openBundle("/tmp/TestBrainBar.app"),
+                expectedExecutablePath: "/test/TestBrainBar"
             ),
             processProvider: {
                 state.processProvider()
@@ -1055,7 +1061,19 @@ final class DashboardTests: XCTestCase {
                 state.recordRelaunch()
                 relaunched.fulfill()
             },
-            clock: now.clock
+            clock: now.clock,
+            ownerUID: 502,
+            processIdentity: { pid in
+                switch pid {
+                case 111:
+                    return .init(uid: 502, realUID: 502, startedSeconds: 1,
+                                 startedMicroseconds: 0, executablePath: "/test/TestBrainBar")
+                case 222:
+                    return .init(uid: 501, realUID: 501, startedSeconds: 2,
+                                 startedMicroseconds: 0, executablePath: "/test/TestBrainBar")
+                default: return nil
+                }
+            }
         )
 
         watchdog.checkNow()
