@@ -1698,14 +1698,6 @@
         "target": "self.request"
       }
     },
-    "63d44e1d2d79f0029e7d6dc4ccc839531d2d65adcd8b0374c89580326b5a17cb": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "41f551dfbae446e5179ad79901e51babbfef7e64ae11b030784ffe4e1400a93f",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
-      }
-    },
     "64e385b7c16a15500e8da69f55a524fd0ba589fd6a21509c08f1a71f681df1d2": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/check_observability_golden_inputs.py <module>._metadata",
       "site": {
@@ -3984,6 +3976,14 @@
         "owner": "<module>.helper_started_at",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "ddd936e9e9ff9760e48f3067450ce5413b177ea41842e5d446abb002d39eb432": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "26be85842e8e3d87daa6f6aaa71d092e99ecedd597afdf5c05d59ae16308958b",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
       }
     },
     "de00ab5510da36ed21719375c85227f6fce4dbaf23348c6e8d035077341724c0": {
