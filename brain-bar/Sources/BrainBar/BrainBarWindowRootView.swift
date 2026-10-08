@@ -3469,6 +3469,20 @@ private struct BrainBarPipelinePanelPreviewView: View {
 }
 #endif
 
+#if DEBUG
+@MainActor
+enum BrainBarPendingStoreQueuePreview {
+    static func make(stats: DashboardStats, expanded: Bool = true) -> AnyView {
+        AnyView(BrainBarQueueRail(
+            summary: DashboardFlowSummary.derive(daemon: nil, stats: stats).queue,
+            replayDebtBreakdown: stats.replayDebtBreakdown, censusText: "Synthetic census",
+            coverageText: "Synthetic coverage", watcherText: "Synthetic watcher",
+            compact: false, replayDebtExpanded: expanded
+        ).padding(24).background(Color.brainBarBackgroundBase).environment(\.colorScheme, .dark))
+    }
+}
+#endif
+
 private struct BrainBarQueueRail: View {
     let summary: DashboardQueueSummary
     let replayDebtBreakdown: BrainDatabase.ReplayDebtBreakdown
