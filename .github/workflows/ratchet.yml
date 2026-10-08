@@ -391,21 +391,46 @@ jobs:
             ${{ runner.temp }}/retirement-work/native-build.log
             ${{ runner.temp }}/retirement-work/build.log
 
+  no-enrichment-render:
+    name: BrainBar renders no enrichment status
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Build real synthetic render binary
+        run: swift build --package-path brain-bar --product BrainBar -j 2
+      - name: Prove retired reads absent and historical sentinel data retained
+        run: swift test --package-path brain-bar -j 2 --filter BrainBarNoEnrichmentQueryTests
+      - name: Render every no-enrichment surface
+        run: |
+          python3 scripts/brainbar_no_enrichment_ratchet.py \
+            --binary brain-bar/.build/debug/BrainBar \
+            --out "${RUNNER_TEMP}/brainbar-render-report.json"
+      - name: Retain synthetic render receipt only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainbar-no-enrichment-render
+          path: ${{ runner.temp }}/brainbar-render-report.json
+          if-no-files-found: error
+
   table:
     name: ratchet table
     # `needs` ORDERS these; the job-level `if` is what keeps the table unconditional. A skipped
     # `signatures` job would otherwise skip `table` too, leaving the previous commit's table
     # standing on the PR -- the same crime as printing an unmeasured number, committed by omission.
-    needs: [gate, signatures, quiesce, retirement]
+    needs: [gate, signatures, quiesce, retirement, no-enrichment-render]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth 2, so `commit provenance` can PROVE this checkout is the commit the run was
-      # triggered for. On a pull_request event the checkout is GitHub's synthetic merge ref, whose
-      # sha is on no PR page anywhere -- #759's table printed `13fa724278bf` while the PR's head was
-      # `4632f979` -- and the PR-head sha a reviewer can see is that merge commit's SECOND PARENT.
-      # At depth 1 the checkout is the shallow boundary and git reports it as having no parents, so
-      # the row could not tell "this is the right commit" from "git cannot say".
+      # UI, retirement and table explicitly measure the triggering PR head.
+      # Depth 2 preserves parent lineage for the existing commit-provenance gate.
       # ...and `persist-credentials: false` matters MOST here, because this is the one job that
       # EXECUTES code out of the PR tree: `python -m build --wheel` runs the PR's own build backend.
       # A persisted token sitting in `.git/config` would be readable by that backend on a
@@ -413,6 +438,7 @@ jobs:
       # the means to edit its gate.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -648,6 +674,14 @@ jobs:
           name: global-model-retirement
           path: ${{ runner.temp }}/retirement
 
+      - name: Download actual-view render receipt
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: brainbar-no-enrichment-render
+          path: ${{ runner.temp }}/brainbar-render
+
       - name: Collect ratchet rows
         id: collect
         if: ${{ !cancelled() }}
@@ -715,6 +749,7 @@ jobs:
             "${SIGNATURE_ARGS[@]}" \
             "${QUIESCE_ARGS[@]}" \
             --retirement-report "${RUNNER_TEMP}/retirement/retirement-report.json" \
+            --brainbar-render-report "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --out "${RUNNER_TEMP}/ratchet.md" || rc=$?
           if [[ ! -s "${RUNNER_TEMP}/ratchet.md" ]]; then

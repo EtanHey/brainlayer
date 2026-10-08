@@ -21,6 +21,24 @@ from scripts import ci_ratchet_table as ratchet
 from scripts import sprint_gate
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_view_row(monkeypatch):
+    # These older unit fixtures isolate other table contracts. They cannot render macOS views.
+    # The report handoff's fail-closed cases live in test_brainbar_no_enrichment_ratchet.py;
+    # real native render/mutation receipts, not this fixture, prove the new row.
+    monkeypatch.setattr(
+        ratchet,
+        "row_brainbar_no_enrichment",
+        lambda *_: ratchet.Row(
+            "BrainBar renders no enrichment status",
+            ratchet.GREEN,
+            "isolated unit fixture",
+            "unit fixture",
+            "not native proof",
+        ),
+    )
+
+
 def _clean_git_env() -> dict[str, str]:
     # An inherited GIT_DIR/GIT_WORK_TREE (a git hook runs the suite) overrides `-C`, so the decoy
     # repo's commits would land in the REAL repo. Same guard as tests/test_build_sha.py and
@@ -463,7 +481,7 @@ def test_the_two_shas_in_the_table_say_which_is_which(tmp_path: Path) -> None:
     the merge ref from the PR head is back in #759, just with more numbers."""
     rows = ratchet.collect(commit_probe(tmp_path), CORPUS)
     assert "commit provenance" in row(rows, "provenance").notes
-    assert "merge ref on a PR" in row(rows, "provenance").notes
+    assert "explicit PR head in ratchet.yml" in row(rows, "provenance").notes
 
 
 def test_the_commit_row_leads_the_table(tmp_path: Path) -> None:
@@ -1379,7 +1397,7 @@ def test_the_table_job_waits_for_the_signature_job_without_depending_on_it_runni
     table standing on the PR -- the same crime as printing an unmeasured number, by omission.
     """
     table = workflow_jobs()["table"]
-    assert set(table["needs"]) == {"gate", "signatures", "quiesce", "retirement"}
+    assert set(table["needs"]) == {"gate", "signatures", "quiesce", "retirement", "no-enrichment-render"}
     assert "!cancelled()" in table["if"] and "always()" not in table["if"]
 
 
@@ -3187,3 +3205,12 @@ def test_pre_push_delete_missing_bash_is_red(tmp_path: Path, monkeypatch) -> Non
     result = ratchet.row_pre_push_delete(linux_probe(tmp_path), {})
     assert result.status == ratchet.RED
     assert "bash" in result.value
+
+
+def test_ui_retirement_and_table_use_the_same_explicit_pr_head():
+    jobs = workflow_jobs()
+    for name in ("no-enrichment-render", "retirement", "table"):
+        checkouts = [s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/checkout")]
+        assert checkouts[0]["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    run = workflow_steps()["Collect ratchet rows"]["run"]
+    assert "--retirement-report" in run and "--brainbar-render-report" in run
