@@ -1369,14 +1369,13 @@ enum SparklineRenderer {
         return NSImage(size: NSSize(width: width, height: height))
     }
 
-    /// Render the three-line pipeline status-bar icon (Agent / Watcher / Enrichment).
+    /// Render the two-line status-bar icon (Agent / Watcher).
     /// isTemplate=false: we want the bright colors, and the baseline guarantees the
     /// icon stays visible on a dark fullscreen menu bar even when all series are idle.
     @MainActor
     static func renderStatusBarIcon(
         agent: [Int],
         watcher: [Int],
-        enrichment: [Int],
         badgeOn: Bool = false,
         size: NSSize = NSSize(width: 26, height: 14)
     ) -> NSImage {
@@ -1386,7 +1385,6 @@ enum SparklineRenderer {
             MenuBarSparklineIcon(series: [
                 .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
                 .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
-                .init(values: enrichment, color: Color(nsColor: BrainBarDesignTokens.Colors.signalFTS5)),
             ])
             if badgeOn {
                 Circle()
