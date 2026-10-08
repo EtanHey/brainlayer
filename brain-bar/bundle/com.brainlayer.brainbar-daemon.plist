@@ -17,9 +17,9 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/brainbar-daemon.stdout.log</string>
+    <string>__HOME__/Library/Logs/brainlayer/brainbar-daemon.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/brainbar-daemon.stderr.log</string>
+    <string>__HOME__/Library/Logs/brainlayer/brainbar-daemon.err.log</string>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>ThrottleInterval</key>
