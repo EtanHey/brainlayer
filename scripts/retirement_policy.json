@@ -3938,6 +3938,14 @@
         "target": "subprocess.check_output"
       }
     },
+    "dadc0867be0ed5245c6164bb0a3573600ed139acc8b4125f63ff91d953f9d75a": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "7388240dfbbe24115265631d078710546c8c6cb07dd7a5ec70d50658dd33cf2c",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
+      }
+    },
     "db97b9ce7920e3c0f4edb293648b881f444d167786c82b1cfa512d3cd89ac8da": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -3976,14 +3984,6 @@
         "owner": "<module>.helper_started_at",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
-      }
-    },
-    "ddd936e9e9ff9760e48f3067450ce5413b177ea41842e5d446abb002d39eb432": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "26be85842e8e3d87daa6f6aaa71d092e99ecedd597afdf5c05d59ae16308958b",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
       }
     },
     "de00ab5510da36ed21719375c85227f6fce4dbaf23348c6e8d035077341724c0": {
