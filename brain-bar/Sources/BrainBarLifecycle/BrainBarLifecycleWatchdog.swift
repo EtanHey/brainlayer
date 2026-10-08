@@ -15,6 +15,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         /// as well as to unified logging, so a restart stays explainable after
         /// the process that made it is gone.
         let eventLogPath: String?
+        let expectedExecutablePath: String?
 
         public init(
             watchedName: String,
@@ -23,7 +24,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             checkInterval: TimeInterval = 10,
             terminateGraceInterval: TimeInterval = 2,
             relaunchCommand: RelaunchCommand,
-            eventLogPath: String? = nil
+            eventLogPath: String? = nil,
+            expectedExecutablePath: String? = nil
         ) {
             self.watchedName = watchedName
             self.heartbeatPath = heartbeatPath
@@ -32,6 +34,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             self.terminateGraceInterval = terminateGraceInterval
             self.relaunchCommand = relaunchCommand
             self.eventLogPath = eventLogPath
+            self.expectedExecutablePath = expectedExecutablePath
         }
     }
 
@@ -80,8 +83,19 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         }
     }
 
-    public static let uiHeartbeatPath = "/tmp/brainbar-ui.heartbeat"
-    public static let daemonHeartbeatPath = "/tmp/brainbar-daemon.heartbeat"
+    public static var uiHeartbeatPath: String { heartbeatPath("ui", home: NSHomeDirectory()) }
+    public static var daemonHeartbeatPath: String { heartbeatPath("daemon", home: NSHomeDirectory()) }
+    static func heartbeatPath(_ peer: String, home: String) -> String {
+        URL(fileURLWithPath: home).appendingPathComponent("Library/Application Support/BrainBar/\(peer).heartbeat").path
+    }
+
+    struct ProcessIdentity: Equatable, Sendable {
+        let uid: uid_t
+        let realUID: uid_t
+        let startedSeconds: UInt64
+        let startedMicroseconds: UInt64
+        let executablePath: String
+    }
     public static let uiLaunchAgentLabel = "com.brainlayer.brainbar"
     public static let daemonLaunchAgentLabel = "com.brainlayer.brainbar-daemon"
     public static let daemonSocketPath = "/tmp/brainbar.sock"
@@ -91,6 +105,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
 
     private let configuration: Configuration
     private let processProvider: @Sendable () -> [pid_t]
+    private let processIdentity: @Sendable (pid_t) -> ProcessIdentity?
+    private let ownerUID: uid_t
     private let terminateProcess: @Sendable (pid_t, Int32) -> Void
     private let relaunch: @Sendable (RelaunchCommand) -> Void
     private let clock: HeartbeatClock
@@ -121,10 +137,14 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
             _ = BrainBarLifecycleWatchdog.run(command: command)
         },
         clock: HeartbeatClock = .system,
-        livenessProbe: (@Sendable () -> Bool)? = nil
+        livenessProbe: (@Sendable () -> Bool)? = nil,
+        ownerUID: uid_t = getuid(),
+        processIdentity: @escaping @Sendable (pid_t) -> ProcessIdentity? = BrainBarLifecycleWatchdog.readProcessIdentity
     ) {
         self.configuration = configuration
         self.processProvider = processProvider
+        self.processIdentity = processIdentity
+        self.ownerUID = ownerUID
         self.terminateProcess = terminateProcess
         self.relaunch = relaunch
         self.clock = clock
@@ -191,7 +211,15 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         // The relaunched process gets a full grace before its first heartbeat.
         unmeasuredSighting = nil
 
-        let pids = processProvider()
+        let candidates = processProvider().map { ($0, processIdentity($0)) }
+        guard candidates.allSatisfy({ $0.1 != nil }) else {
+            log("\(name) process identity unreadable; leaving processes running")
+            return
+        }
+        let identities = candidates.compactMap { pid, identity in
+            identity.flatMap { isOwned($0) ? (pid, $0) : nil }
+        }
+        let pids = identities.map(\.0)
         guard !pids.isEmpty else {
             isRestarting = true
             log("\(name) \(staleness), \(evidence), and no process is running; requesting launch")
@@ -204,16 +232,38 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
 
         isRestarting = true
         log("\(name) \(staleness), \(evidence); terminating PIDs \(pids.map(String.init).joined(separator: ","))")
-        pids.forEach { terminateProcess($0, SIGTERM) }
-        let stalePIDs = pids
+        identities.forEach { pid, identity in
+            if ownedIdentity(pid) == identity { terminateProcess(pid, SIGTERM) }
+        }
         queue.asyncAfter(deadline: .now() + configuration.terminateGraceInterval) { [weak self] in
             guard let self else { return }
-            stalePIDs.forEach { self.terminateProcess($0, SIGKILL) }
-            self.relaunch(self.configuration.relaunchCommand)
+            identities.forEach { pid, identity in
+                if self.ownedIdentity(pid) == identity { self.terminateProcess(pid, SIGKILL) }
+            }
+            // kickstart -k also terminates: never restart a newly discovered replacement.
+            let replacement = self.processProvider().contains { pid in
+                guard let current = self.processIdentity(pid) else { return true }
+                // A same-account executable mismatch must also veto the kill-bearing relaunch.
+                guard current.uid == self.ownerUID && current.realUID == self.ownerUID else { return false }
+                return !identities.contains { $0.0 == pid && $0.1 == current }
+            }
+            if !replacement { self.relaunch(self.configuration.relaunchCommand) }
+            else { self.log("\(name) process identity changed; leaving replacement running") }
             self.queue.asyncAfter(deadline: .now() + self.configuration.terminateGraceInterval) { [weak self] in
                 self?.isRestarting = false
             }
         }
+    }
+
+    private func ownedIdentity(_ pid: pid_t) -> ProcessIdentity? {
+        guard pid > 0, let identity = processIdentity(pid), isOwned(identity) else { return nil }
+        return identity
+    }
+
+    private func isOwned(_ identity: ProcessIdentity) -> Bool {
+        identity.uid == ownerUID && identity.realUID == ownerUID &&
+            (identity.executablePath as NSString).lastPathComponent == configuration.watchedName &&
+            (configuration.expectedExecutablePath.map { $0 == identity.executablePath } ?? true)
     }
 
     /// Awake-seconds the heartbeat has not advanced, and how it was judged.
@@ -266,8 +316,14 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         return age
     }
 
-    static func observeHeartbeat(atPath path: String, clock: HeartbeatClock) -> HeartbeatObservation {
-        guard let payload = try? String(contentsOfFile: path, encoding: .utf8) else {
+    static func observeHeartbeat(atPath path: String, clock: HeartbeatClock, ownerUID: uid_t = getuid()) -> HeartbeatObservation {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        defer { if fd >= 0 { close(fd) } }
+        var info = stat()
+        var bytes = [UInt8](repeating: 0, count: 1024)
+        let count = fd >= 0 && fstat(fd, &info) == 0 && ownedHeartbeat(info, uid: ownerUID)
+            ? read(fd, &bytes, bytes.count) : -1
+        guard count > 0, count < bytes.count, let payload = String(bytes: bytes.prefix(count), encoding: .utf8) else {
             let exists = FileManager.default.fileExists(atPath: path)
             return .unmeasured(
                 kind: exists ? "heartbeat unreadable" : "heartbeat missing",
@@ -301,19 +357,37 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
     }
 
     /// Line 1 stays the wall-clock epoch so any legacy reader keeps working.
-    public static func writeHeartbeat(to path: String, clock: HeartbeatClock = .system) {
+    @discardableResult
+    public static func writeHeartbeat(to path: String, clock: HeartbeatClock = .system) -> Bool {
         let url = URL(fileURLWithPath: path)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
+        let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard parent >= 0 else { return false }
+        defer { close(parent) }
+        var directory = stat()
+        guard fstat(parent, &directory) == 0, directory.st_uid == getuid(), directory.st_mode & 0o022 == 0 else { return false }
+        let fd = openat(parent, url.lastPathComponent, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, ownedHeartbeat(info, uid: getuid()), fchmod(fd, 0o600) == 0 else { return false }
         let payload = """
         \(clock.wallNow().timeIntervalSince1970)
         uptime_ns=\(clock.uptimeNanos())
         boot=\(clock.bootSession())
 
         """
-        try? payload.write(to: url, atomically: true, encoding: .utf8)
+        let bytes = Array(payload.utf8)
+        guard ftruncate(fd, 0) == 0 else { return false }
+        return bytes.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) == $0.count }
+    }
+
+    private static func ownedHeartbeat(_ info: stat, uid: uid_t) -> Bool {
+        info.st_mode & S_IFMT == S_IFREG && info.st_uid == uid && info.st_nlink == 1 && info.st_mode & 0o022 == 0
     }
 
     static let systemBootSession: String = {
@@ -424,7 +498,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: interval)
         timer.setEventHandler {
-            writeHeartbeat(to: path)
+            if !writeHeartbeat(to: path) { logger.error("Owned heartbeat write refused at \(path, privacy: .private)") }
         }
         timer.resume()
         return timer
@@ -434,6 +508,7 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         let currentPID = ProcessInfo.processInfo.processIdentifier
         let appPIDs = NSWorkspace.shared.runningApplications.compactMap { app -> pid_t? in
             guard app.processIdentifier != currentPID else { return nil }
+            if let identity = readProcessIdentity(app.processIdentifier), identity.uid != getuid() { return nil }
             if bundleIdentifiers.contains(app.bundleIdentifier ?? "") {
                 return app.processIdentifier
             }
@@ -449,10 +524,32 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         return pgrep(executableName).filter { $0 != currentPID }
     }
 
+    static func readProcessIdentity(_ pid: pid_t) -> ProcessIdentity? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout.size(ofValue: info))
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        let length = proc_pidpath(pid, &path, UInt32(path.count))
+        guard length > 0 else { return nil }
+        var verified = proc_bsdinfo()
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &verified, size) == size,
+              verified.pbi_uid == info.pbi_uid, verified.pbi_ruid == info.pbi_ruid,
+              verified.pbi_start_tvsec == info.pbi_start_tvsec, verified.pbi_start_tvusec == info.pbi_start_tvusec else { return nil }
+        return ProcessIdentity(uid: info.pbi_uid, realUID: info.pbi_ruid,
+                               startedSeconds: info.pbi_start_tvsec, startedMicroseconds: info.pbi_start_tvusec,
+                               executablePath: String(decoding: path.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self))
+    }
+
+    static func expectedExecutablePath(_ name: String, bundleURL: URL = Bundle.main.bundleURL) -> String {
+        let bundle = bundleURL.resolvingSymlinksInPath()
+        let app = bundle.lastPathComponent == "BrainBar.app" ? bundle : URL(fileURLWithPath: "/Applications/BrainBar.app")
+        return app.appendingPathComponent("Contents/MacOS/\(name)").path
+    }
+
     private static func pgrep(_ executableName: String) -> [pid_t] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-x", executableName]
+        process.arguments = ["-u", String(getuid()), "-x", executableName]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = Pipe()
@@ -496,7 +593,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
                 watchedName: "BrainBarDaemon",
                 heartbeatPath: daemonHeartbeatPath,
                 relaunchCommand: .launchctlKickstart(label: daemonLaunchAgentLabel),
-                eventLogPath: BrainBarLog.lifecycleLogPath
+                eventLogPath: BrainBarLog.lifecycleLogPath,
+                expectedExecutablePath: expectedExecutablePath("BrainBarDaemon")
             ),
             processProvider: {
                 runningPIDs(named: "BrainBarDaemon", bundleIdentifiers: ["com.brainlayer.brainbar-daemon", "com.brainlayer.BrainBarDaemon"])
@@ -513,7 +611,8 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
                 watchedName: "BrainBar",
                 heartbeatPath: uiHeartbeatPath,
                 relaunchCommand: .launchctlKickstart(label: uiLaunchAgentLabel),
-                eventLogPath: BrainBarLog.lifecycleLogPath
+                eventLogPath: BrainBarLog.lifecycleLogPath,
+                expectedExecutablePath: expectedExecutablePath("BrainBar")
             ),
             processProvider: {
                 runningPIDs(named: "BrainBar", bundleIdentifiers: ["com.brainlayer.BrainBar"])

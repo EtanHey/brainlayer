@@ -135,7 +135,8 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
                 relaunched?.fulfill()
             },
             clock: clock.heartbeatClock,
-            livenessProbe: probe
+            livenessProbe: probe,
+            processIdentity: { _ in .init(uid: getuid(), realUID: getuid(), startedSeconds: 1, startedMicroseconds: 0, executablePath: "/test/TestBrainBarDaemon") }
         )
     }
 
