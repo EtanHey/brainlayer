@@ -13,3 +13,6 @@ Render first with explicit paths:
 Activation stays in the separate current-UID LaunchAgent procedure after release/ownership disposition. Labels and global default socket remain compatible; a foreign default socket/lock is refused. A dedicated account must explicitly select its private socket.
 Only derived runtime paths enter the environment; inherited source paths, provider/key references and secrets are not copied. Optional `--db` must remain inside the account home. Templates stay authoritative.
 Checks are metadata observations, not a same-UID mutation lease. Logs/plists must remain owned and safe at activation. Existing cask postflight is separate; this does not change it or establish native proof.
+The DB must identify a different resource from the socket and derived `.lock`: existing same-file identities are refused.
+Case-folded, canonically Unicode-equivalent full paths are conservatively refused even when missing or on case-sensitive volumes; choose names that differ beyond case/normalization.
+This covers prospective ambiguous names without creating probe files or relaxing ownership/type checks; it is a point-in-time check, not an atomic namespace lease.

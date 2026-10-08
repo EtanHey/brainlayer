@@ -233,3 +233,60 @@ def test_owned_private_socket_and_regular_lock_remain_valid(fixture, monkeypatch
 def test_missing_default_endpoint_remains_valid_without_accessing_shared_state(monkeypatch):
     monkeypatch.setattr(service.os.path, "lexists", lambda path: False)
     assert service.endpoint("/tmp/brainbar.sock", Path("/Users/synthetic"), os.getuid()) == Path("/tmp/brainbar.sock")
+
+
+@pytest.mark.parametrize("kind", ["existing-lock", "missing-socket", "missing-lock"])
+def test_case_equivalent_database_endpoint_is_refused(fixture, kind):
+    home, _, args = fixture
+    args.socket = str(home / "fresh.sock")
+    endpoint = Path(args.socket + (".lock" if kind.endswith("lock") else ""))
+    args.db = str(endpoint.with_name(endpoint.name.upper()))
+    if kind == "existing-lock":
+        endpoint.write_bytes(b"database sentinel")
+        endpoint.chmod(0o600)
+        if Path(args.db).exists():
+            assert os.path.samefile(args.db, endpoint)
+    with pytest.raises(ValueError):
+        service.prepare(args, home, os.getuid(), lambda command: None)
+    assert not (home / "Library").exists()
+    if kind == "existing-lock":
+        assert endpoint.read_bytes() == b"database sentinel"
+    else:
+        assert not endpoint.exists() and not Path(args.db).exists()
+
+
+def test_existing_identity_alias_does_not_depend_on_spelling(fixture, monkeypatch):
+    home, _, args = fixture
+    lock = Path(args.socket + ".lock")
+    db = home / "separate.db"
+    for path in (lock, db):
+        path.write_bytes(b"database sentinel")
+        path.chmod(0o600)
+    args.db = str(db)
+    # Inject filesystem identity equivalence independently of lexical similarity.
+    monkeypatch.setattr(service.os.path, "samefile", lambda left, right: Path(left) == db and Path(right) == lock)
+    with pytest.raises(ValueError):
+        service.prepare(args, home, os.getuid(), lambda command: None)
+    assert lock.read_bytes() == db.read_bytes() == b"database sentinel"
+    assert not (home / "Library").exists()
+
+
+def test_missing_canonical_unicode_variant_is_refused(fixture):
+    home, _, args = fixture
+    args.socket = str(home / "caf\u00e9.sock")
+    args.db = str(home / "CAFE\u0301.SOCK")
+    with pytest.raises(ValueError):
+        service.prepare(args, home, os.getuid(), lambda command: None)
+    assert not Path(args.socket).exists() and not Path(args.db).exists()
+
+
+def test_distinct_existing_database_and_lock_remain_valid(fixture, monkeypatch):
+    home, _, args = fixture
+    args.db = str(home / "memory.db")
+    paths = [Path(args.db), Path(args.socket + ".lock")]
+    for path in paths:
+        path.write_bytes(b"keep data")
+        path.chmod(0o600)
+    assert prepare(fixture, monkeypatch)
+    assert all(path.read_bytes() == b"keep data" for path in paths)
+    assert not (home / "Library").exists()
