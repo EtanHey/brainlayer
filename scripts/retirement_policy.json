@@ -1478,6 +1478,16 @@
         "target": "sock.connect"
       }
     },
+    "573819ab1b0492061b0e747764b414556610a41fe46a699d7416a15403c7cb1b": {
+      "non_cloud_purpose": "Read-only local /usr/bin/git rev-parse/status/ls-files for independent BrainBar source identity; no remote/model invocation.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/brainbar_source_identity.py",
+        "target": "import subprocess"
+      }
+    },
     "5871daa3fffbfcd8d6d7b5c13e1b5bb817819b5f5e110b7b0d481f7abaabb8bd": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -4373,6 +4383,16 @@
         "kind": "child_process",
         "owner": "<module>.install_launchd",
         "path": "src/brainlayer/setup.py",
+        "target": "subprocess.run"
+      }
+    },
+    "f7aa7d55f09a105f22976a016bdd7c27281ca9e497a2b8fd6cc5e3f52adaf779": {
+      "non_cloud_purpose": "Read-only local /usr/bin/git rev-parse/status/ls-files for independent BrainBar source identity; no remote/model invocation.",
+      "site": {
+        "call_sha256": "077272fbf91e70df520987fa730993ac4255e2ae25f1d1018246498ce11590d4",
+        "kind": "child_process",
+        "owner": "<module>.source_identity.git",
+        "path": "scripts/brainbar_source_identity.py",
         "target": "subprocess.run"
       }
     },
