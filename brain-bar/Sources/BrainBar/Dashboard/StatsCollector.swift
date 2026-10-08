@@ -223,6 +223,7 @@ final class StatsCollector: ObservableObject {
     private let freshnessTickerInterval: TimeInterval
     private let nowProvider: () -> Date
     private let brainBusEvents: BrainBusEventSource?
+    private let observeDatabaseChanges: Bool
     private var brainBusTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
     private var freshnessTicker: Task<Void, Never>?
@@ -263,6 +264,7 @@ final class StatsCollector: ObservableObject {
         freshnessTickerInterval: TimeInterval = 1,
         nowProvider: @escaping () -> Date = Date.init,
         brainBusEvents: BrainBusEventSource? = nil,
+        observeDatabaseChanges: Bool = true,
         dashboardStatsProvider: DashboardStatsProvider? = nil,
         signalCoverageProvider: SignalCoverageProvider? = nil,
         signalCoverageStartDelay: TimeInterval = 2,
@@ -271,6 +273,7 @@ final class StatsCollector: ObservableObject {
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
         self.dbPath = dbPath
+        self.observeDatabaseChanges = observeDatabaseChanges
         self.databaseOpenConfiguration = databaseOpenConfiguration
         self.daemonMonitor = daemonMonitor
         self.watcherProcessProbe = watcherProcessProbe
@@ -343,7 +346,7 @@ final class StatsCollector: ObservableObject {
         resetRefreshTimingState()
         isStopped = false
         isRunning = true
-        installDarwinObserver()
+        if observeDatabaseChanges { installDarwinObserver() }
         requestRefresh(force: true)
         startAutoRefreshLoop()
         startFreshnessTicker()
@@ -394,7 +397,7 @@ final class StatsCollector: ObservableObject {
         hasPendingStatsRefresh = pendingStatsRefreshTask != nil
         isRefreshing = false
         isManualRefreshInProgress = false
-        if isRunning {
+        if isRunning && observeDatabaseChanges {
             removeDarwinObserver()
         }
         isRunning = false
@@ -511,7 +514,6 @@ final class StatsCollector: ObservableObject {
             endUnix: nil,
             rows: startStats.chunkCount,
             writes5m: startStats.recentWriteFiveMinuteCount,
-            enrich5m: startStats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
 
@@ -734,7 +736,6 @@ final class StatsCollector: ObservableObject {
             endUnix: nowProvider().timeIntervalSince1970,
             rows: stats.chunkCount,
             writes5m: stats.recentWriteFiveMinuteCount,
-            enrich5m: stats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
     }
@@ -923,7 +924,9 @@ final class StatsCollector: ObservableObject {
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
             requestWatcherProcessRefresh()
-        case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
+        case .enrichStatus:
+            break // Historical producer events do not trigger UI polling.
+        case .queueDepth, .lastChunkID, .dbBusy:
             scheduleLiveStatsRefresh()
         }
     }
@@ -958,18 +961,16 @@ final class StatsCollector: ObservableObject {
         endUnix: TimeInterval?,
         rows: Int,
         writes5m: Int,
-        enrich5m: Int,
         trigger: DashboardRefreshTrigger
     ) {
         let endText = endUnix.map { String(format: "%.3f", $0) } ?? "ongoing"
         NSLog(
-            "[BrainBar] dashboard refresh: %@ start=%.3f end=%@ rows=%d writes_5m=%d enrich_5m=%d trigger=%@",
+            "[BrainBar] dashboard refresh: %@ start=%.3f end=%@ rows=%d writes_5m=%d trigger=%@",
             ISO8601DateFormatter().string(from: timestamp),
             startUnix,
             endText,
             rows,
             writes5m,
-            enrich5m,
             trigger.rawValue
         )
     }

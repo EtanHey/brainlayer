@@ -134,6 +134,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     struct DashboardStats: Sendable, Equatable {
         let chunkCount: Int
+        // Compatibility slots for old synthetic snapshots; live UI readers do not query them.
         let enrichedChunkCount: Int
         let failedEnrichmentCount: Int
         let skippedEnrichmentCount: Int
@@ -2122,6 +2123,14 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
+#if DEBUG
+    /// Lets private-fixture tests audit SQLite reads on the actual dashboard connection.
+    func withSQLiteHandleForTesting<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        guard let db else { throw DBError.notOpen }
+        return try body(db)
+    }
+#endif
+
     func dashboardStats(
         activityWindowMinutes: Int = 30,
         bucketCount: Int = 12,
@@ -2153,7 +2162,7 @@ final class BrainDatabase: @unchecked Sendable {
                 )
             }
 
-            let counts = try dashboardCounts()
+            let chunkCount = try scalarInt("SELECT COUNT(*) FROM chunks")
             let signalCoverage: SignalCoverageSnapshot?
             if includeSignalCoverage {
                 let counts = try dashboardSignalCoverageCounts()
@@ -2167,12 +2176,7 @@ final class BrainDatabase: @unchecked Sendable {
             } else {
                 signalCoverage = nil
             }
-            let lastEvents = try dashboardLastEvents(now: now)
-            let chunkCount = counts.chunkCount
-            let enrichedChunkCount = counts.enrichedChunkCount
-            let pendingEnrichmentCount = counts.pendingEnrichmentCount
-            let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
-            let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: liveWindowMinutes, now: now)
+            let lastWriteAt = try dashboardLastWriteAt(now: now)
             let recentActivityBuckets = try recentActivityBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
@@ -2194,35 +2198,29 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: 1,
                 now: now
             )
-            let recentEnrichmentBuckets = try recentEnrichmentBuckets(
-                activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount,
-                now: now
-            )
             let recentWriteFiveMinuteCount = try recentActivityCount(windowSeconds: 300, now: now)
             let brainStoreWrites = brainStoreWriteCount(now: now)
-            let recentEnrichmentFiveMinuteCount = try recentEnrichmentCount(windowSeconds: 300, now: now)
 
             return DashboardStats(
                 chunkCount: chunkCount,
-                enrichedChunkCount: enrichedChunkCount,
-                failedEnrichmentCount: counts.failedEnrichmentCount,
-                skippedEnrichmentCount: counts.skippedEnrichmentCount,
-                pendingEnrichmentCount: pendingEnrichmentCount,
-                enrichmentPercent: enrichmentPercent,
-                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                enrichedChunkCount: 0,
+                failedEnrichmentCount: 0,
+                skippedEnrichmentCount: 0,
+                pendingEnrichmentCount: 0,
+                enrichmentPercent: 0,
+                enrichmentRatePerMinute: 0,
                 databaseSizeBytes: databaseSizeBytes(),
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
                 recentWatcherWriteBuckets: recentWatcherIngest.buckets,
-                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentEnrichmentBuckets: Array(repeating: 0, count: bucketCount),
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
-                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: 0,
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 liveWindowMinutes: liveWindowMinutes,
-                lastWriteAt: lastEvents.lastWriteAt,
-                lastEnrichedAt: lastEvents.lastEnrichedAt,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: nil,
                 signalEligibleChunkCount: signalCoverage?.eligibleChunkCount ?? 0,
                 ftsEligibleChunkCount: signalCoverage?.ftsEligibleChunkCount ?? 0,
                 vectorIndexedChunkCount: signalCoverage?.vectorIndexedChunkCount ?? 0,
@@ -2294,19 +2292,13 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let enrichmentBuckets = try recentEnrichmentBuckets(
-                activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount,
-                now: now
-            )
-
             return PipelineWindowBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 allWriteBuckets: allWriteBuckets,
                 agentWriteBuckets: agentWriteBuckets,
                 watcherWriteBuckets: watcherIngest.buckets,
-                enrichmentBuckets: enrichmentBuckets,
+                enrichmentBuckets: Array(repeating: 0, count: bucketCount),
                 watcherFlowReadability: watcherIngest.readability
             )
         }
@@ -2358,23 +2350,6 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    private func dashboardCounts() throws -> (
-        chunkCount: Int,
-        enrichedChunkCount: Int,
-        failedEnrichmentCount: Int,
-        skippedEnrichmentCount: Int,
-        pendingEnrichmentCount: Int
-    ) {
-        return (
-            chunkCount: try scalarInt("SELECT COUNT(*) FROM chunks"),
-            enrichedChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'success'"),
-            failedEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'failed'"),
-            skippedEnrichmentCount: try scalarInt(
-                "SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL AND LOWER(TRIM(enrich_status)) NOT IN ('success', 'failed')"
-            ),
-            pendingEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NULL AND enriched_at IS NULL")
-        )
-    }
 
     private func dashboardSignalCoverageCounts() throws -> (
         eligibleChunkCount: Int,
@@ -2454,19 +2429,11 @@ final class BrainDatabase: @unchecked Sendable {
         return clauses.isEmpty ? "1 = 1" : clauses.joined(separator: " AND ")
     }
 
-    private func dashboardLastEvents(now: Date) throws -> (lastWriteAt: Date?, lastEnrichedAt: Date?) {
-        let recentWindowStart = now.addingTimeInterval(-Self.dashboardLatestEventLookbackSeconds)
-        let lastWriteAt = try latestIndexedTimestampEpoch(
-            column: "created_at",
-            whereClause: nil,
-            since: recentWindowStart
+    private func dashboardLastWriteAt(now: Date) throws -> Date? {
+        try latestIndexedTimestampEpoch(
+            column: "created_at", whereClause: nil,
+            since: now.addingTimeInterval(-Self.dashboardLatestEventLookbackSeconds)
         )
-        let lastEnrichedAt = try latestIndexedTimestampEpoch(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            since: recentWindowStart
-        )
-        return (lastWriteAt: lastWriteAt, lastEnrichedAt: lastEnrichedAt)
     }
 
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
@@ -2538,17 +2505,6 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
-        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
-
-        return try indexedTimestampBuckets(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount,
-            now: now
-        )
-    }
 
     private func recentActivityCount(windowSeconds: TimeInterval, now: Date) throws -> Int {
         guard windowSeconds > 0 else { return 0 }
@@ -2559,24 +2515,7 @@ final class BrainDatabase: @unchecked Sendable {
         ).count
     }
 
-    private func recentEnrichmentCount(windowSeconds: TimeInterval, now: Date) throws -> Int {
-        guard windowSeconds > 0 else { return 0 }
-        return try indexedTimestampEpochs(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            since: now.addingTimeInterval(-windowSeconds)
-        ).count
-    }
 
-    private func recentEnrichmentRatePerMinute(windowMinutes: Int, now: Date) throws -> Double {
-        guard windowMinutes > 0 else { return 0 }
-        let count = Double(try indexedTimestampEpochs(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            since: now.addingTimeInterval(Double(-windowMinutes * 60))
-        ).count)
-        return count / Double(windowMinutes)
-    }
 
     private func indexedTimestampBuckets(
         column: String,

@@ -184,7 +184,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         XCTAssertEqual(live.allWriteTotal, 3, "30m all commits = two agent writes + one watcher write")
         XCTAssertEqual(live.agentTotal, 2, "30m agent window = agent-live-1 + agent-live-2")
         XCTAssertEqual(live.watcherTotal, 1, "30m watcher window = watcher-live-1")
-        XCTAssertEqual(live.enrichmentTotal, 1, "30m enrichment window = enrich-live-1 (enriched 12m ago)")
+        XCTAssertEqual(live.enrichmentTotal, 0, "Retired metadata is not queried for UI windows")
 
         // 3) Wider windows strictly CONTAIN MORE than the live window.
         //    24h agent: agent-live-1/2 + agent-old-1/2/3 + enrich-live-1(90m,mcp)
@@ -196,9 +196,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         XCTAssertEqual(day.watcherTotal, 3, "24h watcher window pulls in 2 older watcher writes")
         XCTAssertGreaterThan(day.watcherTotal, live.watcherTotal,
                              "24h watcher total must exceed 30m watcher total")
-        XCTAssertEqual(day.enrichmentTotal, 2, "24h enrichment window pulls in the older enrichment")
-        XCTAssertGreaterThan(day.enrichmentTotal, live.enrichmentTotal,
-                             "24h enrichment total must exceed 30m enrichment total")
+        XCTAssertEqual(day.enrichmentTotal, 0, "Retired metadata is not queried for UI windows")
 
         // 4) 3h sits between live and day — monotonic widening, real data.
         //    3h agent: agent-live-1/2 + agent-old-1(45m) + agent-old-2(120m)
@@ -209,7 +207,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
         XCTAssertLessThan(threeHour.agentTotal, day.agentTotal)
         XCTAssertEqual(threeHour.watcherTotal, 2, "3h watcher window = watcher-live-1 + watcher-old-1(70m)")
         // enrich-old-1 enriched ~200m ago is OUTSIDE 3h (180m) but INSIDE 24h.
-        XCTAssertEqual(threeHour.enrichmentTotal, 1, "3h enrichment still only sees the live enrichment")
+        XCTAssertEqual(threeHour.enrichmentTotal, 0, "Retired metadata is not queried for UI windows")
     }
 
     func testEmptyWindowAndZeroBucketsAreSafe() throws {
