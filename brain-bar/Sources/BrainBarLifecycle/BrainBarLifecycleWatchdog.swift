@@ -219,6 +219,12 @@ public final class BrainBarLifecycleWatchdog: @unchecked Sendable {
         let identities = candidates.compactMap { pid, identity in
             identity.flatMap { isOwned($0) ? (pid, $0) : nil }
         }
+        if identities.isEmpty && candidates.contains(where: { _, identity in
+            identity?.uid == ownerUID && identity?.realUID == ownerUID
+        }) {
+            log("\(name) same-account process does not match expected executable; not kickstarting")
+            return
+        }
         let pids = identities.map(\.0)
         guard !pids.isEmpty else {
             isRestarting = true

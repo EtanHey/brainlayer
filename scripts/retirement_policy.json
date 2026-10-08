@@ -1698,14 +1698,6 @@
         "target": "self.request"
       }
     },
-    "63d44e1d2d79f0029e7d6dc4ccc839531d2d65adcd8b0374c89580326b5a17cb": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "41f551dfbae446e5179ad79901e51babbfef7e64ae11b030784ffe4e1400a93f",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
-      }
-    },
     "64e385b7c16a15500e8da69f55a524fd0ba589fd6a21509c08f1a71f681df1d2": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/check_observability_golden_inputs.py <module>._metadata",
       "site": {
@@ -3944,6 +3936,14 @@
         "owner": "<module>._detect_git_sha",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "dadc0867be0ed5245c6164bb0a3573600ed139acc8b4125f63ff91d953f9d75a": {
+      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
+      "site": {
+        "body_sha256": "7388240dfbbe24115265631d078710546c8c6cb07dd7a5ec70d50658dd33cf2c",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift"
       }
     },
     "db97b9ce7920e3c0f4edb293648b881f444d167786c82b1cfa512d3cd89ac8da": {
