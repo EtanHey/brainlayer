@@ -201,10 +201,13 @@ _DESTRUCTIVE = ToolAnnotations(
 
 _DEFAULT_STRING_MAX_LENGTH = 256
 _DEFAULT_STRING_ARRAY_MAX_ITEMS = 100
+# Match BrainBar's bounded opaque-ID contract: legacy IDs can include a full
+# source path plus a numeric position. No ID truncation or storage migration.
+_CHUNK_IDENTIFIER_MAX_LENGTH = 8_192
 _INPUT_STRING_MAX_LENGTHS = {
     "action": 64,
     "agent_id": 128,
-    "chunk_id": 128,
+    "chunk_id": _CHUNK_IDENTIFIER_MAX_LENGTH,
     "content": 200_000,
     "content_class": 32,
     "content_type": 64,
@@ -222,8 +225,8 @@ _INPUT_STRING_MAX_LENGTHS = {
     "intent": 32,
     "mode": 32,
     "name": 256,
-    "new_chunk_id": 128,
-    "old_chunk_id": 128,
+    "new_chunk_id": _CHUNK_IDENTIFIER_MAX_LENGTH,
+    "old_chunk_id": _CHUNK_IDENTIFIER_MAX_LENGTH,
     "outcome": 32,
     "pattern": 256,
     "plan_name": 256,
@@ -239,15 +242,15 @@ _INPUT_STRING_MAX_LENGTHS = {
     "source": 32,
     "source_filter": 512,
     "status": 32,
-    "supersedes": 128,
+    "supersedes": _CHUNK_IDENTIFIER_MAX_LENGTH,
     "tag": 128,
     "title": 512,
     "type": 32,
 }
 _INPUT_STRING_ARRAY_LIMITS = {
-    "chunk_ids": {"max_items": 500, "item_max_length": 128},
+    "chunk_ids": {"max_items": 500, "item_max_length": _CHUNK_IDENTIFIER_MAX_LENGTH},
     "files_changed": {"max_items": 200, "item_max_length": 1_024},
-    "merge_chunk_ids": {"max_items": 100, "item_max_length": 128},
+    "merge_chunk_ids": {"max_items": 100, "item_max_length": _CHUNK_IDENTIFIER_MAX_LENGTH},
     "participants": {"max_items": 100, "item_max_length": 256},
     "tags": {"max_items": 100, "item_max_length": 128},
 }
