@@ -62,6 +62,36 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+# Optional fields in parsed import/expression trees, pinned to the reviewed 3.12
+# representation. Unknown fields are retained so semantic additions fail closed.
+OPTIONAL_AST_FIELDS = {
+    "ImportFrom": {"module", "level"},
+    "Yield": {"value"},
+    "FormattedValue": {"format_spec"},
+    "Constant": {"kind"},
+    "Slice": {"lower", "upper", "step"},
+    "arguments": {"vararg", "kwarg"},
+    "arg": {"annotation", "type_comment"},
+    "keyword": {"arg"},
+    "alias": {"asname"},
+}
+
+
+def canonical_ast_dump(node):
+    """Retain reviewed AST identities across 3.11–3.13, including empty lists."""
+    if isinstance(node, ast.AST):
+        name = type(node).__name__
+        fields = [
+            field + "=" + canonical_ast_dump(value)
+            for field, value in ast.iter_fields(node)
+            if not (value is None and field in OPTIONAL_AST_FIELDS.get(name, set()))
+        ]
+        return name + "(" + ", ".join(fields) + ")"
+    if isinstance(node, list):
+        return "[" + ", ".join(canonical_ast_dump(value) for value in node) + "]"
+    return repr(node)
+
+
 def python_sites(text, path):
     tree = ast.parse(text)
     sites = []
@@ -189,7 +219,7 @@ def python_sites(text, path):
                         "owner": owner,
                         "kind": kind,
                         "target": target,
-                        "call_sha256": hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest(),
+                        "call_sha256": hashlib.sha256(canonical_ast_dump(node).encode()).hexdigest(),
                     }
                 )
         if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
@@ -206,7 +236,7 @@ def python_sites(text, path):
                         "owner": owner,
                         "kind": "callable_reference",
                         "target": target,
-                        "call_sha256": hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest(),
+                        "call_sha256": hashlib.sha256(canonical_ast_dump(node).encode()).hexdigest(),
                     }
                 )
         for child in ast.iter_child_nodes(node):
