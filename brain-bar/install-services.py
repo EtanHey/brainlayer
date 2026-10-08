@@ -47,8 +47,10 @@ def endpoint(path, home, uid):
                 if not (stat.S_ISSOCK(info.st_mode) if item == path else stat.S_ISREG(info.st_mode)):
                     raise ValueError(f"foreign or unsafe default endpoint: {item}")
     else:
-        owned(path, home, uid, missing=True, socket=True)
-        owned(Path(str(path) + ".lock"), home, uid, missing=True)
+        for item, leaf_type in ((path, stat.S_ISSOCK), (Path(str(path) + ".lock"), stat.S_ISREG)):
+            owned(item, home, uid, missing=True, socket=item == path)
+            if os.path.lexists(item) and not leaf_type(item.lstat().st_mode):
+                raise ValueError(f"unsupported private endpoint type: {item}")
     if len(os.fsencode(path)) >= 104:
         raise ValueError("socket path exceeds macOS sockaddr_un limit")
     return path
@@ -93,6 +95,8 @@ def prepare(args, home, uid, verify):
         raise ValueError("explicit installed Python/CLI must be executable")
     socket = endpoint(args.socket, home, uid)
     db = owned(args.db or home / ".local/share/brainlayer/brainlayer.db", home, uid, missing=True)
+    if db in (socket, Path(str(socket) + ".lock")):
+        raise ValueError("database must not alias the socket or its derived lock")
     envfile = owned(home / ".config/brainlayer/brainlayer.env", home, uid, missing=True)
     env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "BRAINBAR_SOCKET_PATH": str(socket),
            "BRAINLAYER_MCP_SOCKET": str(socket), "BRAINBAR_DB_PATH": str(db), "BRAINLAYER_DB": str(db),

@@ -5,6 +5,7 @@ import json
 import os
 import plistlib
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -181,3 +182,54 @@ def test_cli_render_only_has_current_uid_domain_and_no_activation(fixture, monke
     assert output["domain"] == f"gui/{os.getuid()}" and output["activated"] is False
     assert calls == [["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)]]
     assert not (home / "Library").exists()
+
+
+@pytest.mark.parametrize("leaf", ["socket-file", "socket-directory", "lock-directory", "lock-fifo"])
+def test_private_endpoint_leaf_types_are_distinct(fixture, leaf):
+    home, _, args = fixture
+    target = Path(args.socket + ".lock") if leaf.startswith("lock") else Path(args.socket)
+    if leaf.endswith("directory"):
+        target.mkdir(mode=0o700)
+    elif leaf.endswith("fifo"):
+        os.mkfifo(target, mode=0o600)
+    else:
+        target.write_bytes(b"keep data")
+        target.chmod(0o600)
+    with pytest.raises(ValueError):
+        service.prepare(args, home, os.getuid(), lambda command: None)
+    assert target.exists() and not (home / "Library").exists()
+    if leaf == "socket-file":
+        assert target.read_bytes() == b"keep data"
+
+
+@pytest.mark.parametrize("endpoint_name", ["socket", "lock"])
+@pytest.mark.parametrize("exists", [False, True])
+def test_database_cannot_alias_either_endpoint_even_when_missing(fixture, endpoint_name, exists):
+    home, _, args = fixture
+    args.db = args.socket + (".lock" if endpoint_name == "lock" else "")
+    target = Path(args.db)
+    if exists:
+        target.write_bytes(b"database sentinel")
+        target.chmod(0o600)
+    with pytest.raises(ValueError):
+        service.prepare(args, home, os.getuid(), lambda command: None)
+    assert target.exists() == exists and not (home / "Library").exists()
+    if exists:
+        assert target.read_bytes() == b"database sentinel"
+
+
+def test_owned_private_socket_and_regular_lock_remain_valid(fixture, monkeypatch):
+    home, _, args = fixture
+    with socket.socket(socket.AF_UNIX) as private_socket:
+        private_socket.bind(args.socket)
+        Path(args.socket).chmod(0o600)
+        lock = Path(args.socket + ".lock")
+        lock.write_bytes(b"lock sentinel")
+        lock.chmod(0o600)
+        assert prepare(fixture, monkeypatch)
+        assert lock.read_bytes() == b"lock sentinel" and not (home / "Library").exists()
+
+
+def test_missing_default_endpoint_remains_valid_without_accessing_shared_state(monkeypatch):
+    monkeypatch.setattr(service.os.path, "lexists", lambda path: False)
+    assert service.endpoint("/tmp/brainbar.sock", Path("/Users/synthetic"), os.getuid()) == Path("/tmp/brainbar.sock")
