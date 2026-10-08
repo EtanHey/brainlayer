@@ -2352,6 +2352,16 @@
         "target": "session.get"
       }
     },
+    "8b2afb324a96b806b32ba52542f9128cbf4dd80e733504d82603fe3dc231a0f2": {
+      "non_cloud_purpose": "Import local subprocess support for private synthetic BrainBar proof execution and fail-closed process receipts; no cloud model transport.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/brainbar_no_enrichment_ratchet.py",
+        "target": "import subprocess"
+      }
+    },
     "8b747a5fbcc43e532d8cadb9fae8e97b1ac35871f74250a0f2c5cd7b41f7f2b8": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.inspect_sdk importlib.metadata.distribution.",
       "site": {
@@ -2804,6 +2814,16 @@
         "body_sha256": "4ff52d3a3088a2a61ab9c1742e6f4ac63c09187bf6091f9a4fb69dd7559a9bb7",
         "kind": "non_python_source",
         "path": "scripts/generate-fixtures.sh"
+      }
+    },
+    "a52920a4c8fd99729cf7df50af867ae25bab80774ebddd646b3d2c36d53f5e41": {
+      "non_cloud_purpose": "Catch local source-identity/render subprocess failure and return explicit FAIL receipt; exception reference does not send.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.read_report",
+        "path": "scripts/brainbar_no_enrichment_ratchet.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "a5a95ab5b2e4445601fb6e909d58d73a65647d3630e6cbf1e152e25a470ac5e5": {
@@ -4156,6 +4176,16 @@
         "target": "importlib.import_module"
       }
     },
+    "eec8bd4da136f002894428eb3a94eac01207acba90d95578365e503f6eac4199": {
+      "non_cloud_purpose": "Run the supplied local DEBUG BrainBar binary with private synthetic HOME/DB/socket: compiled-source preflight or actual AppKit/Vision render; mismatched source rejects before rendering. No cloud model call.",
+      "site": {
+        "call_sha256": "2cdac07ed9ac57189495c9142b9a4704d9b956351a11cf43fe2fc4e089e7e95c",
+        "kind": "child_process",
+        "owner": "<module>.run",
+        "path": "scripts/brainbar_no_enrichment_ratchet.py",
+        "target": "subprocess.run"
+      }
+    },
     "eefebd62990b9c0cf3ef20d44df2ac3756c61ef84293cc868dc55b4e059a7165": {
       "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>._drive_put_with_deadline requests.Timeout.",
       "site": {
@@ -4294,6 +4324,16 @@
         "owner": "<module>.check_db",
         "path": "scripts/retirement_guard.py",
         "target": "urllib.parse.urlsplit"
+      }
+    },
+    "f34a2c15904a74db151ab317a407ea2b06c56be8dbfa09fc7bf76a88177061a2": {
+      "non_cloud_purpose": "Catch local source-identity/render subprocess failure and return explicit FAIL receipt; exception reference does not send.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.run",
+        "path": "scripts/brainbar_no_enrichment_ratchet.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "f386188d7f0fc6b517c7011f286de7c0da3b2c26c107b332ed970e7f6209cdf8": {

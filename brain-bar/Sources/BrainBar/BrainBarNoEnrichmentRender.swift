@@ -16,6 +16,11 @@ enum BrainBarNoEnrichmentRender {
     static func runIfRequested() {
         guard let path = ProcessInfo.processInfo.environment["BRAINBAR_NO_ENRICHMENT_RENDER"] else { return }
         do {
+            let identity = try JSONSerialization.jsonObject(with: Data(BrainBarCompiledSource.json.utf8)) as! [String: Any]
+            if ProcessInfo.processInfo.environment["BRAINBAR_BUILD_IDENTITY_ONLY"] == "1" {
+                print(BrainBarCompiledSource.json)
+                Darwin.exit(EXIT_SUCCESS)
+            }
             guard NSString(string: path).isAbsolutePath else { throw Failure("absolute render directory required") }
             NSApplication.shared.setActivationPolicy(.prohibited)
             let directory = URL(fileURLWithPath: path, isDirectory: true)
@@ -79,6 +84,12 @@ enum BrainBarNoEnrichmentRender {
                 name: "pending-store-replay", height: 500, directory: directory,
                 required: ["Pending stores", "Replay debt"], violations: &violations
             ))
+            for name in BrainBarMenuIconProof.names {
+                let icon = try BrainBarMenuIconProof.measure(name, directory: directory)
+                let pixels = icon["pixel_check"] as? [String: Any]
+                if pixels?["matches_reference"] as? Bool != true { violations.append("\(name): unexpected status icon series/pixels") }
+                captures.append(icon)
+            }
             // Positive control: fail closed if the OCR cannot see either forbidden shape.
             let control = AnyView(VStack(spacing: 20) {
                 Text("Enrichment paused · 274,847 queued")
@@ -87,7 +98,11 @@ enum BrainBarNoEnrichmentRender {
             let controlCapture = try capture(control, name: "ocr-positive-control", height: 220,
                 directory: directory, required: ["Enrichment"], violations: nil)
             guard let controlText = controlCapture["text"] as? String,
-                  controlText.lowercased().contains("enrichment") else { throw Failure("forbidden-text control unreadable") }
+                  controlText.localizedCaseInsensitiveContains("Enrichment paused"),
+                  controlText.contains("274,847 queued"),
+                  controlText.localizedCaseInsensitiveContains("Enrichment retired") else {
+                throw Failure("full forbidden-text controls unreadable")
+            }
             let active = captures.first { ($0["name"] as? String) == "pending-store-replay" }?["text"] as? String ?? ""
             guard active.lowercased().contains("pending stores"), active.lowercased().contains("replay") else {
                 throw Failure("active pending-store/replay UI was not rendered")
@@ -97,7 +112,7 @@ enum BrainBarNoEnrichmentRender {
                 "status": violations.isEmpty ? "PASS" : "FAIL", "historical_backlog": 274847,
                 "captures": captures, "violations": violations, "positive_control": controlCapture,
                 "active_pending_store_visible": true, "mode": "synthetic-source-build",
-                "measured_sha": ProcessInfo.processInfo.environment["BRAINBAR_RENDER_SHA"] ?? "unknown",
+                "measured_sha": identity["head"] ?? "unknown", "build_identity": identity,
             ]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: directory.appendingPathComponent("render-report.json"), options: .atomic)
