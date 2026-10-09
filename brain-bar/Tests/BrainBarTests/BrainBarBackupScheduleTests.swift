@@ -123,6 +123,17 @@ final class BrainBarBackupScheduleTests: XCTestCase {
         XCTAssertNil(BackupLogReader.lastRun(.databaseBackup, log: nil))
     }
 
+    func testRecoveredSnapshotKeepsOriginalAge() {
+        let log = Data("""
+        {"backup_log_provenance":"real","operation":"recover_existing_artifact","attempted_at":"2026-10-09T18:00:00Z","source_attempted_at":"2026-10-01T00:17:07Z","verified":true}
+        """.utf8)
+        XCTAssertEqual(BackupLogReader.lastRun(.databaseBackup, log: log)?.at, date("2026-10-01T00:17:07Z"))
+        let unknown = Data("""
+        {"backup_log_provenance":"real","operation":"recover_existing_artifact","attempted_at":"2026-10-09T18:00:00Z","verified":true}
+        """.utf8)
+        XCTAssertNil(BackupLogReader.lastRun(.databaseBackup, log: unknown))
+    }
+
     // MARK: latest local copies
 
     func testLatestLocalCopiesIgnoreNonSnapshotFiles() {

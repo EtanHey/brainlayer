@@ -232,8 +232,10 @@ enum BackupLogReader {
             switch kind {
             case .databaseBackup:
                 // Test runs append to their own log path but carry provenance; only real rows count.
+                let timeKey = row["operation"] as? String == "recover_existing_artifact"
+                    ? "source_attempted_at" : "attempted_at"
                 guard row["backup_log_provenance"] as? String == "real",
-                      let at = isoDate(row["attempted_at"]) else { continue }
+                      let at = isoDate(row[timeKey]) else { continue }
                 return BackupRunReceipt(at: at, verified: row["verified"] as? Bool ?? false)
             case .transcriptArchive:
                 guard let at = isoDate(row["attempted_at"]) else { continue }

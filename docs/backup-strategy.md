@@ -59,6 +59,40 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
 
 ## Restore Drill
 
+### Recover a preserved failed upload
+
+After the recovery source has been reviewed and installed, use the explicit operator
+command for an existing `YYYY-MM-DD.db` and matching `.db.gz`. This operation holds
+the same exclusive, nonblocking `.backup.lock` as the daily job. It never takes a new
+snapshot, creates a restore copy, deletes candidates, or runs retention.
+
+```bash
+brainlayer backup recover-existing --snapshot-date YYYY-MM-DD \
+  --source-receipt-line LINE --expected-raw-bytes MEASURED_RAW_SIZE --no-retention
+```
+
+The CLI invokes the installed environment wrapper and pinned keg Python. `LINE` is
+the one-based original failed JSONL record in the resolved canonical backup log;
+`MEASURED_RAW_SIZE` is the existing raw file's measured size. The receipt must match
+the configured machine, Drive folder, dated staging path, compressed size and sentinel.
+The raw and gzip must pass streamed byte equivalence, gzip CRC, hashes, sentinel
+count and a read-only bounded `quick_check` (default 300 seconds). The ordinary backup
+wall-clock timeout also applies; zero/skipped SQLite checks cannot satisfy recovery.
+
+The original Drive folder is resolved read-only. Exactly one complete object matching
+parent, original name, machine, size and MD5 is reused. With no complete match, upload
+uses `YYYY-MM-DD-recovery-<unique-attempt-id>.db.gz` without overwriting any candidate.
+Ambiguous or unknown ownership fails. Both preserved files remain after success or failure.
+Remote metadata is read again and verified; the canonical attempt receipt is appended
+and fsynced before the backup alert is cleared. A recovery receipt records the new
+`attempted_at` separately from `source_attempted_at` and `snapshot_date`; freshness
+readers use the source time. Recovery proves the preserved snapshot, not a new capture.
+
+This command cannot resume the original in-memory resumable upload session. Source
+tests do not establish installed behavior or actual recovery; those need a later
+accepted operator run. Never use `brainlayer.backup_daily` arguments for recovery:
+that module starts the ordinary daily snapshot flow.
+
 1. Pick the newest good snapshot from Google Drive:
 
    `Brain Drive/06_ARCHIVE/backups/brainlayer-db/YYYY-MM-DD.db.gz`

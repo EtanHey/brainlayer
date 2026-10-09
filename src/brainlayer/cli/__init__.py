@@ -72,6 +72,55 @@ def backup_auth_command(
         raise typer.Exit(1)
 
 
+@backup_app.command("recover-existing")
+def backup_recover_existing_command(
+    snapshot_date: str = typer.Option(..., "--snapshot-date", help="Original snapshot date (YYYY-MM-DD)."),
+    source_receipt_line: int = typer.Option(..., "--source-receipt-line", min=1),
+    expected_raw_bytes: int = typer.Option(
+        ..., "--expected-raw-bytes", min=1, help="Measured preserved raw snapshot size."
+    ),
+    no_retention: bool = typer.Option(
+        False, "--no-retention", help="Required: preserve all artifacts and Drive candidates."
+    ),
+    sqlite_timeout_seconds: float = typer.Option(300.0, "--sqlite-timeout-seconds", min=0.001),
+) -> None:
+    """Recover a preserved pair through the installed env wrapper and pinned Python."""
+    import subprocess
+
+    from ..hook_python import resolve_hook_python
+
+    if not no_retention:
+        raise typer.BadParameter("recover-existing requires --no-retention")
+    runner = Path.home() / ".local/lib/brainlayer/brainlayer-env-run.sh"
+    if not runner.is_file():
+        raise typer.BadParameter("installed BrainLayer environment wrapper is missing")
+    interpreter = resolve_hook_python()
+    child_env = os.environ.copy()
+    child_env.pop("PYTHONPATH", None)
+    child_env.pop("PYTHONHOME", None)
+    code = subprocess.run(
+        [
+            str(runner),
+            str(interpreter),
+            "-I",
+            "-m",
+            "brainlayer.backup_recovery",
+            "--snapshot-date",
+            snapshot_date,
+            "--source-receipt-line",
+            str(source_receipt_line),
+            "--expected-raw-bytes",
+            str(expected_raw_bytes),
+            "--no-retention",
+            "--sqlite-timeout-seconds",
+            str(sqlite_timeout_seconds),
+        ],
+        env=child_env,
+        check=False,
+    ).returncode
+    raise typer.Exit(code)
+
+
 @jobs_app.command("restart")
 def jobs_restart_command(
     all_jobs: bool = typer.Option(False, "--all", help="Select loaded BrainLayer jobs."),

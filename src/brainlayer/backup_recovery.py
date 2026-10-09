@@ -7,6 +7,8 @@ import fcntl
 import hashlib
 import json
 import os
+import signal
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -299,3 +301,58 @@ def recover_existing_artifact(
             lock.close()
         for descriptor in descriptors:
             os.close(descriptor)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot-date", required=True)
+    parser.add_argument("--source-receipt-line", type=int, required=True)
+    parser.add_argument("--expected-raw-bytes", type=int, required=True)
+    parser.add_argument("--no-retention", action="store_true", required=True)
+    parser.add_argument("--sqlite-timeout-seconds", type=float, default=300.0)
+    args = parser.parse_args(argv)
+    timeout = daily._configured_backup_timeout_seconds()
+    if not daily._env_flag_enabled(daily.BACKUP_SUPERVISED_CHILD_ENV):
+        code = daily._supervise_backup_process(
+            timeout,
+            command=[
+                sys.executable,
+                "-I",
+                "-m",
+                "brainlayer.backup_recovery",
+                *(argv if argv is not None else sys.argv[1:]),
+            ],
+        )
+        if code != 0:
+            report("backup-daily", "Preserved backup recovery failed; check the backup log")
+        return code
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGALRM, signal.SIGTERM, signal.SIGINT)}
+    try:
+        signal.signal(signal.SIGALRM, daily._raise_backup_timeout)
+        signal.signal(signal.SIGTERM, daily._raise_backup_stopped)
+        signal.signal(signal.SIGINT, daily._raise_backup_stopped)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        folder = os.environ.get("BRAINLAYER_BACKUP_DRIVE_FOLDER", os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH"))
+        result = recover_existing_artifact(
+            snapshot_date=args.snapshot_date,
+            source_receipt_line=args.source_receipt_line,
+            expected_raw_bytes=args.expected_raw_bytes,
+            sqlite_timeout_seconds=args.sqlite_timeout_seconds,
+            staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(daily.DEFAULT_STAGING_DIR))),
+            folder_parts=folder.split("/") if folder else None,
+        )
+        print(json.dumps(result, sort_keys=True), flush=True)
+        return 0
+    except Exception as exc:
+        print(f"Preserved backup recovery failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return 1
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
