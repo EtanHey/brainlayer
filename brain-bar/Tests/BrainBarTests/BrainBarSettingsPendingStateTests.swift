@@ -218,11 +218,77 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         XCTAssertEqual(model.groupStatus(.ingest).health, .unhealthy)
     }
 
+    func testMeasuredWatcherFailureWinsInBothIndependentReaderOrders() async throws {
+        let now = Date(timeIntervalSince1970: 1_791_500_000)
+        let health = WatcherHealthFileRead.readable(WatcherHealthFile(
+            updatedAt: now, pollCount: 72, alertReasons: ["file_ingestion_failure"], dbProbeFailed: true,
+            fileIngestionFailureCount: 2, earliestFileIngestionFailureAt: now.addingTimeInterval(-60)
+        ))
+        for watcherFirst in [true, false] {
+            let launchd = PendingLaunchdSamples([healthyStates])
+            let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+            let watcherReads = PendingSettingsSamples([health])
+            defer { launchd.releaseAll(); reads.releaseAll(); watcherReads.releaseAll() }
+            let (root, model) = try makeModel(launchd: launchd, reads: reads, refreshOnLoad: true,
+                                            watcherReads: watcherReads, now: now)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try await waitUntil { launchd.calls == 1 && watcherReads.calls == 1 }
+            XCTAssertEqual(model.groupStatus(.ingest).health, .checking)
+            XCTAssertEqual(model.footerPresentation.state, .checking)
+            if !watcherFirst {
+                launchd.release(0)
+                try await waitUntil { !model.isRefreshingLaunchdStatus }
+            }
+            watcherReads.release(0)
+            try await waitUntil { model.watcherHealth == health }
+            XCTAssertTrue(model.watcherStatus.needsAttention)
+            let reason = try XCTUnwrap(model.watcherStatus.reasonText(now: now))
+            XCTAssertTrue(reason.contains("2 transcript files could not be ingested"))
+            XCTAssertEqual(model.groupStatus(.ingest).health, .unhealthy)
+            XCTAssertEqual(model.groupStatus(.ingest).attentionReason, reason)
+            XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
+            XCTAssertEqual(model.footerPresentation.detail, reason)
+            if watcherFirst {
+                XCTAssertTrue(model.isRefreshingLaunchdStatus)
+                XCTAssertFalse(model.hasCompletedLaunchdSample)
+                XCTAssertEqual(model.groupStatus(.maintenance).health, .checking)
+                launchd.release(0)
+                try await waitUntil { !model.isRefreshingLaunchdStatus }
+                XCTAssertEqual(model.groupStatus(.ingest).attentionReason, reason)
+                XCTAssertEqual(model.footerPresentation.detail, reason)
+            }
+        }
+    }
+
+    func testInjectedWatcherAttentionWinsWhileHealthyAndUnknownStayChecking() throws {
+        let now = Date(timeIntervalSince1970: 1_791_500_000)
+        let degraded = WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now, pollCount: 72, dbProbeFailed: true))
+        let controls: [WatcherHealthFileRead?] = [nil, .missing(path: "/fixture/watcher-health.json"),
+                                                .readable(WatcherHealthFile(updatedAt: now, pollCount: 72))]
+        for health in [degraded] + controls {
+            let launchd = PendingLaunchdSamples([healthyStates])
+            let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+            defer { launchd.releaseAll(); reads.releaseAll() }
+            let (root, model) = try makeModel(launchd: launchd, reads: reads, initialWatcherHealth: health, now: now)
+            defer { try? FileManager.default.removeItem(at: root) }
+            XCTAssertFalse(model.hasCompletedLaunchdSample)
+            let failed = health == degraded
+            XCTAssertEqual(model.watcherStatus.needsAttention, failed)
+            XCTAssertEqual(model.groupStatus(.ingest).health, failed ? .unhealthy : .checking)
+            XCTAssertEqual(model.footerPresentation.state, failed ? .watcher(model.watcherStatus) : .checking)
+            XCTAssertEqual(model.groupStatus(.ingest).attentionReason, failed ? model.watcherStatus.reasonText(now: now) : nil)
+            XCTAssertEqual(model.footerPresentation.detail, failed ? model.watcherStatus.reasonText(now: now) : nil)
+        }
+    }
+
     private func makeModel(
         launchd: PendingLaunchdSamples, reads: PendingSettingsSamples<ObservabilityReadResult>,
         initialStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
         initialResult: ObservabilityReadResult? = nil,
-        refreshOnLoad: Bool = false
+        refreshOnLoad: Bool = false,
+        watcherReads: PendingSettingsSamples<WatcherHealthFileRead>? = nil,
+        initialWatcherHealth: WatcherHealthFileRead? = nil,
+        now: Date = Date()
     ) throws -> (URL, BrainBarSettingsViewModel) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("settings-pending-\(UUID().uuidString)")
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
@@ -231,8 +297,12 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
             store: store, launchdStatusProvider: launchd,
             embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
             initialLaunchdStates: initialStates, refreshStatusOnLoad: refreshOnLoad,
+            now: { now },
             observabilityURL: root.appendingPathComponent("observability.json"), initialObservabilityResult: initialResult,
-            observabilityRead: { _ in await Task.detached { reads.sample() }.value }
+            observabilityRead: { _ in await Task.detached { reads.sample() }.value },
+            watcherHealthURL: watcherReads == nil ? nil : root.appendingPathComponent("watcher-health.json"),
+            initialWatcherHealth: initialWatcherHealth,
+            watcherHealthRead: { _ in watcherReads?.sample() ?? .missing(path: "/fixture/watcher-health.json") }
         ))
     }
 

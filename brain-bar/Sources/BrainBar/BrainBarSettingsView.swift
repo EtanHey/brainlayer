@@ -229,14 +229,16 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func groupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
-        if !hasCompletedLaunchdSample, isGroupEnabled(group) {
+        let watcher = watcherStatus
+        // The independent health reader can measure a failure before launchd finishes.
+        if !hasCompletedLaunchdSample, isGroupEnabled(group), !(group == .ingest && watcher.needsAttention) {
             return .init(health: .checking, attentionReason: nil, lastRunText: "Checking…", nextRunText: "Checking…")
         }
         return group.status(
             settings: config.launchdJobs,
             observations: launchdObservations,
             formatDate: DashboardMetricFormatter.jobDateTimeString,
-            watcher: watcherStatus,
+            watcher: watcher,
             maintenance: maintenanceEvidence,
             now: now()
         )
@@ -654,7 +656,7 @@ struct BrainBarSettingsFooterPresentation {
         if !config.systemEnabled {
             state = .systemOff
             detail = nil
-        } else if isChecking {
+        } else if isChecking, watcher?.needsAttention != true {
             state = .checking
             detail = nil
         } else if let watcher {
