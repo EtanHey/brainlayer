@@ -362,7 +362,11 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
         t3_linkage_resolved = True
         try:
-            linked_t3_session_ids = t3_app_codex_session_ids(t3_state_db) if t3_state_db.exists() else set()
+            linked_t3_session_ids = (
+                t3_app_codex_session_ids(t3_state_db)
+                if t3_state_db.exists() or os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", "1") != "1"
+                else set()
+            )
         except BrainLayerAlarm:
             linked_t3_session_ids = set()
             t3_linkage_resolved = False
@@ -372,6 +376,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         deferred_entries: list[dict[str, Any]] = []
         source_files_seen: set[str] = set()
         confirmed_offsets: dict[str, int] = {}
+        t3_session_identity_cache: dict = {}
 
         def confirm_entry(entry: dict[str, Any], source_file: str) -> None:
             raw_offset = entry.get("_line_end_offset")
@@ -420,11 +425,22 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             source_file = entry.get("_source_file", "unknown")
             source_files_seen.add(source_file)
             if not t3_linkage_resolved:
-                source_only_provenance = classify_provenance(source_file, t3_linked_session_ids=set())
+                source_only_provenance = classify_provenance(
+                    source_file, t3_linked_session_ids=set(), t3_projection_version=1
+                )
                 if source_only_provenance.provenance_tag == "codex-session":
                     # Do not persist or confirm ambiguous Codex provenance; retain its payload for a later pass.
                     deferred_entries.append(entry)
                     continue
+            try:
+                provenance_decision = classify_provenance(
+                    source_file,
+                    t3_linked_session_ids=linked_t3_session_ids,
+                    t3_session_identity_cache=t3_session_identity_cache,
+                )
+            except BrainLayerAlarm:
+                deferred_entries.append(entry)
+                continue
             project = source_projects.get(source_file)
             source_identity = _source_file_identity(source_file)
             cached_identity = resolved_source_identities.get(source_file)
@@ -524,12 +540,6 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     source="realtime_watcher",
                     source_file=source_file,
                     project=project,
-                )
-                provenance_decision = classify_provenance(
-                    source_file,
-                    base_content_class,
-                    content=clean_content,
-                    t3_linked_session_ids=linked_t3_session_ids,
                 )
                 visibility = effective_visibility(provenance_decision, base_content_class)
                 content_class = _content_class_for_visibility(base_content_class, visibility)
