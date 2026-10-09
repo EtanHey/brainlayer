@@ -12,6 +12,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
     /// The Backups page's Technical details disclosure (E1); closed by default.
     @Published var backupDetailsExpanded = false
     @Published var isRefreshingLaunchdStatus = false
+    /// A refresh retains its last completed sample; only a first read presents Checking.
+    @Published private(set) var hasCompletedLaunchdSample: Bool
+    @Published private(set) var hasCompletedObservabilityRead: Bool
+    @Published private(set) var isRefreshingObservabilityStatus = false
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
@@ -42,7 +46,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
         BrainBarSettingsFooterPresentation(
             config: configReadSucceeded ? config : nil,
             watcher: watcherStatus,
-            now: now()
+            now: now(),
+            isChecking: !hasCompletedLaunchdSample && config.launchdJobs[.watch]?.enabled != false
         )
     }
 
@@ -70,6 +75,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private var previousConfigForLastSaveReceipt: BrainLayerConfig?
     private var observabilityTask: Task<Void, Never>?
     private var embeddingSampleGeneration: UInt64 = 0
+    private var launchdSampleGeneration: UInt64 = 0
 
     init(
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
@@ -82,7 +88,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         refreshStatusOnLoad: Bool = true,
         now: @escaping @Sendable () -> Date = Date.init,
         observabilityURL: URL? = nil,
-        initialObservabilityResult: ObservabilityReadResult = .unreadable("Backup status unavailable."),
+        initialObservabilityResult: ObservabilityReadResult? = nil,
         confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
             await Task.detached { ObservabilityReader.readReconciled(url: url) }.value
@@ -111,7 +117,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.workspace = workspace
         backupSchedules = initialBackupSchedules
         maintenanceEvidence = initialMaintenanceEvidence
-        observabilityResult = initialObservabilityResult
+        observabilityResult = initialObservabilityResult ?? .unreadable("Backup status unavailable.")
+        hasCompletedObservabilityRead = initialObservabilityResult != nil || observabilityURL == nil
+        hasCompletedLaunchdSample = !initialLaunchdStates.isEmpty || !initialLaunchdObservations.isEmpty
         launchdObservations = initialLaunchdObservations.isEmpty
             ? initialLaunchdStates.mapValues(BrainLayerLaunchdJobObservation.stateOnly)
             : initialLaunchdObservations
@@ -221,7 +229,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func groupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
-        group.status(
+        if !hasCompletedLaunchdSample, isGroupEnabled(group) {
+            return .init(health: .checking, attentionReason: nil, lastRunText: "Checking…", nextRunText: "Checking…")
+        }
+        return group.status(
             settings: config.launchdJobs,
             observations: launchdObservations,
             formatDate: DashboardMetricFormatter.jobDateTimeString,
@@ -247,6 +258,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     }
 
     func refreshLaunchdStatus() {
+        launchdSampleGeneration &+= 1
+        let generation = launchdSampleGeneration
         isRefreshingLaunchdStatus = true
         refreshEmbeddingResidency()
         refreshWatcherHealth()
@@ -256,12 +269,21 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let observations = await Task.detached {
                 provider.sampleActivity()
             }.value
+            guard generation == launchdSampleGeneration else { return }
             launchdObservations = observations
-            applyLaunchdStates(observations.mapValues(\.loadState))
+            applyLaunchdStates(Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
+                ($0, observations[$0]?.loadState ?? .unknown)
+            }))
+            hasCompletedLaunchdSample = true
             activeRuntimeObservation = runtimeStatusProvider.sample()
             refreshLastSaveReceiptActiveState()
             isRefreshingLaunchdStatus = false
         }
+    }
+
+    /// Advanced keeps its last observation on refresh, just like the group cards.
+    func launchdStatusTitle(_ job: BrainLayerLaunchdJob) -> String {
+        hasCompletedLaunchdSample ? (config.launchdJobs[job]?.loadState.title ?? "Unknown") : "Checking…"
     }
 
     var backupStatus: ObservabilityBackupStatus? {
@@ -285,7 +307,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
             drive: drive,
             status: backupStatus,
             statusUnavailableReason: backupStatusReason ?? "Backup status is unmeasurable.",
-            attentionSentence: backupChecks?.attentionSentence
+            attentionSentence: backupChecks?.attentionSentence,
+            isCheckingStatus: !hasCompletedObservabilityRead
         )
     }
 
@@ -329,6 +352,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 #if DEBUG
     func setObservabilityResultForTesting(_ result: ObservabilityReadResult) {
         observabilityResult = result
+        hasCompletedObservabilityRead = true
     }
 #endif
 
@@ -339,7 +363,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func copyText(_ text: String) { workspace.copy(text) }
 
     var backupStatusReason: String? {
-        switch observabilityResult {
+        guard hasCompletedObservabilityRead else { return nil }
+        return switch observabilityResult {
         case let .unreadable(value):
             value
         case let .readable(document):
@@ -378,12 +403,15 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func refreshObservabilityStatus() {
         guard let observabilityURL else { return }
         observabilityTask?.cancel()
+        isRefreshingObservabilityStatus = true
         let read = observabilityRead
         observabilityTask = Task { [weak self] in
             let result = await read(observabilityURL)
             guard !Task.isCancelled else { return }
             guard let self else { return }
             observabilityResult = result
+            hasCompletedObservabilityRead = true
+            isRefreshingObservabilityStatus = false
         }
     }
 
@@ -590,12 +618,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
 }
 
 enum BrainBarSettingsFooterState: Equatable {
+    case checking
     case watcher(WatcherHealthStatus)
     case systemOff
     case unavailable
 
     var title: String {
         switch self {
+        case .checking: "Checking…"
         case let .watcher(status): status.title
         case .systemOff: "System off"
         case .unavailable: "Status unavailable"
@@ -611,7 +641,7 @@ struct BrainBarSettingsFooterPresentation {
     let showsLock: Bool
     let symbol: String
 
-    init(config: BrainLayerConfig?, watcher: WatcherHealthStatus?, now: Date = Date()) {
+    init(config: BrainLayerConfig?, watcher: WatcherHealthStatus?, now: Date = Date(), isChecking: Bool = false) {
         guard let config else {
             state = .unavailable
             detail = nil
@@ -623,6 +653,9 @@ struct BrainBarSettingsFooterPresentation {
 
         if !config.systemEnabled {
             state = .systemOff
+            detail = nil
+        } else if isChecking {
+            state = .checking
             detail = nil
         } else if let watcher {
             state = .watcher(watcher)
@@ -871,10 +904,11 @@ struct BrainBarSettingsView: View {
             Button {
                 viewModel.refreshAllStatus()
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label(viewModel.isRefreshingLaunchdStatus || viewModel.isRefreshingObservabilityStatus ? "Refreshing…" : "Refresh",
+                      systemImage: "arrow.clockwise")
             }
             .controlSize(.small)
-            .disabled(viewModel.isRefreshingLaunchdStatus)
+            .disabled(viewModel.isRefreshingLaunchdStatus || viewModel.isRefreshingObservabilityStatus)
         }
     }
 
@@ -1036,6 +1070,10 @@ struct BrainBarSettingsView: View {
                 detailsExpanded: $viewModel.backupDetailsExpanded,
                 copy: { viewModel.copyText($0) }
             )
+        } else if !viewModel.hasCompletedObservabilityRead {
+            Label("Checking backup status…", systemImage: "clock")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextMuted)
         } else {
             Label(
                 viewModel.backupStatusReason ?? "Backup status is unmeasurable.",
@@ -1129,6 +1167,7 @@ private struct BrainBarJobGroupCard: View {
 
     static func symbol(_ health: BrainLayerLaunchdGroupHealth) -> String {
         switch health {
+        case .checking: "clock"
         case .healthy: "checkmark.circle.fill"
         case .awaitingRun: "clock.fill"
         case .unhealthy: "exclamationmark.triangle.fill"
@@ -1142,7 +1181,7 @@ private struct BrainBarJobGroupCard: View {
         case .healthy: BrainBarStateTheme.active.theme.swiftUIColor
         case .awaitingRun: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unhealthy: BrainBarStateTheme.error.theme.swiftUIColor
-        case .unknown, .skipped: Color.brainBarTextMuted
+        case .checking, .unknown, .skipped: Color.brainBarTextMuted
         }
     }
 
@@ -1161,6 +1200,7 @@ private struct BrainBarJobGroupCard: View {
             )
         }
         let (symbol, color): (String, Color) = switch backupsHealth.badge {
+        case .checking: (Self.symbol(.checking), Self.color(.checking))
         case .healthy: (Self.symbol(.healthy), Self.color(.healthy))
         case .awaitingRun: (Self.symbol(.awaitingRun), Self.color(.awaitingRun))
         case .expiring: ("clock.badge.exclamationmark.fill", Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
@@ -1245,9 +1285,9 @@ private struct BrainBarJobToggle: View {
             }
             HStack(spacing: 6) {
                 Circle()
-                    .fill(loadStateColor(setting.loadState))
+                    .fill(viewModel.hasCompletedLaunchdSample ? loadStateColor(setting.loadState) : Color.brainBarTextMuted)
                     .frame(width: 7, height: 7)
-                Text(setting.loadState.title)
+                Text(viewModel.launchdStatusTitle(job))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.brainBarTextMuted)
             }
