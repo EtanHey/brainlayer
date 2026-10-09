@@ -160,6 +160,83 @@ def test_latest_excludes_invalid_rows_even_when_they_would_fill_the_limit(tmp_pa
     assert [item["chunk_id"] for item in actual["stores"]["latest"]] == ["synthetic-00", "synthetic-01"]
 
 
+@pytest.mark.parametrize("row_count", [0, 3, 600])
+def test_latest_fetches_content_only_for_selected_rows(row_count: int) -> None:
+    from datetime import UTC, timedelta
+
+    from brainlayer.observability_surface import _stores
+
+    now = datetime(2026, 10, 9, 1, 0, tzinfo=UTC)
+    content_reads: list[str] = []
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, created_at TEXT, content TEXT, "
+            "source_class TEXT, source TEXT, sender TEXT, source_file TEXT, content_class TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO items VALUES (?, ?, ?, 'cli', 'codex', NULL, 'synthetic', 'user_message')",
+            [
+                (f"chunk-{index:04}", (now + timedelta(seconds=index)).isoformat(), f"payload {index}")
+                for index in range(row_count)
+            ],
+        )
+
+        def read_content(value: str) -> str:
+            content_reads.append(value)
+            return value
+
+        # A view makes SQLite's payload evaluation observable without a timing threshold.
+        # Ascending insertion puts a new row into the top-five sorter on every step.
+        connection.create_function("read_content", 1, read_content)
+        connection.execute(
+            "CREATE VIEW chunks AS SELECT rowid, id, created_at, read_content(content) AS content, "
+            "source_class, source, sender, source_file, content_class FROM items"
+        )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(chunks)")}
+        stores = _stores(connection, columns, {}, now)
+
+    selected = list(range(max(0, row_count - 5), row_count))[::-1]
+    assert [row["chunk_id"] for row in stores["latest"]] == [f"chunk-{index:04}" for index in selected]
+    assert [row["preview"] for row in stores["latest"]] == [f"payload {index}" for index in selected]
+    assert len(content_reads) == len(selected)
+
+
+def test_latest_keeps_timestamp_ties_and_nullable_ids() -> None:
+    from datetime import UTC
+
+    from brainlayer.observability_surface import _stores
+
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute(
+            "CREATE TABLE chunks (id TEXT PRIMARY KEY, created_at TEXT, content TEXT, "
+            "source_class TEXT, source TEXT, sender TEXT, source_file TEXT, content_class TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO chunks VALUES (?, ?, ?, 'cli', 'codex', NULL, 'synthetic', 'user_message')",
+            [
+                (None, "2026-10-09T03:00:00+02:00", "first nullable id"),
+                (None, "2026-10-09T01:00:00Z", "second nullable id"),
+                ("a", "2026-10-09T01:00:00Z", "tied a"),
+                ("b", "2026-10-09T03:00:00+02:00", "tied b"),
+                ("c", "2026-10-09T01:00:00Z", "tied c"),
+                ("older", "2026-10-08T23:59:59Z", "excluded older"),
+                ("invalid", "invalid", "excluded invalid"),
+            ],
+        )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(chunks)")}
+        stores = _stores(connection, columns, {}, datetime(2026, 10, 9, 2, 0, tzinfo=UTC))
+
+    assert [row["chunk_id"] for row in stores["latest"]] == ["None", "None", "a", "b", "c"]
+    assert {row["preview"] for row in stores["latest"]} == {
+        "first nullable id",
+        "second nullable id",
+        "tied a",
+        "tied b",
+        "tied c",
+    }
+    assert {row["stored_at"] for row in stores["latest"]} == {"2026-10-09T01:00:00Z"}
+
+
 def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import brainlayer.observability_surface as surface
 
