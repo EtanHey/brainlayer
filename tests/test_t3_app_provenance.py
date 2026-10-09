@@ -409,3 +409,217 @@ def test_missing_runtime_schema_raises_loud_alarm(tmp_path: Path) -> None:
             str(_codex_source(tmp_path, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")),
             t3_state_db=state_db,
         )
+
+
+def _v2_state(tmp_path, payloads):
+    path = _state_db(tmp_path, [])  # retained legacy tables must not win explicit V2 selection
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, provider TEXT, payload_json TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?)",
+            [(str(i), provider, json.dumps(payload)) for i, (provider, payload) in enumerate(payloads)],
+        )
+    return path
+
+
+def _header(source, identity, **fields):
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(json.dumps({"type": "session_meta", "payload": {"id": identity, **fields}}) + "\n")
+
+
+def test_v2_links_parent_and_head_by_header_never_filename(tmp_path, monkeypatch):
+    from brainlayer.t3_provenance import t3_app_codex_session_ids
+
+    parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    head = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    unrelated = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    state = _v2_state(
+        tmp_path,
+        [
+            (
+                "codex",
+                {
+                    "nativeThreadRef": {"driver": "codex", "nativeId": parent},
+                    "nativeConversationHeadRef": {"driver": "codex", "nativeId": head},
+                },
+            ),
+            ("claude", {"nativeThreadRef": {"driver": "claude", "nativeId": unrelated}}),
+        ],
+    )
+    monkeypatch.setenv("BRAINLAYER_T3_PROJECTION_VERSION", "2")
+    assert t3_app_codex_session_ids(state) == {parent, head}
+    source = _codex_source(tmp_path, unrelated)
+    _header(source, parent, session_id=parent, originator="T3 Code")
+    decision = classify_provenance(str(source), t3_state_db=state)
+    assert (decision.provenance_tag, decision.source_class) == ("t3-app-session", "desktop")
+    _header(source, head)
+    assert classify_provenance(str(source), t3_state_db=state).source_class == "desktop"
+    _header(source, unrelated, originator="codex_cli_rs", cwd="/code/t3code")
+    assert (
+        classify_provenance(str(source), content="T3 Code brain-worker", t3_state_db=state).source_class == "cli-agent"
+    )
+    _header(source, unrelated, originator="T3 Code")
+    with pytest.raises(BrainLayerAlarm, match="t3_runtime_linkage_pending"):
+        classify_provenance(str(source), t3_state_db=state)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"nativeThreadRef": []},
+        {"nativeThreadRef": {"driver": "claude", "nativeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}},
+        {"nativeThreadRef": {"driver": "codex", "nativeId": "bad"}},
+        {"nativeConversationHeadRef": {"driver": "codex", "nativeId": 3}},
+    ],
+)
+def test_v2_malformed_linkage_fails_closed(tmp_path, payload):
+    from brainlayer.t3_provenance import t3_app_codex_session_ids
+
+    state = _v2_state(tmp_path, [("codex", payload)])
+    with pytest.raises(BrainLayerAlarm, match="t3_runtime_linkage_invalid"):
+        t3_app_codex_session_ids(state, projection_version=2)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"type": "user"},
+        {"type": "session_meta", "payload": {"id": "bad"}},
+        {
+            "type": "session_meta",
+            "payload": {
+                "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            },
+        },
+    ],
+)
+def test_v2_invalid_header_defers_instead_of_filename_guess(tmp_path, record):
+    from brainlayer.t3_provenance import codex_header_identity
+
+    source = _codex_source(tmp_path, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps(record) + "\n")
+    with pytest.raises(BrainLayerAlarm, match="t3_session_identity_invalid"):
+        codex_header_identity(source)
+    source.write_bytes(b"x" * (1024 * 1024 + 1))
+    with pytest.raises(BrainLayerAlarm, match="t3_session_identity_invalid"):
+        codex_header_identity(source)
+
+
+def test_v2_header_cache_invalidates_rewrite(tmp_path):
+    from brainlayer.t3_provenance import codex_header_identity
+
+    source = _codex_source(tmp_path, "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+    cache = {}
+    first = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    second = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    _header(source, first)
+    assert codex_header_identity(source, cache)[0] == first
+    _header(source, second, originator="T3 Code")
+    assert codex_header_identity(source, cache) == (second, True)
+
+
+def test_v2_flush_deferral_recovery_and_queue_class(tmp_path, monkeypatch):
+    session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    source = _codex_source(tmp_path, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    _header(source, session, originator="T3 Code")
+    state = _state_db(tmp_path, [])
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state))
+    monkeypatch.setenv("BRAINLAYER_T3_PROJECTION_VERSION", "2")
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
+    flush = create_flush_callback(arbitrated=True)
+    entry = {
+        "type": "user",
+        "message": {
+            "content": [
+                {"type": "text", "text": "This settled desktop message must retain its origin and survive recovery."}
+            ]
+        },
+        "timestamp": "2026-10-09T00:00:00Z",
+        "_source_file": str(source),
+        "_line_end_offset": 300,
+    }
+    failed = flush([entry])
+    assert failed.inserted == 0 and dict(failed) == {}
+    assert failed.deferred_entries == [entry]
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            "CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, provider TEXT, payload_json TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?)",
+            ("t3", "codex", json.dumps({"nativeThreadRef": {"driver": "codex", "nativeId": session}})),
+        )
+    recovered = flush([entry])
+    assert recovered.inserted == 1 and dict(recovered) == {str(source): 300}
+    events = [
+        json.loads(line) for path in (tmp_path / "queue").glob("*.jsonl") for line in path.read_text().splitlines()
+    ]
+    assert [(item["source_class"], item["provenance_class"]) for item in events] == [("desktop", "t3-app-session")]
+    source.write_text('{"type":"session_meta","payload":{"id":"bad"}}\n')
+    retry = flush([{**entry, "_line_end_offset": 400}])
+    assert retry.inserted == 0 and dict(retry) == {} and len(retry.deferred_entries) == 1
+
+
+def test_memory_reader_stays_excluded_before_v2_header_lookup(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_T3_PROJECTION_VERSION", "2")
+    source = tmp_path / ".claude/projects/code/subagents/brain-worker/agent.jsonl"
+    decision = classify_provenance(str(source), t3_linked_session_ids=set())
+    assert (decision.source_class, decision.search_policy) == ("brain-worker", "OUT")
+
+
+def test_v2_persisted_desktop_is_hidden_but_exactly_readable(tmp_path, monkeypatch):
+    from brainlayer.vector_store import VectorStore
+
+    session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    state = _v2_state(tmp_path, [("codex", {"nativeThreadRef": {"driver": "codex", "nativeId": session}})])
+    source = _codex_source(tmp_path, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    _header(source, session)
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state))
+    monkeypatch.setenv("BRAINLAYER_T3_PROJECTION_VERSION", "2")
+    destination = tmp_path / "destination.db"
+    flush = create_flush_callback(db_path=destination, arbitrated=False)
+    result = flush(
+        [
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "DesktopVisibilityNeedle preserves this exact settled personal message.",
+                        }
+                    ]
+                },
+                "timestamp": "2026-10-09T00:00:00Z",
+                "_source_file": str(source),
+                "_line_end_offset": 300,
+            }
+        ]
+    )
+    assert result.inserted == 1
+    store = VectorStore(destination)
+    row = store.conn.execute("SELECT id,source_class,provenance_class FROM chunks").fetchone()
+    assert row[1:] == ("desktop", "t3-app-session")
+    assert store.search(query_text="DesktopVisibilityNeedle", n_results=20)["ids"][0] == []
+    assert store.get_context(row[0])["target"]["id"] == row[0]
+    assert store.search(query_text="DesktopVisibilityNeedle", n_results=20, include_hidden_source_classes=True)["ids"][
+        0
+    ] == [row[0]]
+    store.close()
+
+
+def test_v2_selection_missing_schema_and_invalid_version_alarm(tmp_path):
+    from brainlayer.t3_provenance import t3_app_codex_session_ids
+
+    state = _state_db(tmp_path, [])
+    with pytest.raises(BrainLayerAlarm, match="t3_runtime_schema_drift"):
+        t3_app_codex_session_ids(state, projection_version=2)
+    with pytest.raises(BrainLayerAlarm, match="t3_runtime_selection_invalid"):
+        t3_app_codex_session_ids(state, projection_version=3)
+    with pytest.raises(BrainLayerAlarm, match="t3_runtime_unavailable"):
+        t3_app_codex_session_ids(tmp_path / "missing.sqlite", projection_version=2)
