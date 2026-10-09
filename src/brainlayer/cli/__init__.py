@@ -101,6 +101,7 @@ def backup_recover_existing_command(
     code = subprocess.run(
         [
             str(runner),
+            "--refuse-disabled",
             str(interpreter),
             "-I",
             "-m",

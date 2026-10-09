@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from brainlayer import backup_daily as daily
@@ -26,7 +27,14 @@ def test_cli_routes_through_installed_wrapper_and_pinned_python(tmp_path, monkey
     result = CliRunner().invoke(app, ["backup", "recover-existing", *ARGS])
     assert result.exit_code == 7
     command, options = calls[0]
-    assert command[:5] == [str(runner), "/synthetic/venv/bin/python", "-I", "-m", "brainlayer.backup_recovery"]
+    assert command[:6] == [
+        str(runner),
+        "--refuse-disabled",
+        "/synthetic/venv/bin/python",
+        "-I",
+        "-m",
+        "brainlayer.backup_recovery",
+    ]
     assert "--no-retention" in command
     assert "PYTHONPATH" not in options["env"]
 
@@ -111,3 +119,76 @@ def test_uploader_keeps_verified_descriptor_when_path_is_replaced(tmp_path, monk
         assert metadata[0]["appProperties"]["brainlayer_recovery_attempt"] == "attempt"
     finally:
         os.close(descriptor)
+
+
+@pytest.mark.parametrize(
+    "sleep_seconds,disabled_service,skip_gates", [("0", False, "0"), ("3600", False, "0"), ("3600", True, "1")]
+)
+def test_manual_env_wrapper_refuses_disabled_promptly_without_exec(
+    tmp_path, sleep_seconds, disabled_service, skip_gates
+):
+    import os
+    import signal
+    import subprocess
+
+    wrapper = Path(__file__).parents[1] / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "synthetic.env"
+    gate = "BRAINLAYER_LAUNCHD_BACKUP_DAILY_ENABLED=0" if disabled_service else "BRAINLAYER_SYSTEM_ENABLED=0"
+    env_file.write_text(
+        f"{gate}\nBRAINLAYER_DISABLED_SLEEP_SECONDS={sleep_seconds}\nBRAINLAYER_SKIP_DISABLE_GATES={skip_gates}\n"
+    )
+    env_file.chmod(0o600)
+    marker = tmp_path / "must-not-execute"
+    child_env = os.environ.copy()
+    child_env.update(BRAINLAYER_ENV_FILE=str(env_file), BRAINLAYER_LAUNCHD_SERVICE="backup-daily")
+    child_env.pop("XPC_SERVICE_NAME", None)
+    process = subprocess.Popen(
+        ["bash", str(wrapper), "--refuse-disabled", "/usr/bin/touch", str(marker)],
+        env=child_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        _, stderr = process.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.communicate(timeout=2)
+        pytest.fail("manual disabled operation slept outside recovery deadline")
+    assert process.returncode == 78
+    assert "disabled by config" in stderr and "refused" in stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("enabled,expected_exit", [(True, 23), (False, 78)])
+def test_cli_executes_real_source_wrapper_with_temporary_configuration(tmp_path, monkeypatch, enabled, expected_exit):
+    import shutil
+
+    from brainlayer import hook_python
+
+    wrapper = tmp_path / ".local/lib/brainlayer/brainlayer-env-run.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy2(Path(__file__).parents[1] / "scripts/launchd/brainlayer-env-run.sh", wrapper)
+    env_file = tmp_path / "synthetic.env"
+    env_file.write_text(
+        f"BRAINLAYER_SYSTEM_ENABLED={int(enabled)}\nBRAINLAYER_DISABLED_SLEEP_SECONDS=3600\nRECOVERY_SYNTHETIC_VALUE=loaded\n"
+    )
+    env_file.chmod(0o600)
+    argument_receipt = tmp_path / "arguments.txt"
+    interpreter = tmp_path / "synthetic-python"
+    interpreter.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$RECOVERY_SYNTHETIC_VALUE" "$@" > "$RECOVERY_SYNTHETIC_ARGS_PATH"\nexit 23\n'
+    )
+    interpreter.chmod(0o700)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(hook_python, "resolve_hook_python", lambda: str(interpreter))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(env_file))
+    monkeypatch.setenv("RECOVERY_SYNTHETIC_ARGS_PATH", str(argument_receipt))
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    result = CliRunner().invoke(app, ["backup", "recover-existing", *ARGS])
+    assert result.exit_code == expected_exit
+    if enabled:
+        assert argument_receipt.read_text().splitlines()[:4] == ["loaded", "-I", "-m", "brainlayer.backup_recovery"]
+    else:
+        assert not argument_receipt.exists()

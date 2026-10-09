@@ -2,6 +2,14 @@
 # Source BrainLayer's private env file before execing a launchd-managed command.
 set -euo pipefail
 
+# Manual operators must fail before a launchd-style disabled sleep or success.
+if [ "${1:-}" = "--refuse-disabled" ]; then
+    readonly refuse_disabled_operation=1
+    shift
+else
+    readonly refuse_disabled_operation=0
+fi
+
 ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:${PATH:-}"
 
@@ -111,6 +119,10 @@ is_false() {
 
 sleep_then_exit_disabled() {
     local reason="$1"
+    if [ "$refuse_disabled_operation" = "1" ]; then
+        echo "BrainLayer manual operation refused: disabled by config: $reason" >&2
+        exit 78
+    fi
     local sleep_seconds="${BRAINLAYER_DISABLED_SLEEP_SECONDS:-3600}"
     echo "BrainLayer launchd service ${BRAINLAYER_LAUNCHD_SERVICE:-unknown} disabled by config: $reason" >&2
     if [ "$sleep_seconds" != "0" ]; then
@@ -125,7 +137,7 @@ elif [ -n "${BRAINLAYER_ENRICH_ENABLED:-}" ]; then
     export BRAINLAYER_AUTO_ENRICH="0"
 fi
 
-if [ "${BRAINLAYER_SKIP_DISABLE_GATES:-0}" != "1" ]; then
+if [ "$refuse_disabled_operation" = "1" ] || [ "${BRAINLAYER_SKIP_DISABLE_GATES:-0}" != "1" ]; then
     if is_false "${BRAINLAYER_SYSTEM_ENABLED:-1}"; then
         sleep_then_exit_disabled "BRAINLAYER_SYSTEM_ENABLED"
     fi
