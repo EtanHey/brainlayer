@@ -106,10 +106,33 @@ Streaming messages become eligible when settled. Missing schema or invalid
 payloads raise an alarm; the reader never falls back to legacy tables. Dry-run
 writes the health file but does not write the destination database.
 
-The packaged daily 03:45 T3 LaunchAgent retains the legacy selection. V2 service
-wiring is a separate deployment step; this option does not automatically enable
-another source, change watcher roots, or update provider-rollout provenance.
-`BRAINLAYER_T3_STATE_DB` configures watcher linkage, not this CLI selection.
+The packaged T3 LaunchAgent retains legacy selection and the daily 03:45 schedule
+by default. To select V2 durably, add these settings to the private BrainLayer env
+file, then rerender with the installed `scripts/launchd/install.sh t3-ingest`:
+
+```dotenv
+BRAINLAYER_T3_INGEST_STATE_DB=/Users/example/.t3/userdata/statev2.sqlite
+BRAINLAYER_T3_INGEST_PROJECTION_VERSION=2
+BRAINLAYER_T3_INGEST_INTERVAL_SECONDS=60
+```
+
+V2 requires an explicitly selected absolute source path. No source is detected
+automatically; the importer reads all projects. The renderer pins `--db` to the
+configured `BRAINLAYER_DB` (or canonical DB) and `--health-path` beside that DB.
+`BRAINLAYER_T3_INGEST_HEALTH_PATH` may explicitly override health placement.
+Invalid configuration fails before the installed plist is replaced.
+
+The optional interval accepts 60–86400 seconds and replaces the daily calendar;
+unset restores the original daily schedule. `RunAtLoad` remains enabled. launchd
+runs one instance of this label, and the existing DB writer arbitration still
+applies. Freshness is the interval plus import runtime, model startup, and any
+writer contention; the daily default does not meet active-chat freshness. First
+V2 execution also imports historical settled messages. Verify loaded argv,
+schedule, health and exact persisted message IDs after a reviewed deployment.
+
+These settings select the SQLite importer. `BRAINLAYER_T3_STATE_DB` configures
+watcher provider linkage separately; selecting V2 ingestion does not correct
+provider-rollout provenance by itself.
 
 ## Config File
 
