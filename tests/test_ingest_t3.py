@@ -574,3 +574,43 @@ def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
         ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
     assert json.loads(health.read_text())["alerting"] is True
     assert not (tmp_path / "destination.db").exists()
+
+
+def test_v2_partial_embeddings_fail_health_preserve_rows_and_replay(tmp_path, monkeypatch):
+    from brainlayer.embeddings import EmbeddedChunk
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.vector_store import VectorStore
+
+    source = _create_v2_fixture(tmp_path / "state.sqlite")
+    destination = tmp_path / "destination.db"
+    health = tmp_path / "health.json"
+    VectorStore(destination).close()
+
+    def partial(chunks, **kwargs):
+        return [EmbeddedChunk(chunk=chunks[0], embedding=[0.1] * 1024)]
+
+    monkeypatch.setattr("brainlayer.index_new.embed_chunks", partial)
+    with pytest.raises(RuntimeError, match="indexed 1 of 2 eligible chunks"):
+        ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
+    assert json.loads(health.read_text())["alerting"] is True
+    store = VectorStore(destination)
+    assert list(store.conn.execute("SELECT id FROM chunks")) == [("t3:v2-a:v2-user:0",)]
+    assert list(store.conn.execute("SELECT chunk_id FROM chunk_vectors")) == [("t3:v2-a:v2-user:0",)]
+    store.conn.execute("UPDATE chunks SET ingested_at=1000")
+    first_created = store.conn.execute("SELECT created_at FROM chunks").fetchone()[0]
+    store.close()
+
+    def complete(chunks, **kwargs):
+        return [EmbeddedChunk(chunk=chunk, embedding=[0.1] * 1024) for chunk in chunks]
+
+    monkeypatch.setattr("brainlayer.index_new.embed_chunks", complete)
+    result = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
+    assert result.chunks_indexed == 2 and json.loads(health.read_text())["alerting"] is False
+    store = VectorStore(destination, readonly=True)
+    expected = {"t3:v2-a:v2-user:0", "t3:v2-b:v2-assistant:0"}
+    assert {row[0] for row in store.conn.execute("SELECT id FROM chunks")} == expected
+    assert {row[0] for row in store.conn.execute("SELECT chunk_id FROM chunk_vectors")} == expected
+    assert store.conn.execute(
+        "SELECT created_at,ingested_at FROM chunks WHERE id=?", ("t3:v2-a:v2-user:0",)
+    ).fetchone() == (first_created, 1000)
+    store.close()
