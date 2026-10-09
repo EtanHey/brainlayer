@@ -614,12 +614,20 @@ configure_launchagent_environment() {
         exit 1
     fi
 
-    "$PLIST_BUDDY" -c "Delete :EnvironmentVariables" "$plist_path" >/dev/null 2>&1 || true
-    "$PLIST_BUDDY" -c "Add :EnvironmentVariables dict" "$plist_path"
-    "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINLAYER_REPO_ROOT string \"$repo_root\"" "$plist_path"
-    if [ -x "$python_path" ]; then
-        "$PLIST_BUDDY" -c "Add :EnvironmentVariables:BRAINBAR_PYTHON string \"$python_path\"" "$plist_path"
-    fi
+    local python_exec="python3"
+    if [ -x "$python_path" ]; then python_exec="$python_path"; fi
+    "$python_exec" -I - "$SCRIPT_DIR/install-services.py" "$plist_path" "$APP_DIR" "$HOME" "$repo_root" <<'PY_RENDER'
+import os, plistlib, runpy, sys
+helper, target, app, home, repo = sys.argv[1:]
+env = {"BRAINLAYER_REPO_ROOT": repo}
+python = repo + "/.venv/bin/python"
+if os.access(python, os.X_OK):
+    env["BRAINBAR_PYTHON"] = python
+with open(target, "rb") as stream:
+    result = runpy.run_path(helper)["render"](plistlib.load(stream), app, home, env)
+with open(target, "wb") as stream:
+    plistlib.dump(result, stream)
+PY_RENDER
 }
 
 stamp_info_plist() {
@@ -816,6 +824,7 @@ mkdir -p "$BRAINLAYER_LOG_DIR"
 
 cp "$BUNDLE_DIR/Info.plist" "$APP_DIR/Contents/"
 cp "$APP_ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
+cp "$SCRIPT_DIR/install-services.py" "$APP_DIR/Contents/Resources/install-services.py"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/BrainBar"
 cp "$DAEMON_BINARY" "$APP_DIR/Contents/MacOS/BrainBarDaemon"
 cp "$UI_PLIST_SRC" "$APP_DIR/Contents/Resources/LaunchAgents/$UI_PLIST_FILENAME"
@@ -864,10 +873,7 @@ install_launchagent() {
     echo "[build-app] Installing LaunchAgent to $target_plist..."
     TMP_PLIST="$(mktemp)"
     trap 'rm -f "$TMP_PLIST"' EXIT
-    sed \
-        -e "s|/Applications/BrainBar.app|$APP_DIR|g" \
-        -e "s|__HOME__|$HOME|g" \
-        "$source_plist" > "$TMP_PLIST"
+    cp "$source_plist" "$TMP_PLIST"
     configure_launchagent_environment "$TMP_PLIST" "$CURRENT_REPO_ROOT"
     mv "$TMP_PLIST" "$target_plist"
     trap - EXIT
