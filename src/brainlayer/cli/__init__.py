@@ -3802,6 +3802,13 @@ def ingest_t3_command(
         help="T3 ingestion health JSON path.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Read and plan chunks without writing BrainLayer."),
+    projection_version: int = typer.Option(
+        1,
+        "--projection-version",
+        min=1,
+        max=2,
+        help="Explicit T3 projection contract: 1 (legacy) or 2 (V2). Set --state-db for V2.",
+    ),
 ) -> None:
     """Ingest the live T3 thread projection into BrainLayer."""
     from ..ingest.t3 import ingest_t3
@@ -3812,6 +3819,7 @@ def ingest_t3_command(
         db_path=(db.expanduser() if db is not None else get_db_path()),
         health_path=health_path.expanduser(),
         dry_run=dry_run,
+        projection_version=projection_version,
     )
     mode = "dry-run " if dry_run else ""
     rprint(

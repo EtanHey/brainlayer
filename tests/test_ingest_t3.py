@@ -289,18 +289,20 @@ def test_indexer_preserves_stable_identity_timestamp_and_provenance(monkeypatch)
     assert captured["chunks"][0]["provenance_class"] == "t3-thread"
 
 
-def test_ingest_t3_cli_is_a_real_production_entrypoint(tmp_path, monkeypatch):
+@pytest.mark.parametrize("projection_version", [1, 2])
+def test_ingest_t3_cli_is_a_real_production_entrypoint(tmp_path, monkeypatch, projection_version):
     from brainlayer.cli import app
     from brainlayer.ingest.t3 import T3IngestionResult
 
     captured = {}
 
-    def fake_ingest(state_db_path, *, db_path, health_path, dry_run):
+    def fake_ingest(state_db_path, *, db_path, health_path, dry_run, projection_version):
         captured.update(
             state_db_path=state_db_path,
             db_path=db_path,
             health_path=health_path,
             dry_run=dry_run,
+            projection_version=projection_version,
         )
         return T3IngestionResult(
             threads_seen=45,
@@ -327,6 +329,8 @@ def test_ingest_t3_cli_is_a_real_production_entrypoint(tmp_path, monkeypatch):
             str(db_path),
             "--health-path",
             str(health_path),
+            "--projection-version",
+            str(projection_version),
         ],
     )
 
@@ -336,6 +340,7 @@ def test_ingest_t3_cli_is_a_real_production_entrypoint(tmp_path, monkeypatch):
         "db_path": db_path,
         "health_path": health_path,
         "dry_run": False,
+        "projection_version": projection_version,
     }
     assert "chunks_indexed=2506" in result.output
 
@@ -344,3 +349,189 @@ def test_read_t3_threads_export_is_removed():
     import brainlayer.ingest as ingest
 
     assert not hasattr(ingest, "read_t3_threads")
+
+
+def _create_v2_fixture(path):
+    # V2 stores retain legacy projections: choosing the wrong tables must be observable.
+    _create_t3_fixture(path)
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE orchestration_v2_projection_threads (
+                thread_id TEXT PRIMARY KEY, project_id TEXT, title TEXT, created_at TEXT,
+                default_provider TEXT, active_provider_thread_id TEXT);
+            CREATE TABLE orchestration_v2_projection_messages (
+                message_id TEXT PRIMARY KEY, thread_id TEXT, role TEXT, created_at TEXT,
+                payload_json TEXT, streaming INTEGER);
+            CREATE TABLE orchestration_v2_projection_provider_threads (
+                provider_thread_id TEXT PRIMARY KEY, provider TEXT, payload_json TEXT);
+        """)
+        conn.executemany(
+            "INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("v2-a", "brainlayer", "V2 A", "2026-10-09T01:00:00Z", "codex", "provider-a"),
+                ("v2-b", "golems", "V2 B", "2026-10-09T02:00:00Z", "claude", None),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?)",
+            ("provider-a", "codex", json.dumps({"nativeThreadRef": {"nativeId": "native-a"}})),
+        )
+        conn.executemany(
+            "INSERT INTO orchestration_v2_projection_messages VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("v2-user", "v2-a", "user", "2026-10-09T01:00:01Z", json.dumps({"text": "u"}), 0),
+                (
+                    "v2-assistant",
+                    "v2-b",
+                    "assistant",
+                    "2026-10-09T02:00:01Z",
+                    json.dumps({"text": "settled V2 response"}),
+                    0,
+                ),
+                ("v2-streaming", "v2-a", "assistant", "2026-10-09T03:00:00Z", json.dumps({"text": "partial"}), 1),
+            ],
+        )
+    return path
+
+
+def test_v2_reader_uses_selected_projection_preserves_all_projects_and_waits_for_streaming(tmp_path):
+    from brainlayer.ingest.t3 import T3Reader
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    before = state.read_bytes()
+    reader = T3Reader(state, health_path=None, projection_version=2)
+    threads = reader.read_threads()
+    assert [t.thread_id for t in threads] == ["v2-a", "v2-b"]
+    assert [t.project_name for t in threads] == ["BrainLayer", "Golems"]
+    assert threads[0].provider_session_id == "native-a"
+    assert threads[0].mirrored is True
+    assert threads[1].provider_name == "claude"
+    assert threads[1].mirrored is False
+    assert [m.message_id for t in threads for m in t.messages] == ["v2-user", "v2-assistant"]
+    assert state.read_bytes() == before
+    with sqlite3.connect(state) as conn:
+        conn.execute("UPDATE orchestration_v2_projection_messages SET streaming=0 WHERE message_id='v2-streaming'")
+    assert len(reader.read_threads()[0].messages) == 2
+    assert [t.thread_id for t in T3Reader(state, health_path=None).read_threads()] == ["thread-1", "thread-2"]
+
+
+@pytest.mark.parametrize("bad_payload", ["{broken", "[]", '{"text": null}'])
+def test_v2_invalid_payload_alarms_before_indexing(tmp_path, monkeypatch, bad_payload):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET payload_json=? WHERE message_id='v2-user'", (bad_payload,)
+        )
+
+    def no_index(*args, **kwargs):
+        pytest.fail("invalid snapshot must not index partial content")
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", no_index)
+    health = tmp_path / "health.json"
+    with pytest.raises(BrainLayerAlarm, match="t3_payload_invalid"):
+        ingest_t3(state, db_path=tmp_path / "dest.db", health_path=health, projection_version=2)
+    assert json.loads(health.read_text())["alerting"] is True
+
+
+@pytest.mark.parametrize(
+    "native_ref",
+    [
+        "invalid-ref",
+        17,
+        True,
+        [],
+        {"nativeId": ""},
+        {"nativeId": " \t\n"},
+        {"nativeId": " native-a"},
+        {"nativeId": "native-a "},
+        {"nativeId": 17},
+        {"nativeId": []},
+    ],
+)
+def test_v2_invalid_native_reference_alarms_before_indexing(tmp_path, monkeypatch, native_ref):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_provider_threads SET payload_json=? WHERE provider_thread_id='provider-a'",
+            (json.dumps({"nativeThreadRef": native_ref}),),
+        )
+
+    def no_index(*args, **kwargs):
+        pytest.fail("invalid native reference must not index partial content")
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", no_index)
+    health_path = tmp_path / "health.json"
+    destination = tmp_path / "dest.db"
+    with pytest.raises(BrainLayerAlarm, match="t3_payload_invalid"):
+        ingest_t3(state, db_path=destination, health_path=health_path, projection_version=2)
+    health = json.loads(health_path.read_text())
+    assert health["alerting"] is True
+    assert health["failures"][0]["code"] == "t3_payload_invalid"
+    assert health["failures"][0]["error_type"] == "T3PayloadError"
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    "native_ref,native_id", [(None, None), ({"nativeId": None}, None), ({"nativeId": "native-a"}, "native-a")]
+)
+def test_v2_valid_native_reference_preserves_nullable_linkage(tmp_path, monkeypatch, native_ref, native_id):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(state) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_provider_threads SET payload_json=? WHERE provider_thread_id='provider-a'",
+            (json.dumps({"nativeThreadRef": native_ref}),),
+        )
+    captured = []
+
+    def index(chunks, **kwargs):
+        captured.extend(chunks)
+        return len(chunks)
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", index)
+    health_path = tmp_path / "health.json"
+    result = ingest_t3(state, db_path=tmp_path / "dest.db", health_path=health_path, projection_version=2)
+    assert result.chunks_indexed == 2
+    assert captured[0].metadata["t3_mirrored"] is True
+    assert captured[0].metadata["t3_provider_session_id"] == native_id
+    assert json.loads(health_path.read_text())["alerting"] is False
+
+
+def test_explicit_v2_schema_drift_never_falls_back_to_healthy_legacy(tmp_path):
+    from brainlayer.ingest.t3 import T3Reader
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(state) as conn:
+        conn.execute("ALTER TABLE orchestration_v2_projection_messages RENAME COLUMN payload_json TO body")
+    with pytest.raises(BrainLayerAlarm, match="t3_schema_drift"):
+        T3Reader(state, health_path=None, projection_version=2).read_threads()
+
+
+def test_v2_ingest_preserves_stable_identity_and_dry_run_has_no_destination_write(tmp_path, monkeypatch):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    captured = []
+
+    def index(chunks, **kwargs):
+        captured.extend(chunks)
+        assert kwargs["source_file"] == str(state)
+        return len(chunks)
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", index)
+    destination = tmp_path / "dest.db"
+    planned = ingest_t3(state, db_path=destination, health_path=None, projection_version=2, dry_run=True)
+    assert planned.chunks_planned == 2 and planned.chunks_indexed == 0
+    assert captured == [] and not destination.exists()
+    health = tmp_path / "health.json"
+    result = ingest_t3(state, db_path=destination, health_path=health, projection_version=2)
+    assert result.chunks_indexed == 2
+    assert [c.metadata["chunk_id"] for c in captured] == ["t3:v2-a:v2-user:0", "t3:v2-b:v2-assistant:0"]
+    assert captured[0].metadata["created_at"] == "2026-10-09T01:00:01Z"
+    assert all(c.metadata["provenance_class"] == "t3-thread" for c in captured)
+    assert json.loads(health.read_text())["projection_version"] == 2

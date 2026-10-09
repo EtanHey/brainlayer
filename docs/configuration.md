@@ -89,6 +89,28 @@ BrainLayer reads from these locations by default:
 | Daemon socket | `/tmp/brainlayer.sock` |
 | Historical enrichment lock | `/tmp/brainlayer-enrichment.lock` (legacy safety/cleanup only) |
 
+### T3 projection selection
+
+`ingest-t3` defaults to the legacy `~/.t3/userdata/state.sqlite` and projection
+version 1. T3 V2 uses a separate database and separate projection tables;
+pointing the legacy reader at `statev2.sqlite` still reads its retained legacy
+tables. Select both explicitly for V2:
+
+```bash
+brainlayer ingest-t3 --state-db ~/.t3/userdata/statev2.sqlite --projection-version 2 --dry-run
+```
+
+V2 reads settled user/assistant messages from their JSON payloads and retains
+all projects, stable message IDs, source timestamps, and `t3-thread` provenance.
+Streaming messages become eligible when settled. Missing schema or invalid
+payloads raise an alarm; the reader never falls back to legacy tables. Dry-run
+writes the health file but does not write the destination database.
+
+The packaged daily 03:45 T3 LaunchAgent retains the legacy selection. V2 service
+wiring is a separate deployment step; this option does not automatically enable
+another source, change watcher roots, or update provider-rollout provenance.
+`BRAINLAYER_T3_STATE_DB` configures watcher linkage, not this CLI selection.
+
 ## Config File
 
 Create or update the config file with:
