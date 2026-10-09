@@ -69,6 +69,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private let watcherHealthURL: URL?
     private let watcherHealthRead: @Sendable (URL) -> WatcherHealthFileRead
     private var watcherHealthGeneration: UInt64 = 0
+    let backupLogPreview: BrainBarBackupLogPreviewModel?
     private let backupSources: BrainBarBackupSources?
     private let workspace: any BrainBarWorkspaceActing
     private var backupScheduleGeneration: UInt64 = 0
@@ -115,6 +116,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.watcherHealthRead = watcherHealthRead
         watcherHealth = initialWatcherHealth
         self.backupSources = backupSources
+        backupLogPreview = backupSources.map { BrainBarBackupLogPreviewModel(paths: $0.paths, workspace: workspace) }
         self.workspace = workspace
         backupSchedules = initialBackupSchedules
         maintenanceEvidence = initialMaintenanceEvidence
@@ -945,6 +947,7 @@ struct BrainBarSettingsView: View {
                 }
                 Divider()
                 backupSchedule
+                if let preview = viewModel.backupLogPreview { BrainBarBackupLogPreviewView(model: preview) }
                 backupStatus
             }
         case .advanced:
@@ -991,8 +994,8 @@ struct BrainBarSettingsView: View {
                 .accessibilityIdentifier("brainbar.settings.config-file.toggle")
             }
             ViewThatFits(in: .horizontal) {
-                HStack { configFileActions }
-                VStack(alignment: .leading, spacing: 6) { configFileActions }
+                HStack { configFileActions }.fixedSize()
+                VStack(alignment: .leading, spacing: 6) { configFileActions }.fixedSize()
             }
             .controlSize(.small)
         }
