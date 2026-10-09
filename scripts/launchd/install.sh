@@ -790,6 +790,7 @@ import os
 import plistlib
 import sys
 from pathlib import Path
+from brainlayer.paths import resolve_t3_health_path
 
 def absolute_path(value, key):
     path = Path(value).expanduser()
@@ -805,7 +806,7 @@ if version == "2" and not state:
     raise SystemExit("ERROR: V2 requires explicit BRAINLAYER_T3_INGEST_STATE_DB")
 state = absolute_path(state or "~/.t3/userdata/state.sqlite", "BRAINLAYER_T3_INGEST_STATE_DB")
 destination = absolute_path(os.environ.get("BRAINLAYER_DB") or "~/.local/share/brainlayer/brainlayer.db", "BRAINLAYER_DB")
-health = absolute_path(os.environ.get("BRAINLAYER_T3_INGEST_HEALTH_PATH") or str(Path(destination).parent / "t3-health.json"), "BRAINLAYER_T3_INGEST_HEALTH_PATH")
+health = absolute_path(str(resolve_t3_health_path(destination)), "BRAINLAYER_T3_INGEST_HEALTH_PATH")
 interval = os.environ.get("BRAINLAYER_T3_INGEST_INTERVAL_SECONDS")
 if interval is not None and (not interval.isdecimal() or int(interval) < 60 or int(interval) > 86400):
     raise SystemExit("ERROR: BRAINLAYER_T3_INGEST_INTERVAL_SECONDS must be an integer from 60 to 86400")

@@ -669,11 +669,17 @@ def _render_t3_selection(tmp_path, settings):
     harness = tmp_path / "render.sh"
     harness.write_text(helper + '\nrender_t3_ingest_selection "$1"\n')
     # No launchctl or model/DB access: execute the real env loader and renderer.
-    env = {key: value for key, value in os.environ.items() if not key.startswith("BRAINLAYER_")}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("BRAINLAYER_T3_") and key != "BRAINLAYER_DB"
+    }
     env.update(
         BRAINLAYER_ENV_FILE=str(env_file),
         BRAINLAYER_ENV_RUN=str(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"),
         BRAINLAYER_PYTHON=__import__("sys").executable,
+        PYTHONPATH=str(REPO_ROOT / "src"),
+        HOME=str(tmp_path),
     )
     result = subprocess.run(
         ["/bin/bash", str(harness), str(rendered)], env=env, capture_output=True, text=True, timeout=20
@@ -687,7 +693,7 @@ def test_t3_selection_default_retains_legacy_daily_schedule(tmp_path):
     plist = plistlib.loads(rendered.read_bytes())
     assert plist["ProgramArguments"][3:7] == [
         "--state-db",
-        str(Path.home() / ".t3/userdata/state.sqlite"),
+        str(tmp_path / ".t3/userdata/state.sqlite"),
         "--projection-version",
         "1",
     ]

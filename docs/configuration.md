@@ -121,6 +121,10 @@ automatically; the importer reads all projects. The renderer pins `--db` to the
 configured `BRAINLAYER_DB` (or canonical DB) and `--health-path` beside that DB.
 `BRAINLAYER_T3_INGEST_HEALTH_PATH` may explicitly override health placement.
 Invalid configuration fails before the installed plist is replaced.
+The public ingest and health-check CLIs and direct health-check configuration
+share this path resolver; explicit `--health-path`/`--t3-health-path` options
+take precedence over the environment. Rerender the job after changing its DB
+or health selection so the loaded importer and scheduled consumer agree.
 
 The optional interval accepts 60–86400 seconds and replaces the daily calendar;
 unset restores the original daily schedule. `RunAtLoad` remains enabled. launchd
