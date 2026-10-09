@@ -1081,15 +1081,20 @@ def upload_file_to_drive_raw(
     machine_id: str,
     chunk_size: int = 8 * 1024 * 1024,
     max_attempts: int = 30,
+    drive_name: str | None = None,
+    attempt_id: str | None = None,
+    source_descriptor: int | None = None,
 ) -> dict[str, Any]:
     """Upload large backups with Drive's raw resumable protocol."""
     file_path = Path(file_path)
-    total = file_path.stat().st_size
+    total = (os.fstat(source_descriptor) if source_descriptor is not None else file_path.stat()).st_size
     metadata = {
-        "name": file_path.name,
+        "name": drive_name if drive_name is not None else file_path.name,
         "parents": [folder_id],
         "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
     }
+    if attempt_id is not None:
+        metadata["appProperties"]["brainlayer_recovery_attempt"] = attempt_id
     init = requests.post(
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
         # md5Checksum is REQUIRED: retention coverage compares it against the surviving
@@ -1120,7 +1125,9 @@ def upload_file_to_drive_raw(
     stalled_attempts = 0
     session = requests.Session()
     try:
-        with file_path.open("rb") as handle:
+        with (
+            os.fdopen(os.dup(source_descriptor), "rb") if source_descriptor is not None else file_path.open("rb")
+        ) as handle:
             while sent < total:
                 handle.seek(sent)
                 expected = min(chunk_size, total - sent)
@@ -1625,10 +1632,14 @@ def verify_drive_upload(
     expected_name: str,
     expected_size: int,
     expected_machine_id: str,
-) -> None:
+    expected_md5: str | None = None,
+    expected_parent: str | None = None,
+) -> dict[str, Any]:
     """Verify that Drive can see the uploaded file with the expected name and byte size."""
     metadata = _execute_drive_read(
-        service.files().get(fileId=file_id, fields="id,name,size,trashed,appProperties", supportsAllDrives=True),
+        service.files().get(
+            fileId=file_id, fields="id,name,size,trashed,appProperties,parents,md5Checksum", supportsAllDrives=True
+        ),
         what="Drive upload verification",
     )
     if metadata.get("trashed"):
@@ -1645,6 +1656,13 @@ def verify_drive_upload(
     actual_machine_id = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
     if actual_machine_id != expected_machine_id:
         raise RuntimeError(f"Uploaded Drive backup machine mismatch: {actual_machine_id!r} != {expected_machine_id!r}")
+    if expected_md5 is not None and metadata.get("md5Checksum") != expected_md5:
+        raise RuntimeError("Uploaded Drive backup MD5 mismatch or missing checksum")
+    if expected_parent is not None and metadata.get("parents") != [expected_parent]:
+        raise RuntimeError("Uploaded Drive backup parent mismatch")
+    if expected_md5 is not None and (metadata.get("id") != file_id or metadata.get("trashed") is not False):
+        raise RuntimeError("Uploaded Drive backup identity or trash state is unknown")
+    return metadata
 
 
 def prune_drive_backups(
