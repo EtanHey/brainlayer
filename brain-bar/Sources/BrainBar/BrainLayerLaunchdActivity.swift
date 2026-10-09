@@ -171,7 +171,7 @@ struct BrainLayerLaunchdGroupStatus: Equatable, Sendable {
     let attentionReason: String?
     let lastRunText: String
     let nextRunText: String
-    /// A quiet note that never changes `health`: a maintenance run that succeeded with warnings.
+    /// Desired Ingest configuration or maintenance warnings; never changes runtime `health`.
     var note: String?
 }
 
@@ -237,7 +237,10 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             }
         }
         let jobReason = jobs.compactMap { job -> String? in
-            guard settings[job]?.enabled == true else { return "\(job.humanGroupLabel) is disabled." }
+            // The unified watcher verdict already accounts for missing/error launchd evidence.
+            if job == .watch, ingestWatcher != nil { return nil }
+            // Ingest configuration is desired state; toggling it does not stop loaded jobs.
+            if self != .ingest, settings[job]?.enabled != true { return "\(job.humanGroupLabel) is disabled." }
             guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
             switch observation.loadState {
             case .running:
@@ -291,6 +294,9 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             return "\(job.humanGroupLabel) last run OK · "
                 + warnings.map(BrainLayerMaintenanceExit.humanWarning).joined(separator: " · ")
         }
+        let configuredOff = self != .ingest ? [] : jobs.filter { settings[$0]?.enabled == false }
+        let configurationNote = configuredOff.isEmpty ? nil
+            : "Configured OFF: \(configuredOff.map(\.humanGroupLabel).joined(separator: ", "))."
         return BrainLayerLaunchdGroupStatus(
             health: health,
             attentionReason: reason ?? unknownReason ?? (skips.isEmpty ? nil : skips.joined(separator: " ")),
@@ -304,7 +310,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                     : observation?.nextRunAt.map(formatDate) ?? "Unavailable"
                 return "\(job.humanGroupLabel) \(value)"
             }.joined(separator: " · "),
-            note: warningNotes.isEmpty ? nil : warningNotes.joined(separator: " · ")
+            note: configurationNote ?? (warningNotes.isEmpty ? nil : warningNotes.joined(separator: " · "))
         )
     }
 }
@@ -385,12 +391,9 @@ private extension BrainLayerLaunchdJob {
 }
 
 extension WatcherLaunchdEvidence {
-    /// Settings' view of `com.brainlayer.watch`: the configured setting plus the launchd observation.
-    init(setting: BrainLayerLaunchdJobSetting?, loadState: BrainLayerLaunchdLoadState?) {
-        if setting?.enabled == false {
-            self = .notRunning("the Watcher job is disabled in Settings")
-            return
-        }
+    /// Settings' runtime evidence comes from launchd. Configuration expresses desired state;
+    /// saving it does not stop the process, and cannot replace an unknown/error observation.
+    init(setting _: BrainLayerLaunchdJobSetting?, loadState: BrainLayerLaunchdLoadState?) {
         switch loadState {
         case .running:
             self = .running

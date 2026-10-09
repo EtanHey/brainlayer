@@ -389,9 +389,31 @@ final class WatcherHealthStatusTests: XCTestCase {
         guard case .unavailable = WatcherLaunchdEvidence(setting: enabled, loadState: nil) else { return XCTFail("no observation") }
         let disabled = BrainLayerLaunchdJobSetting(enabled: false, loadState: .unloaded)
         guard case let .notRunning(detail) = WatcherLaunchdEvidence(setting: disabled, loadState: .unloaded) else {
-            return XCTFail("disabled job must be notRunning")
+            return XCTFail("unloaded job must be notRunning")
         }
-        XCTAssertTrue(detail.localizedCaseInsensitiveContains("disabled"), detail)
+        XCTAssertTrue(detail.contains("not loaded"), detail)
+    }
+
+    func testDisabledConfigurationDoesNotOverrideLaunchdRuntimeEvidence() {
+        let disabled = BrainLayerLaunchdJobSetting(enabled: false, loadState: .running)
+        XCTAssertEqual(WatcherLaunchdEvidence(setting: disabled, loadState: .running), .running)
+        for state in [BrainLayerLaunchdLoadState.loaded, .unloaded] {
+            guard case .notRunning = WatcherLaunchdEvidence(setting: disabled, loadState: state) else {
+                return XCTFail("observed \(state) must be notRunning")
+            }
+        }
+        for state in [BrainLayerLaunchdLoadState.unknown, .probeError("launchctl timed out")] {
+            guard case .unavailable = WatcherLaunchdEvidence(setting: disabled, loadState: state) else {
+                return XCTFail("observed \(state) must remain unavailable")
+            }
+        }
+        guard case .unavailable = WatcherLaunchdEvidence(setting: disabled, loadState: nil) else {
+            return XCTFail("missing observation must remain unavailable")
+        }
+        XCTAssertEqual(
+            WatcherLaunchdEvidence(setting: disabled, loadState: .probeError("launchctl timed out")),
+            .unavailable("launchctl timed out")
+        )
     }
 
     // MARK: reader
