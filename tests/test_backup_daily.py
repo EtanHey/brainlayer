@@ -99,10 +99,10 @@ def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn.close()
 
 
-def _write_preserved_pair(raw_path: Path, gzip_path: Path) -> None:
+def _write_preserved_pair(raw_path: Path, gzip_path: Path, *, content: str = "preserved snapshot") -> None:
     conn = sqlite3.connect(raw_path)
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
-    conn.execute("INSERT INTO chunks VALUES ('c1', 'preserved snapshot')")
+    conn.execute("INSERT INTO chunks VALUES ('c1', ?)", (content,))
     conn.commit()
     conn.close()
     with gzip_path.open("wb") as compressed:
@@ -159,6 +159,57 @@ def test_preserved_artifact_pair_rejects_symlinked_artifacts(tmp_path):
 
     with pytest.raises(RuntimeError, match="non-symlink"):
         verify_preserved_artifact_pair(alias, gzip_path, expected_sentinel_chunks=1)
+
+
+def test_preserved_artifact_pair_binds_every_check_to_open_files_during_parent_swap(tmp_path, monkeypatch):
+    import hashlib
+
+    from brainlayer import backup_daily
+
+    active_dir = tmp_path / "active"
+    replacement_dir = tmp_path / "replacement"
+    active_dir.mkdir()
+    replacement_dir.mkdir()
+    raw_path = active_dir / "2026-10-09.db"
+    gzip_path = active_dir / "2026-10-09.db.gz"
+    substitute_path = replacement_dir / raw_path.name
+    _write_preserved_pair(raw_path, gzip_path, content="original")
+    _write_preserved_pair(substitute_path, replacement_dir / gzip_path.name, content="replaced")
+    assert raw_path.stat().st_size == substitute_path.stat().st_size
+    expected_digest = hashlib.sha256(raw_path.read_bytes()).hexdigest()
+    substitute_digest = hashlib.sha256(substitute_path.read_bytes()).hexdigest()
+    open_artifact = backup_daily._open_stable_regular_file
+    validate_descriptor = backup_daily._validate_backup_target_fd
+    opened = 0
+
+    def swap_parent_after_both_files_are_open(path):
+        nonlocal opened
+        result = open_artifact(path)
+        opened += 1
+        if opened == 2:
+            active_dir.rename(tmp_path / "saved")
+            replacement_dir.rename(active_dir)
+        return result
+
+    def restore_parent_then_validate(descriptor):
+        active_dir.rename(replacement_dir)
+        (tmp_path / "saved").rename(active_dir)
+        return validate_descriptor(descriptor)
+
+    monkeypatch.setattr(backup_daily, "_open_stable_regular_file", swap_parent_after_both_files_are_open)
+    monkeypatch.setattr(backup_daily, "_validate_backup_target_fd", restore_parent_then_validate)
+
+    result = backup_daily.verify_preserved_artifact_pair(
+        raw_path,
+        gzip_path,
+        expected_sentinel_chunks=1,
+        chunk_size=137,
+        sqlite_timeout_seconds=10,
+    )
+
+    assert result["raw_sha256"] == expected_digest
+    assert result["raw_sha256"] != substitute_digest
+    assert result["gzip_uncompressed_sha256"] == expected_digest
 
 
 def test_local_backup_cap_is_decoupled_from_drive_retention(monkeypatch):

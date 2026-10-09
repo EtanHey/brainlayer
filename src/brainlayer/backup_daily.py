@@ -1352,19 +1352,39 @@ def _md5_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _stable_regular_file_identity(path: Path) -> tuple[int, int, int, int, int]:
-    """Return a fail-closed identity for an artifact without following symlinks."""
-    path = Path(path).expanduser()
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode):
-        raise RuntimeError(f"preserved backup artifact is not a regular non-symlink file: {path.name}")
-    resolved = path.resolve(strict=True)
-    if resolved != path.absolute():
-        raise RuntimeError(f"preserved backup artifact path resolves unexpectedly: {path.name}")
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _readonly_quick_check(db_path: Path, *, timeout_seconds: float) -> str:
+def _open_stable_regular_file(path: Path) -> tuple[int, tuple[int, int, int, int, int]]:
+    """Open an artifact without following symlinks and bind checks to its descriptor."""
+    path = Path(path).expanduser()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(
+            f"could not safely open preserved backup artifact (must be regular and non-symlink): {path.name}"
+        ) from exc
+    try:
+        opened_info = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_info.st_mode):
+            raise RuntimeError(f"preserved backup artifact is not a regular file: {path.name}")
+        identity = _file_identity(opened_info)
+        if _file_identity(path.lstat()) != identity:
+            raise RuntimeError(f"preserved backup artifact path changed while opening: {path.name}")
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _assert_open_file_unchanged(descriptor: int, identity: tuple[int, int, int, int, int], name: str) -> None:
+    if _file_identity(os.fstat(descriptor)) != identity:
+        raise RuntimeError(f"preserved backup artifact changed during verification: {name}")
+
+
+def _readonly_quick_check_fd(descriptor: int, *, timeout_seconds: float) -> str:
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("SQLite quick_check timeout must be a positive finite number")
     script = (
@@ -1379,12 +1399,13 @@ def _readonly_quick_check(db_path: Path, *, timeout_seconds: float) -> str:
                 sys.executable,
                 "-c",
                 script,
-                f"{Path(db_path).resolve().as_uri()}?mode=ro&immutable=1",
+                f"file:/dev/fd/{descriptor}?mode=ro&immutable=1",
             ],
             check=False,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            pass_fds=(descriptor,),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("preserved backup SQLite quick_check timed out") from exc
@@ -1394,6 +1415,35 @@ def _readonly_quick_check(db_path: Path, *, timeout_seconds: float) -> str:
     if result != "ok":
         raise RuntimeError(f"preserved backup SQLite quick_check returned {result!r}")
     return result
+
+
+def _validate_backup_target_fd(descriptor: int) -> int:
+    """Run the snapshot sentinel query against the already-open raw artifact."""
+    conn = sqlite3.connect(f"file:/dev/fd/{descriptor}?mode=ro&immutable=1", uri=True)
+    try:
+        page_count_row = conn.execute("PRAGMA page_count").fetchone()
+        page_count = int(page_count_row[0]) if page_count_row else 0
+        if page_count < 1:
+            raise RuntimeError("Backup target has zero SQLite pages")
+        chunks_row = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
+        chunks = int(chunks_row[0]) if chunks_row else 0
+        if chunks < 1:
+            raise RuntimeError("Backup target has zero chunks rows")
+        return chunks
+    finally:
+        conn.close()
+
+
+def _md5_open_file(descriptor: int, *, chunk_size: int) -> str:
+    digest = hashlib.md5()  # noqa: S324 - backup restore verification needs MD5 parity with Drive tooling.
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, chunk_size, offset)
+        if not chunk:
+            break
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
 
 
 def verify_preserved_artifact_pair(
@@ -1417,45 +1467,55 @@ def verify_preserved_artifact_pair(
     if expected_sentinel_chunks < 1:
         raise ValueError("expected_sentinel_chunks must be positive")
 
-    raw_identity_before = _stable_regular_file_identity(raw_path)
-    gzip_identity_before = _stable_regular_file_identity(gzip_path)
-    raw_sha256 = hashlib.sha256()
-    expanded_sha256 = hashlib.sha256()
-    raw_bytes = 0
-    expanded_bytes = 0
+    raw_fd, raw_identity = _open_stable_regular_file(raw_path)
+    try:
+        gzip_fd, gzip_identity = _open_stable_regular_file(gzip_path)
+    except BaseException:
+        os.close(raw_fd)
+        raise
+    try:
+        raw_sha256 = hashlib.sha256()
+        expanded_sha256 = hashlib.sha256()
+        raw_bytes = 0
+        expanded_bytes = 0
 
-    with raw_path.open("rb") as raw, gzip.open(gzip_path, "rb") as expanded:
-        while True:
-            raw_chunk = raw.read(chunk_size)
-            expanded_chunk = expanded.read(chunk_size)
-            if raw_chunk != expanded_chunk:
-                raise RuntimeError("preserved gzip does not expand byte-for-byte to the raw SQLite snapshot")
-            if not raw_chunk:
-                break
-            raw_sha256.update(raw_chunk)
-            expanded_sha256.update(expanded_chunk)
-            raw_bytes += len(raw_chunk)
-            expanded_bytes += len(expanded_chunk)
+        with os.fdopen(os.dup(raw_fd), "rb") as raw, os.fdopen(os.dup(gzip_fd), "rb") as gzip_source:
+            with gzip.GzipFile(fileobj=gzip_source, mode="rb") as expanded:
+                while True:
+                    raw_chunk = raw.read(chunk_size)
+                    expanded_chunk = expanded.read(chunk_size)
+                    if raw_chunk != expanded_chunk:
+                        raise RuntimeError("preserved gzip does not expand byte-for-byte to the raw SQLite snapshot")
+                    if not raw_chunk:
+                        break
+                    raw_sha256.update(raw_chunk)
+                    expanded_sha256.update(expanded_chunk)
+                    raw_bytes += len(raw_chunk)
+                    expanded_bytes += len(expanded_chunk)
 
-    if raw_bytes != raw_identity_before[2] or expanded_bytes != raw_bytes:
-        raise RuntimeError("preserved artifact byte count does not match the raw snapshot size")
-    raw_digest = raw_sha256.hexdigest()
-    expanded_digest = expanded_sha256.hexdigest()
-    if raw_digest != expanded_digest:
-        raise RuntimeError("preserved raw and gzip-expanded SHA-256 digests differ")
+        if raw_bytes != raw_identity[2] or expanded_bytes != raw_bytes:
+            raise RuntimeError("preserved artifact byte count does not match the raw snapshot size")
+        raw_digest = raw_sha256.hexdigest()
+        expanded_digest = expanded_sha256.hexdigest()
+        if raw_digest != expanded_digest:
+            raise RuntimeError("preserved raw and gzip-expanded SHA-256 digests differ")
 
-    sentinel_chunks = _validate_backup_target(raw_path)
-    if sentinel_chunks != expected_sentinel_chunks:
-        raise RuntimeError(
-            f"preserved snapshot sentinel mismatch: expected={expected_sentinel_chunks} actual={sentinel_chunks}"
-        )
-    quick_check = _readonly_quick_check(raw_path, timeout_seconds=sqlite_timeout_seconds)
-    compressed_md5 = _md5_file(gzip_path)
-
-    if _stable_regular_file_identity(raw_path) != raw_identity_before:
-        raise RuntimeError("raw SQLite snapshot changed during preserved artifact verification")
-    if _stable_regular_file_identity(gzip_path) != gzip_identity_before:
-        raise RuntimeError("gzip snapshot changed during preserved artifact verification")
+        sentinel_chunks = _validate_backup_target_fd(raw_fd)
+        if sentinel_chunks != expected_sentinel_chunks:
+            raise RuntimeError(
+                f"preserved snapshot sentinel mismatch: expected={expected_sentinel_chunks} actual={sentinel_chunks}"
+            )
+        quick_check = _readonly_quick_check_fd(raw_fd, timeout_seconds=sqlite_timeout_seconds)
+        compressed_md5 = _md5_open_file(gzip_fd, chunk_size=chunk_size)
+        _assert_open_file_unchanged(raw_fd, raw_identity, raw_path.name)
+        _assert_open_file_unchanged(gzip_fd, gzip_identity, gzip_path.name)
+        if _file_identity(raw_path.lstat()) != raw_identity:
+            raise RuntimeError("raw SQLite snapshot path changed during preserved artifact verification")
+        if _file_identity(gzip_path.lstat()) != gzip_identity:
+            raise RuntimeError("gzip snapshot path changed during preserved artifact verification")
+    finally:
+        os.close(raw_fd)
+        os.close(gzip_fd)
     return {
         "raw_bytes": raw_bytes,
         "expanded_bytes": expanded_bytes,
