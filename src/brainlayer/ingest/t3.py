@@ -479,12 +479,26 @@ def ingest_t3(
             from ..paths import DEFAULT_DB_PATH
 
             destination = DEFAULT_DB_PATH
-        result.chunks_indexed = _index_chunks(
-            chunks,
-            source_file=str(Path(state_db_path).expanduser()),
-            project=None,
-            db_path=destination,
-        )
+        try:
+            result.chunks_indexed = _index_chunks(
+                chunks,
+                source_file=str(Path(state_db_path).expanduser()),
+                project=None,
+                db_path=destination,
+            )
+        except BaseException as exc:
+            # Preserve failure/cancellation semantics and any committed rows for stable-ID replay.
+            # A successful projection read must not remain the final health result of a failed import.
+            reader._last_counts["chunks_planned"] = result.chunks_planned
+            reader._failures.append(
+                {
+                    "code": "t3_indexing_failure",
+                    "message": "T3 chunk indexing did not complete",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            reader._write_health(alerting=True, alert_reasons=["indexing_failure"])
+            raise
     if reader.health_path is not None:
         reader._last_counts.update(
             {
