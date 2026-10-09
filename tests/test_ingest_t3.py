@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 from uuid import UUID
 
@@ -565,12 +567,34 @@ def test_v2_index_failure_records_alert_and_preserves_original_exception(tmp_pat
 
 
 def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
-    from brainlayer.ingest.t3 import ingest_t3
-
     state = _create_v2_fixture(tmp_path / "state.sqlite")
     health = tmp_path / "health.json"
+    destination = tmp_path / "destination.db"
     monkeypatch.setenv("BRAINLAYER_FORBID_EMBEDDING_MODEL", "1")
-    with pytest.raises(RuntimeError, match="refusing to load"):
-        ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
-    assert json.loads(health.read_text())["alerting"] is True
-    assert not (tmp_path / "destination.db").exists()
+    # Earlier declared model tests may warm the process-global cache. The guard forbids loading,
+    # so use a fresh real CLI process rather than assuming an in-process model is still cold.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "brainlayer",
+            "ingest-t3",
+            "--state-db",
+            str(state),
+            "--projection-version",
+            "2",
+            "--db",
+            str(destination),
+            "--health-path",
+            str(health),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "refusing to load" in result.stderr
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is True and snapshot["alert_reasons"] == ["indexing_failure"]
+    assert snapshot["failures"][-1]["error_type"] == "RuntimeError"
+    assert not destination.exists()
