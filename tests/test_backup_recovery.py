@@ -172,3 +172,142 @@ def test_remote_verification_requires_checksum_parent_and_exact_identity():
                 daily.verify_drive_upload(service, **kwargs)
         else:
             assert daily.verify_drive_upload(service, **kwargs) == candidate()
+
+
+def recovery_setup(tmp_path, monkeypatch, *, reuse=True):
+    raw, compressed, source, log = source_pair(tmp_path, monkeypatch)
+    alerts = []
+    remote = candidate(
+        size=str(compressed.stat().st_size), md5Checksum=hashlib.md5(compressed.read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(recovery, "report", lambda key, reason: alerts.append(reason))
+    monkeypatch.setattr(daily, "build_drive_service", lambda: object())
+    monkeypatch.setattr(daily, "get_drive_credentials", lambda: object())
+    monkeypatch.setattr(recovery, "resolve_existing_folder", lambda *args: "folder")
+    monkeypatch.setattr(daily, "assert_drive_folder_owned_by_machine", lambda *args, **kwargs: None)
+    monkeypatch.setattr(recovery, "find_verified_drive_match", lambda *args, **kwargs: remote if reuse else None)
+    monkeypatch.setattr(daily, "verify_drive_upload", lambda *args, **kwargs: dict(remote))
+    for name in ("create_sqlite_backup_artifact", "prune_drive_backups", "prune_local_gzip_snapshots"):
+        monkeypatch.setattr(daily, name, lambda *args, **kwargs: pytest.fail("snapshot/retention forbidden"))
+    kwargs = dict(
+        snapshot_date="2026-10-09",
+        source_receipt_line=1,
+        expected_raw_bytes=raw.stat().st_size,
+        staging_dir=tmp_path,
+        log_path=log,
+        machine_id="test-machine",
+        folder_parts=["archive"],
+    )
+    return raw, compressed, source, log, alerts, remote, kwargs
+
+
+def test_recovery_reuses_verified_copy_and_fsyncs_before_clearing(tmp_path, monkeypatch):
+    raw, compressed, source, log, alerts, _, kwargs = recovery_setup(tmp_path, monkeypatch)
+    original = log.read_bytes()
+    raw_bytes, gzip_bytes = raw.read_bytes(), compressed.read_bytes()
+    monkeypatch.setattr(daily, "upload_file_to_drive_raw", lambda *args, **kwargs: pytest.fail("reuse must not upload"))
+    real_append = recovery._append_durable_receipt
+    events = []
+    monkeypatch.setattr(recovery.os, "fsync", lambda fd: events.append("fsync"))
+    monkeypatch.setattr(recovery, "report", lambda key, reason: events.append("clear" if reason is None else "fail"))
+    result = recovery.recover_existing_artifact(**kwargs)
+    assert events == ["fsync", "clear"]
+    assert result["verified"] and result["uploaded"]
+    assert result["drive_action"] == "reuse_existing"
+    assert result["source_attempted_at"] == source["attempted_at"]
+    assert result["attempted_at"] != source["attempted_at"]
+    assert log.read_bytes().startswith(original)
+    assert raw.read_bytes() == raw_bytes and compressed.read_bytes() == gzip_bytes
+
+
+def test_recovery_uploads_unique_name_from_verified_descriptor(tmp_path, monkeypatch):
+    raw, compressed, _, log, alerts, remote, kwargs = recovery_setup(tmp_path, monkeypatch, reuse=False)
+    names = []
+
+    def upload(path, folder, credentials, **options):
+        import os
+
+        names.append(options["drive_name"])
+        assert os.pread(options["source_descriptor"], compressed.stat().st_size, 0) == compressed.read_bytes()
+        remote.update(name=options["drive_name"])
+        remote["appProperties"]["brainlayer_recovery_attempt"] = options["attempt_id"]
+        return dict(remote)
+
+    monkeypatch.setattr(daily, "upload_file_to_drive_raw", upload)
+    result = recovery.recover_existing_artifact(**kwargs)
+    assert names == [f"2026-10-09-recovery-{result['attempt_id']}.db.gz"]
+    assert daily._parse_snapshot_date(names[0]).isoformat() == "2026-10-09"
+    assert alerts == [None]
+    assert raw.exists() and compressed.exists()
+
+
+@pytest.mark.parametrize("gate", ["size", "sentinel", "local", "remote", "durable", "swap"])
+def test_recovery_failed_gate_preserves_alert_and_artifacts(tmp_path, monkeypatch, gate):
+    raw, compressed, _, log, alerts, _, kwargs = recovery_setup(tmp_path, monkeypatch)
+    if gate == "size":
+        kwargs["expected_raw_bytes"] += 1
+    elif gate == "sentinel":
+        receipt = json.loads(log.read_text())
+        receipt["sentinel_snapshot_chunks"] = 2
+        log.write_text(json.dumps(receipt) + "\n")
+    else:
+
+        def fail(*args, **options):
+            raise RuntimeError("gate failed")
+
+        if gate == "local":
+            monkeypatch.setattr(daily, "verify_preserved_artifact_pair", fail)
+        elif gate == "remote":
+            monkeypatch.setattr(daily, "verify_drive_upload", fail)
+        elif gate == "durable":
+            monkeypatch.setattr(recovery.os, "fsync", fail)
+        else:
+
+            def swap(*args, **options):
+                raw.rename(raw.with_suffix(".preserved"))
+                raw.write_bytes(b"replacement")
+                return candidate()
+
+            monkeypatch.setattr(recovery, "find_verified_drive_match", swap)
+    with pytest.raises((ValueError, RuntimeError)):
+        recovery.recover_existing_artifact(**kwargs)
+    assert None not in alerts
+    assert raw.exists() and compressed.exists()
+    if gate != "durable":
+        assert json.loads(log.read_text().splitlines()[-1])["verified"] is False
+
+
+def test_recovery_nonblocking_lock_refuses_work(tmp_path, monkeypatch):
+    import fcntl
+
+    _, _, _, _, alerts, _, kwargs = recovery_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(daily, "verify_preserved_artifact_pair", lambda *args, **kwargs: pytest.fail("locked"))
+    with (tmp_path / ".backup.lock").open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(daily.BackupAlreadyRunningError):
+            recovery.recover_existing_artifact(**kwargs)
+    assert alerts and None not in alerts
+
+
+def test_recovered_old_snapshot_never_satisfies_fresh_backup_gate(tmp_path):
+    import datetime as dt
+
+    from brainlayer.health_check import _jsonl_backup_attempt_time
+
+    now = dt.datetime.now(dt.UTC)
+    old = now - dt.timedelta(days=5)
+    receipt = dict(
+        operation="recover_existing_artifact",
+        attempted_at=now.isoformat(),
+        source_attempted_at=old.isoformat(),
+        db="synthetic.db",
+        uploaded=True,
+        verified=True,
+        drive_file={"id": "file"},
+    )
+    log = tmp_path / "backup.log"
+    log.write_text(json.dumps(receipt) + "\n")
+    assert daily._recent_verified_backup_for_reuse(log, "synthetic.db", now=now, max_age_hours=24) is None
+    assert _jsonl_backup_attempt_time(receipt) == old
+    receipt.pop("source_attempted_at")
+    assert _jsonl_backup_attempt_time(receipt) is None

@@ -809,7 +809,10 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _jsonl_backup_attempt_time(payload: dict[str, Any]) -> datetime | None:
-    raw_attempted_at = payload.get("attempted_at")
+    recovery = payload.get("operation") == "recover_existing_artifact"
+    raw_attempted_at = payload.get("source_attempted_at" if recovery else "attempted_at")
+    if recovery and not raw_attempted_at:
+        return None
     if isinstance(raw_attempted_at, str) and raw_attempted_at:
         try:
             attempted_at = datetime.fromisoformat(raw_attempted_at.replace("Z", "+00:00"))

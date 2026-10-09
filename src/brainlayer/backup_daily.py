@@ -1729,7 +1729,10 @@ def _recent_verified_backup_for_reuse(
     for line in reversed(lines):
         try:
             receipt = json.loads(line)
-            attempted = dt.datetime.fromisoformat(receipt["attempted_at"])
+            time_key = (
+                "source_attempted_at" if receipt.get("operation") == "recover_existing_artifact" else "attempted_at"
+            )
+            attempted = dt.datetime.fromisoformat(receipt[time_key])
         except (ValueError, KeyError, TypeError):
             continue
         if attempted.tzinfo is None:
