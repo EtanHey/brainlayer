@@ -535,3 +535,42 @@ def test_v2_ingest_preserves_stable_identity_and_dry_run_has_no_destination_writ
     assert captured[0].metadata["created_at"] == "2026-10-09T01:00:01Z"
     assert all(c.metadata["provenance_class"] == "t3-thread" for c in captured)
     assert json.loads(health.read_text())["projection_version"] == 2
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("local embedding failed"), KeyboardInterrupt(), SystemExit(2)])
+def test_v2_index_failure_records_alert_and_preserves_original_exception(tmp_path, monkeypatch, failure):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "health.json"
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", fail)
+    with pytest.raises(type(failure)) as raised:
+        ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
+    assert raised.value is failure
+    result = json.loads(health.read_text())
+    assert result["alerting"] is True and result["alert_reasons"] == ["indexing_failure"]
+    assert result["chunks_planned"] == 2
+    assert result["failures"][-1]["error_type"] == type(failure).__name__
+    assert result["failures"][-1]["code"] == "t3_indexing_failure"
+    # Read-only retry reports its actual dry-run result without ever claiming a persisted write.
+    planned = ingest_t3(
+        state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2, dry_run=True
+    )
+    assert planned.chunks_indexed == 0 and not (tmp_path / "destination.db").exists()
+    assert json.loads(health.read_text())["alerting"] is False
+
+
+def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "health.json"
+    monkeypatch.setenv("BRAINLAYER_FORBID_EMBEDDING_MODEL", "1")
+    with pytest.raises(RuntimeError, match="refusing to load"):
+        ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
+    assert json.loads(health.read_text())["alerting"] is True
+    assert not (tmp_path / "destination.db").exists()
