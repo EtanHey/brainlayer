@@ -180,6 +180,108 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         }
     }
 
+    func testConfiguredOffPreservesRuntimeTruthAcrossDashboardAndSettings() throws {
+        let cases: [(WatcherProcessProbeResult, BrainLayerLaunchdLoadState, WatcherHealthFileRead?, String, BrainLayerLaunchdGroupHealth)] = [
+            (.running(pid: 42), .running, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher running", .healthy),
+            (.running(pid: 42), .running, degradedHealth(), "Watcher needs attention", .unhealthy),
+            (.running(pid: 42), .running, .readable(WatcherHealthFile(
+                updatedAt: now.addingTimeInterval(-900), pollCount: 72
+            )), "Watcher needs attention", .unhealthy),
+            (.running(pid: 42), .running, .missing(path: "/fixture/health.json"), "Watcher status unknown", .unknown),
+            (.absent, .unloaded, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher stopped", .unhealthy),
+            (.absent, .loaded, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher stopped", .unhealthy),
+            (.failure("launchctl timed out"), .probeError("launchctl timed out"), nil, "Watcher status unknown", .unknown),
+            (.failure("launchd status for com.brainlayer.watch is unknown"), .unknown, nil, "Watcher status unknown", .unknown),
+            (.failure("launchctl timed out"), .probeError("launchctl timed out"), BrainBarDashboardFixture.healthyWatcherHealth, "Watcher running", .healthy),
+            (.failure("launchctl timed out"), .probeError("launchctl timed out"), degradedHealth(), "Watcher needs attention", .unhealthy),
+        ]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BrainLayerConfigStore(configURL: directory.appendingPathComponent("brainlayer.env"))
+        var config = BrainLayerConfig.defaultConfig
+        for job in BrainLayerLaunchdJobGroup.ingest.jobs {
+            config.launchdJobs[job]?.enabled = false
+        }
+        try store.save(config)
+        for (process, loadState, health, title, groupHealth) in cases {
+            let flow = DashboardFlowSummary.derive(
+                daemon: nil, stats: stats(replayDebt: 0, process: process, health: health), now: now
+            )
+            let viewModel = BrainBarSettingsViewModel(
+                store: store,
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                initialLaunchdStates: [.watch: loadState, .index: .loaded],
+                refreshStatusOnLoad: false,
+                now: { [now] in now },
+                initialWatcherHealth: health
+            )
+            XCTAssertFalse(viewModel.isGroupEnabled(.ingest))
+            XCTAssertEqual(viewModel.config.launchdJobs[.watch]?.enabled, false)
+            XCTAssertEqual(viewModel.config.launchdJobs[.index]?.enabled, false)
+            XCTAssertEqual(flow.watcherStatus.title, title)
+            XCTAssertEqual(viewModel.watcherStatus.title, title)
+            XCTAssertEqual(viewModel.footerPresentation.state.title, title)
+            let ingest = viewModel.groupStatus(.ingest)
+            XCTAssertEqual(ingest.health, groupHealth, title)
+            XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
+            XCTAssertEqual(ingest.note, "Configured OFF: Watcher, Index.")
+            XCTAssertFalse(ingest.nextRunText.contains("Index Continuous"), "loaded scheduled Index is not executing")
+            if title != "Watcher stopped" {
+                XCTAssertEqual(viewModel.watcherStatus, flow.watcherStatus)
+            }
+        }
+    }
+
+    func testConfiguredOffDoesNotHideObservedIndexFailures() {
+        var settings = BrainLayerConfig.defaultConfig.launchdJobs
+        for job in BrainLayerLaunchdJobGroup.ingest.jobs { settings[job]?.enabled = false }
+        let observations: [BrainLayerLaunchdJobObservation] = [
+            .init(loadState: .loaded, runs: 1, lastExitCode: 1,
+                  lastRunAt: now, nextRunAt: nil, isContinuous: false),
+            .stateOnly(.unloaded),
+        ]
+        for (index, reason) in zip(observations, ["Index last run exited 1 at t.", "Index is unloaded."]) {
+            let status = BrainLayerLaunchdJobGroup.ingest.status(
+                settings: settings, observations: [.watch: .stateOnly(.running), .index: index],
+                formatDate: { _ in "t" },
+                watcher: .running(heartbeatAt: now.addingTimeInterval(-70)), now: now
+            )
+            XCTAssertEqual(status.health, .unhealthy)
+            XCTAssertEqual(status.attentionReason, reason)
+            XCTAssertEqual(status.note, "Configured OFF: Watcher, Index.")
+        }
+    }
+
+    func testIngestToggleChangesConfigurationWithoutChangingObservedRuntime() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BrainLayerConfigStore(configURL: directory.appendingPathComponent("brainlayer.env"))
+        try store.save(.defaultConfig)
+        let viewModel = BrainBarSettingsViewModel(
+            store: store,
+            launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+            initialLaunchdStates: [.watch: .running, .index: .loaded],
+            refreshStatusOnLoad: false,
+            now: { [now] in now },
+            initialWatcherHealth: BrainBarDashboardFixture.healthyWatcherHealth
+        )
+        let runtime = viewModel.watcherStatus
+        viewModel.setGroup(.ingest, enabled: false)
+        XCTAssertFalse(viewModel.isGroupEnabled(.ingest))
+        XCTAssertEqual(try store.loadDocument().config.launchdJobs[.watch]?.enabled, false)
+        XCTAssertEqual(viewModel.config.launchdJobs[.watch]?.loadState, .running)
+        XCTAssertEqual(viewModel.watcherStatus, runtime)
+        XCTAssertEqual(viewModel.groupStatus(.ingest).health, .healthy)
+        XCTAssertEqual(viewModel.groupStatus(.ingest).note, "Configured OFF: Watcher, Index.")
+        viewModel.setGroup(.ingest, enabled: true)
+        XCTAssertTrue(viewModel.isGroupEnabled(.ingest))
+        XCTAssertEqual(try store.loadDocument().config.launchdJobs[.watch]?.enabled, true)
+        XCTAssertEqual(viewModel.watcherStatus, runtime)
+        XCTAssertNil(viewModel.groupStatus(.ingest).note)
+    }
+
     func testDegradedReasonNamesWhatSinceWhenAndWhatToDo() {
         let health = WatcherHealthFileRead.readable(WatcherHealthFile(
             updatedAt: now.addingTimeInterval(-70),
