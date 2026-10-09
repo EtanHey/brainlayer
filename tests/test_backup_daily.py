@@ -99,6 +99,68 @@ def _create_source_db(path: Path, *, chunk_count: int = 1) -> None:
     conn.close()
 
 
+def _write_preserved_pair(raw_path: Path, gzip_path: Path) -> None:
+    conn = sqlite3.connect(raw_path)
+    conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT)")
+    conn.execute("INSERT INTO chunks VALUES ('c1', 'preserved snapshot')")
+    conn.commit()
+    conn.close()
+    with gzip_path.open("wb") as compressed:
+        with gzip.GzipFile(fileobj=compressed, mode="wb") as writer:
+            writer.write(raw_path.read_bytes())
+
+
+def test_preserved_artifact_pair_stream_verifies_without_restore(tmp_path):
+    from brainlayer.backup_daily import verify_preserved_artifact_pair
+
+    raw_path = tmp_path / "2026-10-09.db"
+    gzip_path = tmp_path / "2026-10-09.db.gz"
+    _write_preserved_pair(raw_path, gzip_path)
+
+    result = verify_preserved_artifact_pair(
+        raw_path,
+        gzip_path,
+        expected_sentinel_chunks=1,
+        chunk_size=137,
+        sqlite_timeout_seconds=10,
+    )
+
+    assert result["raw_bytes"] == raw_path.stat().st_size
+    assert result["expanded_bytes"] == raw_path.stat().st_size
+    assert result["raw_sha256"] == result["gzip_uncompressed_sha256"]
+    assert len(result["gzip_md5"]) == 32
+    assert result["gzip_crc_ok"] is True
+    assert result["sqlite_pragma"] == "quick_check=ok"
+    assert result["sentinel_snapshot_chunks"] == result["sentinel_verified_chunks"] == 1
+    assert not (tmp_path / "restored.db").exists()
+
+
+def test_preserved_artifact_pair_fails_closed_on_mismatched_snapshot(tmp_path):
+    from brainlayer.backup_daily import verify_preserved_artifact_pair
+
+    raw_path = tmp_path / "2026-10-09.db"
+    gzip_path = tmp_path / "2026-10-09.db.gz"
+    _write_preserved_pair(raw_path, gzip_path)
+    with raw_path.open("ab") as handle:
+        handle.write(b"different bytes")
+
+    with pytest.raises(RuntimeError, match="byte-for-byte"):
+        verify_preserved_artifact_pair(raw_path, gzip_path, expected_sentinel_chunks=1, chunk_size=127)
+
+
+def test_preserved_artifact_pair_rejects_symlinked_artifacts(tmp_path):
+    from brainlayer.backup_daily import verify_preserved_artifact_pair
+
+    raw_path = tmp_path / "2026-10-09.db"
+    gzip_path = tmp_path / "2026-10-09.db.gz"
+    _write_preserved_pair(raw_path, gzip_path)
+    alias = tmp_path / "raw-alias.db"
+    alias.symlink_to(raw_path)
+
+    with pytest.raises(RuntimeError, match="non-symlink"):
+        verify_preserved_artifact_pair(alias, gzip_path, expected_sentinel_chunks=1)
+
+
 def test_local_backup_cap_is_decoupled_from_drive_retention(monkeypatch):
     from brainlayer import backup_daily
 
