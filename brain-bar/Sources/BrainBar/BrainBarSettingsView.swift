@@ -11,6 +11,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
     /// The Backups page's Technical details disclosure (E1); closed by default.
     @Published var backupDetailsExpanded = false
+    @Published private(set) var configPathRevealed = false
     @Published var isRefreshingLaunchdStatus = false
     /// A refresh retains its last completed sample; only a first read presents Checking.
     @Published private(set) var hasCompletedLaunchdSample: Bool
@@ -360,6 +361,11 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// The one Config file row (E5): the file this model reads and saves.
     var configFileURL: URL { store.configURL }
+    var configFilePathLabel: String {
+        configPathRevealed ? store.configURL.path : store.configURL.lastPathComponent
+    }
+    func toggleConfigPathVisibility() { configPathRevealed.toggle() }
+    func hideConfigPath() { configPathRevealed = false }
     func copyConfigFilePath() { workspace.copy(store.configURL.path) }
     func revealConfigFile() { workspace.reveal(store.configURL) }
     func copyText(_ text: String) { workspace.copy(text) }
@@ -822,7 +828,10 @@ struct BrainBarSettingsView: View {
         .background(Color.brainBarBackgroundBase)
         .foregroundStyle(Color.brainBarTextPrimary)
         .environment(\.colorScheme, .dark)
+        .onDisappear { viewModel.hideConfigPath() }
+        .onChange(of: navigation.selected) { _, _ in viewModel.hideConfigPath() }
         .onChange(of: activationRevision) { _, _ in
+            viewModel.hideConfigPath()
             _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
             viewModel.refreshLaunchdStatus()
             viewModel.refreshObservabilityStatus()
@@ -962,20 +971,41 @@ struct BrainBarSettingsView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(viewModel.configFileURL.path)
+            HStack(alignment: .top, spacing: 8) {
+                // Only the selected label enters SwiftUI or the accessibility tree.
+                Text(viewModel.configFilePathLabel)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.brainBarTextSecondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                Button("Copy path") { viewModel.copyConfigFilePath() }
-                Button("Reveal in Finder") { viewModel.revealConfigFile() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("brainbar.settings.config-file.path")
+                Button {
+                    viewModel.toggleConfigPathVisibility()
+                } label: {
+                    Image(systemName: viewModel.configPathRevealed ? "eye.slash" : "eye")
+                }
+                .accessibilityLabel(viewModel.configPathRevealed ? "Hide full config path" : "Show full config path")
+                .accessibilityValue(viewModel.configPathRevealed ? "Revealed" : "Hidden")
+                .help(viewModel.configPathRevealed ? "Hide full path" : "Show full path")
+                .accessibilityIdentifier("brainbar.settings.config-file.toggle")
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack { configFileActions }
+                VStack(alignment: .leading, spacing: 6) { configFileActions }
             }
             .controlSize(.small)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brainbar.settings.config-file")
+    }
+
+    @ViewBuilder
+    private var configFileActions: some View {
+        Button("Copy full path") { viewModel.copyConfigFilePath() }
+            .accessibilityIdentifier("brainbar.settings.config-file.copy")
+        Button("Reveal in Finder") { viewModel.revealConfigFile() }
+            .accessibilityIdentifier("brainbar.settings.config-file.reveal")
     }
 
     private func sectionHeading(_ title: String) -> some View {
