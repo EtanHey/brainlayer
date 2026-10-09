@@ -11,7 +11,7 @@ BRAINLAYER_T3_PROJECTION_VERSION=2
 ```
 
 The selected V2 provider projection links Codex `nativeThreadRef` and
-`nativeConversationHeadRef` identities by structural provider/driver metadata.
+`nativeConversationHeadRef` identities by structural driver metadata, independently of provider instance names.
 The transcript's first `session_meta` record supplies its native identity; fork
 filename suffixes, task text and working directories do not establish linkage.
 Headers are bounded to 1 MiB and cached by file identity within each flush.

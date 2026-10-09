@@ -415,11 +415,20 @@ def _v2_state(tmp_path, payloads):
     path = _state_db(tmp_path, [])  # retained legacy tables must not win explicit V2 selection
     with sqlite3.connect(path) as conn:
         conn.execute(
-            "CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, provider TEXT, payload_json TEXT)"
+            "CREATE TABLE orchestration_v2_projection_provider_threads (provider_thread_id TEXT, provider TEXT, payload_json TEXT, driver TEXT, provider_instance_id TEXT)"
         )
         conn.executemany(
-            "INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?)",
-            [(str(i), provider, json.dumps(payload)) for i, (provider, payload) in enumerate(payloads)],
+            "INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?, ?, ?)",
+            [
+                (
+                    str(i),
+                    provider,
+                    json.dumps(payload),
+                    payload.get("driver", provider) if isinstance(payload, dict) else provider,
+                    provider,
+                )
+                for i, (provider, payload) in enumerate(payloads)
+            ],
         )
     return path
 
@@ -429,7 +438,8 @@ def _header(source, identity, **fields):
     source.write_text(json.dumps({"type": "session_meta", "payload": {"id": identity, **fields}}) + "\n")
 
 
-def test_v2_links_parent_and_head_by_header_never_filename(tmp_path, monkeypatch):
+@pytest.mark.parametrize("instance", ["codex", "codex-personal"])
+def test_v2_links_parent_and_head_by_header_never_filename(tmp_path, monkeypatch, instance):
     from brainlayer.t3_provenance import t3_app_codex_session_ids
 
     parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -439,8 +449,10 @@ def test_v2_links_parent_and_head_by_header_never_filename(tmp_path, monkeypatch
         tmp_path,
         [
             (
-                "codex",
+                instance,
                 {
+                    "driver": "codex",
+                    "providerInstanceId": instance,
                     "nativeThreadRef": {"driver": "codex", "nativeId": parent},
                     "nativeConversationHeadRef": {"driver": "codex", "nativeId": head},
                 },
@@ -552,7 +564,11 @@ def test_v2_flush_deferral_recovery_and_queue_class(tmp_path, monkeypatch):
         )
         conn.execute(
             "INSERT INTO orchestration_v2_projection_provider_threads VALUES (?, ?, ?)",
-            ("t3", "codex", json.dumps({"nativeThreadRef": {"driver": "codex", "nativeId": session}})),
+            (
+                "t3",
+                "codex",
+                json.dumps({"driver": "codex", "nativeThreadRef": {"driver": "codex", "nativeId": session}}),
+            ),
         )
     recovered = flush([entry])
     assert recovered.inserted == 1 and dict(recovered) == {str(source): 300}

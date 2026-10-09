@@ -130,18 +130,25 @@ def t3_app_codex_session_ids(
                     {"path": str(path)},
                 )
             session_ids: set[str] = set()
-            for provider, raw in connection.execute(
-                f"SELECT provider, payload_json FROM {_V2_TABLE} WHERE provider = ?", ("codex",)
-            ):
+            driver_column = "driver" if "driver" in columns else "NULL"
+            for stored_driver, raw in connection.execute(f"SELECT {driver_column}, payload_json FROM {_V2_TABLE}"):
                 try:
                     payload = json.loads(raw)
                     if not isinstance(payload, dict):
                         raise ValueError("provider payload must be an object")
+                    payload_driver = payload.get("driver")
+                    driver = stored_driver or payload_driver
+                    if not isinstance(driver, str) or not driver:
+                        raise ValueError("provider linkage must declare its structural driver")
+                    if stored_driver and payload_driver and stored_driver != payload_driver:
+                        raise ValueError("provider projection and payload drivers disagree")
+                    if driver != "codex":
+                        continue
                     for field in ("nativeThreadRef", "nativeConversationHeadRef"):
                         ref = payload.get(field)
                         if ref is None:
                             continue
-                        if not isinstance(ref, dict) or ref.get("driver") != provider:
+                        if not isinstance(ref, dict) or ref.get("driver") != driver:
                             raise ValueError("native reference must name its structural provider")
                         identity = ref.get("nativeId")
                         if identity is None:
