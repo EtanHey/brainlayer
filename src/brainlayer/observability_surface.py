@@ -124,9 +124,13 @@ def _stores(connection: sqlite3.Connection, columns: set[str], db_input: dict[st
     rows = connection.execute("SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at), COUNT(*) FROM chunks WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?) GROUP BY 1 ORDER BY 1", (cutoff, now_text))
     by_hour = [{"hour": row[0], "count": row[1]} for row in rows]
     latest = []
+    # Pick rows before loading payloads: the top-N sorter can otherwise read full
+    # content for every newer candidate, even though only five previews survive.
     for row in connection.execute("SELECT id, created_at, source_class, source, sender, source_file, content "
-                                  "FROM chunks WHERE datetime(created_at) IS NOT NULL "
-                                  "ORDER BY datetime(created_at) DESC, id LIMIT 5"):
+                                  "FROM chunks WHERE rowid IN (SELECT rowid FROM chunks "
+                                  "WHERE datetime(created_at) IS NOT NULL "
+                                  "ORDER BY datetime(created_at) DESC, id LIMIT 5) "
+                                  "ORDER BY datetime(created_at) DESC, id"):
         emitter, _ = derive_emitter(row[3], row[4], row[5])
         scrubbed = scrub_secrets(row[6] or "")
         latest.append({"chunk_id": str(row[0]), "stored_at": _iso_utc(_parse_time(row[1])),
