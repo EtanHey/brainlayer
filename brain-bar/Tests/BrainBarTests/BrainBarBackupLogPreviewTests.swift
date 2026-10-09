@@ -58,6 +58,43 @@ final class BrainBarBackupLogPreviewTests: XCTestCase {
         XCTAssertEqual(BrainBarBackupLogPreview.redact(#"failed C:\Users\Private\config.env"#), "failed [private path]")
     }
 
+    func testReviewBasicAuthorizationAndCompoundCredentialLabelsThroughPublicPresenter() throws {
+        for error in ["Authorization: Basic dXNlcjpwYXNz", "client_secret=shortsecret", "ClientSecret: shortsecret"] {
+            let data = try JSONSerialization.data(withJSONObject: ["status": "failed", "error": error])
+            guard case let .entries(text, _) = present(String(decoding: data, as: UTF8.self)) else { return XCTFail() }
+            XCTAssertTrue(text.contains("Status: failed"))
+            XCTAssertFalse(text.contains("dXNlcjpwYXNz"), text)
+            XCTAssertFalse(text.contains("shortsecret"), text)
+        }
+        for line in ["ERROR ClientSecret: shortsecret", "ERROR Authorization: Basic dXNlcjpwYXNz",
+                     "ERROR client_secret=shortsecret", "ERROR accessToken=shortsecret"] {
+            guard case let .entries(text, _) = present(line) else { return XCTFail() }
+            XCTAssertTrue(text.contains("ERROR"), text)
+            XCTAssertFalse(text.contains("shortsecret"), text)
+            XCTAssertFalse(text.contains("dXNlcjpwYXNz"), text)
+        }
+    }
+
+    func testReviewWordAndRatioSlashesCannotEraseFailures() {
+        for line in ["upload/verify failed: disk full", "uploaded 0/5; upload failed: disk full"] {
+            guard case let .entries(text, _) = present(line) else { return XCTFail() }
+            XCTAssertEqual(text, line)
+        }
+        guard case let .entries(text, _) = present("/Users/Synthetic/file: permission denied") else { return XCTFail() }
+        XCTAssertFalse(text.contains("/Users/Synthetic"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("failure"), text)
+    }
+
+    func testReviewSpaceContainingPathsPreserveFailureVisibility() {
+        for line in [#"/Users/Synthetic Person/file: permission denied"#,
+                     #""/Users/Synthetic Person/file": permission denied"#,
+                     #"C:\Users\Synthetic Person\file: permission denied"#] {
+            guard case let .entries(text, _) = present(line) else { return XCTFail() }
+            XCTAssertFalse(text.contains("Synthetic Person"), text)
+            XCTAssertTrue(text.localizedCaseInsensitiveContains("denied") || text.localizedCaseInsensitiveContains("failure"), text)
+        }
+    }
+
     func testMalformedOrUnstructuredFailuresStayVisibleWithRedaction() {
         let raw = "FAILED /Users/private/config token=shortsecret"
         guard case let .entries(text, truncated) = present(raw) else { return XCTFail() }

@@ -57,28 +57,40 @@ enum BrainBarBackupLogPreview: Equatable, Sendable {
     static func redact(_ input: String) -> String {
         let scrubbed = SecretScrubber.scrub(input)
         guard scrubbed.quarantineCount == 0 else {
-            let failure = input.range(of: #"(?i)\b(failed|failure|error|aborted|denied|timeout)\b"#, options: .regularExpression) != nil
+            let failure = indicatesFailure(input)
             return failure ? "Failure detail hidden for privacy; reveal log for details." : "[private detail hidden; reveal log for details]"
         }
         var text = scrubbed.text
+        // Match the whole compound label even when its payload is short or low entropy.
+        let credentialLabel = #"(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*(?:token|secret|password|authorization|api[_ -]?key)[A-Za-z0-9_.-]*"#
         // URLs (including query credentials), absolute/tilde/Windows paths, credential labels,
         // provider-prefixed and long token-shaped values. Paths consume their remaining segment
         // because unquoted filenames may contain spaces; failure status/type stay separate.
         let rules = [
+            // Header values include their scheme and credential, not just the first word.
+            (#"(?i)(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*authorization[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*(?:[\"'][^\"']*[\"']|[^\r\n,;]+)"#, "[credential hidden]"),
             (#"(?i)\b[a-z][a-z0-9+.-]*://[^\s\"'<>]+"#, "[private URL]"),
             (#"[\"'](?:~?/|[A-Za-z]:\\)[^\"']*[\"']"#, "[private path]"),
-            (#"(?:~?/|[A-Za-z]:\\)[^\r\n\"'<>]*"#, "[private path]"),
-            (#"(?i)\b(?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|authorization|password|secret|token)\b[\"']?\s*[:=]\s*[\"'][^\"']*[\"']"#, "[credential hidden]"),
-            (#"(?i)\b(?:access[_ -]?token|refresh[_ -]?token|api[_ -]?key|authorization|password|secret|token)\b[\"']?\s*[:=]\s*[\"']?[^\s,;]+"#, "[credential hidden]"),
-            (#"(?i)\bBearer\s+[^\s,;]+"#, "[credential hidden]"),
-            (#"\b(?:sk-|ghp_|github_pat_|AIza|ya29\.|GOCSPX-)[A-Za-z0-9_.-]+"#, "[credential hidden]"),
+            (#"(?<![\p{L}\p{N}_./\\])(?:~?/|[A-Za-z]:\\)[^\r\n\"'<>]*"#, "[private path]"),
+            (#"(?i)\#(credentialLabel)[\"']?\s*[:=]\s*[\"'][^\"']*[\"']"#, "[credential hidden]"),
+            (#"(?i)\#(credentialLabel)[\"']?\s*[:=]\s*[\"']?[^\s,;]+"#, "[credential hidden]"),
+            (#"(?i)\b(?:Bearer|Basic)\s+[^\s,;]+"#, "[credential hidden]"),
+            (#"\b(?:sk-|ghp_|github_pat_|AIza|ya29\.|GOCSPX-|1//)[A-Za-z0-9_.-]+"#, "[credential hidden]"),
             (#"[A-Za-z0-9_+=.-]{32,}"#, "[token hidden]")
         ]
         for (pattern, replacement) in rules {
             text = text.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
         }
+        if indicatesFailure(input), !indicatesFailure(text) {
+            text += " · Failure detail hidden for privacy; reveal log for details."
+        }
         // Log-controlled newlines/control characters cannot imitate another receipt in the preview.
         return text.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : String($0) }.joined()
+    }
+
+    private static func indicatesFailure(_ text: String) -> Bool {
+        text.range(of: #"(?i)\b(failed|failure|error|aborted|denied|timeout|timed\s+out|disk\s+full|not\s+verified)\b"#,
+                   options: .regularExpression) != nil
     }
 }
 
