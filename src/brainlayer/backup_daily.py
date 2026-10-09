@@ -1453,6 +1453,20 @@ def _md5_open_file(descriptor: int, *, chunk_size: int) -> str:
     return digest.hexdigest()
 
 
+def _duplicate_regular_file(descriptor: int) -> tuple[int, tuple[int, int, int, int, int]]:
+    """Own a duplicate of the caller's artifact, never reopen its pathname."""
+    duplicate = os.dup(descriptor)
+    try:
+        info = os.fstat(duplicate)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("preserved backup descriptor is not a regular file")
+        os.lseek(duplicate, 0, os.SEEK_SET)
+        return duplicate, _file_identity(info)
+    except BaseException:
+        os.close(duplicate)
+        raise
+
+
 def verify_preserved_artifact_pair(
     raw_path: Path,
     gzip_path: Path,
@@ -1460,12 +1474,15 @@ def verify_preserved_artifact_pair(
     expected_sentinel_chunks: int,
     chunk_size: int = COPY_CHUNK_BYTES,
     sqlite_timeout_seconds: float = 300.0,
+    source_descriptors: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Prove a preserved gzip is the exact raw SQLite snapshot without restoring it.
 
     This is a local verification primitive only. It does not upload, write receipts,
     acquire the backup lock, or change backup health. The caller must provide and
     preserve the snapshot provenance and serialize any subsequent recovery action.
+    When supplied, source_descriptors bind every check to the caller's opened
+    raw/gzip pair; only duplicates are closed here. Path inputs remain identity guards.
     """
     raw_path = Path(raw_path).expanduser()
     gzip_path = Path(gzip_path).expanduser()
@@ -1474,9 +1491,17 @@ def verify_preserved_artifact_pair(
     if expected_sentinel_chunks < 1:
         raise ValueError("expected_sentinel_chunks must be positive")
 
-    raw_fd, raw_identity = _open_stable_regular_file(raw_path)
+    raw_fd, raw_identity = (
+        _open_stable_regular_file(raw_path)
+        if source_descriptors is None
+        else _duplicate_regular_file(source_descriptors[0])
+    )
     try:
-        gzip_fd, gzip_identity = _open_stable_regular_file(gzip_path)
+        gzip_fd, gzip_identity = (
+            _open_stable_regular_file(gzip_path)
+            if source_descriptors is None
+            else _duplicate_regular_file(source_descriptors[1])
+        )
     except BaseException:
         os.close(raw_fd)
         raise

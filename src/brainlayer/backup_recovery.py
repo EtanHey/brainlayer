@@ -234,6 +234,7 @@ def recover_existing_artifact(
                 gzip_path,
                 expected_sentinel_chunks=facts["sentinel_snapshot_chunks"],
                 sqlite_timeout_seconds=sqlite_timeout_seconds,
+                source_descriptors=(descriptors[0], descriptors[1]),
             )
         )
         assert_unchanged()

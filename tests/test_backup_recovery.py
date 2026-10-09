@@ -289,6 +289,81 @@ def test_recovery_nonblocking_lock_refuses_work(tmp_path, monkeypatch):
     assert alerts and None not in alerts
 
 
+def test_recovery_rejects_verifier_substitute_pair_after_outer_descriptors_open(tmp_path, monkeypatch):
+    monkeypatch.setattr(daily, "get_db_path", lambda: tmp_path / "unused.db")
+    real_match = recovery.find_verified_drive_match
+    real_remote_verify = daily.verify_drive_upload
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    raw, compressed, source, log, alerts, _, kwargs = recovery_setup(staging, monkeypatch)
+    compressed.write_bytes(gzip.compress(raw.read_bytes(), mtime=0))
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    replacement_raw = replacement / raw.name
+    replacement_gzip = replacement / compressed.name
+    for value in range(1000):
+        replacement_raw.unlink(missing_ok=True)
+        with sqlite3.connect(replacement_raw) as db:
+            db.execute("CREATE TABLE chunks (id TEXT)")
+            db.execute("INSERT INTO chunks VALUES (?)", (str(value),))
+        replacement_gzip.write_bytes(gzip.compress(replacement_raw.read_bytes(), mtime=0))
+        if replacement_gzip.stat().st_size == compressed.stat().st_size:
+            break
+    else:
+        pytest.fail("could not construct same-sized synthetic substitute")
+    assert replacement_raw.stat().st_size == raw.stat().st_size
+    assert replacement_raw.read_bytes() != raw.read_bytes()
+    source["bytes"] = compressed.stat().st_size
+    log.write_text(json.dumps(source) + "\n")
+    original_raw, original_gzip = raw.read_bytes(), compressed.read_bytes()
+    metadata = candidate(size=str(source["bytes"]), md5Checksum=hashlib.md5(replacement_gzip.read_bytes()).hexdigest())
+
+    class Service:
+        def files(self):
+            return self
+
+        def list(self, **options):
+            return SimpleNamespace(execute=lambda: {"files": [metadata]})
+
+        def get(self, **options):
+            return SimpleNamespace(execute=lambda: metadata)
+
+    monkeypatch.setattr(recovery, "find_verified_drive_match", real_match)
+    monkeypatch.setattr(daily, "verify_drive_upload", real_remote_verify)
+    monkeypatch.setattr(daily, "build_drive_service", Service)
+    monkeypatch.setattr(
+        daily, "upload_file_to_drive_raw", lambda *args, **options: pytest.fail("must reject substitute")
+    )
+    real_verifier = daily.verify_preserved_artifact_pair
+    real_open = daily._open_stable_regular_file
+    opened = []
+    held = tmp_path / "held-original"
+
+    def count_open(path):
+        result = real_open(path)
+        opened.append(result[0])
+        return result
+
+    def verify_during_swap(*args, **options):
+        staging.rename(held)
+        replacement.rename(staging)
+        try:
+            return real_verifier(*args, **options)
+        finally:
+            staging.rename(replacement)
+            held.rename(staging)
+
+    monkeypatch.setattr(daily, "_open_stable_regular_file", count_open)
+    monkeypatch.setattr(daily, "verify_preserved_artifact_pair", verify_during_swap)
+    with pytest.raises(RuntimeError, match="path changed"):
+        recovery.recover_existing_artifact(**kwargs)
+    assert len(opened) == 2  # Verification duplicates the held pair rather than reopening paths.
+    assert None not in alerts
+    failure = json.loads(log.read_text().splitlines()[-1])
+    assert failure["verified"] is False and failure["uploaded"] is False
+    assert raw.read_bytes() == original_raw and compressed.read_bytes() == original_gzip
+
+
 def test_recovered_old_snapshot_never_satisfies_fresh_backup_gate(tmp_path):
     import datetime as dt
 
