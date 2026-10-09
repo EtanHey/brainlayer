@@ -5,6 +5,8 @@ Resolution order:
   2. ~/.local/share/brainlayer/brainlayer.db (canonical path)
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 

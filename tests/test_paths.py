@@ -1,6 +1,8 @@
 """Tests for brainlayer.paths — DB path resolution."""
 
 import os
+import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -73,3 +75,30 @@ def test_spotlight_exclusion_rejects_unmarked_path(tmp_path):
     child.mkdir()
 
     assert not brainlayer_paths.is_spotlight_excluded(child)
+
+
+def test_installer_bootstrap_python_can_load_paths_and_resolve_t3_health(tmp_path):
+    """macOS installer preflight can use its standard-library-only Python 3.9."""
+    bootstrap_python = Path("/usr/bin/python3")
+    if not bootstrap_python.exists():
+        pytest.skip("installer bootstrap Python unavailable")
+    db_path = tmp_path / "uncreated" / "copy.db"
+    env = dict(os.environ)
+    env.pop("BRAINLAYER_T3_INGEST_HEALTH_PATH", None)
+    result = subprocess.run(
+        [
+            str(bootstrap_python),
+            "-c",
+            "import runpy,sys; from pathlib import Path; "
+            "paths=runpy.run_path(sys.argv[1]); print(paths['resolve_t3_health_path'](Path(sys.argv[2])))",
+            str(Path(brainlayer_paths.__file__)),
+            str(db_path),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == str(db_path.parent / "t3-health.json")
+    assert not db_path.parent.exists()
