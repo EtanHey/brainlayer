@@ -387,8 +387,18 @@ def _provider_session_id(resume_cursor_json: str | None) -> str | None:
 
 def _index_chunks(chunks, *, source_file: str, project: str | None, db_path: Path) -> int:
     from ..index_new import index_chunks_to_sqlite
+    from ..system_prompt_guard import looks_like_system_prompt
 
-    return index_chunks_to_sqlite(chunks, source_file=source_file, project=project, db_path=db_path)
+    # Match the indexer's existing admission filter; an embedding batch can fail without raising.
+    expected = sum(
+        not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content) for chunk in chunks
+    )
+    indexed = index_chunks_to_sqlite(chunks, source_file=source_file, project=project, db_path=db_path)
+    if indexed != expected:
+        raise RuntimeError(
+            f"T3 indexing incomplete: indexed {indexed} of {expected} eligible chunks; retain rows for replay"
+        )
+    return indexed
 
 
 def _message_chunks(thread: T3Thread, message: T3Message) -> list:
