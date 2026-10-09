@@ -739,6 +739,26 @@ def test_t3_selection_v2_paths_schedule_and_reverse_render(tmp_path):
     assert not destination.exists() and not state.exists()
 
 
+@pytest.mark.parametrize("projection_version", ["1", "2"])
+def test_t3_selection_empty_health_override_uses_database_parent(tmp_path, projection_version):
+    """The real env loader may preserve a blank optional health-path setting."""
+    destination = tmp_path / "uncreated" / "copy.db"
+    state = tmp_path / "unused-source.sqlite"
+    result, rendered, _ = _render_t3_selection(
+        tmp_path,
+        {
+            "BRAINLAYER_DB": destination,
+            "BRAINLAYER_T3_INGEST_STATE_DB": state,
+            "BRAINLAYER_T3_INGEST_PROJECTION_VERSION": projection_version,
+            "BRAINLAYER_T3_INGEST_HEALTH_PATH": "",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    argv = plistlib.loads(rendered.read_bytes())["ProgramArguments"]
+    assert argv[argv.index("--health-path") + 1] == str(destination.parent / "t3-health.json")
+    assert not destination.exists() and not state.exists()
+
+
 @pytest.mark.parametrize(
     "settings",
     [

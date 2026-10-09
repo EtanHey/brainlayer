@@ -69,8 +69,8 @@ def get_db_path() -> Path:
 
 
 def resolve_t3_health_path(db_path: Path | str | None = None, explicit: Path | str | None = None) -> Path:
-    """Shared T3 producer/consumer path: CLI override, env override, then DB-relative."""
-    selected = explicit if explicit is not None else os.environ.get("BRAINLAYER_T3_INGEST_HEALTH_PATH")
+    """Resolve CLI, environment, then DB-relative health paths; blank strings are unset."""
+    selected = explicit or os.environ.get("BRAINLAYER_T3_INGEST_HEALTH_PATH") or None
     if selected is not None:
         path = Path(selected).expanduser()
     else:
