@@ -656,6 +656,110 @@ def test_launchd_installer_wires_t3_ingest_target():
     assert "remove_plist t3-ingest" in install_source
 
 
+def _render_t3_selection(tmp_path, settings):
+    source = (REPO_ROOT / "scripts/launchd/install.sh").read_text()
+    head = "render_t3_ingest_selection() {"
+    helper = head + source.split("\n" + head, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("\n".join(f'{key}="{value}"' for key, value in settings.items()) + "\n")
+    env_file.chmod(0o600)
+    rendered = tmp_path / "rendered.plist"
+    original = (REPO_ROOT / "scripts/launchd/com.brainlayer.t3-ingest.plist").read_bytes()
+    rendered.write_bytes(original)
+    harness = tmp_path / "render.sh"
+    harness.write_text(helper + '\nrender_t3_ingest_selection "$1"\n')
+    # No launchctl or model/DB access: execute the real env loader and renderer.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("BRAINLAYER_T3_") and key != "BRAINLAYER_DB"
+    }
+    env.update(
+        BRAINLAYER_ENV_FILE=str(env_file),
+        BRAINLAYER_ENV_RUN=str(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"),
+        BRAINLAYER_PYTHON=__import__("sys").executable,
+        PYTHONPATH=str(REPO_ROOT / "src"),
+        HOME=str(tmp_path),
+    )
+    result = subprocess.run(
+        ["/bin/bash", str(harness), str(rendered)], env=env, capture_output=True, text=True, timeout=20
+    )
+    return result, rendered, original
+
+
+def test_t3_selection_default_retains_legacy_daily_schedule(tmp_path):
+    result, rendered, _ = _render_t3_selection(tmp_path, {})
+    assert result.returncode == 0, result.stderr
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"][3:7] == [
+        "--state-db",
+        str(tmp_path / ".t3/userdata/state.sqlite"),
+        "--projection-version",
+        "1",
+    ]
+    assert plist["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
+    assert "StartInterval" not in plist
+    assert plist["RunAtLoad"] is True
+
+
+def test_t3_selection_v2_paths_schedule_and_reverse_render(tmp_path):
+    destination = tmp_path / "private & data" / "brainlayer.db"
+    state = tmp_path / "source <v2>.sqlite"
+    result, rendered, _ = _render_t3_selection(
+        tmp_path,
+        {
+            "BRAINLAYER_T3_INGEST_STATE_DB": state,
+            "BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "2",
+            "BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "60",
+            "BRAINLAYER_DB": destination,
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"][3:] == [
+        "--state-db",
+        str(state),
+        "--projection-version",
+        "2",
+        "--db",
+        str(destination),
+        "--health-path",
+        str(destination.parent / "t3-health.json"),
+    ]
+    assert "StartCalendarInterval" not in plist
+    assert plist["StartInterval"] == 60
+    assert plist["RunAtLoad"] is True
+    assert "KeepAlive" not in plist
+    result, rendered, _ = _render_t3_selection(tmp_path, {"BRAINLAYER_T3_INGEST_HEALTH_PATH": tmp_path / "health.json"})
+    assert result.returncode == 0, result.stderr
+    reverted = plistlib.loads(rendered.read_bytes())
+    assert reverted["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
+    assert "StartInterval" not in reverted
+    assert reverted["ProgramArguments"][-1] == str(tmp_path / "health.json")
+    assert not destination.exists() and not state.exists()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "2"},
+        {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "3"},
+        {"BRAINLAYER_T3_INGEST_STATE_DB": "relative.sqlite"},
+        {"BRAINLAYER_DB": "relative.db"},
+        {"BRAINLAYER_T3_INGEST_HEALTH_PATH": "relative.json"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "59"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "86401"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "1.5"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": ""},
+    ],
+)
+def test_t3_selection_invalid_is_atomic(tmp_path, settings):
+    result, rendered, original = _render_t3_selection(tmp_path, settings)
+    assert result.returncode != 0
+    assert "ERROR:" in result.stderr
+    assert rendered.read_bytes() == original
+
+
 def test_launchd_installer_wires_throughput_watchdog_target():
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
 

@@ -5,6 +5,8 @@ Resolution order:
   2. ~/.local/share/brainlayer/brainlayer.db (canonical path)
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
@@ -64,6 +66,17 @@ def get_db_path() -> Path:
     if not os.environ.get("BRAINLAYER_DB"):
         db_path.parent.mkdir(parents=True, exist_ok=True)
     return db_path
+
+
+def resolve_t3_health_path(db_path: Path | str | None = None, explicit: Path | str | None = None) -> Path:
+    """Shared T3 producer/consumer path: CLI override, env override, then DB-relative."""
+    selected = explicit if explicit is not None else os.environ.get("BRAINLAYER_T3_INGEST_HEALTH_PATH")
+    if selected is not None:
+        path = Path(selected).expanduser()
+    else:
+        destination = Path(db_path).expanduser() if db_path is not None else resolve_db_path()
+        path = destination.parent / "t3-health.json"
+    return _guard_test_runtime_path(path, source="T3 health path")
 
 
 # Convenience: pre-resolved default without import-time filesystem mutation.
