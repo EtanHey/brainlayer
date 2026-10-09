@@ -21,6 +21,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
 }
 
 enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
+    case checking
     case healthy
     case awaitingRun
     case unhealthy
@@ -31,6 +32,7 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
 
     var title: String {
         switch self {
+        case .checking: "Checking…"
         case .healthy: "Healthy"
         case .awaitingRun: "Awaiting next run"
         case .unhealthy: "Needs attention"
@@ -411,10 +413,11 @@ extension WatcherLaunchdEvidence {
 /// "Healthy".
 struct BrainBarBackupsHealth: Equatable, Sendable {
     enum Badge: Equatable, Sendable {
-        case healthy, awaitingRun, expiring, attention, unknown
+        case checking, healthy, awaitingRun, expiring, attention, unknown
 
         var title: String {
             switch self {
+            case .checking: "Checking…"
             case .healthy: "Healthy"
             case .awaitingRun: "Awaiting next run"
             case .expiring: "Drive access expiring"
@@ -433,7 +436,8 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         drive: DriveAuthPresentation?,
         status: ObservabilityBackupStatus?,
         statusUnavailableReason: String,
-        attentionSentence: String? = nil
+        attentionSentence: String? = nil,
+        isCheckingStatus: Bool = false
     ) -> Self {
         // Every red line the page shows, most severe first: the failed job's own alert, Drive
         // access, the launchd job, then the other backup diagnostics. `attentionSentence` is the
@@ -445,15 +449,17 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
             status.flatMap { $0.errorIsJobAlert ? $0.attentionLine?.text : nil },
             drive?.tone == .attention ? drive?.line : nil,
             job.health == .unhealthy ? job.attentionReason : nil,
-            statusAttention ?? statusUnavailableReason,
+            statusAttention ?? (isCheckingStatus ? nil : statusUnavailableReason),
         ].compactMap { $0 }
         if let reason = red.first { return .init(badge: .attention, reason: reason) }
+        if isCheckingStatus || job.health == .checking { return .init(badge: .checking, reason: nil) }
         switch drive?.tone {
         case .expiring: return .init(badge: .expiring, reason: drive?.line)
         case .unknown: return .init(badge: .unknown, reason: drive?.line)
         case .attention, .connected, nil: break
         }
         return switch job.health {
+        case .checking: .init(badge: .checking, reason: nil)
         case .healthy: .init(badge: .healthy, reason: nil)
         case .awaitingRun: .init(badge: .awaitingRun, reason: nil)
         // Unreachable for Backups (only the Maintenance group skips); a deferral is not a failure.
