@@ -988,8 +988,8 @@ def health_check_command(
         "--drain-health-path",
         help="Drain health JSON path.",
     ),
-    t3_health_path: Path = typer.Option(
-        Path("~/.local/share/brainlayer/t3-health.json"),
+    t3_health_path: Optional[Path] = typer.Option(
+        None,
         "--t3-health-path",
         help="T3 ingestion health JSON path.",
     ),
@@ -1045,7 +1045,7 @@ def health_check_command(
             else HealthCheckConfig().source_jsonl_globs,
             pause_sentinel_path=pause_sentinel_path.expanduser(),
             drain_health_path=drain_health_path.expanduser(),
-            t3_health_path=t3_health_path.expanduser(),
+            t3_health_path=t3_health_path,
             queue_dir=queue_dir.expanduser(),
             offsets_path=offsets_path.expanduser(),
             watcher_health_path=watcher_health_path.expanduser(),
@@ -3796,22 +3796,31 @@ def ingest_t3_command(
         help="Read-only T3 state SQLite database.",
     ),
     db: Optional[Path] = typer.Option(None, "--db", help="BrainLayer destination database."),
-    health_path: Path = typer.Option(
-        Path("~/.local/share/brainlayer/t3-health.json"),
+    health_path: Optional[Path] = typer.Option(
+        None,
         "--health-path",
         help="T3 ingestion health JSON path.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Read and plan chunks without writing BrainLayer."),
+    projection_version: int = typer.Option(
+        1,
+        "--projection-version",
+        min=1,
+        max=2,
+        help="Explicit T3 projection contract: 1 (legacy) or 2 (V2). Set --state-db for V2.",
+    ),
 ) -> None:
     """Ingest the live T3 thread projection into BrainLayer."""
     from ..ingest.t3 import ingest_t3
-    from ..paths import get_db_path
+    from ..paths import get_db_path, resolve_t3_health_path
 
+    resolved_db = db.expanduser() if db is not None else get_db_path()
     result = ingest_t3(
         state_db.expanduser(),
-        db_path=(db.expanduser() if db is not None else get_db_path()),
-        health_path=health_path.expanduser(),
+        db_path=resolved_db,
+        health_path=resolve_t3_health_path(resolved_db, health_path),
         dry_run=dry_run,
+        projection_version=projection_version,
     )
     mode = "dry-run " if dry_run else ""
     rprint(

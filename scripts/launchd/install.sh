@@ -782,6 +782,46 @@ verify_hotlane_runtime() {
     return 1
 }
 
+render_t3_ingest_selection() {
+    # Read the same private env file as the job. Never source it as shell code.
+    # Modify only the temporary plist; invalid selection leaves the installed job intact.
+    BRAINLAYER_SKIP_DISABLE_GATES=1 "$BRAINLAYER_ENV_RUN" "$BRAINLAYER_PYTHON" - "$1" <<'PY'
+import os
+import plistlib
+import sys
+from pathlib import Path
+from brainlayer.paths import resolve_t3_health_path
+
+def absolute_path(value, key):
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise SystemExit(f"ERROR: {key} must be an absolute path")
+    return str(path)
+
+version = os.environ.get("BRAINLAYER_T3_INGEST_PROJECTION_VERSION", "1")
+if version not in {"1", "2"}:
+    raise SystemExit("ERROR: BRAINLAYER_T3_INGEST_PROJECTION_VERSION must be 1 or 2")
+state = os.environ.get("BRAINLAYER_T3_INGEST_STATE_DB")
+if version == "2" and not state:
+    raise SystemExit("ERROR: V2 requires explicit BRAINLAYER_T3_INGEST_STATE_DB")
+state = absolute_path(state or "~/.t3/userdata/state.sqlite", "BRAINLAYER_T3_INGEST_STATE_DB")
+destination = absolute_path(os.environ.get("BRAINLAYER_DB") or "~/.local/share/brainlayer/brainlayer.db", "BRAINLAYER_DB")
+health = absolute_path(str(resolve_t3_health_path(destination)), "BRAINLAYER_T3_INGEST_HEALTH_PATH")
+interval = os.environ.get("BRAINLAYER_T3_INGEST_INTERVAL_SECONDS")
+if interval is not None and (not interval.isdecimal() or int(interval) < 60 or int(interval) > 86400):
+    raise SystemExit("ERROR: BRAINLAYER_T3_INGEST_INTERVAL_SECONDS must be an integer from 60 to 86400")
+path = Path(sys.argv[1])
+with path.open("rb") as handle:
+    plist = plistlib.load(handle)
+plist["ProgramArguments"] += ["--state-db", state, "--projection-version", version, "--db", destination, "--health-path", health]
+if interval is not None:
+    plist.pop("StartCalendarInterval", None)
+    plist["StartInterval"] = int(interval)
+with path.open("wb") as handle:
+    plistlib.dump(plist, handle)
+PY
+}
+
 install_plist() {
     local name="$1"
     local src="$SCRIPT_DIR/com.brainlayer.${name}.plist"
@@ -827,6 +867,9 @@ install_plist() {
         -e "s|__HOTLANE_BRAINBAR_DAEMON__|$HOTLANE_BRAINBAR_DST|g" \
         "$src" > "$rendered_plist" || return 1
 
+    if [ "$name" = "t3-ingest" ]; then
+        render_t3_ingest_selection "$rendered_plist" || return 1
+    fi
     install_rendered_plist "$rendered_plist" "$dst" || return 1
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 

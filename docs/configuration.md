@@ -89,6 +89,55 @@ BrainLayer reads from these locations by default:
 | Daemon socket | `/tmp/brainlayer.sock` |
 | Historical enrichment lock | `/tmp/brainlayer-enrichment.lock` (legacy safety/cleanup only) |
 
+### T3 projection selection
+
+`ingest-t3` defaults to the legacy `~/.t3/userdata/state.sqlite` and projection
+version 1. T3 V2 uses a separate database and separate projection tables;
+pointing the legacy reader at `statev2.sqlite` still reads its retained legacy
+tables. Select both explicitly for V2:
+
+```bash
+brainlayer ingest-t3 --state-db ~/.t3/userdata/statev2.sqlite --projection-version 2 --dry-run
+```
+
+V2 reads settled user/assistant messages from their JSON payloads and retains
+all projects, stable message IDs, source timestamps, and `t3-thread` provenance.
+Streaming messages become eligible when settled. Missing schema or invalid
+payloads raise an alarm; the reader never falls back to legacy tables. Dry-run
+writes the health file but does not write the destination database.
+
+The packaged T3 LaunchAgent retains legacy selection and the daily 03:45 schedule
+by default. To select V2 durably, add these settings to the private BrainLayer env
+file, then rerender with the installed `scripts/launchd/install.sh t3-ingest`:
+
+```dotenv
+BRAINLAYER_T3_INGEST_STATE_DB=/Users/example/.t3/userdata/statev2.sqlite
+BRAINLAYER_T3_INGEST_PROJECTION_VERSION=2
+BRAINLAYER_T3_INGEST_INTERVAL_SECONDS=60
+```
+
+V2 requires an explicitly selected absolute source path. No source is detected
+automatically; the importer reads all projects. The renderer pins `--db` to the
+configured `BRAINLAYER_DB` (or canonical DB) and `--health-path` beside that DB.
+`BRAINLAYER_T3_INGEST_HEALTH_PATH` may explicitly override health placement.
+Invalid configuration fails before the installed plist is replaced.
+The public ingest and health-check CLIs and direct health-check configuration
+share this path resolver; explicit `--health-path`/`--t3-health-path` options
+take precedence over the environment. Rerender the job after changing its DB
+or health selection so the loaded importer and scheduled consumer agree.
+
+The optional interval accepts 60–86400 seconds and replaces the daily calendar;
+unset restores the original daily schedule. `RunAtLoad` remains enabled. launchd
+runs one instance of this label, and the existing DB writer arbitration still
+applies. Freshness is the interval plus import runtime, model startup, and any
+writer contention; the daily default does not meet active-chat freshness. First
+V2 execution also imports historical settled messages. Verify loaded argv,
+schedule, health and exact persisted message IDs after a reviewed deployment.
+
+These settings select the SQLite importer. `BRAINLAYER_T3_STATE_DB` configures
+watcher provider linkage separately; selecting V2 ingestion does not correct
+provider-rollout provenance by itself.
+
 ## Config File
 
 Create or update the config file with:

@@ -35,7 +35,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
-from .paths import get_db_path
+from .paths import get_db_path, resolve_t3_health_path
 from .pause import (
     DEFAULT_PAUSE_SENTINEL_PATH,
     pause_applies_to_label,
@@ -136,7 +136,7 @@ class HealthCheckConfig:
     drain_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
-    t3_health_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser())
+    t3_health_path: Path | None = None
     jsonl_backup_log_path: Path = field(
         default_factory=lambda: Path(
             os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_JSONL_BACKUP_LOG_PATH))
@@ -181,6 +181,9 @@ class HealthCheckConfig:
             DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES,
         )
     )
+
+    def __post_init__(self) -> None:
+        self.t3_health_path = resolve_t3_health_path(self.db_path, self.t3_health_path)
 
 
 @dataclass
