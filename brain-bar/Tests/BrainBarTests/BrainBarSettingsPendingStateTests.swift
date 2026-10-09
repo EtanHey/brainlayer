@@ -281,6 +281,38 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         }
     }
 
+    func testPartiallyDisabledGroupsShowKnownReasonBeforeFirstLaunchdSample() async throws {
+        for group in BrainLayerLaunchdJobGroup.allCases {
+            let launchd = PendingLaunchdSamples([healthyStates])
+            let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+            defer { launchd.releaseAll(); reads.releaseAll() }
+            let (root, model) = try makeModel(launchd: launchd, reads: reads, refreshOnLoad: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let disabled = try XCTUnwrap(group.jobs.last)
+            model.setJob(disabled, enabled: false)
+            try await waitUntil { launchd.calls == 1 }
+            XCTAssertFalse(model.hasCompletedLaunchdSample)
+            let pending = model.groupStatus(group)
+            XCTAssertEqual(pending.health, .unhealthy)
+            let reason: String = switch group {
+            case .ingest: "Index is disabled."
+            case .backups: "Transcripts is disabled."
+            case .maintenance: "Weekly is disabled."
+            }
+            XCTAssertEqual(pending.attentionReason, reason)
+            XCTAssertEqual(pending.lastRunText, "Checking…")
+            XCTAssertEqual(pending.nextRunText, "Checking…")
+
+            launchd.release(0)
+            try await waitUntil { !model.isRefreshingLaunchdStatus }
+            XCTAssertEqual(model.groupStatus(group).attentionReason, reason)
+            model.setJob(disabled, enabled: true)
+            XCTAssertTrue(model.isGroupEnabled(group))
+            XCTAssertNotEqual(model.groupStatus(group).health, .checking)
+            XCTAssertFalse(model.groupStatus(group).attentionReason?.contains("is disabled") ?? false)
+        }
+    }
+
     private func makeModel(
         launchd: PendingLaunchdSamples, reads: PendingSettingsSamples<ObservabilityReadResult>,
         initialStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
