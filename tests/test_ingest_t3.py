@@ -599,6 +599,7 @@ def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
     assert snapshot["failures"][-1]["error_type"] == "RuntimeError"
     assert not destination.exists()
 
+
 def test_v2_partial_embeddings_fail_health_preserve_rows_and_replay(tmp_path, monkeypatch):
     from brainlayer.embeddings import EmbeddedChunk
     from brainlayer.ingest.t3 import ingest_t3
