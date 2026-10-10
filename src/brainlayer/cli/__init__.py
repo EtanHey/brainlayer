@@ -583,12 +583,9 @@ def _report_ingest_denylist_overrides(resolved_env_file: Path) -> None:
 
     readers = ", ".join(sorted(MEMORY_READER_ATTRIBUTIONS))
     for source, patterns in override_sources:
-        # Quiet-on-overreach is NOT a clean bill of health: any override at all takes the place of
-        # the attribution class rule, so memory-reading workers stop being excluded by class.
         rprint(
-            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and REPLACES the ingest"
-            f" class rule[/] — while it is set, {readers} transcripts are no longer excluded by"
-            " their attribution, only by these patterns."
+            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and adds path exclusions"
+            f" to the ingest class rule[/] — {readers} transcripts remain excluded by their attribution."
         )
         overreaching = env_denylist_overreach(patterns=patterns)
         if not overreaching:
