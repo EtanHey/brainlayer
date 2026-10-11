@@ -2589,12 +2589,49 @@ No results found.
         let restoreQueuePath = setPendingStoreQueuePath(queuePath)
         defer { restoreQueuePath() }
 
+        let retainedQueuePath = tempDir.appendingPathComponent("retained-pending-stores.jsonl")
+        let drainQueue = DispatchQueue(label: "test.deferred-store-unreadable-retry")
+        let blockerStarted = DispatchSemaphore(value: 0)
+        let installFault = DispatchSemaphore(value: 0)
+        let faultInstalled = DispatchSemaphore(value: 0)
+        let releaseDrain = DispatchSemaphore(value: 0)
+        let unreadableRetry = DispatchSemaphore(value: 0)
+        drainQueue.async {
+            blockerStarted.signal()
+            guard installFault.wait(timeout: .now() + 5.0) == .success else {
+                XCTFail("fault setup was not requested before the bounded drain barrier expired")
+                faultInstalled.signal()
+                return
+            }
+            do {
+                let bytes = try Data(contentsOf: queuePath)
+                try bytes.write(to: retainedQueuePath, options: .atomic)
+                try FileManager.default.removeItem(at: queuePath)
+                try FileManager.default.createDirectory(at: queuePath, withIntermediateDirectories: false)
+            } catch {
+                XCTFail("could not install the real unreadable queue fault: \(error)")
+            }
+            faultInstalled.signal()
+            XCTAssertEqual(releaseDrain.wait(timeout: .now() + 5.0), .success, "fault barrier must be released")
+        }
+        defer {
+            installFault.signal()
+            releaseDrain.signal()
+            let barrierFinished = DispatchSemaphore(value: 0)
+            drainQueue.async { barrierFinished.signal() }
+            XCTAssertEqual(barrierFinished.wait(timeout: .now() + 5.0), .success, "drain barrier teardown must finish")
+        }
+        guard blockerStarted.wait(timeout: .now() + 5.0) == .success else {
+            XCTFail("serial drain queue did not enter its bounded fault barrier")
+            return
+        }
+
         let dbPath = tempDir.appendingPathComponent("brainbar.db").path
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
         db.failNextStoreWithBusyForTesting = true
 
-        let router = MCPRouter(profile: "full")
+        let router = MCPRouter(profile: "full", pendingStoreDrainQueue: drainQueue)
         defer { withExtendedLifetime(router) {} }
         router.setDatabase(db)
 
@@ -2615,13 +2652,35 @@ No results found.
 
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertEqual(result["queued"] as? Bool, true)
-        let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
-
-        try FileManager.default.removeItem(at: queuePath)
-        try FileManager.default.createDirectory(at: queuePath, withIntermediateDirectories: false)
-        Thread.sleep(forTimeInterval: 0.35)
-        try FileManager.default.removeItem(at: queuePath)
-        try queuedText.write(to: queuePath, atomically: true, encoding: .utf8)
+        let chunkID = try XCTUnwrap(result["chunk_id"] as? String)
+        let queuedBytes = try Data(contentsOf: queuePath)
+        XCTAssertTrue(String(decoding: queuedBytes, as: UTF8.self).contains(queuedContent))
+        router.observeUnreadablePendingStoreRetryForTesting { observedChunkID in
+            XCTAssertEqual(observedChunkID, chunkID, "witness must identify this queued target")
+            print("PR1249_RETRY_WITNESS chunk_id=\(observedChunkID) unreadable=true retry_scheduled=true")
+            unreadableRetry.signal()
+        }
+        installFault.signal()
+        guard faultInstalled.wait(timeout: .now() + 5.0) == .success else {
+            XCTFail("unreadable queue fault was not installed before releasing drains")
+            return
+        }
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: queuePath.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue, "fault must be a real unreadable queue directory")
+        releaseDrain.signal()
+        guard unreadableRetry.wait(timeout: .now() + 5.0) == .success else {
+            XCTFail("this target never acknowledged an unreadable snapshot and scheduled retry")
+            return
+        }
+        XCTAssertEqual(try Data(contentsOf: retainedQueuePath), queuedBytes, "fault must retain the queued bytes")
+        XCTAssertFalse(try chunkContents(path: dbPath).contains(queuedContent), "unreadable queue must not have persisted yet")
+        try drainQueue.sync {
+            try FileManager.default.removeItem(at: queuePath)
+            try queuedBytes.write(to: queuePath, options: .atomic)
+            XCTAssertEqual(try Data(contentsOf: queuePath), queuedBytes, "restore must preserve the acknowledged queue")
+            print("PR1249_RESTORE_WITNESS chunk_id=\(chunkID) queue_bytes_preserved=true serialized=true")
+        }
 
         let deadline = Date().addingTimeInterval(2.0)
         var storedContents: [String] = []
