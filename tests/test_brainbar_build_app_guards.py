@@ -63,6 +63,8 @@ def _prepare_build_repo(tmp_path: Path, repo_name: str, branch: str = "main") ->
     script_dir.mkdir(parents=True, exist_ok=True)
     source_script = Path(__file__).resolve().parents[1] / "brain-bar" / "build-app.sh"
     target_script = script_dir / "build-app.sh"
+    helper = source_script.with_name("install-services.py")
+    _write_tracked_file(repo, "brain-bar/install-services.py", helper.read_text())
     shutil.copy2(source_script, target_script)
     _write_tracked_file(repo, "README.md", "# test repo\n")
     _write_tracked_file(repo, "brain-bar/build-app.sh", target_script.read_text())
