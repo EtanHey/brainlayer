@@ -216,6 +216,12 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         model.setJob(.watch, enabled: false)
         XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
         XCTAssertEqual(model.groupStatus(.ingest).health, .unhealthy)
+        XCTAssertEqual(model.groupStatus(.ingest).attentionReason, "Watcher is disabled.")
+        XCTAssertEqual(model.groupStatus(.ingest).lastRunText, "Checking…")
+        XCTAssertEqual(model.groupStatus(.ingest).nextRunText, "Checking…")
+        if case .unknown = model.watcherStatus {} else {
+            XCTFail("Configured OFF without a sample is unknown runtime, never an invented stop")
+        }
     }
 
     func testMeasuredWatcherFailureWinsInBothIndependentReaderOrders() async throws {
@@ -286,7 +292,11 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
             let launchd = PendingLaunchdSamples([healthyStates])
             let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
             defer { launchd.releaseAll(); reads.releaseAll() }
-            let (root, model) = try makeModel(launchd: launchd, reads: reads, refreshOnLoad: true)
+            let (root, model) = try makeModel(
+                launchd: launchd, reads: reads, refreshOnLoad: true,
+                initialWatcherHealth: BrainBarDashboardFixture.healthyWatcherHealth,
+                now: BrainBarDashboardFixture.fetchedAt
+            )
             defer { try? FileManager.default.removeItem(at: root) }
             let disabled = try XCTUnwrap(group.jobs.last)
             model.setJob(disabled, enabled: false)
@@ -305,11 +315,210 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
 
             launchd.release(0)
             try await waitUntil { !model.isRefreshingLaunchdStatus }
-            XCTAssertEqual(model.groupStatus(group).attentionReason, reason)
+            if group == .ingest {
+                XCTAssertEqual(model.groupStatus(group).health, .healthy)
+                XCTAssertNil(model.groupStatus(group).attentionReason)
+                XCTAssertEqual(model.groupStatus(group).note, "Configured OFF: Index.")
+            } else {
+                XCTAssertEqual(model.groupStatus(group).attentionReason, reason)
+            }
             model.setJob(disabled, enabled: true)
             XCTAssertTrue(model.isGroupEnabled(group))
+            XCTAssertNil(model.groupStatus(group).note)
             XCTAssertNotEqual(model.groupStatus(group).health, .checking)
             XCTAssertFalse(model.groupStatus(group).attentionReason?.contains("is disabled") ?? false)
+        }
+    }
+
+    private var ingestConfigurations: [(watch: Bool, index: Bool, note: String?, pendingReason: String?)] {
+        [(true, true, nil, nil),
+         (false, false, "Configured OFF: Watcher, Index.", "Watcher is disabled."),
+         (false, true, "Configured OFF: Watcher.", "Watcher is disabled."),
+         (true, false, "Configured OFF: Index.", "Index is disabled.")]
+    }
+
+    func testConfiguredIngestPendingTruthInBothIndependentReaderOrders() async throws {
+        let now = BrainBarDashboardFixture.fetchedAt
+        let healthy = BrainBarDashboardFixture.healthyWatcherHealth
+        let degraded = WatcherHealthFileRead.readable(WatcherHealthFile(
+            updatedAt: now, pollCount: 72, dbProbeFailed: true
+        ))
+        let stale = WatcherHealthFileRead.readable(WatcherHealthFile(
+            updatedAt: now.addingTimeInterval(-900), pollCount: 72
+        ))
+        var sampledStates = healthyStates
+        sampledStates[.index] = .loaded // Scheduled and loaded, not proof of execution.
+        for configuration in ingestConfigurations {
+            for health in [healthy, degraded, stale] {
+                for watcherFirst in [true, false] {
+                    let launchd = PendingLaunchdSamples([sampledStates])
+                    let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+                    let watcherReads = PendingSettingsSamples([health])
+                    defer { launchd.releaseAll(); reads.releaseAll(); watcherReads.releaseAll() }
+                    let (root, model) = try makeModel(
+                        launchd: launchd, reads: reads, refreshOnLoad: true,
+                        watcherReads: watcherReads, now: now,
+                        watchEnabled: configuration.watch, indexEnabled: configuration.index
+                    )
+                    defer { try? FileManager.default.removeItem(at: root) }
+                    try await waitUntil { launchd.calls == 1 && watcherReads.calls == 1 }
+                    assertPendingConfiguredIngest(model, configuration: configuration)
+                    XCTAssertFalse(model.hasCompletedLaunchdSample)
+                    if !watcherFirst {
+                        launchd.release(0)
+                        try await waitUntil { model.hasCompletedLaunchdSample }
+                        XCTAssertEqual(model.groupStatus(.ingest).health, .unknown)
+                        XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
+                        XCTAssertEqual(model.footerPresentation.detail,
+                                       "Watcher is running, but its health file has not been read yet.")
+                    }
+                    watcherReads.release(0)
+                    try await waitUntil { model.watcherHealth == health }
+                    let attention = health == degraded || (!watcherFirst && health == stale)
+                    let reason = model.watcherStatus.reasonText(now: now)
+                    if watcherFirst && !attention {
+                        assertPendingConfiguredIngest(model, configuration: configuration)
+                    } else {
+                        XCTAssertEqual(model.groupStatus(.ingest).health, attention ? .unhealthy : .healthy)
+                        XCTAssertEqual(model.groupStatus(.ingest).attentionReason, reason)
+                        XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
+                        XCTAssertEqual(model.footerPresentation.detail, reason)
+                    }
+                    XCTAssertEqual(model.groupStatus(.ingest).note,
+                                   watcherFirst && !attention ? nil : configuration.note)
+                    if watcherFirst {
+                        XCTAssertFalse(model.hasCompletedLaunchdSample)
+                        launchd.release(0)
+                        try await waitUntil { model.hasCompletedLaunchdSample }
+                    }
+                    let completedAttention = health != healthy
+                    let completedReason = model.watcherStatus.reasonText(now: now)
+                    XCTAssertEqual(model.watcherStatus.needsAttention, completedAttention)
+                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .unhealthy : .healthy)
+                    XCTAssertEqual(model.groupStatus(.ingest).attentionReason, completedReason)
+                    XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
+                    XCTAssertEqual(model.footerPresentation.detail, completedReason)
+                    XCTAssertEqual(model.groupStatus(.ingest).note, configuration.note)
+                    XCTAssertEqual(model.config.launchdJobs[.watch]?.enabled, configuration.watch)
+                    XCTAssertEqual(model.config.launchdJobs[.index]?.enabled, configuration.index)
+                    XCTAssertEqual(model.launchdStatusTitle(.index), "Loaded")
+                    let runtime = model.watcherStatus
+                    model.setGroup(.ingest, enabled: false)
+                    XCTAssertEqual(model.watcherStatus, runtime)
+                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .unhealthy : .healthy)
+                    XCTAssertEqual(model.groupStatus(.ingest).note, "Configured OFF: Watcher, Index.")
+                    model.setGroup(.ingest, enabled: true)
+                    XCTAssertEqual(model.watcherStatus, runtime)
+                    XCTAssertEqual(model.groupStatus(.ingest).health, completedAttention ? .unhealthy : .healthy)
+                    XCTAssertEqual(model.groupStatus(.ingest).attentionReason, completedReason)
+                    XCTAssertNil(model.groupStatus(.ingest).note)
+                }
+            }
+        }
+    }
+
+    func testPendingIngestOffOnAndMixedConfigurationKeepsMeasuredControls() throws {
+        let now = BrainBarDashboardFixture.fetchedAt
+        let healths: [WatcherHealthFileRead?] = [
+            nil, .missing(path: "/fixture/health.json"), BrainBarDashboardFixture.healthyWatcherHealth,
+            .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-900), pollCount: 72)),
+            .readable(WatcherHealthFile(updatedAt: now, pollCount: 72, dbProbeFailed: true)),
+        ]
+        for configuration in ingestConfigurations {
+            for (position, health) in healths.enumerated() {
+                let launchd = PendingLaunchdSamples([healthyStates])
+                let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+                defer { launchd.releaseAll(); reads.releaseAll() }
+                let (root, model) = try makeModel(
+                    launchd: launchd, reads: reads, initialWatcherHealth: health, now: now,
+                    watchEnabled: configuration.watch, indexEnabled: configuration.index
+                )
+                defer { try? FileManager.default.removeItem(at: root) }
+                let attention = position == healths.count - 1
+                XCTAssertEqual(model.watcherStatus.needsAttention, attention)
+                XCTAssertFalse(model.hasCompletedLaunchdSample)
+                assertPendingConfiguredIngest(model, configuration: configuration)
+                model.setGroup(.ingest, enabled: false)
+                assertPendingConfiguredIngest(model, configuration: ingestConfigurations[1])
+                model.setGroup(.ingest, enabled: true)
+                XCTAssertTrue(model.isGroupEnabled(.ingest))
+                assertPendingConfiguredIngest(model, configuration: ingestConfigurations[0])
+                XCTAssertFalse(model.hasCompletedLaunchdSample)
+            }
+        }
+    }
+
+    func testConfiguredIngestOnlyPublishesNewestLaunchdSampleInEitherOrder() async throws {
+        let now = BrainBarDashboardFixture.fetchedAt
+        for configuration in ingestConfigurations {
+            for newestFirst in [false, true] {
+                var sampledStates = healthyStates
+                sampledStates[.index] = .loaded
+                let launchd = PendingLaunchdSamples([[:], sampledStates])
+                let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+                defer { launchd.releaseAll(); reads.releaseAll() }
+                let (root, model) = try makeModel(
+                    launchd: launchd, reads: reads,
+                    initialWatcherHealth: BrainBarDashboardFixture.healthyWatcherHealth, now: now,
+                    watchEnabled: configuration.watch, indexEnabled: configuration.index
+                )
+                defer { try? FileManager.default.removeItem(at: root) }
+                model.refreshLaunchdStatus()
+                try await waitUntil { launchd.calls == 1 }
+                model.refreshLaunchdStatus()
+                try await waitUntil { launchd.calls == 2 }
+                if newestFirst {
+                    launchd.release(1)
+                    try await waitUntil { model.hasCompletedLaunchdSample }
+                    launchd.release(0)
+                } else {
+                    launchd.release(0)
+                    try await waitUntil { launchd.completed == 1 }
+                    try await Task.sleep(for: .milliseconds(50))
+                    XCTAssertFalse(model.hasCompletedLaunchdSample)
+                    assertPendingConfiguredIngest(model, configuration: configuration)
+                    launchd.release(1)
+                }
+                try await waitUntil { !model.isRefreshingLaunchdStatus && launchd.completed == 2 }
+                try await Task.sleep(for: .milliseconds(50))
+                XCTAssertEqual(model.config.launchdJobs[.watch]?.loadState, .running)
+                XCTAssertEqual(model.groupStatus(.ingest).health, .healthy)
+                XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus))
+                XCTAssertEqual(model.groupStatus(.ingest).note, configuration.note)
+            }
+        }
+    }
+
+    private func assertPendingConfiguredIngest(
+        _ model: BrainBarSettingsViewModel,
+        configuration: (watch: Bool, index: Bool, note: String?, pendingReason: String?),
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertFalse(model.hasCompletedLaunchdSample, file: file, line: line)
+        let status = model.groupStatus(.ingest)
+        if model.watcherStatus.needsAttention {
+            XCTAssertEqual(status.health, .unhealthy, file: file, line: line)
+            XCTAssertEqual(status.attentionReason, model.watcherStatus.reasonText(now: BrainBarDashboardFixture.fetchedAt),
+                           file: file, line: line)
+            XCTAssertEqual(status.note, configuration.note, file: file, line: line)
+        } else {
+            XCTAssertEqual(status.health, configuration.pendingReason == nil ? .checking : .unhealthy,
+                           file: file, line: line)
+            XCTAssertEqual(status.attentionReason, configuration.pendingReason, file: file, line: line)
+            XCTAssertEqual(status.lastRunText, "Checking…", file: file, line: line)
+            XCTAssertEqual(status.nextRunText, "Checking…", file: file, line: line)
+            XCTAssertNil(status.note, file: file, line: line)
+            if case .stopped = model.watcherStatus {
+                XCTFail("Desired OFF must not manufacture stopped runtime before a sample", file: file, line: line)
+            }
+        }
+        if configuration.watch && !model.watcherStatus.needsAttention {
+            XCTAssertEqual(model.footerPresentation.state, .checking, file: file, line: line)
+            XCTAssertNil(model.footerPresentation.detail, file: file, line: line)
+        } else {
+            XCTAssertEqual(model.footerPresentation.state, .watcher(model.watcherStatus), file: file, line: line)
+            XCTAssertEqual(model.footerPresentation.detail, model.watcherStatus.reasonText(now: BrainBarDashboardFixture.fetchedAt),
+                           file: file, line: line)
         }
     }
 
@@ -320,11 +529,16 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         refreshOnLoad: Bool = false,
         watcherReads: PendingSettingsSamples<WatcherHealthFileRead>? = nil,
         initialWatcherHealth: WatcherHealthFileRead? = nil,
-        now: Date = Date()
+        now: Date = Date(),
+        watchEnabled: Bool = true,
+        indexEnabled: Bool = true
     ) throws -> (URL, BrainBarSettingsViewModel) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("settings-pending-\(UUID().uuidString)")
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
-        try store.save(.defaultConfig)
+        var config = BrainLayerConfig.defaultConfig
+        config.launchdJobs[.watch]?.enabled = watchEnabled
+        config.launchdJobs[.index]?.enabled = indexEnabled
+        try store.save(config)
         return (root, BrainBarSettingsViewModel(
             store: store, launchdStatusProvider: launchd,
             embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
