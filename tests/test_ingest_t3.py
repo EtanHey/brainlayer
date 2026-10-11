@@ -221,7 +221,7 @@ def test_t3_ingestion_keeps_short_messages_and_sets_first_class_provenance(tmp_p
     state_db = _create_t3_fixture(tmp_path / "state.sqlite")
     indexed: list[Chunk] = []
 
-    def capture_index(chunks, *, source_file, project, db_path):
+    def capture_index(chunks, *, source_file, project, db_path, budget=None):
         indexed.extend(chunks)
         assert source_file == str(state_db)
         assert project is None
@@ -882,3 +882,141 @@ def test_real_v1_v2_overlap_prefers_modern_payload(tmp_path, monkeypatch):
     assert result.messages_seen == 4
     overlap = [c for c in captured if c.metadata["chunk_id"] == "t3:v2-a:v2-user:0"]
     assert len(overlap) == 1 and overlap[0].content == "u"
+
+
+def test_s2_run_caps_embedding_and_releases_writer_while_embedding(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from brainlayer import index_new, runtime_store
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.vector_store import VectorStore
+
+    source = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(source) as conn:
+        conn.execute("DELETE FROM orchestration_v2_projection_messages")
+        conn.executemany(
+            "INSERT INTO orchestration_v2_projection_messages VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    f"cap-{i}",
+                    "v2-a",
+                    "user",
+                    f"2026-10-11T01:00:{i % 60:02d}Z",
+                    json.dumps({"text": f"distinct cap prompt {i}"}),
+                    0,
+                )
+                for i in range(225)
+            ],
+        )
+    destination = tmp_path / "copy.db"
+    health = tmp_path / "health.json"
+    VectorStore(destination).close()
+    active = [False]
+    real_open = runtime_store.open_writer_store
+
+    @contextmanager
+    def tracked_open(*args, **kwargs):
+        with real_open(*args, **kwargs) as store:
+            active[0] = True
+            try:
+                yield store
+            finally:
+                active[0] = False
+
+    def embed(chunks, **kwargs):
+        assert not active[0], "writer hold spans embedding"
+        embedded.extend(chunks)
+        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+
+    embedded = []
+    monkeypatch.setattr(runtime_store, "open_writer_store", tracked_open)
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    first = ingest_t3(source, db_path=destination, health_path=health)
+    assert len(embedded) == first.chunks_indexed == 200
+    snapshot = json.loads(health.read_text())
+    assert snapshot["chunks_deferred"] == 25
+    assert snapshot["alerting"] is False
+    embedded.clear()
+    second = ingest_t3(source, db_path=destination, health_path=health)
+    assert len(embedded) == second.chunks_indexed == 25
+    embedded.clear()
+    third = ingest_t3(source, db_path=destination, health_path=health)
+    assert third.chunks_indexed == 0 and embedded == []
+    with VectorStore(destination, readonly=True) as store:
+        assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 225
+
+
+def test_s2_recheck_skips_chunk_indexed_by_another_writer_during_embedding(tmp_path, monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.vector_store import VectorStore
+
+    source = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    destination = tmp_path / "copy.db"
+    VectorStore(destination).close()
+
+    def embed(chunks, **kwargs):
+        computed = [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+        # A separate writer can persist a selected chunk while T3 has no writer hold.
+        with VectorStore(destination) as other:
+            index_new.index_chunks_to_sqlite([chunks[0]], str(source), store=other, precomputed_embeddings=computed[:1])
+        return computed
+
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    result = ingest_t3(source, db_path=destination, health_path=tmp_path / "health.json")
+    assert result.chunks_indexed == 1
+    with VectorStore(destination, readonly=True) as store:
+        assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 2
+        assert store.conn.execute("SELECT seen_count FROM chunks WHERE id='t3:v2-a:v2-user:0'").fetchone()[0] == 1
+        assert store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0] == 0
+
+
+def test_s2_cap_is_shared_across_modern_and_legacy_sources(tmp_path, monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest import t3
+    from brainlayer.vector_store import VectorStore
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".t3/userdata"
+    root.mkdir(parents=True)
+    _create_v2_fixture(root / "statev2.sqlite")
+    _create_t3_fixture(root / "state.sqlite")
+    destination = tmp_path / "copy.db"
+    VectorStore(destination).close()
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 3)
+    embedded = []
+
+    def embed(chunks, **kwargs):
+        embedded.extend(chunks)
+        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    first = t3.ingest_t3(db_path=destination, health_path=tmp_path / "health.json")
+    assert len(embedded) == first.chunks_indexed == 3
+    assert first.chunks_deferred == 2
+    embedded.clear()
+    second = t3.ingest_t3(db_path=destination, health_path=tmp_path / "health.json")
+    assert len(embedded) == second.chunks_indexed == 2
+    assert second.chunks_deferred == 0
+
+
+def test_s2_precomputed_vectors_reject_mismatched_scrubbed_content():
+    from dataclasses import replace
+
+    from brainlayer import index_new
+
+    chunk = Chunk(
+        content="admitted text",
+        content_type=ContentType.USER_MESSAGE,
+        value=ContentValue.HIGH,
+        metadata={"chunk_id": "t3:thread:message:0"},
+        char_count=13,
+    )
+
+    class Store:
+        def upsert_chunks(self, *args, **kwargs):
+            pytest.fail("mismatched precomputed embedding must not reach persistence")
+
+    computed = [EmbeddedChunk(replace(chunk, content="stale text"), [0.1] * 1024)]
+    with pytest.raises(ValueError, match="do not match admitted"):
+        index_new.index_chunks_to_sqlite([chunk], "source.sqlite", store=Store(), precomputed_embeddings=computed)

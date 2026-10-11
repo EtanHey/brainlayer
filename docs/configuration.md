@@ -137,10 +137,16 @@ The optional interval accepts 60–86400 seconds; unset restores 300 seconds.
 applies. Freshness is the interval plus import runtime, model startup, and any
 writer contention, so five minutes is a scheduling target rather than a hard
 searchability guarantee. Writer contention exits cleanly for the next interval
-and records alerting `writer_busy` health before embedding; other indexing failures
+and records alerting `writer_busy` health. A short writer preflight checks IDs
+before embedding, then releases the writer for model loading/embedding. The
+importer reacquires it and rechecks IDs before upserting precomputed vectors;
+content already persisted by another writer is skipped. Other indexing failures
 still fail. Indexed chunks with unchanged scrubbed content skip both embedding
 and upsert, so repeat runs do not increment seen counts or add dedupe audit rows.
-First V2 execution also imports historical settled messages. Verify loaded argv,
+Each run embeds at most 200 changed chunks across both source files. CLI output
+and health report `chunks_deferred` for the remainder, which later intervals
+continue using stable IDs. First V2 execution imports historical settled messages
+across as many bounded runs as needed. Verify loaded argv,
 schedule, health and exact persisted message IDs after a reviewed deployment.
 
 These settings select the SQLite importer. `BRAINLAYER_T3_STATE_DB` configures

@@ -22,6 +22,8 @@ from ..t3_sources import resolve_t3_sources
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_T3_MAX_CHANGED_CHUNKS = 200
+
 T3_SOURCE = "t3"
 T3_PROVENANCE_CLASS = "t3-thread"
 DEFAULT_T3_HEALTH_PATH = Path("~/.local/share/brainlayer/t3-health.json").expanduser()
@@ -89,6 +91,7 @@ class T3IngestionResult:
     messages_ingested: int = 0
     chunks_planned: int = 0
     chunks_indexed: int = 0
+    chunks_deferred: int = 0
     duplicates_accepted: int = 0
     messages_skipped: dict[str, int] = field(default_factory=dict)
 
@@ -385,29 +388,57 @@ def _provider_session_id(resume_cursor_json: str | None) -> str | None:
     return str(provider_session_id) if provider_session_id else None
 
 
-def _index_chunks(chunks, *, source_file: str, project: str | None, db_path: Path) -> int:
-    from ..index_new import _scrubbed_chunk, index_chunks_to_sqlite
+@dataclass
+class _IndexBudget:
+    remaining: int = DEFAULT_T3_MAX_CHANGED_CHUNKS
+    deferred: int = 0
+
+
+def _changed_chunks(chunks, store):
+    existing = {}
+    for start in range(0, len(chunks), 400):
+        ids = [chunk.metadata["chunk_id"] for chunk in chunks[start : start + 400]]
+        placeholders = ",".join("?" for _ in ids)
+        existing.update(store.conn.execute(f"SELECT id,content FROM chunks WHERE id IN ({placeholders})", ids))
+    return [chunk for chunk in chunks if existing.get(chunk.metadata["chunk_id"]) != chunk.content]
+
+
+def _index_chunks(
+    chunks, *, source_file: str, project: str | None, db_path: Path, budget: _IndexBudget | None = None
+) -> int:
+    from ..index_new import _scrubbed_chunk, embed_chunks, index_chunks_to_sqlite
     from ..runtime_store import open_writer_store
     from ..system_prompt_guard import looks_like_system_prompt
 
-    # Acquire the writer before embedding, and retain it through lookup/upsert.
-    # Compare scrubbed text, the same representation the indexer persists.
+    budget = budget if budget is not None else _IndexBudget()
+    eligible = [
+        _scrubbed_chunk(chunk)
+        for chunk in chunks
+        if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
+    ]
+    # Fail fast on an already-busy writer, then release it before model loading.
     with open_writer_store(db_path) as store:
-        eligible = [
-            _scrubbed_chunk(chunk)
-            for chunk in chunks
-            if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
-        ]
-        existing = {}
-        for start in range(0, len(eligible), 400):
-            ids = [chunk.metadata["chunk_id"] for chunk in eligible[start : start + 400]]
-            placeholders = ",".join("?" for _ in ids)
-            existing.update(store.conn.execute(f"SELECT id,content FROM chunks WHERE id IN ({placeholders})", ids))
-        changed = [chunk for chunk in eligible if existing.get(chunk.metadata["chunk_id"]) != chunk.content]
+        changed = _changed_chunks(eligible, store)
+    selected = changed[: budget.remaining]
+    budget.remaining -= len(selected)
+    budget.deferred += len(changed) - len(selected)
+    if not selected:
+        return 0
+    computed = embed_chunks(selected)
+    with open_writer_store(db_path) as store:
+        # Another writer may have indexed these IDs while we embedded.
+        changed = _changed_chunks(selected, store)
         if not changed:
             return 0
+        admitted = {(chunk.metadata["chunk_id"], chunk.content) for chunk in changed}
+        computed = [ec for ec in computed if (ec.chunk.metadata["chunk_id"], ec.chunk.content) in admitted]
         indexed = index_chunks_to_sqlite(
-            changed, source_file=source_file, project=project, db_path=db_path, store=store
+            changed,
+            source_file=source_file,
+            project=project,
+            db_path=db_path,
+            store=store,
+            precomputed_embeddings=computed,
         )
         if indexed != len(changed):
             raise RuntimeError(
@@ -540,9 +571,13 @@ def ingest_t3(
             from ..paths import DEFAULT_DB_PATH
 
             destination = DEFAULT_DB_PATH
+        budget = _IndexBudget(remaining=DEFAULT_T3_MAX_CHANGED_CHUNKS)
         try:
             for path, batch in batches.items():
-                result.chunks_indexed += _index_chunks(batch, source_file=str(path), project=None, db_path=destination)
+                result.chunks_indexed += _index_chunks(
+                    batch, source_file=str(path), project=None, db_path=destination, budget=budget
+                )
+            result.chunks_deferred = budget.deferred
         except BaseException as exc:
             # Preserve failure/cancellation semantics and any committed rows for stable-ID replay.
             # A successful projection read must not remain the final health result of a failed import.
@@ -568,6 +603,7 @@ def ingest_t3(
                 "messages_ingested": result.messages_ingested,
                 "chunks_planned": result.chunks_planned,
                 "chunks_indexed": result.chunks_indexed,
+                "chunks_deferred": result.chunks_deferred,
                 "duplicates_accepted": result.duplicates_accepted,
                 "messages_skipped": sum(result.messages_skipped.values()),
             }

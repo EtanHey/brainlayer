@@ -8,7 +8,7 @@ from typing import Callable, List, Optional
 
 from .agent_provenance import resolve_source_class
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
-from .embeddings import embed_chunks
+from .embeddings import EmbeddedChunk, embed_chunks
 from .pipeline.chunk import Chunk
 from .pipeline.secret_scrub import scrub_for_storage
 from .runtime_store import ReadonlyStore, open_writer_store
@@ -35,6 +35,7 @@ def index_chunks_to_sqlite(
     on_progress: Optional[Callable[[int, int], None]] = None,
     deadline_monotonic: float | None = None,
     store: VectorStore | None = None,
+    precomputed_embeddings: list[EmbeddedChunk] | None = None,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -64,10 +65,18 @@ def index_chunks_to_sqlite(
         if on_progress is not None:
             on_progress(completed, total)
 
-    embedded_chunks = embed_chunks(
-        filtered_chunks,
-        on_progress=embedding_progress if deadline_monotonic is not None else on_progress,
-    )
+    if precomputed_embeddings is None:
+        embedded_chunks = embed_chunks(
+            filtered_chunks,
+            on_progress=embedding_progress if deadline_monotonic is not None else on_progress,
+        )
+    else:
+        # Caller may precompute before acquiring a writer, but only for the exact
+        # scrubbed chunks admitted here. Reject stale/unscrubbed payloads.
+        admitted = {(chunk.metadata.get("chunk_id"), chunk.content) for chunk in filtered_chunks}
+        if any((ec.chunk.metadata.get("chunk_id"), ec.chunk.content) not in admitted for ec in precomputed_embeddings):
+            raise ValueError("precomputed embeddings do not match admitted scrubbed chunks")
+        embedded_chunks = precomputed_embeddings
 
     if not embedded_chunks:
         return 0

@@ -3829,6 +3829,7 @@ def ingest_t3_command(
         f"messages_ingested={result.messages_ingested} "
         f"chunks_planned={result.chunks_planned} "
         f"chunks_indexed={result.chunks_indexed} "
+        f"chunks_deferred={result.chunks_deferred} "
         f"duplicates_accepted={result.duplicates_accepted}"
     )
 

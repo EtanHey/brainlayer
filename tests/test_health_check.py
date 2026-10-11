@@ -55,6 +55,7 @@ def test_t3_producer_consumer_share_resolver_and_public_cli(tmp_path, monkeypatc
                     "messages_ingested",
                     "chunks_planned",
                     "chunks_indexed",
+                    "chunks_deferred",
                     "duplicates_accepted",
                 ],
                 0,
