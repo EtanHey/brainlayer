@@ -11,18 +11,19 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..alarm import BrainLayerAlarm, raise_alarm
+from ..t3_sources import DEFAULT_T3_STATE_DB as DEFAULT_T3_STATE_DB
+from ..t3_sources import resolve_t3_sources
 
 logger = logging.getLogger(__name__)
 
 T3_SOURCE = "t3"
 T3_PROVENANCE_CLASS = "t3-thread"
-DEFAULT_T3_STATE_DB = Path("~/.t3/userdata/state.sqlite").expanduser()
 DEFAULT_T3_HEALTH_PATH = Path("~/.local/share/brainlayer/t3-health.json").expanduser()
 
 _REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
@@ -112,20 +113,17 @@ class T3Reader:
 
     def __init__(
         self,
-        state_db_path: Path | str = DEFAULT_T3_STATE_DB,
+        state_db_path: Path | str | None = None,
         *,
         health_path: Path | str | None = DEFAULT_T3_HEALTH_PATH,
-        projection_version: int = 1,
+        projection_version: int | None = None,
     ):
-        if projection_version not in {1, 2}:
-            raise ValueError("T3 projection_version must be 1 or 2")
-        self.projection_version = projection_version
-        self.state_db_path = Path(state_db_path).expanduser()
+        self.state_db_path, self.projection_version = resolve_t3_sources(state_db_path, projection_version)[0]
         self.health_path = Path(health_path).expanduser() if health_path is not None else None
         self._last_counts: dict[str, int] = {}
         self._failures: list[dict[str, Any]] = []
 
-    def read_threads(self) -> list[T3Thread]:
+    def read_threads(self, *, report_success: bool = True) -> list[T3Thread]:
         """Read a complete short snapshot of the T3 projections.
 
         Each query runs in SQLite autocommit mode and is fully materialized
@@ -178,7 +176,8 @@ class T3Reader:
                 "messages_seen": sum(len(thread.messages) for thread in threads),
                 "mirrored_threads": sum(thread.mirrored for thread in threads),
             }
-            self._write_health(alerting=False, alert_reasons=[])
+            if report_success:
+                self._write_health(alerting=False, alert_reasons=[])
             return threads
         finally:
             if conn is not None:
@@ -189,7 +188,7 @@ class T3Reader:
     def _connect(self) -> sqlite3.Connection:
         if not self.state_db_path.is_file():
             raise FileNotFoundError(f"T3 state database not found: {self.state_db_path}")
-        uri = f"file:{self.state_db_path}?mode=ro&immutable=0"
+        uri = f"{self.state_db_path.absolute().as_uri()}?mode=ro&immutable=0"
         conn = sqlite3.connect(uri, uri=True, timeout=1.0, isolation_level=None)
         conn.execute("PRAGMA query_only=ON")
         conn.execute("PRAGMA busy_timeout=1000")
@@ -358,6 +357,7 @@ class T3Reader:
             "source": T3_SOURCE,
             "state_db_path": str(self.state_db_path),
             "projection_version": self.projection_version,
+            "state_db_paths": getattr(self, "_source_paths", [str(self.state_db_path)]),
             "alerting": alerting,
             "alert_reasons": alert_reasons,
             "failures": list(self._failures),
@@ -386,19 +386,34 @@ def _provider_session_id(resume_cursor_json: str | None) -> str | None:
 
 
 def _index_chunks(chunks, *, source_file: str, project: str | None, db_path: Path) -> int:
-    from ..index_new import index_chunks_to_sqlite
+    from ..index_new import _scrubbed_chunk, index_chunks_to_sqlite
+    from ..runtime_store import open_writer_store
     from ..system_prompt_guard import looks_like_system_prompt
 
-    # Match the indexer's existing admission filter; an embedding batch can fail without raising.
-    expected = sum(
-        not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content) for chunk in chunks
-    )
-    indexed = index_chunks_to_sqlite(chunks, source_file=source_file, project=project, db_path=db_path)
-    if indexed != expected:
-        raise RuntimeError(
-            f"T3 indexing incomplete: indexed {indexed} of {expected} eligible chunks; retain rows for replay"
+    # Acquire the writer before embedding, and retain it through lookup/upsert.
+    # Compare scrubbed text, the same representation the indexer persists.
+    with open_writer_store(db_path) as store:
+        eligible = [
+            _scrubbed_chunk(chunk)
+            for chunk in chunks
+            if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
+        ]
+        existing = {}
+        for start in range(0, len(eligible), 400):
+            ids = [chunk.metadata["chunk_id"] for chunk in eligible[start : start + 400]]
+            placeholders = ",".join("?" for _ in ids)
+            existing.update(store.conn.execute(f"SELECT id,content FROM chunks WHERE id IN ({placeholders})", ids))
+        changed = [chunk for chunk in eligible if existing.get(chunk.metadata["chunk_id"]) != chunk.content]
+        if not changed:
+            return 0
+        indexed = index_chunks_to_sqlite(
+            changed, source_file=source_file, project=project, db_path=db_path, store=store
         )
-    return indexed
+        if indexed != len(changed):
+            raise RuntimeError(
+                f"T3 indexing incomplete: indexed {indexed} of {len(changed)} eligible chunks; retain rows for replay"
+            )
+        return indexed
 
 
 def _message_chunks(thread: T3Thread, message: T3Message) -> list:
@@ -454,25 +469,60 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
 
 
 def ingest_t3(
-    state_db_path: Path | str = DEFAULT_T3_STATE_DB,
+    state_db_path: Path | str | None = None,
     *,
     db_path: Path | str | None = None,
     health_path: Path | str | None = DEFAULT_T3_HEALTH_PATH,
     dry_run: bool = False,
-    projection_version: int = 1,
+    projection_version: int | None = None,
 ) -> T3IngestionResult:
     """Ingest all T3 threads, deliberately retaining mirrored content."""
     destination = Path(db_path).expanduser() if db_path is not None else None
-    reader = T3Reader(state_db_path, health_path=health_path, projection_version=projection_version)
-    threads = reader.read_threads()
+    try:
+        sources = resolve_t3_sources(state_db_path, projection_version, tolerate_legacy_failure=True)
+    except BrainLayerAlarm as exc:
+        failed_path = exc.context["state_db_path"]
+        failed_reader = T3Reader(failed_path, health_path=health_path, projection_version=1)
+        failed_reader._failures.append({"code": exc.code, "message": str(exc)})
+        failed_reader._write_health(alerting=True, alert_reasons=["source_selection_failure"])
+        raise
+    reader = T3Reader(sources[0][0], health_path=health_path, projection_version=sources[0][1])
+    reader._source_paths = [str(path) for path, _ in sources]
+    threads = []
+    seen_messages = set()
+    source_alerts = []
+    # Read every selected source before indexing. Newer projections win shared IDs.
+    for path, version in sources:
+        source_reader = (
+            reader
+            if path == reader.state_db_path
+            else T3Reader(path, health_path=health_path, projection_version=version)
+        )
+        try:
+            source_threads = source_reader.read_threads(report_success=False)
+        except BrainLayerAlarm:
+            if state_db_path is not None or path == reader.state_db_path or reader.projection_version != 2:
+                raise
+            source_alerts.append("legacy_source_failure")
+            reader._failures.extend({**failure, "state_db_path": str(path)} for failure in source_reader._failures)
+            continue
+        for thread in source_threads:
+            messages = []
+            for message in thread.messages:
+                identity = (thread.thread_id, message.message_id)
+                if identity not in seen_messages:
+                    seen_messages.add(identity)
+                    messages.append(message)
+            threads.append((path, replace(thread, messages=tuple(messages))))
     result = T3IngestionResult(
-        threads_seen=len(threads),
-        threads_ingested=len(threads),
-        messages_seen=sum(len(thread.messages) for thread in threads),
-        duplicates_accepted=sum(thread.mirrored for thread in threads),
+        threads_seen=len({thread.thread_id for _, thread in threads}),
+        threads_ingested=len({thread.thread_id for _, thread in threads}),
+        messages_seen=sum(len(thread.messages) for _, thread in threads),
+        duplicates_accepted=len({thread.thread_id for _, thread in threads if thread.mirrored}),
     )
     chunks = []
-    for thread in threads:
+    batches = {}
+    for path, thread in threads:
         for message in thread.messages:
             if message.role not in {"user", "assistant"}:
                 result.messages_skipped["unsupported_role"] = result.messages_skipped.get("unsupported_role", 0) + 1
@@ -483,6 +533,7 @@ def ingest_t3(
                 continue
             result.messages_ingested += 1
             chunks.extend(message_chunks)
+            batches.setdefault(path, []).extend(message_chunks)
     result.chunks_planned = len(chunks)
     if chunks and not dry_run:
         if destination is None:
@@ -490,12 +541,8 @@ def ingest_t3(
 
             destination = DEFAULT_DB_PATH
         try:
-            result.chunks_indexed = _index_chunks(
-                chunks,
-                source_file=str(Path(state_db_path).expanduser()),
-                project=None,
-                db_path=destination,
-            )
+            for path, batch in batches.items():
+                result.chunks_indexed += _index_chunks(batch, source_file=str(path), project=None, db_path=destination)
         except BaseException as exc:
             # Preserve failure/cancellation semantics and any committed rows for stable-ID replay.
             # A successful projection read must not remain the final health result of a failed import.
@@ -507,11 +554,16 @@ def ingest_t3(
                     "error_type": type(exc).__name__,
                 }
             )
-            reader._write_health(alerting=True, alert_reasons=["indexing_failure"])
+            from ..vector_store import WriterInUseError
+
+            reason = "writer_busy" if isinstance(exc, WriterInUseError) else "indexing_failure"
+            reader._write_health(alerting=True, alert_reasons=source_alerts + [reason])
             raise
     if reader.health_path is not None:
         reader._last_counts.update(
             {
+                "threads_seen": result.threads_seen,
+                "messages_seen": result.messages_seen,
                 "threads_ingested": result.threads_ingested,
                 "messages_ingested": result.messages_ingested,
                 "chunks_planned": result.chunks_planned,
@@ -520,5 +572,5 @@ def ingest_t3(
                 "messages_skipped": sum(result.messages_skipped.values()),
             }
         )
-        reader._write_health(alerting=False, alert_reasons=[])
+        reader._write_health(alerting=bool(source_alerts), alert_reasons=source_alerts)
     return result

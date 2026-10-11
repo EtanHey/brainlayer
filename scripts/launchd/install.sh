@@ -798,13 +798,13 @@ def absolute_path(value, key):
         raise SystemExit(f"ERROR: {key} must be an absolute path")
     return str(path)
 
-version = os.environ.get("BRAINLAYER_T3_INGEST_PROJECTION_VERSION", "1")
-if version not in {"1", "2"}:
+version = os.environ.get("BRAINLAYER_T3_INGEST_PROJECTION_VERSION")
+if version is not None and version not in {"1", "2"}:
     raise SystemExit("ERROR: BRAINLAYER_T3_INGEST_PROJECTION_VERSION must be 1 or 2")
 state = os.environ.get("BRAINLAYER_T3_INGEST_STATE_DB")
 if version == "2" and not state:
     raise SystemExit("ERROR: V2 requires explicit BRAINLAYER_T3_INGEST_STATE_DB")
-state = absolute_path(state or "~/.t3/userdata/state.sqlite", "BRAINLAYER_T3_INGEST_STATE_DB")
+state = absolute_path(state, "BRAINLAYER_T3_INGEST_STATE_DB") if state else None
 destination = absolute_path(os.environ.get("BRAINLAYER_DB") or "~/.local/share/brainlayer/brainlayer.db", "BRAINLAYER_DB")
 health = absolute_path(str(resolve_t3_health_path(destination)), "BRAINLAYER_T3_INGEST_HEALTH_PATH")
 interval = os.environ.get("BRAINLAYER_T3_INGEST_INTERVAL_SECONDS")
@@ -813,7 +813,11 @@ if interval is not None and (not interval.isdecimal() or int(interval) < 60 or i
 path = Path(sys.argv[1])
 with path.open("rb") as handle:
     plist = plistlib.load(handle)
-plist["ProgramArguments"] += ["--state-db", state, "--projection-version", version, "--db", destination, "--health-path", health]
+if state:
+    plist["ProgramArguments"] += ["--state-db", state]
+if version:
+    plist["ProgramArguments"] += ["--projection-version", version]
+plist["ProgramArguments"] += ["--db", destination, "--health-path", health]
 if interval is not None:
     plist.pop("StartCalendarInterval", None)
     plist["StartInterval"] = int(interval)

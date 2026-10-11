@@ -15,13 +15,8 @@
 		<string>__BRAINLAYER_BIN__</string>
 		<string>ingest-t3</string>
 	</array>
-	<key>StartCalendarInterval</key>
-	<dict>
-		<key>Hour</key>
-		<integer>3</integer>
-		<key>Minute</key>
-		<integer>45</integer>
-	</dict>
+	<key>StartInterval</key>
+	<integer>300</integer>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardOutPath</key>

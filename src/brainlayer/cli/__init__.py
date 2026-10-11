@@ -3783,8 +3783,8 @@ def index_fast(
 
 @app.command("ingest-t3")
 def ingest_t3_command(
-    state_db: Path = typer.Option(
-        Path("~/.t3/userdata/state.sqlite"),
+    state_db: Optional[Path] = typer.Option(
+        None,
         "--state-db",
         help="Read-only T3 state SQLite database.",
     ),
@@ -3795,12 +3795,12 @@ def ingest_t3_command(
         help="T3 ingestion health JSON path.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Read and plan chunks without writing BrainLayer."),
-    projection_version: int = typer.Option(
-        1,
+    projection_version: Optional[int] = typer.Option(
+        None,
         "--projection-version",
         min=1,
         max=2,
-        help="Explicit T3 projection contract: 1 (legacy) or 2 (V2). Set --state-db for V2.",
+        help="Override automatic T3 projection selection: 1 (legacy) or 2 (V2).",
     ),
 ) -> None:
     """Ingest the live T3 thread projection into BrainLayer."""
@@ -3808,13 +3808,19 @@ def ingest_t3_command(
     from ..paths import get_db_path, resolve_t3_health_path
 
     resolved_db = db.expanduser() if db is not None else get_db_path()
-    result = ingest_t3(
-        state_db.expanduser(),
-        db_path=resolved_db,
-        health_path=resolve_t3_health_path(resolved_db, health_path),
-        dry_run=dry_run,
-        projection_version=projection_version,
-    )
+    from ..vector_store import WriterInUseError
+
+    try:
+        result = ingest_t3(
+            state_db.expanduser() if state_db is not None else None,
+            db_path=resolved_db,
+            health_path=resolve_t3_health_path(resolved_db, health_path),
+            dry_run=dry_run,
+            projection_version=projection_version,
+        )
+    except WriterInUseError:
+        rprint("[yellow]T3 ingest deferred: destination writer busy; retry next interval. See T3 health.[/]")
+        return
     mode = "dry-run " if dry_run else ""
     rprint(
         f"{mode}threads_seen={result.threads_seen} "
