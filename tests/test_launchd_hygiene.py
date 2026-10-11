@@ -236,7 +236,8 @@ def test_t3_ingest_launchagent_invokes_first_class_source():
 
     assert t3["Label"] == "com.brainlayer.t3-ingest"
     assert t3["ProgramArguments"][:3] == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "ingest-t3"]
-    assert t3["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
+    assert t3["StartInterval"] == 300
+    assert "StartCalendarInterval" not in t3
     assert t3["RunAtLoad"] is True
     assert "KeepAlive" not in t3
 
@@ -687,18 +688,14 @@ def _render_t3_selection(tmp_path, settings):
     return result, rendered, original
 
 
-def test_t3_selection_default_retains_legacy_daily_schedule(tmp_path):
+def test_t3_selection_default_resolves_sources_each_run(tmp_path):
     result, rendered, _ = _render_t3_selection(tmp_path, {})
     assert result.returncode == 0, result.stderr
     plist = plistlib.loads(rendered.read_bytes())
-    assert plist["ProgramArguments"][3:7] == [
-        "--state-db",
-        str(tmp_path / ".t3/userdata/state.sqlite"),
-        "--projection-version",
-        "1",
-    ]
-    assert plist["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
-    assert "StartInterval" not in plist
+    assert "--state-db" not in plist["ProgramArguments"]
+    assert "--projection-version" not in plist["ProgramArguments"]
+    assert plist["StartInterval"] == 300
+    assert "StartCalendarInterval" not in plist
     assert plist["RunAtLoad"] is True
 
 
@@ -733,8 +730,8 @@ def test_t3_selection_v2_paths_schedule_and_reverse_render(tmp_path):
     result, rendered, _ = _render_t3_selection(tmp_path, {"BRAINLAYER_T3_INGEST_HEALTH_PATH": tmp_path / "health.json"})
     assert result.returncode == 0, result.stderr
     reverted = plistlib.loads(rendered.read_bytes())
-    assert reverted["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
-    assert "StartInterval" not in reverted
+    assert reverted["StartInterval"] == 300
+    assert "StartCalendarInterval" not in reverted
     assert reverted["ProgramArguments"][-1] == str(tmp_path / "health.json")
     assert not destination.exists() and not state.exists()
 

@@ -9,17 +9,20 @@ import sqlite3
 from pathlib import Path
 
 from .alarm import raise_alarm
+from .t3_sources import DEFAULT_T3_STATE_DB as DEFAULT_T3_STATE_DB
+from .t3_sources import resolve_t3_sources
 
 T3_APP_SESSION = "t3-app-session"
-DEFAULT_T3_STATE_DB = Path.home() / ".t3" / "userdata" / "state.sqlite"
 _CODEX_SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 _REQUIRED_RUNTIME_COLUMNS = frozenset({"thread_id", "provider_name", "resume_cursor_json"})
 _V2_TABLE = "orchestration_v2_projection_provider_threads"
 _HEADER_LIMIT = 1024 * 1024
 
 
-def _projection_version(value: int | None) -> int:
-    selected = str(value if value is not None else os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", "1"))
+def _projection_version(value: int | None) -> int | None:
+    selected = str(value if value is not None else os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", ""))
+    if not selected:
+        return None
     if selected not in {"1", "2"}:
         raise_alarm("t3_runtime_selection_invalid", "T3 projection version must be 1 or 2")
     return int(selected)
@@ -81,19 +84,29 @@ def is_t3_app_initiated_codex_session(
     provenance collision this module prevents.
     """
     version = _projection_version(projection_version)
+    selected_path = state_db or os.environ.get("BRAINLAYER_T3_STATE_DB")
+    selection_key = ("t3-source-selection", str(selected_path), version)
+    if version == 1 and linked_session_ids is not None:
+        # Source-only fallback must not inspect the runtime that just failed.
+        sources = []
+    elif session_identity_cache is not None and selection_key in session_identity_cache:
+        sources = session_identity_cache[selection_key]
+    else:
+        sources = resolve_t3_sources(selected_path, version)
+        if session_identity_cache is not None:
+            session_identity_cache[selection_key] = sources
     session_id, t3_origin = (
         codex_header_identity(source_file, session_identity_cache)
-        if version == 2
+        if any(v == 2 for _, v in sources)
         else (codex_session_id_from_source(source_file), False)
     )
     if session_id is None:
         return False
 
     if linked_session_ids is None:
-        path = Path(state_db or os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
-        if not path.exists() and version == 1:
+        if not any(path.exists() for path, _ in sources) and version != 2:
             return False
-        linked_session_ids = t3_app_codex_session_ids(path, projection_version=version)
+        linked_session_ids = t3_app_codex_session_ids(selected_path, projection_version=version)
     linked = session_id in linked_session_ids
     if t3_origin and not linked:
         raise_alarm(
@@ -104,12 +117,14 @@ def is_t3_app_initiated_codex_session(
     return linked
 
 
-def t3_app_codex_session_ids(
-    state_db: str | Path = DEFAULT_T3_STATE_DB, *, projection_version: int | None = None
-) -> set[str]:
-    """Return Codex session IDs explicitly linked by T3 runtime cursors."""
-    path = Path(state_db).expanduser()
+def t3_app_codex_session_ids(state_db: str | Path | None = None, *, projection_version: int | None = None) -> set[str]:
+    """Union linkage from the same default sources used by thread ingestion."""
     version = _projection_version(projection_version)
+    sources = resolve_t3_sources(state_db or os.environ.get("BRAINLAYER_T3_STATE_DB"), version)
+    return set().union(*(_source_codex_session_ids(path, selected) for path, selected in sources))
+
+
+def _source_codex_session_ids(path: Path, version: int) -> set[str]:
 
     try:
         connection = sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro&immutable=0", uri=True, timeout=1.0)

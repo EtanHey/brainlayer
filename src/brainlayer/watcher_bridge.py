@@ -36,7 +36,8 @@ from .pipeline.classify import classify_content
 from .pipeline.correction_detection import build_correction_tags
 from .pipeline.secret_scrub import scrub_secrets
 from .queue_io import enqueue_watcher_chunk
-from .t3_provenance import DEFAULT_T3_STATE_DB, t3_app_codex_session_ids
+from .t3_provenance import t3_app_codex_session_ids
+from .t3_sources import resolve_t3_sources
 from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -359,12 +360,14 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         import time as _time
 
         flush_start = _time.monotonic()
-        t3_state_db = Path(os.environ.get("BRAINLAYER_T3_STATE_DB", DEFAULT_T3_STATE_DB)).expanduser()
+        t3_selection = os.environ.get("BRAINLAYER_T3_STATE_DB")
+        t3_state_db = Path(t3_selection).expanduser() if t3_selection else None
         t3_linkage_resolved = True
         try:
             linked_t3_session_ids = (
                 t3_app_codex_session_ids(t3_state_db)
-                if t3_state_db.exists() or os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", "1") != "1"
+                if any(path.exists() for path, _ in resolve_t3_sources(t3_state_db))
+                or os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", "1") != "1"
                 else set()
             )
         except BrainLayerAlarm:

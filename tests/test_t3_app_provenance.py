@@ -639,3 +639,22 @@ def test_v2_selection_missing_schema_and_invalid_version_alarm(tmp_path):
         t3_app_codex_session_ids(state, projection_version=3)
     with pytest.raises(BrainLayerAlarm, match="t3_runtime_unavailable"):
         t3_app_codex_session_ids(tmp_path / "missing.sqlite", projection_version=2)
+
+
+def test_default_provider_linkage_prefers_v2_and_unions_legacy(tmp_path, monkeypatch):
+    from brainlayer.t3_provenance import t3_app_codex_session_ids
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("BRAINLAYER_T3_PROJECTION_VERSION", raising=False)
+    monkeypatch.delenv("BRAINLAYER_T3_STATE_DB", raising=False)
+    root = tmp_path / ".t3/userdata"
+    root.mkdir(parents=True)
+    modern_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    legacy_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    modern = _v2_state(
+        tmp_path, [("codex", {"driver": "codex", "nativeThreadRef": {"driver": "codex", "nativeId": modern_id}})]
+    )
+    modern.rename(root / "statev2.sqlite")
+    legacy = _state_db(tmp_path, [("legacy-thread", "codex", json.dumps({"threadId": legacy_id}))])
+    legacy.rename(root / "state.sqlite")
+    assert t3_app_codex_session_ids() == {modern_id, legacy_id}
