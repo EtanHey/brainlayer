@@ -65,14 +65,23 @@ What it does:
 
 recovery-no-sudo:
   If brew ever fails mid-uninstall on root-owned leftovers, do not rebuild locally.
-  The notarized .app and Homebrew receipt may still survive. Restore the user
-  LaunchAgents from the app bundle and then rerun this script:
+  The notarized .app and Homebrew receipt may still survive. Bundled
+  Contents/Resources/LaunchAgents plists are templates; do not bootstrap copies
+  with unresolved placeholders. Set the paths below to the existing approved current-account
+  installation and endpoint/database. Stop if that account-owned installed venv
+  or the bundled renderer is unavailable; do not substitute a PATH Python or create a new setup.
+  Render/install the user LaunchAgents, then rerun this script:
 
     app="/Applications/BrainBar.app"
-    agents="\$app/Contents/Resources/LaunchAgents"
+    venv="/absolute/path/to/account-owned/installed/venv"
+    socket="/absolute/path/to/existing/approved/socket"
+    db="/absolute/path/to/existing/approved/database"
     domain="gui/\$(id -u)"
-    cp "\$agents/com.brainlayer.brainbar.plist" "\$HOME/Library/LaunchAgents/"
-    cp "\$agents/com.brainlayer.brainbar-daemon.plist" "\$HOME/Library/LaunchAgents/"
+    test -x "\$venv/bin/python" && test -x "\$venv/bin/brainlayer" || exit
+    test -f "\$app/Contents/Resources/install-services.py" || exit
+    "\$venv/bin/python" -I "\$app/Contents/Resources/install-services.py" \
+      --app "\$app" --python "\$venv/bin/python" --cli "\$venv/bin/brainlayer" \
+      --socket "\$socket" --db "\$db" --install || exit
     launchctl bootstrap "\$domain" "\$HOME/Library/LaunchAgents/com.brainlayer.brainbar-daemon.plist"
     launchctl bootstrap "\$domain" "\$HOME/Library/LaunchAgents/com.brainlayer.brainbar.plist"
     launchctl kickstart -k "\$domain/com.brainlayer.brainbar-daemon"
