@@ -2044,6 +2044,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "74563270e37006eea02ed62be590a39293649192fd4ba074925cca91df51ce88": {
+      "non_cloud_purpose": "Local SQLite T3 source-class correction on a copy or supervised canonical DB: URI mode=ro for dry-run, mode=rw for gated apply; no Internet or model transport. Site: src/brainlayer/source_class_migration.py <module>.reclassify_t3_source_class sqlite3.connect.",
+      "site": {
+        "call_sha256": "a8443acc3ee74bccb5470df915c92d4b045e7c1a6e95927e4ca326719dd50ca7",
+        "kind": "generic_send",
+        "owner": "<module>.reclassify_t3_source_class",
+        "path": "src/brainlayer/source_class_migration.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "74928325a3b02c1e9761a65ed08586d553cf72b2a8a92ccf52676c6c11f04cd9": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
       "site": {
