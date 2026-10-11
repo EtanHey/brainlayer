@@ -11,13 +11,14 @@ import shlex
 import socket
 import sqlite3
 import subprocess
-import sys
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
@@ -35,7 +36,7 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
-from .paths import get_db_path
+from .paths import get_db_path, resolve_t3_health_path
 from .pause import (
     DEFAULT_PAUSE_SENTINEL_PATH,
     pause_applies_to_label,
@@ -136,7 +137,7 @@ class HealthCheckConfig:
     drain_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
-    t3_health_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser())
+    t3_health_path: Path | None = None
     jsonl_backup_log_path: Path = field(
         default_factory=lambda: Path(
             os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_JSONL_BACKUP_LOG_PATH))
@@ -181,6 +182,9 @@ class HealthCheckConfig:
             DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES,
         )
     )
+
+    def __post_init__(self) -> None:
+        self.t3_health_path = resolve_t3_health_path(self.db_path, self.t3_health_path)
 
 
 @dataclass
@@ -341,10 +345,39 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
 
 
 logger = logging.getLogger(__name__)
+_HEALTH_EVENT_LOGGER: ContextVar[logging.Logger | None] = ContextVar("brainlayer_health_event_logger", default=None)
+
+
+class UTCISOFormatter(logging.Formatter):
+    """Format log record creation times as ISO-8601 UTC with milliseconds."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        del datefmt
+        return datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
+
+
+@contextmanager
+def health_event_logging(stream: Any) -> Iterator[None]:
+    """Route this invocation's health events to a UTC-formatted stream."""
+    event_logger = logging.Logger(logger.name, level=logging.INFO)
+    event_logger.filters = list(logger.filters)
+    event_logger.disabled = logger.disabled
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(UTCISOFormatter("%(asctime)s %(levelname)s %(message)s"))
+    event_logger.addHandler(handler)
+    event_logger.propagate = False
+    token = _HEALTH_EVENT_LOGGER.set(event_logger)
+    try:
+        yield
+    finally:
+        _HEALTH_EVENT_LOGGER.reset(token)
+        event_logger.removeHandler(handler)
+        handler.close()
 
 
 def _log_health_event(condition: str, message: str, *, timestamp: str) -> None:
-    logger.info("health event timestamp=%s condition=%s message=%s", timestamp, condition, message)
+    event_logger = _HEALTH_EVENT_LOGGER.get() or logger
+    event_logger.info("health event timestamp=%s condition=%s message=%s", timestamp, condition, message)
 
 
 def _parse_backlog_batch(command: str) -> int:
@@ -769,11 +802,6 @@ def _apply_heals(
                 tripped.discard(key)
                 heal_failures.pop(key, None)
             if action not in result.actions:
-                print(
-                    f"timestamp={result.checked_at} heal action label={label} issue={issue_code} "
-                    f"consecutive_failures={consecutive_failures} action={action}",
-                    file=sys.stderr,
-                )
                 result.actions.append(action)
                 _emit_heal_event(
                     {
@@ -787,7 +815,9 @@ def _apply_heals(
                 )
                 _log_health_event(
                     f"heal:{issue_code}",
-                    _heal_notification_message(action, issue_code, details),
+                    f"heal action label={label} issue={issue_code} "
+                    f"consecutive_failures={consecutive_failures} action={action}; "
+                    f"{_heal_notification_message(action, issue_code, details)}",
                     timestamp=result.checked_at,
                 )
     return heal_failures, tripped
