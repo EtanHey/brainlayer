@@ -658,3 +658,74 @@ def test_default_provider_linkage_prefers_v2_and_unions_legacy(tmp_path, monkeyp
     legacy = _state_db(tmp_path, [("legacy-thread", "codex", json.dumps({"threadId": legacy_id}))])
     legacy.rename(root / "state.sqlite")
     assert t3_app_codex_session_ids() == {modern_id, legacy_id}
+
+
+def test_fork_header_uses_own_id_with_verified_parent_identity(tmp_path):
+    from brainlayer.t3_provenance import codex_header_identity
+
+    own = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    parent = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    source = tmp_path / "fork.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": own,
+                    "session_id": parent,
+                    "parent_thread_id": parent,
+                    "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent}}},
+                },
+            }
+        )
+        + "\n"
+    )
+    assert codex_header_identity(source) == (own, False)
+
+
+def test_fork_header_rejects_disagreeing_parent(tmp_path):
+    from brainlayer.t3_provenance import codex_header_identity
+
+    source = tmp_path / "fork.jsonl"
+    _header(
+        source,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        parent_thread_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    )
+    with pytest.raises(BrainLayerAlarm, match="t3_session_identity_invalid"):
+        codex_header_identity(source)
+
+
+def test_explicit_env_v2_source_detects_projection_without_version(tmp_path, monkeypatch):
+    from brainlayer.t3_provenance import t3_app_codex_session_ids
+
+    own = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    state = _v2_state(
+        tmp_path, [("codex", {"driver": "codex", "nativeThreadRef": {"driver": "codex", "nativeId": own}})]
+    )
+    monkeypatch.setenv("BRAINLAYER_T3_STATE_DB", str(state))
+    monkeypatch.delenv("BRAINLAYER_T3_PROJECTION_VERSION", raising=False)
+    assert t3_app_codex_session_ids() == {own}
+
+
+@pytest.mark.parametrize("matching_parent", [True, False])
+def test_nested_subagent_header_carries_root_session_and_immediate_parent(tmp_path, matching_parent):
+    from brainlayer.t3_provenance import codex_header_identity
+
+    own = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    parent = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    root = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    source = tmp_path / "nested.jsonl"
+    payload = {
+        "id": own,
+        "session_id": root,
+        "parent_thread_id": parent,
+        "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent if matching_parent else root, "depth": 2}}},
+    }
+    source.write_text(json.dumps({"type": "session_meta", "payload": payload}) + "\n")
+    if matching_parent:
+        assert codex_header_identity(source) == (own, False)
+    else:
+        with pytest.raises(BrainLayerAlarm, match="t3_session_identity_invalid"):
+            codex_header_identity(source)

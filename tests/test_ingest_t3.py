@@ -414,7 +414,10 @@ def test_v2_reader_uses_selected_projection_preserves_all_projects_and_waits_for
     with sqlite3.connect(state) as conn:
         conn.execute("UPDATE orchestration_v2_projection_messages SET streaming=0 WHERE message_id='v2-streaming'")
     assert len(reader.read_threads()[0].messages) == 2
-    assert [t.thread_id for t in T3Reader(state, health_path=None).read_threads()] == ["thread-1", "thread-2"]
+    assert [t.thread_id for t in T3Reader(state, health_path=None, projection_version=1).read_threads()] == [
+        "thread-1",
+        "thread-2",
+    ]
 
 
 @pytest.mark.parametrize("bad_payload", ["{broken", "[]", '{"text": null}'])
@@ -570,6 +573,9 @@ def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
     state = _create_v2_fixture(tmp_path / "state.sqlite")
     health = tmp_path / "health.json"
     destination = tmp_path / "destination.db"
+    from brainlayer.vector_store import VectorStore
+
+    VectorStore(destination).close()
     monkeypatch.setenv("BRAINLAYER_FORBID_EMBEDDING_MODEL", "1")
     # Earlier declared model tests may warm the process-global cache. The guard forbids loading,
     # so use a fresh real CLI process rather than assuming an in-process model is still cold.
@@ -597,7 +603,8 @@ def test_v2_real_indexer_model_guard_failure_health(tmp_path, monkeypatch):
     snapshot = json.loads(health.read_text())
     assert snapshot["alerting"] is True and snapshot["alert_reasons"] == ["indexing_failure"]
     assert snapshot["failures"][-1]["error_type"] == "RuntimeError"
-    assert not destination.exists()
+    with VectorStore(destination, readonly=True) as store:
+        assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == 0
 
 
 def test_v2_partial_embeddings_fail_health_preserve_rows_and_replay(tmp_path, monkeypatch):
@@ -629,7 +636,7 @@ def test_v2_partial_embeddings_fail_health_preserve_rows_and_replay(tmp_path, mo
 
     monkeypatch.setattr("brainlayer.index_new.embed_chunks", complete)
     result = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
-    assert result.chunks_indexed == 2 and json.loads(health.read_text())["alerting"] is False
+    assert result.chunks_indexed == 1 and json.loads(health.read_text())["alerting"] is False
     store = VectorStore(destination, readonly=True)
     expected = {"t3:v2-a:v2-user:0", "t3:v2-b:v2-assistant:0"}
     assert {row[0] for row in store.conn.execute("SELECT id FROM chunks")} == expected
@@ -739,3 +746,139 @@ def test_unreadable_default_legacy_source_records_alerting_health(tmp_path, monk
     with pytest.raises(BrainLayerAlarm, match="t3_source_unavailable"):
         ingest_t3(dry_run=True, health_path=health)
     assert json.loads(health.read_text())["alert_reasons"] == ["source_selection_failure"]
+
+
+def test_unchanged_second_ingest_embeds_and_upserts_zero(tmp_path, monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.vector_store import VectorStore
+
+    source = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    destination = tmp_path / "copy.db"
+    health = tmp_path / "health.json"
+    VectorStore(destination).close()
+    embedded = []
+    upserted = []
+    real_upsert = VectorStore.upsert_chunks
+
+    def embed(chunks, **kwargs):
+        embedded.extend(chunks)
+        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+
+    def upsert(self, chunks, vectors, **kwargs):
+        upserted.extend(chunks)
+        return real_upsert(self, chunks, vectors, **kwargs)
+
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    monkeypatch.setattr(VectorStore, "upsert_chunks", upsert)
+    assert ingest_t3(source, db_path=destination, health_path=health, projection_version=2).chunks_indexed == 2
+    with VectorStore(destination, readonly=True) as store:
+        before = list(store.conn.execute("SELECT id,seen_count FROM chunks ORDER BY id"))
+        audit_before = store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0]
+    embedded.clear()
+    upserted.clear()
+    second = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
+    assert second.chunks_indexed == 0
+    assert embedded == [] and upserted == []
+    with VectorStore(destination, readonly=True) as store:
+        assert list(store.conn.execute("SELECT id,seen_count FROM chunks ORDER BY id")) == before
+        assert store.conn.execute("SELECT COUNT(*) FROM dedupe_audit").fetchone()[0] == audit_before
+
+    # One edited message is eligible again; the other unchanged message stays untouched.
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET payload_json=? WHERE message_id='v2-user'",
+            (json.dumps({"text": "updated prompt"}),),
+        )
+    changed = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
+    assert changed.chunks_indexed == 1
+    assert len(embedded) == len(upserted) == 1
+    assert embedded[0].content == "updated prompt"
+    embedded.clear()
+    upserted.clear()
+    assert ingest_t3(source, db_path=destination, health_path=health, projection_version=2).chunks_indexed == 0
+    assert embedded == [] and upserted == []
+
+
+def test_busy_writer_is_checked_before_embedding(tmp_path, monkeypatch):
+    from brainlayer import index_new, runtime_store
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.vector_store import WriterInUseError
+
+    source = _create_t3_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "health.json"
+    embedded = []
+
+    def busy(*args, **kwargs):
+        raise WriterInUseError("busy")
+
+    monkeypatch.setattr(runtime_store, "open_writer_store", busy)
+    monkeypatch.setattr(index_new, "open_writer_store", busy)
+    monkeypatch.setattr(index_new, "embed_chunks", lambda chunks, **kwargs: embedded.extend(chunks) or [])
+    with pytest.raises(WriterInUseError):
+        ingest_t3(source, db_path=tmp_path / "copy.db", health_path=health)
+    assert embedded == []
+    assert json.loads(health.read_text())["alert_reasons"] == ["writer_busy"]
+
+
+def test_explicit_v2_path_auto_detects_without_version(tmp_path):
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.t3_sources import resolve_t3_sources
+
+    source = _create_v2_fixture(tmp_path / "named.sqlite")
+    assert resolve_t3_sources(source) == [(source, 2)]
+    assert ingest_t3(source, health_path=None, dry_run=True).messages_seen == 2
+
+    from brainlayer.cli import app
+
+    result = CliRunner().invoke(
+        app, ["ingest-t3", "--state-db", str(source), "--health-path", str(tmp_path / "health.json"), "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "messages_seen=2" in result.output
+
+
+@pytest.mark.parametrize("legacy_failure", ["corrupt", "schema_drift"])
+def test_failed_legacy_does_not_block_valid_v2(tmp_path, monkeypatch, legacy_failure):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".t3/userdata"
+    root.mkdir(parents=True)
+    _create_v2_fixture(root / "statev2.sqlite")
+    if legacy_failure == "corrupt":
+        (root / "state.sqlite").write_bytes(b"corrupt legacy")
+    else:
+        _create_t3_fixture(root / "state.sqlite", drift=True)
+    health = tmp_path / "health.json"
+    indexed = []
+    monkeypatch.setattr(
+        "brainlayer.ingest.t3._index_chunks", lambda chunks, **kwargs: indexed.extend(chunks) or len(chunks)
+    )
+    result = ingest_t3(db_path=tmp_path / "copy.db", health_path=health)
+    assert result.messages_seen == 2 and result.chunks_indexed == len(indexed) == 2
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is True
+    assert snapshot["alert_reasons"] == ["legacy_source_failure"]
+
+
+def test_real_v1_v2_overlap_prefers_modern_payload(tmp_path, monkeypatch):
+    from brainlayer.ingest import t3
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".t3/userdata"
+    root.mkdir(parents=True)
+    modern = _create_v2_fixture(root / "statev2.sqlite")
+    legacy = _create_t3_fixture(root / "state.sqlite")
+    with sqlite3.connect(legacy) as conn:
+        conn.execute("UPDATE projection_threads SET thread_id='v2-a' WHERE thread_id='thread-1'")
+        conn.execute("UPDATE projection_thread_messages SET thread_id='v2-a' WHERE thread_id='thread-1'")
+        conn.execute(
+            "UPDATE projection_thread_messages SET message_id='v2-user',text='stale legacy' WHERE message_id='message-1'"
+        )
+    captured = []
+    monkeypatch.setattr(t3, "_index_chunks", lambda chunks, **kwargs: captured.extend(chunks) or len(chunks))
+    result = t3.ingest_t3(db_path=tmp_path / "copy.db", health_path=None)
+    assert result.messages_seen == 4
+    overlap = [c for c in captured if c.metadata["chunk_id"] == "t3:v2-a:v2-user:0"]
+    assert len(overlap) == 1 and overlap[0].content == "u"

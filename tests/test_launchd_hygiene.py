@@ -1039,3 +1039,19 @@ def test_installed_launchagents_are_associated_with_the_brainbar_bundle():
         pytest.skip(f"no repo-owned BrainLayer LaunchAgents installed under {installed_dir}")
     for path in installed:
         _assert_associated_with_brainbar(path, plistlib.loads(path.read_bytes()))
+
+
+def test_t3_renderer_explicit_source_without_version_retains_auto_detection(tmp_path):
+    import sqlite3
+
+    from brainlayer.t3_sources import resolve_t3_sources
+
+    state = tmp_path / "custom.sqlite"
+    with sqlite3.connect(state) as conn:
+        conn.execute("CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT)")
+    result, rendered, _ = _render_t3_selection(tmp_path, {"BRAINLAYER_T3_INGEST_STATE_DB": state})
+    assert result.returncode == 0, result.stderr
+    argv = plistlib.loads(rendered.read_bytes())["ProgramArguments"]
+    assert "--projection-version" not in argv
+    selected = Path(argv[argv.index("--state-db") + 1])
+    assert resolve_t3_sources(selected) == [(state, 2)]

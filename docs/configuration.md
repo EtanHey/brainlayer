@@ -96,7 +96,8 @@ projection reader. It also ingests `state.sqlite` when that file carries
 projections, deduplicating shared thread/message IDs with the newer file winning.
 Without V2, it falls back to `state.sqlite`. Both sources open read-only and
 schema or payload failures remain fatal. An explicit `--state-db` selects only
-that source; pair it with `--projection-version 2` for an explicit V2 selection:
+that source and detects V2 from its projection tables when no version is supplied.
+`--projection-version` overrides detection when deliberate selection is needed:
 
 ```bash
 brainlayer ingest-t3 --state-db ~/.t3/userdata/statev2.sqlite --projection-version 2 --dry-run
@@ -105,7 +106,9 @@ brainlayer ingest-t3 --state-db ~/.t3/userdata/statev2.sqlite --projection-versi
 V2 reads settled user/assistant messages from their JSON payloads and retains
 all projects, stable message IDs, source timestamps, and `t3-thread` provenance.
 Streaming messages become eligible when settled. Missing schema or invalid
-payloads raise an alarm; the reader never falls back to legacy tables. Dry-run
+payloads raise an alarm; the reader never falls back to legacy tables. When V2
+succeeds, an unavailable legacy source does not block its import, but health stays
+alerting with `legacy_source_failure`. Dry-run
 writes the health file but does not write the destination database.
 
 The packaged T3 LaunchAgent runs every 300 seconds and resolves default sources
@@ -134,7 +137,9 @@ The optional interval accepts 60–86400 seconds; unset restores 300 seconds.
 applies. Freshness is the interval plus import runtime, model startup, and any
 writer contention, so five minutes is a scheduling target rather than a hard
 searchability guarantee. Writer contention exits cleanly for the next interval
-and records alerting `writer_busy` health; other indexing failures still fail.
+and records alerting `writer_busy` health before embedding; other indexing failures
+still fail. Indexed chunks with unchanged scrubbed content skip both embedding
+and upsert, so repeat runs do not increment seen counts or add dedupe audit rows.
 First V2 execution also imports historical settled messages. Verify loaded argv,
 schedule, health and exact persisted message IDs after a reviewed deployment.
 

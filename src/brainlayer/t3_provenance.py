@@ -48,8 +48,28 @@ def codex_header_identity(source_file: str | Path, cache: dict | None = None) ->
         if not isinstance(session_id, str) or not _CODEX_SESSION_ID_RE.fullmatch(session_id):
             raise ValueError("session_meta.id must be a UUID")
         alternate = payload.get("session_id")
-        if alternate is not None and (not isinstance(alternate, str) or alternate.lower() != session_id.lower()):
-            raise ValueError("session_meta identity fields disagree")
+        if alternate is not None:
+            if not isinstance(alternate, str) or not _CODEX_SESSION_ID_RE.fullmatch(alternate):
+                raise ValueError("session_meta.session_id must be a UUID")
+            if alternate.lower() != session_id.lower():
+                parent = payload.get("parent_thread_id")
+                if not isinstance(parent, str) or not _CODEX_SESSION_ID_RE.fullmatch(parent):
+                    raise ValueError("fork parent_thread_id must be a UUID")
+                if parent.lower() != alternate.lower():
+                    # Nested subagents retain the root session_id, but name their
+                    # immediate parent both here and in the structural source.
+                    source = payload.get("source")
+                    subagent = source.get("subagent") if isinstance(source, dict) else None
+                    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+                    recorded_parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+                    depth = spawn.get("depth") if isinstance(spawn, dict) else None
+                    if (
+                        not isinstance(recorded_parent, str)
+                        or recorded_parent.lower() != parent.lower()
+                        or type(depth) is not int
+                        or depth < 2
+                    ):
+                        raise ValueError("session_meta identity fields disagree")
         result = (session_id.lower(), payload.get("originator") == "T3 Code")
         if cache is not None:
             cache[key] = result
