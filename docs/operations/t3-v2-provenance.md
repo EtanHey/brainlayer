@@ -15,9 +15,10 @@ The selected V2 provider projection links Codex `nativeThreadRef` and
 The transcript's first `session_meta` record supplies its native identity; fork
 filename suffixes, task text and working directories do not establish linkage.
 Headers are bounded to 1 MiB and cached by file identity within each flush.
-Linked records persist both `t3-app-session` provenance and `desktop` source class,
-including queued writes. Desktop rows stay hidden from default retrieval and
-remain accessible by exact ID. Memory-reader class exclusion has precedence.
+Linked records persist both `t3-app-session` provenance and `cli-agent` source class,
+including queued writes. T3 is a coding-agent surface visible in default retrieval
+(Etan's 2026-10-11 ruling). Claude Desktop, ChatGPT and Gemini desktop rows remain
+hidden. Memory-reader class exclusion has precedence.
 
 Missing selected schema, malformed references or headers, and unlinked T3-origin
 headers raise an alarm and defer affected entries. Deferred entries retain their
@@ -26,7 +27,11 @@ retries buffered entries against a new linkage snapshot. Ordinary structurally
 unlinked CLI headers remain CLI. Legacy selection and filename behavior remain
 compatible when V2 is not selected. Changing only the DB filename is insufficient.
 
-This changes new classification. Existing wrong-class rows require a separately
-verified exact-ID allowlist and a rollback ledger for both class fields; do not
-run broad source-file retagging or rewind checkpoints. Rolling configuration back
-does not delete already persisted messages or restore a whole database.
+Existing `t3-thread` and `t3-app-session` rows can have their source class re-derived
+on a quiesced offline DB copy with `scripts/migrate_source_class.py --t3-only --db
+<copy> --git-sha <40-character-SHA> --actor <operator>`. This is read-only by default;
+add `--apply` to write the copy. It reports before/after counts, commits 5,000–10,000
+rows per batch, and checkpoints before, every three batches, and after. It refuses
+the canonical DB and its aliases and preserves provenance and all other sources.
+Changing provenance itself still requires a separately verified exact-ID allowlist
+and rollback ledger; do not run broad source-file retagging or rewind checkpoints.

@@ -67,6 +67,7 @@ def test_t3_app_initiated_codex_session_is_tagged_distinctly(tmp_path: Path) -> 
     decision = classify_provenance(str(_codex_source(tmp_path, session_id)), t3_state_db=state_db)
 
     assert (decision.provenance_tag, decision.search_policy) == ("t3-app-session", "KEEP")
+    assert decision.source_class == "cli-agent"
 
 
 def test_t3_app_linkage_outranks_recon_content_signature(tmp_path: Path) -> None:
@@ -111,7 +112,10 @@ def test_new_t3_app_codex_ingestion_gets_distinct_provenance(tmp_path: Path, mon
 
     assert result.inserted == 1
     with sqlite3.connect(tmp_path / "brainlayer.db") as conn:
-        assert conn.execute("SELECT provenance_class FROM chunks").fetchone()[0] == "t3-app-session"
+        assert conn.execute("SELECT provenance_class, source_class FROM chunks").fetchone() == (
+            "t3-app-session",
+            "cli-agent",
+        )
 
 
 def test_watcher_loads_t3_session_ids_once_per_flush(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -465,9 +469,9 @@ def test_v2_links_parent_and_head_by_header_never_filename(tmp_path, monkeypatch
     source = _codex_source(tmp_path, unrelated)
     _header(source, parent, session_id=parent, originator="T3 Code")
     decision = classify_provenance(str(source), t3_state_db=state)
-    assert (decision.provenance_tag, decision.source_class) == ("t3-app-session", "desktop")
+    assert (decision.provenance_tag, decision.source_class) == ("t3-app-session", "cli-agent")
     _header(source, head)
-    assert classify_provenance(str(source), t3_state_db=state).source_class == "desktop"
+    assert classify_provenance(str(source), t3_state_db=state).source_class == "cli-agent"
     _header(source, unrelated, originator="codex_cli_rs", cwd="/code/t3code")
     assert (
         classify_provenance(str(source), content="T3 Code brain-worker", t3_state_db=state).source_class == "cli-agent"
@@ -548,7 +552,7 @@ def test_v2_flush_deferral_recovery_and_queue_class(tmp_path, monkeypatch):
         "type": "user",
         "message": {
             "content": [
-                {"type": "text", "text": "This settled desktop message must retain its origin and survive recovery."}
+                {"type": "text", "text": "This settled T3 message must retain its origin and survive recovery."}
             ]
         },
         "timestamp": "2026-10-09T00:00:00Z",
@@ -575,7 +579,7 @@ def test_v2_flush_deferral_recovery_and_queue_class(tmp_path, monkeypatch):
     events = [
         json.loads(line) for path in (tmp_path / "queue").glob("*.jsonl") for line in path.read_text().splitlines()
     ]
-    assert [(item["source_class"], item["provenance_class"]) for item in events] == [("desktop", "t3-app-session")]
+    assert [(item["source_class"], item["provenance_class"]) for item in events] == [("cli-agent", "t3-app-session")]
     source.write_text('{"type":"session_meta","payload":{"id":"bad"}}\n')
     retry = flush([{**entry, "_line_end_offset": 400}])
     assert retry.inserted == 0 and dict(retry) == {} and len(retry.deferred_entries) == 1
@@ -588,7 +592,7 @@ def test_memory_reader_stays_excluded_before_v2_header_lookup(tmp_path, monkeypa
     assert (decision.source_class, decision.search_policy) == ("brain-worker", "OUT")
 
 
-def test_v2_persisted_desktop_is_hidden_but_exactly_readable(tmp_path, monkeypatch):
+def test_v2_persisted_t3_is_default_visible_and_exactly_readable(tmp_path, monkeypatch):
     from brainlayer.vector_store import VectorStore
 
     session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -607,7 +611,7 @@ def test_v2_persisted_desktop_is_hidden_but_exactly_readable(tmp_path, monkeypat
                     "content": [
                         {
                             "type": "text",
-                            "text": "DesktopVisibilityNeedle preserves this exact settled personal message.",
+                            "text": "T3VisibilityNeedle preserves this exact settled personal message.",
                         }
                     ]
                 },
@@ -620,10 +624,10 @@ def test_v2_persisted_desktop_is_hidden_but_exactly_readable(tmp_path, monkeypat
     assert result.inserted == 1
     store = VectorStore(destination)
     row = store.conn.execute("SELECT id,source_class,provenance_class FROM chunks").fetchone()
-    assert row[1:] == ("desktop", "t3-app-session")
-    assert store.search(query_text="DesktopVisibilityNeedle", n_results=20)["ids"][0] == []
+    assert row[1:] == ("cli-agent", "t3-app-session")
+    assert store.search(query_text="T3VisibilityNeedle", n_results=20)["ids"][0] == [row[0]]
     assert store.get_context(row[0])["target"]["id"] == row[0]
-    assert store.search(query_text="DesktopVisibilityNeedle", n_results=20, include_hidden_source_classes=True)["ids"][
+    assert store.search(query_text="T3VisibilityNeedle", n_results=20, include_hidden_source_classes=True)["ids"][
         0
     ] == [row[0]]
     store.close()

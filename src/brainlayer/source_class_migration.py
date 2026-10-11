@@ -352,3 +352,106 @@ def migrate_source_class(
             except sqlite3.Error:
                 pass
         conn.close()
+
+
+def _checkpoint_full(conn: sqlite3.Connection) -> None:
+    if conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()[0] != 0:
+        raise RuntimeError("WAL checkpoint blocked; quiesce all writers before retrying")
+
+
+def _t3_distribution(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        f"{provenance}/{source_class or 'NULL'}": int(count)
+        for provenance, source_class, count in conn.execute(
+            """SELECT provenance_class, source_class, COUNT(*) FROM chunks
+               WHERE provenance_class IN ('t3-thread', 't3-app-session')
+               GROUP BY provenance_class, source_class ORDER BY provenance_class, source_class"""
+        )
+    }
+
+
+def reclassify_t3_source_class(
+    db_path: str | Path,
+    *,
+    git_sha: str,
+    actor: str,
+    batch_size: int = 5_000,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Re-derive only T3 rows on a quiesced offline copy; default is read-only.
+
+    This is separate from the initial NULL backfill and its one-time ledger:
+    existing desktop labels must be corrected even if that ledger already exists.
+    """
+    path = _resolved(db_path)
+    for canonical in (get_db_path(), Path.home() / ".local/share/brainlayer/brainlayer.db"):
+        canonical = _resolved(canonical)
+        if path == canonical or (path.exists() and canonical.exists() and path.samefile(canonical)):
+            raise ValueError("T3 source_class migration refuses the canonical database and its aliases")
+    path = _validate_target(path, git_sha)
+    if not 5_000 <= batch_size <= 10_000:
+        raise ValueError("batch_size must be between 5,000 and 10,000")
+    if not actor.strip():
+        raise ValueError("actor must be non-empty")
+
+    conn = sqlite3.connect(f"{path.as_uri()}?mode={'rw' if apply else 'ro'}", uri=True, timeout=60.0)
+    try:
+        before = _t3_distribution(conn)
+        candidate_rows = int(
+            conn.execute(
+                """SELECT COUNT(*) FROM chunks
+               WHERE provenance_class IN ('t3-thread', 't3-app-session')
+               AND source_class IS NOT 'cli-agent'"""
+            ).fetchone()[0]
+        )
+        updated_rows = batches = 0
+        if apply and candidate_rows:
+            _load_vec0_if_needed(conn)
+            _checkpoint_full(conn)
+            last_rowid = -(2**63)
+            while True:
+                conn.execute("BEGIN IMMEDIATE")
+                rows = conn.execute(
+                    """SELECT rowid, source_file, provenance_class, source_class FROM chunks
+                       WHERE rowid > ? AND provenance_class IN ('t3-thread', 't3-app-session')
+                       AND source_class IS NOT 'cli-agent' ORDER BY rowid LIMIT ?""",
+                    (last_rowid, batch_size),
+                ).fetchall()
+                if not rows:
+                    conn.commit()
+                    break
+                updates = [
+                    (
+                        derive_source_class(str(source_file or ""), provenance_class=provenance),
+                        rowid,
+                        provenance,
+                        prior_class,
+                    )
+                    for rowid, source_file, provenance, prior_class in rows
+                ]
+                cursor = conn.executemany(
+                    "UPDATE chunks SET source_class = ? WHERE rowid = ? AND provenance_class = ? AND source_class IS ?",
+                    updates,
+                )
+                updated_rows += cursor.rowcount
+                last_rowid = int(rows[-1][0])
+                conn.commit()
+                batches += 1
+                if batches % 3 == 0:
+                    _checkpoint_full(conn)
+            _checkpoint_full(conn)
+        return {
+            "migration": "2026_10_11_t3_source_class",
+            "git_sha": git_sha.lower(),
+            "actor": actor,
+            "database": str(path),
+            "dry_run": not apply,
+            "batch_size": batch_size,
+            "candidate_rows": candidate_rows,
+            "updated_rows": updated_rows,
+            "batches": batches,
+            "before": before,
+            "after": _t3_distribution(conn),
+        }
+    finally:
+        conn.close()

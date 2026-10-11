@@ -69,8 +69,7 @@ def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_pa
     assert receipt["distribution"] == {
         "NULL": 1,
         "brain-worker": 1,
-        "cli-agent": 1,
-        "desktop": 1,
+        "cli-agent": 2,
         "fleet-coordination": 1,
         "subagent": 1,
     }
@@ -81,7 +80,7 @@ def test_migration_backfills_only_unambiguous_rows_and_writes_sha_ledgers(tmp_pa
             "ambiguous": None,
             "brain-worker": "brain-worker",
             "cli": "cli-agent",
-            "desktop": "desktop",
+            "desktop": "cli-agent",
             "fleet": "fleet-coordination",
             "subagent": "subagent",
         }
@@ -253,3 +252,92 @@ def test_idempotent_malformed_receipt_closes_connection(monkeypatch, tmp_path: P
 
     assert len(tracked) == 1
     assert tracked[0].closed is True
+
+
+def _t3_copy(path):
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, source_file, provenance_class, source_class)")
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, ?, ?, ?)",
+            [
+                ("thread", "/t3.jsonl", "t3-thread", "desktop"),
+                ("app", "/codex.jsonl", "t3-app-session", "desktop"),
+                ("null", "/t3.jsonl", "t3-thread", None),
+                ("already", "/t3.jsonl", "t3-thread", "cli-agent"),
+                ("desktop", "/desktop.jsonl", None, "desktop"),
+                ("codex", "/codex.jsonl", "codex-session", "cli-agent"),
+                ("worker", "/worker.jsonl", "recon-agent", "brain-worker"),
+            ],
+        )
+
+
+def test_t3_reclassification_dry_run_apply_and_idempotence(tmp_path):
+    path = tmp_path / "copy.db"
+    _t3_copy(path)
+    before = path.read_bytes()
+    dry = migration.reclassify_t3_source_class(path, git_sha=GIT_SHA, actor="pytest")
+    assert path.read_bytes() == before
+    assert dry["candidate_rows"] == 3 and dry["updated_rows"] == 0
+    assert dry["before"] == dry["after"]
+    applied = migration.reclassify_t3_source_class(path, git_sha=GIT_SHA, actor="pytest", apply=True)
+    assert applied["updated_rows"] == 3
+    assert applied["after"] == {"t3-app-session/cli-agent": 1, "t3-thread/cli-agent": 3}
+    with sqlite3.connect(path) as conn:
+        assert dict(conn.execute("SELECT id, source_class FROM chunks")) == {
+            "thread": "cli-agent",
+            "app": "cli-agent",
+            "null": "cli-agent",
+            "already": "cli-agent",
+            "desktop": "desktop",
+            "codex": "cli-agent",
+            "worker": "brain-worker",
+        }
+    repeat = migration.reclassify_t3_source_class(path, git_sha=GIT_SHA, actor="pytest", apply=True)
+    assert repeat["candidate_rows"] == repeat["updated_rows"] == repeat["batches"] == 0
+
+
+@pytest.mark.parametrize("alias", ["direct", "symlink", "hardlink"])
+def test_t3_reclassification_refuses_canonical_aliases_even_with_old_gate(tmp_path, monkeypatch, alias):
+    canonical = tmp_path / "canonical.db"
+    _t3_copy(canonical)
+    monkeypatch.setattr(migration, "get_db_path", lambda: canonical)
+    monkeypatch.setenv("BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP", "1")
+    target = canonical
+    if alias != "direct":
+        target = tmp_path / "alias.db"
+        if alias == "symlink":
+            target.symlink_to(canonical)
+        else:
+            target.hardlink_to(canonical)
+    with pytest.raises(ValueError, match="canonical"):
+        migration.reclassify_t3_source_class(target, git_sha=GIT_SHA, actor="pytest", apply=True)
+
+
+def test_t3_reclassification_checkpoints_before_every_three_batches_and_after(tmp_path, monkeypatch):
+    path = tmp_path / "copy.db"
+    _t3_copy(path)
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO chunks VALUES (?, ?, ?, ?)",
+            [(f"bulk-{i}", "/t3.jsonl", "t3-thread", "desktop") for i in range(15000)],
+        )
+    checkpoints = []
+    real_checkpoint = migration._checkpoint_full
+
+    def checkpoint(conn):
+        checkpoints.append(conn.execute("SELECT COUNT(*) FROM chunks WHERE source_class = 'cli-agent'").fetchone()[0])
+        real_checkpoint(conn)
+
+    monkeypatch.setattr(migration, "_checkpoint_full", checkpoint)
+    receipt = migration.reclassify_t3_source_class(path, git_sha=GIT_SHA, actor="pytest", apply=True)
+    assert receipt["updated_rows"] == 15003 and receipt["batches"] == 4
+    assert checkpoints == [2, 15002, 15005]
+
+
+@pytest.mark.parametrize("batch_size", [0, 4999, 10001])
+def test_t3_reclassification_enforces_bounded_batches(tmp_path, batch_size):
+    path = tmp_path / "copy.db"
+    _t3_copy(path)
+    with pytest.raises(ValueError, match="5,000.*10,000"):
+        migration.reclassify_t3_source_class(path, git_sha=GIT_SHA, actor="pytest", batch_size=batch_size)
