@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import brainlayer.ingest_denylist as denylist
 from brainlayer.ingest_denylist import BRAINLAYER_INGEST_DENYLIST_ENV, is_denylisted
 
@@ -223,15 +225,58 @@ def test_cached_attribution_is_invalidated_when_same_inode_is_rewritten_larger(m
     assert denylist._claude_subagent_attribution(worker) == "brain-worker"
 
 
-def test_explicit_empty_override_disables_default_subagent_policy(monkeypatch, tmp_path):
+@pytest.mark.parametrize("override", ["", "~/.codex/sessions/**", "~/.claude/projects/*matchmat*/**"])
+@pytest.mark.parametrize("role", ["brain-worker", "session-miner", "weave"])
+def test_environment_patterns_preserve_memory_reader_exclusion(monkeypatch, tmp_path, override, role):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "")
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, override)
     worker = _write_subagent(
         tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent.jsonl",
-        "brain-worker",
+        role,
     )
 
-    assert not is_denylisted(worker)
+    assert is_denylisted(worker)
+    assert worker.exists()
+
+
+def test_narrowed_override_admits_codex_and_ordinary_subagents_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "~/.claude/projects/*matchmat*/**")
+    ordinary = _write_subagent(
+        tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "ordinary.jsonl",
+        "workflow-subagent",
+    )
+    unknown = _write_subagent(ordinary.with_name("unknown.jsonl"), None)
+    assert not is_denylisted(tmp_path / ".codex" / "sessions" / "rollout.jsonl")
+    assert not is_denylisted(ordinary)
+    assert is_denylisted(unknown)
+    assert not is_denylisted(unknown, unknown_subagent_is_denylisted=False)
+    assert is_denylisted(tmp_path / ".claude" / "projects" / "matchmat" / "session.jsonl")
+
+
+def test_watcher_rediscovers_codex_after_narrowing_without_admitting_memory_readers(monkeypatch, tmp_path):
+    from brainlayer.watcher import JSONLWatcher, default_watch_roots
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    remaining_pattern = "~/.claude/projects/*matchmat*/**"
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, f"~/.codex/sessions/**,{remaining_pattern}")
+    codex = tmp_path / ".codex" / "sessions" / "2026" / "10" / "rollout.jsonl"
+    codex.parent.mkdir(parents=True)
+    codex.write_text('{"type":"session_meta","payload":{"id":"synthetic-session"}}\n')
+    subagents = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents"
+    ordinary = _write_subagent(subagents / "ordinary.jsonl", "general-purpose")
+    readers = [_write_subagent(subagents / f"{role}.jsonl", role) for role in denylist.MEMORY_READER_ATTRIBUTIONS]
+    scoped = _write_subagent(tmp_path / ".claude" / "projects" / "matchmat" / "session.jsonl", "general-purpose")
+    watcher = JSONLWatcher(
+        watch_roots=default_watch_roots(home=tmp_path),
+        registry_path=tmp_path / "offsets.json",
+        on_flush=lambda items: None,
+    )
+    assert set(watcher._discover_jsonl_files()) == {str(ordinary)}
+    monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, remaining_pattern)
+    assert set(watcher._discover_jsonl_files()) == {str(ordinary), str(codex)}
+    assert watcher.provider_for_file(str(codex)) == "codex"
+    assert all(path.exists() for path in [codex, ordinary, scoped, *readers])
 
 
 def test_explicit_environment_override_can_deny_an_otherwise_allowed_provider(monkeypatch, tmp_path):
@@ -259,6 +304,7 @@ def test_configured_pattern_match_is_cached_across_polls(monkeypatch, tmp_path):
     )
     denylist.clear_pattern_match_cache()
     path = tmp_path / ".claude" / "projects" / "proj" / "session" / "subagents" / "agent-1.jsonl"
+    _write_subagent(path, "general-purpose")
 
     calls: list[int] = []
     real = denylist._match_parts
