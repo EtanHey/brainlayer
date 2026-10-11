@@ -103,13 +103,7 @@ def test_setup_warns_when_env_denylist_is_broader_than_the_class_rule(monkeypatc
 
 
 def test_setup_is_silent_only_when_no_override_exists_at_all(monkeypatch, tmp_path):
-    """The ONLY quiet case is no override anywhere.
-
-    Round 0 of this file asserted that a deployment-scoped override was 'quiet because it matches
-    the class rule'. That was wrong and the review caught it: `is_denylisted` disables the whole
-    attribution branch when the env var is present at ALL, so a matchmat-only override still stops
-    excluding brain-worker. Quiet must therefore mean 'no override', never 'a harmless override'.
-    """
+    """An unset override has nothing to report; configured paths are audited separately."""
     monkeypatch.delenv(BRAINLAYER_INGEST_DENYLIST_ENV, raising=False)
 
     result = _invoke_setup(monkeypatch, tmp_path)
@@ -118,13 +112,13 @@ def test_setup_is_silent_only_when_no_override_exists_at_all(monkeypatch, tmp_pa
     assert BRAINLAYER_INGEST_DENYLIST_ENV not in _flat(result.output)
 
 
-def test_a_deployment_scoped_override_still_reports_that_it_replaces_the_class_rule(monkeypatch, tmp_path):
+def test_a_deployment_scoped_override_reports_preserved_class_exclusion(monkeypatch, tmp_path):
     monkeypatch.setenv(BRAINLAYER_INGEST_DENYLIST_ENV, "~/.claude/projects/*matchmat*/**")
 
     result = _invoke_setup(monkeypatch, tmp_path)
 
     assert result.exit_code == 0, result.output
-    assert "REPLACES the ingest class rule" in _prose(result.output)
+    assert "adds path exclusions to the ingest class rule" in _prose(result.output)
     assert "brain-worker" in _prose(result.output)
     # ...but it is not an over-exclusion, so no pattern is named as overreaching.
     assert "overreaching pattern" not in _prose(result.output)
@@ -191,8 +185,8 @@ def test_setup_warns_about_a_blanket_in_the_env_file_with_an_empty_process_env(m
     assert "matchmat" not in _flat(result.output)
 
 
-def test_setup_says_an_override_replaces_the_class_rule_even_when_no_pattern_overreaches(monkeypatch, tmp_path):
-    """Quiet-on-overreach must not read as a clean bill: any override disables memory-reader exclusion."""
+def test_setup_reports_preserved_class_rule_from_env_file_without_overreach(monkeypatch, tmp_path):
+    """The audit reads the resolved file and explains additive class semantics."""
     from typer.testing import CliRunner
 
     from brainlayer.cli import app
@@ -206,7 +200,7 @@ def test_setup_says_an_override_replaces_the_class_rule_even_when_no_pattern_ove
 
     assert result.exit_code == 0, result.output
     assert "brain-worker" in _prose(result.output)
-    assert "replaces" in _prose(result.output).lower()
+    assert "remain excluded by their attribution" in _prose(result.output)
 
 
 def test_every_reported_finding_is_one_the_matcher_actually_excludes(monkeypatch):
