@@ -8,9 +8,20 @@ import pwd
 import stat
 import subprocess
 import tempfile
+import unicodedata
 from pathlib import Path
 
 LABELS = {"com.brainlayer.brainbar": "BrainBar", "com.brainlayer.brainbar-daemon": "BrainBarDaemon"}
+
+
+def resource_alias(left, right):
+    """Conservatively refuse case/canonical-Unicode variants, even on case-sensitive volumes."""
+    if unicodedata.normalize("NFD", str(left)).casefold() == unicodedata.normalize("NFD", str(right)).casefold():
+        return True
+    try:
+        return os.path.samefile(left, right)
+    except FileNotFoundError:
+        return False
 
 
 def owned(path, home, uid, missing=False, python_link=False, socket=False):
@@ -95,7 +106,7 @@ def prepare(args, home, uid, verify):
         raise ValueError("explicit installed Python/CLI must be executable")
     socket = endpoint(args.socket, home, uid)
     db = owned(args.db or home / ".local/share/brainlayer/brainlayer.db", home, uid, missing=True)
-    if db in (socket, Path(str(socket) + ".lock")):
+    if any(resource_alias(db, item) for item in (socket, Path(str(socket) + ".lock"))):
         raise ValueError("database must not alias the socket or its derived lock")
     envfile = owned(home / ".config/brainlayer/brainlayer.env", home, uid, missing=True)
     env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "BRAINBAR_SOCKET_PATH": str(socket),
