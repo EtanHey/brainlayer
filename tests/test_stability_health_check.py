@@ -8,9 +8,12 @@ import os
 import plistlib
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -433,7 +436,8 @@ def test_run_health_check_surfaces_jsonl_backup_failure(tmp_path):
     assert "jsonl_backup_attempt_failed" in [issue.code for issue in result.issues]
 
 
-def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, capsys):
+def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=4, vector_rows=3)
@@ -454,7 +458,8 @@ def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart
     assert "hotlane_backlog_disabled" in [issue.code for issue in first_result.issues]
     assert first_result.backlog_batch == 0
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
-    assert "kickstart" not in capsys.readouterr().err
+    assert not any("kickstart" in message for message in caplog.messages)
+    caplog.clear()
 
     second_result = run_health_check(
         HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True),
@@ -472,11 +477,11 @@ def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart
     kickstarts = [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
     assert len(kickstarts) == 1
     assert "com.brainlayer.hotlane-brainbar" in " ".join(kickstarts[0])
-    stderr = capsys.readouterr().err
-    assert "heal action" in stderr
-    assert "label=com.brainlayer.hotlane-brainbar" in stderr
-    assert "issue=hotlane_backlog_disabled" in stderr
-    assert "consecutive_failures=2" in stderr
+    log_text = "\n".join(caplog.messages)
+    assert "heal action" in log_text
+    assert "label=com.brainlayer.hotlane-brainbar" in log_text
+    assert "issue=hotlane_backlog_disabled" in log_text
+    assert "consecutive_failures=2" in log_text
 
 
 def test_any_zero_backlog_batch_alarms_when_multiple_hotlanes_are_running(tmp_path):
@@ -1058,23 +1063,95 @@ def test_lock_holder_stale_pidfile_is_ignored_without_false_wedge(
     assert saved["lock_holder_held_ticks"] == 0
 
 
-def test_heal_action_log_includes_the_health_check_timestamp(tmp_path, capsys):
+def test_heal_action_log_includes_the_health_check_timestamp(tmp_path):
     result = health_check.HealthCheckResult(
         checked_at="2026-09-15T07:15:00+00:00",
         ok=False,
         issues=[health_check.HealthIssue("watcher_stalled", "critical", "stalled")],
     )
+    stream = StringIO()
 
-    health_check._apply_heals(
-        result=result,
-        issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
-        previous_failures={},
-        previous_tripped=set(),
-        config=health_check.HealthCheckConfig(heal=True, heal_min_consecutive_failures=1),
-        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
+    with health_check.health_event_logging(stream):
+        health_check._apply_heals(
+            result=result,
+            issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
+            previous_failures={},
+            previous_tripped=set(),
+            config=health_check.HealthCheckConfig(heal=True, heal_min_consecutive_failures=1),
+            command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
 
-    assert "timestamp=2026-09-15T07:15:00+00:00 heal action label=com.example.watch" in capsys.readouterr().err
+    output = stream.getvalue()
+    assert "condition=heal:watcher_stalled" in output
+    assert "timestamp=2026-09-15T07:15:00+00:00" in output
+    assert "heal action label=com.example.watch issue=watcher_stalled" in output
+    assert "consecutive_failures=1 action=kickstart:com.example.watch" in output
+
+
+def test_health_event_logging_keeps_logger_state_and_nested_context_after_exception(caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+    module_logger = health_check.logger
+    original_state = (tuple(module_logger.handlers), module_logger.level, module_logger.propagate)
+    outer_stream = StringIO()
+    inner_stream = StringIO()
+
+    with health_check.health_event_logging(outer_stream):
+        assert (tuple(module_logger.handlers), module_logger.level, module_logger.propagate) == original_state
+        health_check._log_health_event("outer_before", "outer", timestamp="2026-10-09T00:00:00+00:00")
+        with pytest.raises(RuntimeError, match="fixture failure"):
+            with health_check.health_event_logging(inner_stream):
+                health_check._log_health_event("inner", "inner", timestamp="2026-10-09T00:00:00+00:00")
+                raise RuntimeError("fixture failure")
+        assert (tuple(module_logger.handlers), module_logger.level, module_logger.propagate) == original_state
+        health_check._log_health_event("outer_after", "outer", timestamp="2026-10-09T00:00:00+00:00")
+
+    assert (tuple(module_logger.handlers), module_logger.level, module_logger.propagate) == original_state
+    assert "condition=outer_before" in outer_stream.getvalue()
+    assert "condition=outer_after" in outer_stream.getvalue()
+    assert "condition=inner" in inner_stream.getvalue()
+    health_check._log_health_event("restored", "caller logger", timestamp="2026-10-09T00:00:00+00:00")
+    assert any("condition=restored" in record.getMessage() for record in caplog.records)
+
+
+def test_health_event_logging_routes_concurrent_calls_to_their_own_streams():
+    first_stream = StringIO()
+    second_stream = StringIO()
+    first_entered = Event()
+    second_entered = Event()
+    first_logged_while_second_active = Event()
+
+    def first_call():
+        with health_check.health_event_logging(first_stream):
+            health_check._log_health_event("first_before", "first", timestamp="2026-10-09T00:00:00+00:00")
+            first_entered.set()
+            assert second_entered.wait(timeout=5)
+            health_check._log_health_event("first_during", "first", timestamp="2026-10-09T00:00:00+00:00")
+            first_logged_while_second_active.set()
+
+    def second_call():
+        assert first_entered.wait(timeout=5)
+        with health_check.health_event_logging(second_stream):
+            health_check._log_health_event("second_before", "second", timestamp="2026-10-09T00:00:00+00:00")
+            second_entered.set()
+            assert first_logged_while_second_active.wait(timeout=5)
+            health_check._log_health_event("second_after", "second", timestamp="2026-10-09T00:00:00+00:00")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_call)
+        second = pool.submit(second_call)
+        first.result(timeout=10)
+        second.result(timeout=10)
+
+    first_output = first_stream.getvalue()
+    second_output = second_stream.getvalue()
+    assert "condition=first_before" in first_output
+    assert "condition=first_during" in first_output
+    assert "condition=second_before" not in first_output
+    assert "condition=second_after" not in first_output
+    assert "condition=second_before" in second_output
+    assert "condition=second_after" in second_output
+    assert "condition=first_before" not in second_output
+    assert "condition=first_during" not in second_output
 
 
 def test_heal_escalation_site_emits_incident_log(tmp_path, caplog):
