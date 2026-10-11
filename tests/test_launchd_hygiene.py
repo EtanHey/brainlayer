@@ -759,6 +759,7 @@ def test_t3_selection_empty_health_override_uses_database_parent(tmp_path, proje
 @pytest.mark.parametrize(
     "settings",
     [
+        {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "1"},
         {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "2"},
         {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "3"},
         {"BRAINLAYER_T3_INGEST_STATE_DB": "relative.sqlite"},
