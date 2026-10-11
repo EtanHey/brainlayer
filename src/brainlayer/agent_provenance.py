@@ -177,24 +177,28 @@ def classify_provenance(
     content: str | None = None,
     t3_state_db: str | Path | None = None,
     t3_linked_session_ids: set[str] | None = None,
+    t3_projection_version: int | None = None,
+    t3_session_identity_cache: dict | None = None,
 ) -> ProvenanceDecision:
     """Classify a source path into an auditable provenance search policy."""
     del content_class
     path = _abspath(source_file)
+
+    del content
+    if memory_reader_attribution(path) is not None or _has_recon_path_signature(path):
+        return ProvenanceDecision("recon-agent", "OUT", "memory-reader attribution wins precedence", "brain-worker")
 
     is_t3_app_session = _under_provider_sessions(path, ".codex") and (
         is_t3_app_initiated_codex_session(
             source_file,
             state_db=t3_state_db,
             linked_session_ids=t3_linked_session_ids,
+            projection_version=t3_projection_version,
+            session_identity_cache=t3_session_identity_cache,
         )
     )
     if is_t3_app_session:
         return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session", "desktop")
-
-    del content
-    if memory_reader_attribution(path) is not None or _has_recon_path_signature(path):
-        return ProvenanceDecision("recon-agent", "OUT", "memory-reader attribution wins precedence", "brain-worker")
 
     if _has_segment(path, "wf_*"):
         repo = _repo_from_project_segment(_project_segment(path))

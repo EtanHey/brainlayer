@@ -36,6 +36,31 @@ def test_tier0_install_no_longer_requires_notification_policy_environment() -> N
     assert "__PYTHON_BIN__" not in tier0_installer
 
 
+def test_clustering_import_does_not_preconfigure_process_logging() -> None:
+    probe = """
+import logging
+
+calls = []
+original_basic_config = logging.basicConfig
+
+def tracked_basic_config(*args, **kwargs):
+    calls.append((args, kwargs))
+    return original_basic_config(*args, **kwargs)
+
+logging.basicConfig = tracked_basic_config
+import brainlayer.clustering
+assert not calls, calls
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_health_check_command_actually_emits_timestamped_incident_log() -> None:
     probe = """
 from typer.testing import CliRunner
@@ -67,7 +92,7 @@ raise SystemExit(result.exit_code)
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO", completed.stderr)
+    assert re.search(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00 INFO", completed.stderr)
     assert "2026-09-15" in completed.stderr
     assert "condition=heal:watcher_stalled" in completed.stderr
     assert "com.brainlayer.watch failed repeatedly" in completed.stderr

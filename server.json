@@ -3,7 +3,7 @@
   "name": "io.github.etanhey/brainlayer",
   "title": "BrainLayer",
   "description": "Persistent local memory for AI agents \u2014 semantic search, knowledge graph, and 16 BrainBar MCP tools with ToolAnnotations over SQLite.",
-  "version": "1.5.49",
+  "version": "1.5.50",
   "websiteUrl": "https://brainlayer.etanheyman.com",
   "repository": {
     "url": "https://github.com/EtanHey/brainlayer",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "brainlayer",
-      "version": "1.5.49",
+      "version": "1.5.50",
       "runtimeHint": "pipx",
       "transport": {
         "type": "stdio"
