@@ -221,6 +221,10 @@ def _concurrent_writer_sla_diagnostics(
         "receipt": {key: receipt.get(key) for key in ("chunk_id", "queued", "status", "action")},
         "writers": writers,
         "errors": {},
+        "data_version_semantics": (
+            "Connection-local single samples without baselines; do not compare across connections "
+            "or infer commit history or reader freshness."
+        ),
     }
     try:
         names = list(itertools.islice((path.name for path in queue_dir.iterdir() if path.suffix == ".jsonl"), 21))
@@ -1340,6 +1344,10 @@ def test_concurrent_writer_sla_marker_failure_reports_private_diagnostics(sla_di
     assert diagnostic["receipt"] == {"chunk_id": "synthetic-marker", "queued": True, "status": "QUEUED", "action": None}
     assert diagnostic["writers"] == sla_diagnostic_context["writers"]
     assert diagnostic["errors"] == {}
+    assert diagnostic["data_version_semantics"] == (
+        "Connection-local single samples without baselines; do not compare across connections "
+        "or infer commit history or reader freshness."
+    )
     for key in ("marker_rows", "receipt_rows", "fts_marker_rows", "operational_fts_marker_rows"):
         assert diagnostic["database"][key] == 1
     assert isinstance(diagnostic["database"]["data_version"], int)
