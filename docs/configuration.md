@@ -122,7 +122,7 @@ BRAINLAYER_T3_INGEST_PROJECTION_VERSION=2
 BRAINLAYER_T3_INGEST_INTERVAL_SECONDS=60
 ```
 
-An explicit V2 override requires an absolute source path. The importer reads all
+An explicit projection-version override (V1 or V2) requires an absolute source path. The importer reads all
 projects. The renderer pins `--db` to the configured `BRAINLAYER_DB` (or canonical
 DB) and `--health-path` beside that DB.
 `BRAINLAYER_T3_INGEST_HEALTH_PATH` may explicitly override health placement.
