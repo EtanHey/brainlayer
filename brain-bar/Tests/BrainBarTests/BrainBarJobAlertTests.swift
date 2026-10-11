@@ -527,7 +527,9 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         try Data("{}".utf8).write(to: alertsURL)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
-        let status = BrainBarStatusPopoverController(runtime: runtime, dashboardPanelController: windowController)
+        let status = BrainBarStatusPopoverController(
+            runtime: runtime, dashboardPanelController: windowController, statusBar: NSStatusBar()
+        )
         defer { status.stop(); windowController.dismiss() }
         status.setBadgeForTesting(
             .init(badgeOn: true, reason: first, activeCodes: ["job_alert_maintenance-light"], activeMessages: [first]),

@@ -9,7 +9,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let panelController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: panelController
+            dashboardPanelController: panelController,
+            statusBar: NSStatusBar()
         )
         defer { controller.stop() }
 
@@ -25,7 +26,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: windowController
+            dashboardPanelController: windowController,
+            statusBar: NSStatusBar()
         )
         defer { controller.stop() }
 
@@ -44,7 +46,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: windowController
+            dashboardPanelController: windowController,
+            statusBar: NSStatusBar()
         )
         defer { controller.stop() }
 
@@ -71,7 +74,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: windowController
+            dashboardPanelController: windowController,
+            statusBar: NSStatusBar()
         )
         defer { controller.stop() }
 
@@ -120,11 +124,36 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertFalse(render.contains("BadgeStateReader.read"), "UI emissions must not perform badge file I/O.")
     }
 
+    func testControllerStatusItemBelongsToAPrivateBarAndStopsOnThatBar() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let panelController = BrainBarDashboardPanelController(runtime: runtime)
+        let privateStatusBar = RecordingStatusBar()
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime, dashboardPanelController: panelController, statusBar: privateStatusBar
+        )
+        defer { controller.stop() }
+
+        XCTAssertTrue(controller.statusItemForTesting.statusBar === privateStatusBar)
+        XCTAssertFalse(controller.statusItemForTesting.statusBar === NSStatusBar.system,
+                       "test fixtures must never create items in the live system menu bar")
+        controller.stop()
+        XCTAssertTrue(privateStatusBar.removedItem === controller.statusItemForTesting)
+    }
+
     private func packageRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+}
+
+private final class RecordingStatusBar: NSStatusBar {
+    private(set) var removedItem: NSStatusItem?
+
+    override func removeStatusItem(_ item: NSStatusItem) {
+        removedItem = item
+        super.removeStatusItem(item)
     }
 }
 

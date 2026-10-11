@@ -12,6 +12,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     private let runtime: BrainBarRuntime
     private let dashboardPanelController: BrainBarDashboardPanelController
+    // Retain the owning bar: NSStatusItem only holds a weak reference to it.
+    private let statusBar: NSStatusBar
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
     private let badgeReadQueue = DispatchQueue(label: "com.brainlayer.brainbar.badge-read", qos: .utility)
@@ -26,10 +28,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     /// Shown under the status line only while a job alert is active.
     private let showLogItem = NSMenuItem(title: BrainBarStatusPopoverController.showLogTitle, action: nil, keyEquivalent: "")
 
-    init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
+    init(
+        runtime: BrainBarRuntime,
+        dashboardPanelController: BrainBarDashboardPanelController,
+        statusBar: NSStatusBar = .system
+    ) {
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
-        statusItemForTesting = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusBar = statusBar
+        statusItemForTesting = statusBar.statusItem(withLength: NSStatusItem.variableLength)
         contextMenuForTesting = NSMenu(title: "BrainBar")
         super.init()
 
@@ -90,7 +97,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
         close(nil)
-        NSStatusBar.system.removeStatusItem(statusItemForTesting)
+        statusBar.removeStatusItem(statusItemForTesting)
     }
 
     private func configureStatusItem() {
