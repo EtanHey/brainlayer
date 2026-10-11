@@ -583,12 +583,9 @@ def _report_ingest_denylist_overrides(resolved_env_file: Path) -> None:
 
     readers = ", ".join(sorted(MEMORY_READER_ATTRIBUTIONS))
     for source, patterns in override_sources:
-        # Quiet-on-overreach is NOT a clean bill of health: any override at all takes the place of
-        # the attribution class rule, so memory-reading workers stop being excluded by class.
         rprint(
-            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and REPLACES the ingest"
-            f" class rule[/] — while it is set, {readers} transcripts are no longer excluded by"
-            " their attribution, only by these patterns."
+            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and adds path exclusions"
+            f" to the ingest class rule[/] — {readers} transcripts remain excluded by their attribution."
         )
         overreaching = env_denylist_overreach(patterns=patterns)
         if not overreaching:
@@ -988,8 +985,8 @@ def health_check_command(
         "--drain-health-path",
         help="Drain health JSON path.",
     ),
-    t3_health_path: Path = typer.Option(
-        Path("~/.local/share/brainlayer/t3-health.json"),
+    t3_health_path: Optional[Path] = typer.Option(
+        None,
         "--t3-health-path",
         help="T3 ingestion health JSON path.",
     ),
@@ -1013,47 +1010,43 @@ def health_check_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Run the lightweight BrainLayer stability health-check."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        stream=sys.stderr,
-    )
     from ..badge_state import badge_state_path as resolve_badge_state_path
-    from ..health_check import HealthCheckConfig, run_health_check
+    from ..health_check import HealthCheckConfig, health_event_logging, run_health_check
 
     resolved_db_path = db or get_db_path()
 
-    result = run_health_check(
-        HealthCheckConfig(
-            db_path=resolved_db_path,
-            state_path=state_path.expanduser(),
-            badge_state_path=(
-                badge_state_path.expanduser()
-                if badge_state_path is not None
-                else resolve_badge_state_path(resolved_db_path)
-            ),
-            socket_path=socket_path.expanduser(),
-            canary_query=canary_query,
-            watch_label=watch_label,
-            drain_label=drain_label,
-            health_check_label=health_check_label,
-            watch_plist_path=watch_plist_path.expanduser(),
-            drain_plist_path=drain_plist_path.expanduser(),
-            health_check_plist_path=health_check_plist_path.expanduser(),
-            source_jsonl_globs=source_jsonl_globs
-            if source_jsonl_globs is not None
-            else HealthCheckConfig().source_jsonl_globs,
-            pause_sentinel_path=pause_sentinel_path.expanduser(),
-            drain_health_path=drain_health_path.expanduser(),
-            t3_health_path=t3_health_path.expanduser(),
-            queue_dir=queue_dir.expanduser(),
-            offsets_path=offsets_path.expanduser(),
-            watcher_health_path=watcher_health_path.expanduser(),
-            heal=heal,
-            socket_timeout_seconds=socket_timeout_seconds,
-            max_stalled_ticks=max_stalled_ticks,
+    with health_event_logging(sys.stderr):
+        result = run_health_check(
+            HealthCheckConfig(
+                db_path=resolved_db_path,
+                state_path=state_path.expanduser(),
+                badge_state_path=(
+                    badge_state_path.expanduser()
+                    if badge_state_path is not None
+                    else resolve_badge_state_path(resolved_db_path)
+                ),
+                socket_path=socket_path.expanduser(),
+                canary_query=canary_query,
+                watch_label=watch_label,
+                drain_label=drain_label,
+                health_check_label=health_check_label,
+                watch_plist_path=watch_plist_path.expanduser(),
+                drain_plist_path=drain_plist_path.expanduser(),
+                health_check_plist_path=health_check_plist_path.expanduser(),
+                source_jsonl_globs=source_jsonl_globs
+                if source_jsonl_globs is not None
+                else HealthCheckConfig().source_jsonl_globs,
+                pause_sentinel_path=pause_sentinel_path.expanduser(),
+                drain_health_path=drain_health_path.expanduser(),
+                t3_health_path=t3_health_path,
+                queue_dir=queue_dir.expanduser(),
+                offsets_path=offsets_path.expanduser(),
+                watcher_health_path=watcher_health_path.expanduser(),
+                heal=heal,
+                socket_timeout_seconds=socket_timeout_seconds,
+                max_stalled_ticks=max_stalled_ticks,
+            )
         )
-    )
     payload = result.to_dict()
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
@@ -3796,22 +3789,31 @@ def ingest_t3_command(
         help="Read-only T3 state SQLite database.",
     ),
     db: Optional[Path] = typer.Option(None, "--db", help="BrainLayer destination database."),
-    health_path: Path = typer.Option(
-        Path("~/.local/share/brainlayer/t3-health.json"),
+    health_path: Optional[Path] = typer.Option(
+        None,
         "--health-path",
         help="T3 ingestion health JSON path.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Read and plan chunks without writing BrainLayer."),
+    projection_version: int = typer.Option(
+        1,
+        "--projection-version",
+        min=1,
+        max=2,
+        help="Explicit T3 projection contract: 1 (legacy) or 2 (V2). Set --state-db for V2.",
+    ),
 ) -> None:
     """Ingest the live T3 thread projection into BrainLayer."""
     from ..ingest.t3 import ingest_t3
-    from ..paths import get_db_path
+    from ..paths import get_db_path, resolve_t3_health_path
 
+    resolved_db = db.expanduser() if db is not None else get_db_path()
     result = ingest_t3(
         state_db.expanduser(),
-        db_path=(db.expanduser() if db is not None else get_db_path()),
-        health_path=health_path.expanduser(),
+        db_path=resolved_db,
+        health_path=resolve_t3_health_path(resolved_db, health_path),
         dry_run=dry_run,
+        projection_version=projection_version,
     )
     mode = "dry-run " if dry_run else ""
     rprint(

@@ -280,18 +280,15 @@ brainlayer search "how did I implement authentication"
   workflow agent's own role. Both names stay in `MEMORY_READER_ATTRIBUTIONS` so the ruling holds the
   moment a harness ever labels them; until then only `brain-worker` actually fires. Matching on task
   text is not a substitute and is forbidden — a lead session *discussing* session-miner is ordinary memory.
-- ⚠️ **`BRAINLAYER_INGEST_DENYLIST` REPLACES the class rule; it does not add to it.**
-  `is_denylisted` skips the whole attribution branch whenever the variable is present at all
-  (`BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and ...`). So *any* override — even a
-  project-scoped one naming a single repo — turns OFF brain-worker/session-miner/weave exclusion,
-  and those transcripts start ingesting. **Verified by execution 2026-09-05:** with the deployed
-  `matchmat`-shaped override set, a `brain-worker` transcript returns `is_denylisted == False`.
-  A quiet `setup` therefore means "no over-exclusion", never "the class rule is intact".
+- **`BRAINLAYER_INGEST_DENYLIST` adds path exclusions to the class rule.** Empty and
+  deployment-scoped overrides preserve memory-reader attribution exclusion and the default
+  fail-closed policy for unknown Claude subagents. Narrowing a Codex blanket must retain
+  unrelated project exclusions; a configured path may still exclude otherwise ordinary sessions.
 - **`brainlayer setup` reads the env FILE it resolved, not just the process environment.** The
   blanket lived in `~/.config/brainlayer/brainlayer.env`, which is not in a fresh shell's environ,
   so a check against `os.environ` alone would have stayed silent on the very defect it exists to
   catch. `env_file_denylist_patterns()` parses the resolved file (including `--env-file`), and
-  `setup` reports each source separately: that the override replaces the class rule, and then any
+  `setup` reports each source separately: that the override preserves the class rule, and then any
   pattern broader than it. Deployment-scoped patterns naming one project or repo are not reported as
   overreach. Etan rules on that env file; agents do not edit it.
 - Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.

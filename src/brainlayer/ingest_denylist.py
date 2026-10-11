@@ -241,12 +241,12 @@ def is_directory_denylisted(path: str | Path) -> bool:
 
 
 def is_denylisted(path: str | Path, *, unknown_subagent_is_denylisted: bool = True) -> bool:
-    """Return True when a source path is under an ingest-denylisted transcript root."""
+    """Exclude configured paths and memory-reader classes; patterns never replace the class rule."""
     candidate = Path(os.path.abspath(os.path.expanduser(str(path))))
     patterns = _configured_patterns()
     if patterns and _matches_configured_pattern(str(candidate), patterns, str(Path.home())):
         return True
-    if BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and _is_claude_subagent(candidate):
+    if _is_claude_subagent(candidate):
         if memory_reader_attribution(candidate) is not None:
             return True
         attribution = _claude_subagent_attribution(candidate)
