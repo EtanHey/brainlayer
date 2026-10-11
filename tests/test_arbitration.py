@@ -274,6 +274,15 @@ def _concurrent_writer_sla_diagnostics(
     return result
 
 
+def _attach_concurrent_writer_sla_diagnostics(failure, **context):
+    """Attach a best-effort observation without replacing the caller's assertion."""
+    try:
+        diagnostic = _concurrent_writer_sla_diagnostics(**context)
+        failure.add_note("concurrent-writer-sla diagnostics: " + json.dumps(diagnostic, sort_keys=True))
+    except Exception as error:
+        failure.add_note("concurrent-writer-sla diagnostics unavailable: " + type(error).__name__)
+
+
 def test_drain_default_queue_dir_expands_env_tilde(monkeypatch):
     from brainlayer.drain import _default_queue_dir
 
@@ -1224,7 +1233,8 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
                 }
             finally:
                 counters_lock.release()
-            diagnostic = _concurrent_writer_sla_diagnostics(
+            _attach_concurrent_writer_sla_diagnostics(
+                failure,
                 db_path=db_path,
                 queue_dir=queue_dir,
                 log_path=log_path,
@@ -1237,7 +1247,6 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
                 if roundtrip_latency is not None
                 else (failure_measured_at - roundtrip_started if roundtrip_started is not None else None),
             )
-            failure.add_note("concurrent-writer-sla diagnostics: " + json.dumps(diagnostic, sort_keys=True))
         except Exception as error:
             failure.add_note("concurrent-writer-sla diagnostics unavailable: " + type(error).__name__)
         raise
@@ -1257,49 +1266,180 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
             pytest.fail(f"concurrent writer SLA workers failed: stuck={stuck}, {counts}, errors={errors}")
 
 
-def test_concurrent_writer_sla_marker_failure_reports_private_diagnostics(tmp_path, monkeypatch):
-    """A deterministic missing marker keeps the failure and reports its private fixture state."""
-    from brainlayer.mcp import search_handler
+@pytest.fixture
+def sla_diagnostic_context(tmp_path, monkeypatch):
+    """Private observer inputs; writer/receipt/timing values are supplied snapshots."""
 
-    async def missing_marker(**_kwargs):
-        return [], {"total": 1, "results": [{"chunk_id": "synthetic-unrelated", "content": "unrelated"}]}
+    def forbidden_workload(*_args, **_kwargs):
+        pytest.fail("diagnostic-only controls must not rerun the threaded SLA workload")
 
-    monkeypatch.setattr(search_handler, "_search", missing_marker)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "test_real_concurrent_writers_keep_interactive_store_searchable_under_sla",
+        forbidden_workload,
+    )
+    db_path = tmp_path / "brainlayer.db"
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    log_path = tmp_path / "drain.log"
+    marker = "d3realconcurrencygate42"
+    _create_minimal_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE VIRTUAL TABLE chunks_fts_operational USING fts5(content)")
+        conn.execute(
+            "INSERT INTO chunks (id, content, metadata, source_file) VALUES (?, ?, '{}', 'test')",
+            ("synthetic-marker", marker),
+        )
+        conn.execute("INSERT INTO chunks_fts_operational (content) VALUES (?)", (marker,))
+        conn.commit()
+    for index in range(21):
+        (queue_dir / f"watcher-{index:02}.jsonl").write_text("{}\n", encoding="utf-8")
+    (queue_dir / "ignored.txt").write_text("ignored", encoding="utf-8")
+    log_path.write_text("".join(f"{db_path.parent}/drain event={index}\n" for index in range(10)), encoding="utf-8")
+    reader = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+
+    class PrivateReader:
+        def _read_cursor(self):
+            return reader.cursor()
+
+    try:
+        yield {
+            "db_path": db_path,
+            "queue_dir": queue_dir,
+            "log_path": log_path,
+            "marker": marker,
+            "receipt": {"chunk_id": "synthetic-marker", "queued": True, "status": "QUEUED", "extra": "ignored"},
+            "writers": {"drain_writes": 8, "hotlane_embeddings": 4, "errors": []},
+            "readonly_store": PrivateReader(),
+            "failure_measured_at": time.perf_counter(),
+            "measured_roundtrip_seconds": 2.125,
+        }
+    finally:
+        reader.close()
+
+
+def test_concurrent_writer_sla_marker_failure_reports_private_diagnostics(sla_diagnostic_context):
+    """Report committed fixture state without rerunning concurrent store/search."""
+    payload = {"total": 1, "results": [{"chunk_id": "synthetic-unrelated", "content": "unrelated"}]}
+    original = AssertionError(payload)
+    original.add_note("prior assertion note")
     with pytest.raises(AssertionError) as failure:
-        test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp_path, monkeypatch)
+        try:
+            raise original
+        except AssertionError as error:
+            _attach_concurrent_writer_sla_diagnostics(error, **sla_diagnostic_context)
+            raise
 
-    assert "unrelated" in str(failure.value)
-    notes = getattr(failure.value, "__notes__", [])
-    assert len(notes) == 1
-    diagnostic = json.loads(notes[0].removeprefix("concurrent-writer-sla diagnostics: "))
-    assert diagnostic["measured_roundtrip_seconds"] >= 2.0
-    assert diagnostic["receipt"]["queued"] is True
-    assert diagnostic["writers"]["drain_writes"] >= 8
-    assert diagnostic["writers"]["hotlane_embeddings"] > 0
-    assert isinstance(diagnostic["database"]["marker_rows"], int)
-    assert isinstance(diagnostic["database"]["fts_marker_rows"], int)
+    assert failure.value is original
+    assert failure.value.args == (payload,)
+    notes = failure.value.__notes__
+    assert len(notes) == 2 and notes[0] == "prior assertion note"
+    assert notes[1].startswith("concurrent-writer-sla diagnostics: ")
+    diagnostic = json.loads(notes[1].removeprefix("concurrent-writer-sla diagnostics: "))
+    assert diagnostic["measured_roundtrip_seconds"] == 2.125
+    assert diagnostic["receipt"] == {"chunk_id": "synthetic-marker", "queued": True, "status": "QUEUED", "action": None}
+    assert diagnostic["writers"] == sla_diagnostic_context["writers"]
+    assert diagnostic["errors"] == {}
+    for key in ("marker_rows", "receipt_rows", "fts_marker_rows", "operational_fts_marker_rows"):
+        assert diagnostic["database"][key] == 1
+    assert isinstance(diagnostic["database"]["data_version"], int)
     assert isinstance(diagnostic["reader_data_version"], int)
-    assert "queue_files" in diagnostic and "drain_log_tail" in diagnostic
-    assert str(tmp_path) not in notes[0]
+    assert len(diagnostic["queue_files"]) == 20
+    assert all(name.endswith(".jsonl") for name in diagnostic["queue_files"])
+    assert diagnostic["queue_files_truncated"] is True
+    assert diagnostic["drain_log_tail"] == [f"<fixture>/drain event={index}" for index in range(2, 10)]
+    assert str(sla_diagnostic_context["db_path"].parent) not in notes[1]
     assert diagnostic["observation_started_at"] >= diagnostic["failure_measured_at"]
+    assert diagnostic["observation_seconds"] >= 0
 
 
-def test_concurrent_writer_sla_diagnostic_error_preserves_original_assertion(tmp_path, monkeypatch):
-    """An observer failure cannot replace the missing-marker AssertionError."""
-    from brainlayer.mcp import search_handler
-
-    async def missing_marker(**_kwargs):
-        return [], {"total": 1, "results": [{"content": "unrelated"}]}
+def test_concurrent_writer_sla_diagnostic_error_preserves_original_assertion(sla_diagnostic_context, monkeypatch):
+    """An observer failure cannot replace the original AssertionError or its notes."""
 
     def broken_observer(**_kwargs):
         raise RuntimeError("synthetic observation error")
 
-    monkeypatch.setattr(search_handler, "_search", missing_marker)
-    monkeypatch.setattr(sys.modules[__name__], "_concurrent_writer_sla_diagnostics", broken_observer, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "_concurrent_writer_sla_diagnostics", broken_observer)
+    original = AssertionError({"total": 0, "results": []})
+    original.add_note("prior assertion note")
     with pytest.raises(AssertionError) as failure:
-        test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp_path, monkeypatch)
-    assert "unrelated" in str(failure.value)
-    assert getattr(failure.value, "__notes__", []) == ["concurrent-writer-sla diagnostics unavailable: RuntimeError"]
+        try:
+            raise original
+        except AssertionError as error:
+            _attach_concurrent_writer_sla_diagnostics(error, **sla_diagnostic_context)
+            raise
+    assert failure.value is original
+    assert failure.value.args == ({"total": 0, "results": []},)
+    assert failure.value.__notes__ == [
+        "prior assertion note",
+        "concurrent-writer-sla diagnostics unavailable: RuntimeError",
+    ]
+
+
+def test_concurrent_writer_sla_diagnostics_distinguish_absent_marker_and_receipt(sla_diagnostic_context):
+    """Missing rows report zero instead of inheriting supplied writer counts."""
+    sla_diagnostic_context["marker"] = "absentmarker"
+    sla_diagnostic_context["receipt"] = {"chunk_id": "missing-receipt", "queued": True}
+    original = AssertionError("marker absent")
+    _attach_concurrent_writer_sla_diagnostics(original, **sla_diagnostic_context)
+    diagnostic = json.loads(original.__notes__[0].removeprefix("concurrent-writer-sla diagnostics: "))
+    assert diagnostic["errors"] == {}
+    for key in ("marker_rows", "receipt_rows", "fts_marker_rows", "operational_fts_marker_rows"):
+        assert diagnostic["database"][key] == 0
+    assert diagnostic["writers"] == sla_diagnostic_context["writers"]
+
+
+@pytest.mark.parametrize("fault", ["queue", "drain_log", "reader", "fts", "database"])
+def test_concurrent_writer_sla_diagnostics_report_partial_observer_errors(sla_diagnostic_context, fault):
+    """One unavailable observation stays visible and preserves the other evidence."""
+    context = sla_diagnostic_context
+    if fault == "queue":
+        context["queue_dir"] = context["queue_dir"] / "missing"
+    elif fault == "drain_log":
+        context["log_path"] = context["log_path"].with_name("missing.log")
+    elif fault == "reader":
+
+        class BrokenReader:
+            def _read_cursor(self):
+                raise RuntimeError("synthetic reader unavailable")
+
+        context["readonly_store"] = BrokenReader()
+    elif fault == "fts":
+        with sqlite3.connect(context["db_path"]) as conn:
+            conn.execute("DROP TABLE chunks_fts_operational")
+    else:
+        context["db_path"] = context["db_path"].with_name("missing.db")
+    original = AssertionError("marker absent")
+    with pytest.raises(AssertionError) as failure:
+        try:
+            raise original
+        except AssertionError as error:
+            original_traceback = error.__traceback__
+            _attach_concurrent_writer_sla_diagnostics(error, **context)
+            raise
+    assert failure.value is original
+    assert failure.value.__traceback__ is original_traceback
+    assert failure.value.args == ("marker absent",)
+    assert len(failure.value.__notes__) == 1
+    diagnostic = json.loads(failure.value.__notes__[0].removeprefix("concurrent-writer-sla diagnostics: "))
+    error_key = "operational_fts_marker_rows" if fault == "fts" else fault
+    error_type = (
+        "RuntimeError"
+        if fault == "reader"
+        else ("OperationalError" if fault in ("fts", "database") else "FileNotFoundError")
+    )
+    assert diagnostic["errors"] == {error_key: error_type}
+    assert diagnostic["writers"] == context["writers"]
+    if fault == "database":
+        assert diagnostic["database"] == {}
+        assert not context["db_path"].exists()
+    else:
+        assert diagnostic["database"]["marker_rows"] == 1
+        assert diagnostic["database"]["receipt_rows"] == 1
+    if fault != "queue":
+        assert len(diagnostic["queue_files"]) == 20
+    if fault != "drain_log":
+        assert len(diagnostic["drain_log_tail"]) == 8
 
 
 def test_concurrent_writer_sla_stuck_writer_fails_with_bounded_diagnostic(tmp_path, monkeypatch):
