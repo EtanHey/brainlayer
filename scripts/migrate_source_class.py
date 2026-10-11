@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the supervised source_class migration on an offline database copy."""
+"""Run the source_class migration on a copy or a supervised, gated live database."""
 
 from __future__ import annotations
 
@@ -18,12 +18,16 @@ from brainlayer.source_class_migration import migrate_source_class, reclassify_t
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, required=True, help="offline database copy")
+    parser.add_argument(
+        "--db", type=Path, required=True, help="copy or canonical DB (writes require the supervised gate)"
+    )
     parser.add_argument("--git-sha", required=True, help="exact 40-character migration commit SHA")
     parser.add_argument("--actor", required=True, help="operator identity for the ledger")
     parser.add_argument("--batch-size", type=int, default=5_000)
-    parser.add_argument("--t3-only", action="store_true", help="re-derive only stored T3 classes; dry-run by default")
-    parser.add_argument("--apply", action="store_true", help="apply the --t3-only migration to the offline copy")
+    parser.add_argument("--t3-only", action="store_true", help="correct desktop T3 rows; read-only dry-run by default")
+    parser.add_argument(
+        "--apply", action="store_true", help="apply --t3-only; canonical writes require the supervised gate"
+    )
     args = parser.parse_args()
     if args.apply and not args.t3_only:
         parser.error("--apply requires --t3-only; the legacy supervised migration already applies")

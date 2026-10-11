@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,15 +39,21 @@ def _resolved(path: str | Path) -> Path:
     return Path(path).expanduser().resolve(strict=False)
 
 
-def _validate_target(db_path: str | Path, git_sha: str) -> Path:
+def _validate_target(db_path: str | Path, git_sha: str, *, read_only: bool = False) -> Path:
     if not _SHA_RE.fullmatch(git_sha):
         raise ValueError("git_sha must be an exact 40-character hexadecimal commit SHA")
     path = _resolved(db_path)
-    if path == _resolved(get_db_path()) and os.environ.get("BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP") != "1":
-        raise ValueError(
-            "source_class migration refuses the canonical BrainLayer database unless "
-            "BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP=1 is set for the supervised live run"
-        )
+    for canonical in (get_db_path(), Path.home() / ".local/share/brainlayer/brainlayer.db"):
+        canonical = _resolved(canonical)
+        if path == canonical or (path.exists() and canonical.exists() and path.samefile(canonical)):
+            if not read_only and os.environ.get("BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP") != "1":
+                raise ValueError(
+                    "source_class migration refuses the canonical BrainLayer database unless "
+                    "BRAINLAYER_OFFLINE_MIGRATOR_GATED_SWAP=1 is set for the supervised live run"
+                )
+            # A hardlink must use the canonical WAL/SHM paths as well as the gate.
+            path = canonical
+            break
     if not path.is_file():
         raise FileNotFoundError(path)
     return path
@@ -359,12 +366,22 @@ def _checkpoint_full(conn: sqlite3.Connection) -> None:
         raise RuntimeError("WAL checkpoint blocked; quiesce all writers before retrying")
 
 
+_T3_ORIGIN = """(source = 't3' OR source_file LIKE '%/.codex/sessions/%'
+                   OR provenance_class IN ('t3-thread', 't3-app-session'))
+                AND source NOT IN ('chatgpt', 'claude_desktop', 'gemini_desktop')"""
+_T3_CANDIDATE = f"source_class = 'desktop' AND {_T3_ORIGIN}"
+
+
+def _changed_ids_hash(ids: list[str]) -> str:
+    return hashlib.sha256(json.dumps(sorted(ids), separators=(",", ":")).encode()).hexdigest()
+
+
 def _t3_distribution(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         f"{provenance}/{source_class or 'NULL'}": int(count)
         for provenance, source_class, count in conn.execute(
-            """SELECT provenance_class, source_class, COUNT(*) FROM chunks
-               WHERE provenance_class IN ('t3-thread', 't3-app-session')
+            f"""SELECT provenance_class, source_class, COUNT(*) FROM chunks
+               WHERE {_T3_ORIGIN}
                GROUP BY provenance_class, source_class ORDER BY provenance_class, source_class"""
         )
     }
@@ -378,17 +395,12 @@ def reclassify_t3_source_class(
     batch_size: int = 5_000,
     apply: bool = False,
 ) -> dict[str, Any]:
-    """Re-derive only T3 rows on a quiesced offline copy; default is read-only.
+    """Correct desktop T3 rows on a quiesced copy or gated live DB; default is read-only.
 
     This is separate from the initial NULL backfill and its one-time ledger:
     existing desktop labels must be corrected even if that ledger already exists.
     """
-    path = _resolved(db_path)
-    for canonical in (get_db_path(), Path.home() / ".local/share/brainlayer/brainlayer.db"):
-        canonical = _resolved(canonical)
-        if path == canonical or (path.exists() and canonical.exists() and path.samefile(canonical)):
-            raise ValueError("T3 source_class migration refuses the canonical database and its aliases")
-    path = _validate_target(path, git_sha)
+    path = _validate_target(db_path, git_sha, read_only=not apply)
     if not 5_000 <= batch_size <= 10_000:
         raise ValueError("batch_size must be between 5,000 and 10,000")
     if not actor.strip():
@@ -397,45 +409,57 @@ def reclassify_t3_source_class(
     conn = sqlite3.connect(f"{path.as_uri()}?mode={'rw' if apply else 'ro'}", uri=True, timeout=60.0)
     try:
         before = _t3_distribution(conn)
-        candidate_rows = int(
-            conn.execute(
-                """SELECT COUNT(*) FROM chunks
-               WHERE provenance_class IN ('t3-thread', 't3-app-session')
-               AND source_class IS NOT 'cli-agent'"""
-            ).fetchone()[0]
-        )
+        candidate_rows = int(conn.execute(f"SELECT COUNT(*) FROM chunks WHERE {_T3_CANDIDATE}").fetchone()[0])
         updated_rows = batches = 0
+        changed_ids: list[str] = []
+        ledger_event_ids: list[str] = []
+        run_id = str(uuid.uuid4())
         if apply and candidate_rows:
             _load_vec0_if_needed(conn)
             _checkpoint_full(conn)
+            _ensure_ledgers(conn)
+            conn.commit()
             last_rowid = -(2**63)
             while True:
                 conn.execute("BEGIN IMMEDIATE")
                 rows = conn.execute(
-                    """SELECT rowid, source_file, provenance_class, source_class FROM chunks
-                       WHERE rowid > ? AND provenance_class IN ('t3-thread', 't3-app-session')
-                       AND source_class IS NOT 'cli-agent' ORDER BY rowid LIMIT ?""",
+                    f"""SELECT rowid, id FROM chunks
+                        WHERE rowid > ? AND {_T3_CANDIDATE} ORDER BY rowid LIMIT ?""",
                     (last_rowid, batch_size),
                 ).fetchall()
                 if not rows:
                     conn.commit()
                     break
-                updates = [
-                    (
-                        derive_source_class(str(source_file or ""), provenance_class=provenance),
-                        rowid,
-                        provenance,
-                        prior_class,
-                    )
-                    for rowid, source_file, provenance, prior_class in rows
-                ]
                 cursor = conn.executemany(
-                    "UPDATE chunks SET source_class = ? WHERE rowid = ? AND provenance_class = ? AND source_class IS ?",
-                    updates,
+                    f"UPDATE chunks SET source_class = 'cli-agent' WHERE rowid = ? AND {_T3_CANDIDATE}",
+                    [(rowid,) for rowid, _ in rows],
+                )
+                if cursor.rowcount != len(rows):
+                    raise RuntimeError("T3 candidate rows changed inside the migration batch")
+                batch_ids = sorted(str(chunk_id) for _, chunk_id in rows)
+                event_id = f"source-class:t3:{run_id}:{batches + 1}"
+                details = {
+                    "run_id": run_id,
+                    "batch": batches + 1,
+                    "changed_ids": batch_ids,
+                    "changed_ids_sha256": _changed_ids_hash(batch_ids),
+                    "changed_count": cursor.rowcount,
+                    "prior_class": "desktop",
+                    "result_class": "cli-agent",
+                }
+                conn.execute(
+                    """INSERT INTO migration_events (
+                        id, from_pattern, to_pattern, commit_hash, repo, detected_at,
+                        confidence, memories_weakened, actor, path, affected_objects, status, details
+                    ) VALUES (?, 'desktop T3 rows', 'cli-agent', ?, 'brainlayer', ?,
+                              1.0, 0, ?, ?, '["chunks.source_class"]', 'success', ?)""",
+                    (event_id, git_sha.lower(), time.time(), actor, str(path), json.dumps(details, sort_keys=True)),
                 )
                 updated_rows += cursor.rowcount
                 last_rowid = int(rows[-1][0])
                 conn.commit()
+                changed_ids.extend(batch_ids)
+                ledger_event_ids.append(event_id)
                 batches += 1
                 if batches % 3 == 0:
                     _checkpoint_full(conn)
@@ -450,8 +474,13 @@ def reclassify_t3_source_class(
             "candidate_rows": candidate_rows,
             "updated_rows": updated_rows,
             "batches": batches,
+            "ledger_event_ids": ledger_event_ids,
+            "changed_ids_sha256": _changed_ids_hash(changed_ids),
             "before": before,
             "after": _t3_distribution(conn),
         }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
