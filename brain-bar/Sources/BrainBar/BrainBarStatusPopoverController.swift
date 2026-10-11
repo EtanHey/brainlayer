@@ -46,9 +46,20 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         dashboardPanelController.statusItemButton = statusItemForTesting.button
     }
 
-    /// The menu's first, informational row.
+    /// Includes the attention prefix and ellipsis, so long errors cannot widen the menu.
+    private static let statusLineTitleMaxCharacters = 72
+
+    /// The menu's first, informational row; its tooltip retains the full reason.
     static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
-        badge.badgeOn ? "Needs attention: \(badge.reason)" : "Nothing needs attention"
+        guard badge.badgeOn else { return "Nothing needs attention" }
+        let prefix = "Needs attention: "
+        let title = prefix + badge.reason
+        guard title.count > statusLineTitleMaxCharacters else { return title }
+
+        let reasonPrefix = badge.reason.prefix(statusLineTitleMaxCharacters - prefix.count - 1)
+        let boundary = reasonPrefix.lastIndex(where: { $0.isWhitespace }) ?? reasonPrefix.endIndex
+        let shortenedReason = String(reasonPrefix[..<boundary]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return prefix + shortenedReason + "…"
     }
 
     /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.
@@ -217,6 +228,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             }
         }
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
+        statusLineItem.toolTip = badgePresentation.badgeOn ? badgePresentation.reason : nil
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
 #if BRAINBAR_UI
         if let title = Self.showLogItemTitle(
@@ -232,6 +244,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         contextMenuForTesting.delegate = self
         contextMenuForTesting.autoenablesItems = false
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
+        statusLineItem.toolTip = badgePresentation.badgeOn ? badgePresentation.reason : nil
         statusLineItem.isEnabled = false
         contextMenuForTesting.addItem(statusLineItem)
 #if BRAINBAR_UI
