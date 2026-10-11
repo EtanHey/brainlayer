@@ -143,7 +143,9 @@ importer reacquires it and rechecks IDs before upserting precomputed vectors;
 content already persisted by another writer is skipped. Other indexing failures
 still fail. Indexed chunks with unchanged scrubbed content skip both embedding
 and upsert, so repeat runs do not increment seen counts or add dedupe audit rows.
-Each run embeds at most 200 changed chunks across both source files. CLI output
+Each run embeds at most 200 changed chunks across both source files. Within each
+source, changed chunks are ordered newest first before applying the cap; V2
+remains the preferred source. CLI output
 and health report `chunks_deferred` for the remainder, which later intervals
 continue using stable IDs. First V2 execution imports historical settled messages
 across as many bounded runs as needed. Verify loaded argv,

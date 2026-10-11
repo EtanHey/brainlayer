@@ -403,6 +403,11 @@ def _changed_chunks(chunks, store):
     return [chunk for chunk in chunks if existing.get(chunk.metadata["chunk_id"]) != chunk.content]
 
 
+def _newest_chunk_key(chunk):
+    created = datetime.fromisoformat(chunk.metadata["created_at"].replace("Z", "+00:00"))
+    return created.replace(tzinfo=created.tzinfo or timezone.utc), chunk.metadata["chunk_id"]
+
+
 def _index_chunks(
     chunks, *, source_file: str, project: str | None, db_path: Path, budget: _IndexBudget | None = None
 ) -> int:
@@ -419,6 +424,7 @@ def _index_chunks(
     # Fail fast on an already-busy writer, then release it before model loading.
     with open_writer_store(db_path) as store:
         changed = _changed_chunks(eligible, store)
+    changed.sort(key=_newest_chunk_key, reverse=True)
     selected = changed[: budget.remaining]
     budget.remaining -= len(selected)
     budget.deferred += len(changed) - len(selected)

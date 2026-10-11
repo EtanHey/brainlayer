@@ -618,7 +618,8 @@ def test_v2_partial_embeddings_fail_health_preserve_rows_and_replay(tmp_path, mo
     VectorStore(destination).close()
 
     def partial(chunks, **kwargs):
-        return [EmbeddedChunk(chunk=chunks[0], embedding=[0.1] * 1024)]
+        target = next(chunk for chunk in chunks if chunk.metadata["chunk_id"] == "t3:v2-a:v2-user:0")
+        return [EmbeddedChunk(chunk=target, embedding=[0.1] * 1024)]
 
     monkeypatch.setattr("brainlayer.index_new.embed_chunks", partial)
     with pytest.raises(RuntimeError, match="indexed 1 of 2 eligible chunks"):
@@ -1020,3 +1021,30 @@ def test_s2_precomputed_vectors_reject_mismatched_scrubbed_content():
     computed = [EmbeddedChunk(replace(chunk, content="stale text"), [0.1] * 1024)]
     with pytest.raises(ValueError, match="do not match admitted"):
         index_new.index_chunks_to_sqlite([chunk], "source.sqlite", store=Store(), precomputed_embeddings=computed)
+
+
+def test_s2_cap_indexes_newest_messages_first(tmp_path, monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest import t3
+    from brainlayer.vector_store import VectorStore
+
+    source = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET created_at='2026-03-06T00:00:00Z' WHERE message_id='v2-user'"
+        )
+        conn.execute(
+            "UPDATE orchestration_v2_projection_messages SET created_at='2026-10-11T15:00:00Z' WHERE message_id='v2-assistant'"
+        )
+    destination = tmp_path / "copy.db"
+    VectorStore(destination).close()
+    monkeypatch.setattr(t3, "DEFAULT_T3_MAX_CHANGED_CHUNKS", 1)
+    embedded = []
+
+    def embed(chunks, **kwargs):
+        embedded.extend(chunks)
+        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    t3.ingest_t3(source, db_path=destination, health_path=None)
+    assert [c.metadata["chunk_id"] for c in embedded] == ["t3:v2-b:v2-assistant:0"]
