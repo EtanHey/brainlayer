@@ -231,8 +231,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func groupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
         let watcher = watcherStatus
         // The independent health reader can measure a failure before launchd finishes.
-        if !hasCompletedLaunchdSample, isGroupEnabled(group), !(group == .ingest && watcher.needsAttention) {
-            return .init(health: .checking, attentionReason: nil, lastRunText: "Checking…", nextRunText: "Checking…")
+        if !hasCompletedLaunchdSample, !(group == .ingest && watcher.needsAttention) {
+            let disabledReason = group.disabledJobReason(settings: config.launchdJobs)
+            return .init(health: disabledReason == nil ? .checking : .unhealthy,
+                         attentionReason: disabledReason, lastRunText: "Checking…", nextRunText: "Checking…")
         }
         return group.status(
             settings: config.launchdJobs,

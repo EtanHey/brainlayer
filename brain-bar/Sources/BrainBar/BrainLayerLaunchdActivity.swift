@@ -216,6 +216,10 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         .hotlane,
     ]
 
+    func disabledJobReason(settings: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]) -> String? {
+        jobs.first { settings[$0]?.enabled != true }.map { "\($0.humanGroupLabel) is disabled." }
+    }
+
     func status(
         settings: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting],
         observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation],
