@@ -628,6 +628,15 @@ def test_update_brainbar_help_renders_recovery_templates_and_stops_on_missing_pr
     assert "do not substitute a PATH Python or create a new setup" in recovery
     assert 'cp "$agents/' not in recovery
     assert "__HOME__" not in recovery
+    resolver = 'db="$("$venv/bin/python" -I -c \'from brainlayer.paths import resolve_db_path; print(resolve_db_path())\')" || exit'
+    database_guard = 'test "$db" = "$approved_db" && test -f "$db" || exit'
+    assert resolver in recovery
+    assert database_guard in recovery
+    assert recovery.index('test -x "$venv/bin/python"') < recovery.index(resolver)
+    assert recovery.index('test -f "$app/Contents/Resources/install-services.py"') < recovery.index(resolver)
+    assert recovery.index(resolver) < recovery.index(database_guard) < recovery.index(command)
+    assert recovery.index(command) < recovery.index("launchctl bootstrap")
+    assert "assumes this shell already has the approved account's configured environment" in recovery
     activation = [line.strip() for line in recovery.splitlines() if line.strip().startswith("launchctl ")]
     assert activation == [
         'launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/com.brainlayer.brainbar-daemon.plist"',

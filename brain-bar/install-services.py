@@ -108,6 +108,8 @@ def prepare(args, home, uid, verify):
     db = owned(args.db or home / ".local/share/brainlayer/brainlayer.db", home, uid, missing=True)
     if any(resource_alias(db, item) for item in (socket, Path(str(socket) + ".lock"))):
         raise ValueError("database must not alias the socket or its derived lock")
+    if any(resource_alias(db, home / "Library/LaunchAgents" / (label + ".plist")) for label in LABELS):
+        raise ValueError("database must not alias an installed LaunchAgent plist")
     envfile = owned(home / ".config/brainlayer/brainlayer.env", home, uid, missing=True)
     env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "BRAINBAR_SOCKET_PATH": str(socket),
            "BRAINLAYER_MCP_SOCKET": str(socket), "BRAINBAR_DB_PATH": str(db), "BRAINLAYER_DB": str(db),

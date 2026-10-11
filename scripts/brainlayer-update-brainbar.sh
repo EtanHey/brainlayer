@@ -70,15 +70,19 @@ recovery-no-sudo:
   with unresolved placeholders. Set the paths below to the existing approved current-account
   installation and endpoint/database. Stop if that account-owned installed venv
   or the bundled renderer is unavailable; do not substitute a PATH Python or create a new setup.
+  Path resolution below assumes this shell already has the approved account's configured environment;
+  it does not source an env file. Stop unless the resolved path matches the approved existing database.
   Render/install the user LaunchAgents, then rerun this script:
 
     app="/Applications/BrainBar.app"
     venv="/absolute/path/to/account-owned/installed/venv"
     socket="/absolute/path/to/existing/approved/socket"
-    db="/absolute/path/to/existing/approved/database"
+    approved_db="/absolute/path/to/existing/approved/database"
     domain="gui/\$(id -u)"
     test -x "\$venv/bin/python" && test -x "\$venv/bin/brainlayer" || exit
     test -f "\$app/Contents/Resources/install-services.py" || exit
+    db="\$("\$venv/bin/python" -I -c 'from brainlayer.paths import resolve_db_path; print(resolve_db_path())')" || exit
+    test "\$db" = "\$approved_db" && test -f "\$db" || exit
     "\$venv/bin/python" -I "\$app/Contents/Resources/install-services.py" \
       --app "\$app" --python "\$venv/bin/python" --cli "\$venv/bin/brainlayer" \
       --socket "\$socket" --db "\$db" --install || exit

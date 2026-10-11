@@ -6,9 +6,11 @@ import os
 import plistlib
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from argparse import Namespace
 from pathlib import Path
 
@@ -23,7 +25,7 @@ spec.loader.exec_module(service)
 @pytest.fixture
 def fixture():
     scratch = tempfile.TemporaryDirectory(prefix="bbs-", dir="/tmp")
-    home = Path(scratch.name) / "home &| <case>"
+    home = Path(scratch.name) / "home &| <café>"
     home.mkdir(mode=0o700)
     app = home / "Applications/BrainBar.app"
     resources = app / "Contents/Resources/LaunchAgents"
@@ -290,3 +292,135 @@ def test_distinct_existing_database_and_lock_remain_valid(fixture, monkeypatch):
     assert prepare(fixture, monkeypatch)
     assert all(path.read_bytes() == b"keep data" for path in paths)
     assert not (home / "Library").exists()
+
+
+def database_bytes(path, payload):
+    if payload == "sentinel":
+        path.write_bytes(b"database sentinel must survive")
+    else:
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE preserved (value TEXT)")
+            db.execute("INSERT INTO preserved VALUES ('scratch-only memory')")
+    path.chmod(0o600)
+    return path.read_bytes()
+
+
+@pytest.mark.parametrize("label", service.LABELS)
+@pytest.mark.parametrize("alias", ["exact", "case", "unicode"])
+@pytest.mark.parametrize("payload", ["sentinel", "sqlite", "missing"])
+def test_database_cannot_alias_either_installed_plist(fixture, monkeypatch, label, alias, payload):
+    home, _, args = fixture
+    target = home / "Library/LaunchAgents" / (label + ".plist")
+    before = None
+    if payload != "missing":
+        target.parent.mkdir(parents=True)
+        before = database_bytes(target, payload)
+    db = target.with_name(target.name.upper()) if alias == "case" else target
+    if alias == "unicode":
+        db = Path(unicodedata.normalize("NFD", str(target)))
+    args.db = str(db)
+    monkeypatch.setattr(service.subprocess, "run", lambda *a, **kw: pytest.fail("no external command"))
+    # A differently normalized home is already refused by the containment guard.
+    reason = "inside current account home" if alias == "unicode" else "database must not alias"
+    with pytest.raises(ValueError, match=reason):
+        plists = service.prepare(args, home, os.getuid(), lambda command: None)
+        service.install(plists, home, os.getuid())
+    if before is not None:
+        assert target.read_bytes() == before
+        assert set(target.parent.iterdir()) == {target}
+    else:
+        assert not (home / "Library").exists()
+    assert not (home / ".local").exists()
+
+
+@pytest.mark.parametrize("label", service.LABELS)
+@pytest.mark.parametrize("payload", ["sentinel", "sqlite"])
+def test_database_plist_identity_alias_is_refused(fixture, monkeypatch, label, payload):
+    home, _, args = fixture
+    target = home / "Library/LaunchAgents" / (label + ".plist")
+    target.parent.mkdir(parents=True)
+    db = home / "separate.db"
+    before = {path: database_bytes(path, payload) for path in (db, target)}
+    args.db = str(db)
+    # Identity branch remains required independently of lexical case/Unicode matching.
+    monkeypatch.setattr(service.os.path, "samefile", lambda left, right: Path(left) == db and Path(right) == target)
+    with pytest.raises(ValueError, match="database must not alias"):
+        plists = service.prepare(args, home, os.getuid(), lambda command: None)
+        service.install(plists, home, os.getuid())
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert set(target.parent.iterdir()) == {target}
+
+
+@pytest.mark.parametrize("label", service.LABELS)
+@pytest.mark.parametrize("alias", ["symlink", "hardlink"])
+def test_linked_database_plist_alias_preserves_bytes(fixture, label, alias):
+    home, _, args = fixture
+    target = home / "Library/LaunchAgents" / (label + ".plist")
+    target.parent.mkdir(parents=True)
+    before = database_bytes(target, "sqlite")
+    db = home / "alias.db"
+    if alias == "symlink":
+        db.symlink_to(target)
+    else:
+        os.link(target, db)
+    args.db = str(db)
+    with pytest.raises(ValueError):
+        plists = service.prepare(args, home, os.getuid(), lambda command: None)
+        service.install(plists, home, os.getuid())
+    assert db.read_bytes() == target.read_bytes() == before
+    assert set(target.parent.iterdir()) == {target}
+
+
+@pytest.mark.parametrize("payload", ["sentinel", "sqlite", "missing"])
+def test_unrelated_database_preserved_and_missing_setup_still_installs(fixture, monkeypatch, payload):
+    home, _, args = fixture
+    db = home / "memory.db"
+    args.db = str(db)
+    before = database_bytes(db, payload) if payload != "missing" else None
+    plists = prepare(fixture, monkeypatch)
+    monkeypatch.setattr(service.subprocess, "run", lambda *a, **kw: pytest.fail("no external command"))
+    service.install(plists, home, os.getuid())
+    for name, expected in plists.items():
+        assert plistlib.loads((home / "Library/LaunchAgents" / name).read_bytes()) == expected
+    if before is not None:
+        assert db.read_bytes() == before
+    else:
+        assert not db.exists()
+
+
+@pytest.mark.parametrize("label", service.LABELS)
+@pytest.mark.parametrize("mode", ["--render-only", "--install"])
+def test_cli_refuses_database_plist_alias_before_writes(fixture, monkeypatch, capsys, label, mode):
+    home, _, args = fixture
+    target = home / "Library/LaunchAgents" / (label + ".plist")
+    target.parent.mkdir(parents=True)
+    before = database_bytes(target, "sqlite")
+    monkeypatch.setattr(service.pwd, "getpwuid", lambda uid: Namespace(pw_dir=str(home)))
+    calls = []
+    monkeypatch.setattr(service.subprocess, "run", lambda command, **kwargs: calls.append(command))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "install-services.py",
+            "--app",
+            args.app,
+            "--python",
+            args.python,
+            "--cli",
+            args.cli,
+            "--socket",
+            args.socket,
+            "--db",
+            str(target),
+            mode,
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        service.main()
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert "database must not alias an installed LaunchAgent plist" in output.err
+    assert not output.out
+    assert len(calls) == 1 and calls[0][0] == "/usr/bin/codesign"
+    assert target.read_bytes() == before and set(target.parent.iterdir()) == {target}
