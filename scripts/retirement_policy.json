@@ -640,6 +640,16 @@
         "target": "import socket"
       }
     },
+    "29a60d6f1e4e9bee4347fc0e4b6f66b899e7af3e10de11f0d48daf718d15b7ed": {
+      "non_cloud_purpose": "Read-only local T3 SQLite schema inspection to select V1/V2 projections; mode=ro, no cloud model endpoint or data send.",
+      "site": {
+        "call_sha256": "25a1e46661f06cd04683a2cfe94626ea5e0dd565ad7d279e215c2dbde80f95d1",
+        "kind": "generic_send",
+        "owner": "<module>._tables",
+        "path": "src/brainlayer/t3_sources.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "29e5d7bc28738e7908a72c573af6bbc8ccabf39eb5b88b1ea9438f419a482aab": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ci_ratchet_table.py <module>",
       "site": {
@@ -2482,16 +2492,6 @@
         "target": "subprocess.SubprocessError"
       }
     },
-    "90276fddd3be39f7ad2915552bd70babab966a2d520a1e2c69b655cfcac0c70f": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/t3_provenance.py <module>.t3_app_codex_session_ids",
-      "site": {
-        "call_sha256": "a0e3ac87abbbc206887be7994a42730236616f008f4831362a866c2a50ec662e",
-        "kind": "generic_send",
-        "owner": "<module>.t3_app_codex_session_ids",
-        "path": "src/brainlayer/t3_provenance.py",
-        "target": "sqlite3.connect"
-      }
-    },
     "90527e4bc3ac91388ddd254c9e76671904968e73cb1d74defb6c6ce6f7a63970": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/index_completeness.py <module>",
       "site": {
@@ -4294,6 +4294,16 @@
         "owner": "<module>.WriteQueue.submit",
         "path": "src/brainlayer/pipeline/write_queue.py",
         "target": "self._queue.put"
+      }
+    },
+    "f11e39e6966ddcbb9df3d7a5816b5a98c51c8b3ac69a41ffb5b9e6bb5cfe2724": {
+      "non_cloud_purpose": "Read-only local T3 SQLite runtime/session provenance lookup; mode=ro, no cloud model endpoint or data send.",
+      "site": {
+        "call_sha256": "a0e3ac87abbbc206887be7994a42730236616f008f4831362a866c2a50ec662e",
+        "kind": "generic_send",
+        "owner": "<module>._source_codex_session_ids",
+        "path": "src/brainlayer/t3_provenance.py",
+        "target": "sqlite3.connect"
       }
     },
     "f180996fcf4e66be613dcba188bcc334e19f816c5abaa9d9f6ab5531e4b40e16": {
