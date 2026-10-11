@@ -159,6 +159,9 @@ final class MCPRouter: @unchecked Sendable {
         let registry = PendingStoreDrainRegistry()
         let backupGate = PendingStoreBackupGate()
         let onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
+#if DEBUG
+        var onUnreadableTargetRetryForTesting: (@Sendable (String) -> Void)?
+#endif
 
         init(
             queue: DispatchQueue,
@@ -276,6 +279,11 @@ final class MCPRouter: @unchecked Sendable {
 
 #if DEBUG
     var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
+
+    // Configure before releasing the injected drain queue in a synthetic test.
+    func observeUnreadablePendingStoreRetryForTesting(_ observer: @escaping @Sendable (String) -> Void) {
+        pendingStoreDrainScheduler.onUnreadableTargetRetryForTesting = observer
+    }
 #endif
 
     private static func resolveToolProfile(_ explicitProfile: String?) -> ToolProfile {
@@ -1166,6 +1174,9 @@ final class MCPRouter: @unchecked Sendable {
                 delay: delay,
                 flushedAny: false
             )
+#if DEBUG
+            scheduler.onUnreadableTargetRetryForTesting?(chunkID)
+#endif
             return
         }
         guard before.identityKeys.contains(targetIdentity) else {
