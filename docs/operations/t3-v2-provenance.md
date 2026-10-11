@@ -53,8 +53,8 @@ a transaction; investigate any mismatch before changing rows.
 
 ## Supervised in-place correction
 
-1. Stop the watcher, BrainBar daemon, and any legacy enrichment writers. Verify
-   that no writer remains. Keep retired enrichment services stopped afterward.
+1. Stop the watcher, BrainBar daemon, and any other database writer. Verify
+   that no writer remains. Keep retired services stopped afterward.
 2. Verify an existing backup, its integrity, and its chunk count before continuing.
    On a storage-constrained Mac, rehearse on an APFS clone of that backup; never
    start a fresh canonical `VACUUM INTO` without enough free space.
