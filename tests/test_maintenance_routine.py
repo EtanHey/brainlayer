@@ -171,41 +171,85 @@ def test_dry_run_runs_gates_and_reports_without_moving_queue_files(tmp_path, mon
 
 
 def test_weekly_backup_waits_for_daily_then_reuses_verified_receipt(tmp_path, monkeypatch):
+    import time as stdlib_time
+    from types import SimpleNamespace
+
     from brainlayer import maintenance
 
+    original_sleep = stdlib_time.sleep
+    original_monotonic = stdlib_time.monotonic
     config = _config(tmp_path, now=dt.datetime(2026, 9, 27, 4, 0, tzinfo=dt.UTC))
     config.backup_staging_dir = tmp_path / "staging"
     config.backup_log_path = tmp_path / "backup.log"
     config.backup_wait_poll_seconds = 1
     clock = [0.0]
     calls = [0]
+    finish_calls = [0]
+    receipt_readbacks = []
+    expected_receipt = {
+        "attempted_at": "2026-09-27T03:17:00+00:00",
+        "db": str(config.db_path),
+        "uploaded": True,
+        "verified": True,
+        "drive_file": {"id": "verified-daily"},
+    }
 
     def held(_path):
         calls[0] += 1
         return calls[0] == 1
 
     def finish(_seconds):
+        finish_calls[0] += 1
+        assert finish_calls[0] == 1, "fixture must finish exactly once"
         clock[0] += 1
-        _write_jsonl(
-            config.backup_log_path,
-            [
-                {
-                    "attempted_at": "2026-09-27T03:17:00+00:00",
-                    "db": str(config.db_path),
-                    "uploaded": True,
-                    "verified": True,
-                    "drive_file": {"id": "verified-daily"},
-                }
-            ],
+        _write_jsonl(config.backup_log_path, [expected_receipt])
+        receipt_lines = config.backup_log_path.read_text(encoding="utf-8").splitlines()
+        assert len(receipt_lines) == 1
+        receipt = json.loads(receipt_lines[0])
+        assert receipt == expected_receipt
+        assert receipt["uploaded"] is True
+        assert receipt["verified"] is True
+        receipt_readbacks.append(receipt)
+
+    def forbid_fresh_backup(*_args):
+        try:
+            scratch_receipt = config.backup_log_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            scratch_receipt = f"{type(exc).__name__}: {exc}"
+        try:
+            read_result = maintenance._recent_verified_backup(config)
+        except Exception as exc:
+            read_result = f"{type(exc).__name__}: {exc}"
+        pytest.fail(
+            f"duplicate backup; scratch_receipt={scratch_receipt!r}; read_result={read_result!r}; "
+            f"daily_retention={maintenance.DAILY_RETENTION!r}; weekly_retention={maintenance.WEEKLY_RETENTION!r}"
         )
 
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", held)
-    monkeypatch.setattr(maintenance.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(maintenance.time, "sleep", finish)
-    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_args: pytest.fail("duplicate backup"))
+    monkeypatch.setattr(maintenance, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=finish))
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", forbid_fresh_backup)
+    assert stdlib_time.sleep is original_sleep
+    assert stdlib_time.monotonic is original_monotonic
 
     assert maintenance._weekly_backup(config)["drive_file"]["id"] == "verified-daily"
     assert calls[0] == 2
+    assert finish_calls[0] == 1
+    assert receipt_readbacks == [expected_receipt]
+    assert stdlib_time.sleep is original_sleep
+    assert stdlib_time.monotonic is original_monotonic
+    print(
+        "PR1250_CLOCK_FIXTURE_WITNESS "
+        + json.dumps(
+            {
+                "finish_transitions": finish_calls[0],
+                "lock_probes": calls[0],
+                "receipt": receipt_readbacks[0],
+                "stdlib_sleep_unchanged": True,
+                "stdlib_monotonic_unchanged": True,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 def test_weekly_backup_timeout_aborts_before_destructive_work(tmp_path, monkeypatch):
