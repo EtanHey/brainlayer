@@ -2,6 +2,7 @@ import hashlib
 import json
 import sqlite3
 import struct
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -259,7 +260,7 @@ def test_idempotent_malformed_receipt_closes_connection(monkeypatch, tmp_path: P
 
 
 def _t3_copy(path):
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, source_file, provenance_class, source_class, source)")
         conn.executemany(
