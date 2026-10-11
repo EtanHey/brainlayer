@@ -180,7 +180,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         }
     }
 
-    func testConfiguredOffPreservesRuntimeTruthAcrossDashboardAndSettings() throws {
+    func testConfiguredIngestPreservesRuntimeTruthAcrossDashboardAndSettings() throws {
         let cases: [(WatcherProcessProbeResult, BrainLayerLaunchdLoadState, WatcherHealthFileRead?, String, BrainLayerLaunchdGroupHealth)] = [
             (.running(pid: 42), .running, BrainBarDashboardFixture.healthyWatcherHealth, "Watcher running", .healthy),
             (.running(pid: 42), .running, degradedHealth(), "Watcher needs attention", .unhealthy),
@@ -199,36 +199,41 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = BrainLayerConfigStore(configURL: directory.appendingPathComponent("brainlayer.env"))
-        var config = BrainLayerConfig.defaultConfig
-        for job in BrainLayerLaunchdJobGroup.ingest.jobs {
-            config.launchdJobs[job]?.enabled = false
-        }
-        try store.save(config)
-        for (process, loadState, health, title, groupHealth) in cases {
-            let flow = DashboardFlowSummary.derive(
-                daemon: nil, stats: stats(replayDebt: 0, process: process, health: health), now: now
-            )
-            let viewModel = BrainBarSettingsViewModel(
-                store: store,
-                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
-                initialLaunchdStates: [.watch: loadState, .index: .loaded],
-                refreshStatusOnLoad: false,
-                now: { [now] in now },
-                initialWatcherHealth: health
-            )
-            XCTAssertFalse(viewModel.isGroupEnabled(.ingest))
-            XCTAssertEqual(viewModel.config.launchdJobs[.watch]?.enabled, false)
-            XCTAssertEqual(viewModel.config.launchdJobs[.index]?.enabled, false)
-            XCTAssertEqual(flow.watcherStatus.title, title)
-            XCTAssertEqual(viewModel.watcherStatus.title, title)
-            XCTAssertEqual(viewModel.footerPresentation.state.title, title)
-            let ingest = viewModel.groupStatus(.ingest)
-            XCTAssertEqual(ingest.health, groupHealth, title)
-            XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
-            XCTAssertEqual(ingest.note, "Configured OFF: Watcher, Index.")
-            XCTAssertFalse(ingest.nextRunText.contains("Index Continuous"), "loaded scheduled Index is not executing")
-            if title != "Watcher stopped" {
-                XCTAssertEqual(viewModel.watcherStatus, flow.watcherStatus)
+        let configurations: [(Bool, Bool, String?)] = [
+            (true, true, nil), (false, false, "Configured OFF: Watcher, Index."),
+            (false, true, "Configured OFF: Watcher."), (true, false, "Configured OFF: Index."),
+        ]
+        for (watchEnabled, indexEnabled, note) in configurations {
+            var config = BrainLayerConfig.defaultConfig
+            config.launchdJobs[.watch]?.enabled = watchEnabled
+            config.launchdJobs[.index]?.enabled = indexEnabled
+            try store.save(config)
+            for (process, loadState, health, title, groupHealth) in cases {
+                let flow = DashboardFlowSummary.derive(
+                    daemon: nil, stats: stats(replayDebt: 0, process: process, health: health), now: now
+                )
+                let viewModel = BrainBarSettingsViewModel(
+                    store: store,
+                    launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                    initialLaunchdStates: [.watch: loadState, .index: .loaded],
+                    refreshStatusOnLoad: false,
+                    now: { [now] in now },
+                    initialWatcherHealth: health
+                )
+                XCTAssertEqual(viewModel.isGroupEnabled(.ingest), watchEnabled && indexEnabled)
+                XCTAssertEqual(viewModel.config.launchdJobs[.watch]?.enabled, watchEnabled)
+                XCTAssertEqual(viewModel.config.launchdJobs[.index]?.enabled, indexEnabled)
+                XCTAssertEqual(flow.watcherStatus.title, title)
+                XCTAssertEqual(viewModel.watcherStatus.title, title)
+                XCTAssertEqual(viewModel.footerPresentation.state.title, title)
+                let ingest = viewModel.groupStatus(.ingest)
+                XCTAssertEqual(ingest.health, groupHealth, title)
+                XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
+                XCTAssertEqual(ingest.note, note)
+                XCTAssertFalse(ingest.nextRunText.contains("Index Continuous"), "loaded scheduled Index is not executing")
+                if title != "Watcher stopped" {
+                    XCTAssertEqual(viewModel.watcherStatus, flow.watcherStatus)
+                }
             }
         }
     }
