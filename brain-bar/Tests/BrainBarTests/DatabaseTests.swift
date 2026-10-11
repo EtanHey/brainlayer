@@ -15,14 +15,19 @@ import SQLite3
 final class DatabaseTests: XCTestCase {
     var db: BrainDatabase!
     var tempDBPath: String!
+    private var restoreWatcherHealthEnvironment: (() -> Void)?
 
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-test-\(UUID().uuidString).db"
+        restoreWatcherHealthEnvironment = isolateWatcherHealthEnvironment(
+            root: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("brainbar-test-watcher-\(UUID().uuidString)")
+        )
         db = BrainDatabase(path: tempDBPath)
     }
 
     override func tearDown() {
+        restoreWatcherHealthEnvironment?()
         db.close()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
@@ -283,7 +288,7 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(columns.contains("sender"))
     }
 
-    func testReadOnlyLegacyChunksSchemaExpandsConversationWithoutSenderColumn() throws {
+    func testReadOnlyLegacyChunksSchemaExpandChunkWithoutSenderColumn() throws {
         let legacyPath = NSTemporaryDirectory() + "brainbar-readonly-legacy-sender-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
@@ -324,10 +329,16 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(legacyReader.isOpen)
         XCTAssertFalse(try sqliteTableColumns(path: legacyPath, table: "chunks").contains("sender"))
 
-        let conversation = try legacyReader.expandedConversation(id: "legacy-assistant", before: 1, after: 1)
+        let expanded = try legacyReader.expandChunk(
+            id: "legacy-assistant", before: 1, after: 1, includeFullTargetContent: true
+        )
+        let target = try XCTUnwrap(expanded["target"] as? [String: Any])
+        let context = try XCTUnwrap(expanded["context"] as? [[String: Any]])
 
-        XCTAssertEqual(conversation.entries.map(\.chunkID), ["legacy-user-1", "legacy-assistant", "legacy-user-2"])
-        XCTAssertEqual(conversation.entries.map(\.sender), ["", "", ""])
+        XCTAssertEqual(target["chunk_id"] as? String, "legacy-assistant")
+        XCTAssertEqual(target["content"] as? String, "Make your next big call with confidence.")
+        XCTAssertNil(target["sender"] as? String)
+        XCTAssertEqual(context.compactMap { $0["chunk_id"] as? String }, ["legacy-user-1", "legacy-user-2"])
     }
 
     func testReadOnlyOpenConfigurationAllowsDashboardReadsButRejectsWrites() throws {
@@ -934,11 +945,9 @@ final class DatabaseTests: XCTestCase {
         let resultIDs = Set(try db.search(query: "SwiftSourceClassNeedle", limit: 20).compactMap {
             $0["chunk_id"] as? String
         })
-        let candidateIDs = Set(try db.searchCandidates(query: "SwiftSourceClassNeedle", limit: 20).map(\.id))
         let expected = Set(["source-class-cli", "source-class-subagent", "source-class-fleet", "source-class-null"])
 
         XCTAssertEqual(resultIDs, expected)
-        XCTAssertEqual(candidateIDs, expected)
         XCTAssertFalse(resultIDs.contains("source-class-desktop"))
         XCTAssertFalse(resultIDs.contains("source-class-brain-worker"))
         XCTAssertTrue(try db.search(query: "source-class-desktop", limit: 1).isEmpty)
@@ -1130,9 +1139,17 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testSearchAliasExpansionPreservesMultiwordSemantics() throws {
+        db.exec("""
+            INSERT INTO kg_entities (id, entity_type, name)
+            VALUES ('entity-project-atlas', 'project', 'Project Atlas');
+        """)
+        db.exec("""
+            INSERT INTO kg_entity_aliases (alias, entity_id)
+            VALUES ('AtlasX', 'entity-project-atlas');
+        """)
         try db.insertChunk(
             id: "alias-good",
-            content: "Hershkovits reviewed the release plan yesterday.",
+            content: "Project Atlas reviewed rollout yesterday.",
             sessionId: "session-alias-good",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -1140,14 +1157,14 @@ final class DatabaseTests: XCTestCase {
         )
         try db.insertChunk(
             id: "alias-bad",
-            content: "Met with Hershkovits yesterday.",
+            content: "Met with Project Atlas yesterday.",
             sessionId: "session-alias-bad",
             project: "brainlayer",
             contentType: "assistant_text",
             importance: 8
         )
 
-        let results = try db.search(query: "Hershkovitz release plan", limit: 10)
+        let results = try db.search(query: "AtlasX rollout", limit: 10)
         let resultIDs = results.compactMap { $0["chunk_id"] as? String }
 
         XCTAssertTrue(resultIDs.contains("alias-good"))
@@ -1261,26 +1278,6 @@ final class DatabaseTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(try sqliteStatCount(for: ["chunks", "chunks_fts"], path: tempDBPath), 0, "ANALYZE should populate sqlite_stat1 for search tables")
-    }
-
-    func testSearchCandidatesReturnPrecomputedPreviewText() throws {
-        try db.insertChunk(
-            id: "preview-1",
-            content: """
-            Search previews must be precomputed ahead of keystrokes so the UI never calls snippet() while typing.
-            This content is intentionally long enough to exercise truncation and whitespace normalization.
-            """,
-            sessionId: "session-1",
-            project: "brainbar",
-            contentType: "assistant_text",
-            importance: 6
-        )
-
-        let results = try db.searchCandidates(query: "precomputed keystrokes", limit: 10)
-
-        XCTAssertEqual(results.first?.id, "preview-1")
-        XCTAssertFalse(results.first?.previewText.isEmpty ?? true)
-        XCTAssertFalse(results.first?.previewText.contains("\n") ?? false)
     }
 
     func testStoreRetriesThroughTransientWriteLock() throws {
@@ -2072,9 +2069,11 @@ final class DatabaseTests: XCTestCase {
         let entityID = try XCTUnwrap(entity["entity_id"] as? String)
         XCTAssertEqual(entity["name"] as? String, name)
 
-        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
-        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }),
-                      "Digested chunk should be linked to its extracted entity")
+        XCTAssertEqual(
+            try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = '\(entityID)' AND chunk_id = '\(chunkID)'"),
+            1,
+            "Digested chunk should be linked to its extracted entity"
+        )
     }
 
     func testDigestReusesActiveCanonicalPersonAndLanguageAliasInMixedText() throws {
@@ -2153,8 +2152,10 @@ final class DatabaseTests: XCTestCase {
         let matchingRows = try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE name = 'BrainLayer'")
         XCTAssertEqual(matchingRows, 1, "Digest should not create a duplicate concept row for an existing name")
 
-        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
-        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+        XCTAssertEqual(
+            try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = '\(entityID)' AND chunk_id = '\(chunkID)'"),
+            1
+        )
     }
 
     func testDigestReusesExistingCrossTypeEntityInsteadOfCreatingConceptDuplicate() throws {
@@ -2176,8 +2177,10 @@ final class DatabaseTests: XCTestCase {
         let conceptRows = try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entities WHERE name = 'BrainLayer' AND entity_type = 'concept'")
         XCTAssertEqual(conceptRows, 0, "Digest should link the canonical entity instead of creating an ambiguous concept duplicate")
 
-        let linkedChunks = try db.fetchEntityChunks(entityId: entityID, limit: 10)
-        XCTAssertTrue(linkedChunks.contains(where: { $0.chunkID == chunkID }))
+        XCTAssertEqual(
+            try sqliteScalarInt(path: tempDBPath, sql: "SELECT COUNT(*) FROM kg_entity_chunks WHERE entity_id = '\(entityID)' AND chunk_id = '\(chunkID)'"),
+            1
+        )
     }
 
     func testDigestStorageFailureReportsZeroPersistedEntities() throws {

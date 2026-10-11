@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
 from mcp.types import TextContent
 
 import brainlayer.mcp as mcp_module
@@ -127,3 +128,44 @@ def test_call_tool_error_results_use_call_tool_result(monkeypatch):
 
     assert result.is_error is True
     assert result.content[0].text == "Store failed: database is locked"
+
+
+def test_chunk_identifier_aliases_advertise_producer_compatible_bounded_caps():
+    """Library schema parity, not library runtime enforcement or installed proof."""
+    scalar_names = {"chunk_id", "old_chunk_id", "new_chunk_id", "supersedes"}
+    array_names = {"chunk_ids", "merge_chunk_ids"}
+    seen = set()
+    for tool in _get_tools():
+        schema = _tool_input_schema(tool)
+        for name, field in schema["properties"].items():
+            if name in scalar_names:
+                assert field["maxLength"] == 8_192, (tool.name, name)
+                validator = Draft202012Validator(field)
+                for length in (142, 4_116, 8_192):
+                    assert not list(validator.iter_errors("x" * length))
+                assert list(validator.iter_errors("x" * 8_193))
+                seen.add(name)
+            if name in array_names:
+                assert field["items"]["maxLength"] == 8_192, (tool.name, name)
+                assert field["maxItems"] == (500 if name == "chunk_ids" else 100)
+                seen.add(name)
+    # chunk_ids is currently a shared-map alias, not a registered library input.
+    assert seen == scalar_names | {"merge_chunk_ids"}
+    bounded = mcp_module._bounded_input_schema(
+        {
+            "type": "object",
+            "properties": {name: {"type": "array", "items": {"type": "string"}} for name in array_names},
+        }
+    )
+    for name in array_names:
+        field = bounded["properties"][name]
+        assert field["items"]["maxLength"] == 8_192
+        validator = Draft202012Validator(field)
+        assert not list(validator.iter_errors(["x" * 8_192]))
+        assert list(validator.iter_errors(["x" * 8_193]))
+        assert list(validator.iter_errors(["x"] * (field["maxItems"] + 1)))
+        assert field["maxItems"] == (500 if name == "chunk_ids" else 100)
+    assert mcp_module._INPUT_STRING_MAX_LENGTHS["query"] == 4_096
+    assert mcp_module._INPUT_STRING_MAX_LENGTHS["content"] == 200_000
+    assert mcp_module._INPUT_STRING_MAX_LENGTHS["session_id"] == 128
+    assert mcp_module._INPUT_STRING_ARRAY_LIMITS["tags"] == {"max_items": 100, "item_max_length": 128}

@@ -95,12 +95,12 @@ class TestExtractedEntity:
 SEED_ENTITIES = {
     "person": [
         "Etan Heyman",
-        "Dor Zohar",
-        "Shachar Gerby",
-        "Maor Noah",
-        "Avi Simon",
-        "Yuval Nir",
-        "Daniel Munk",
+        "Person Alpha",
+        "Person Beta",
+        "Person Gamma",
+        "Rina Vale",
+        "Person Delta",
+        "Person Epsilon",
     ],
     "company": ["Cantaloupe AI", "Domica", "MeHayom", "ProductDZ", "Weby"],
     "project": [
@@ -126,10 +126,10 @@ class TestSeedEntityMatching:
     """Seed entity matching finds known entities by string match."""
 
     def test_finds_person(self):
-        text = "Dor Zohar is the CEO and handles UX/UI."
+        text = "Person Alpha is the CEO and handles UX/UI."
         entities = extract_seed_entities(text, SEED_ENTITIES)
         names = {e.text for e in entities}
-        assert "Dor Zohar" in names
+        assert "Person Alpha" in names
 
     def test_finds_company(self):
         text = "We're building Domica as a real estate platform."
@@ -138,11 +138,11 @@ class TestSeedEntityMatching:
         assert "Domica" in names
 
     def test_finds_multiple(self):
-        text = "Etan Heyman and Dor Zohar co-founded Domica."
+        text = "Etan Heyman and Person Alpha co-founded Domica."
         entities = extract_seed_entities(text, SEED_ENTITIES)
         names = {e.text for e in entities}
         assert "Etan Heyman" in names
-        assert "Dor Zohar" in names
+        assert "Person Alpha" in names
         assert "Domica" in names
 
     def test_correct_spans(self):
@@ -180,7 +180,7 @@ class TestSeedEntityMatching:
 
     def test_high_confidence(self):
         """Seed matches should have confidence >= 0.95."""
-        text = "Dor Zohar wrote this."
+        text = "Person Alpha wrote this."
         entities = extract_seed_entities(text, SEED_ENTITIES)
         assert all(e.confidence >= 0.95 for e in entities)
 
@@ -214,17 +214,17 @@ class TestLLMResponseParsing:
         response = json.dumps(
             {
                 "entities": [
-                    {"text": "Dor Zohar", "type": "person"},
+                    {"text": "Person Alpha", "type": "person"},
                     {"text": "Domica", "type": "company"},
                 ],
-                "relations": [{"source": "Dor Zohar", "target": "Domica", "type": "works_at"}],
+                "relations": [{"source": "Person Alpha", "target": "Domica", "type": "works_at"}],
             }
         )
-        source = "Dor Zohar is CEO of Domica."
+        source = "Person Alpha is CEO of Domica."
         entities, relations = parse_llm_ner_response(response, source)
         assert len(entities) == 2
         assert len(relations) == 1
-        assert relations[0].source_text == "Dor Zohar"
+        assert relations[0].source_text == "Person Alpha"
         assert relations[0].relation_type == "works_at"
 
     def test_parse_json_in_text(self):
@@ -276,6 +276,10 @@ class TestLLMResponseParsing:
 
 class TestNERPrompt:
     """Test the NER prompt construction."""
+
+    def test_prompt_uses_synthetic_works_at_example(self):
+        prompt = build_ner_prompt("A neutral input")
+        assert "Alex Example works at Example Corp" in prompt
 
     def test_prompt_contains_text(self):
         prompt = build_ner_prompt("Hello world")

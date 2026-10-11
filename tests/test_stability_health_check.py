@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
 import os
 import plistlib
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from io import StringIO
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +26,60 @@ from brainlayer.vector_store import VectorStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENRICHMENT_EVENT = '{"kind":"enrichment_update"}\n'
+
+
+@pytest.mark.parametrize("heal", [False, True])
+def test_health_check_recovers_watchdog_hold_only_when_healing(tmp_path, monkeypatch, heal):
+    from brainlayer import maintenance
+
+    calls = []
+    monkeypatch.setattr(maintenance, "recover_fleet_watchdog_hold", lambda **kwargs: calls.append(kwargs))
+    db_path = tmp_path / "fixture.db"
+    _make_db(db_path, total=1, vector_rows=1)
+
+    def runner(args):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    pause = tmp_path / "pause.sentinel"
+    alerts = tmp_path / "alerts.json"
+    run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health.json",
+            heal=heal,
+            pause_sentinel_path=pause,
+            job_alert_path=alerts,
+            source_jsonl_globs=[],
+        ),
+        ps_output_fn=lambda: "",
+        socket_request_fn=_ok_canary,
+        command_runner=runner,
+    )
+    assert calls == (
+        [{"path": pause.with_name("fleet-watchdog-hold.json"), "command_runner": runner, "alert_path": alerts}]
+        if heal
+        else []
+    )
+
+
+def test_live_watchdog_hold_keeps_health_monitoring_without_healing(tmp_path, monkeypatch):
+    from brainlayer import maintenance
+
+    def active_hold(**kwargs):
+        raise maintenance.MaintenanceAbort("owner alive", detail="hold-active:com.etanhey.brainlayer-fleet-watchdog")
+
+    monkeypatch.setattr(maintenance, "recover_fleet_watchdog_hold", active_hold)
+    commands = []
+    _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(hours=1),
+        pending_store_count=2,
+        heal=True,
+        command_runner=lambda args: commands.append(args) or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    assert commands  # State probes still monitor the fleet.
+    assert not any(args[1] in {"bootstrap", "bootout", "kickstart", "enable", "disable"} for args in commands)
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +116,7 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(health_check, "_pending_stores_count", _isolated_pending_stores_count)
 
     absent_sentinel = tmp_path_factory.mktemp("hc-sentinel") / "pause.sentinel"
+    monkeypatch.setattr(health_check, "DEFAULT_PAUSE_SENTINEL_PATH", absent_sentinel)
     live_sentinel_default = Path("~/.local/share/brainlayer/pause.sentinel").expanduser()
     real_pause_state = health_check._pause_sentinel_state
 
@@ -67,6 +126,37 @@ def _isolate_default_live_paths(tmp_path_factory, monkeypatch):
         return real_pause_state(config, now)
 
     monkeypatch.setattr(health_check, "_pause_sentinel_state", _isolated_pause_state)
+
+    live_backup_log_default = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
+    real_backup_health = health_check.inspect_jsonl_backup_health
+
+    def _isolated_backup_health(
+        log_path,
+        *,
+        now,
+        max_age_seconds,
+        absence_alert_nights=health_check.DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
+    ):
+        if log_path.expanduser() == live_backup_log_default:
+            return (
+                health_check.JsonlBackupHealth(
+                    state="no_op",
+                    status="no-op",
+                    attempted_at=now.isoformat(),
+                    age_seconds=0.0,
+                    verified=True,
+                    detail="isolated test no-op",
+                ),
+                None,
+            )
+        return real_backup_health(
+            log_path,
+            now=now,
+            max_age_seconds=max_age_seconds,
+            absence_alert_nights=absence_alert_nights,
+        )
+
+    monkeypatch.setattr(health_check, "inspect_jsonl_backup_health", _isolated_backup_health)
     yield
 
 
@@ -162,12 +252,192 @@ def test_health_check_consumes_alerting_t3_health_snapshot(tmp_path):
     )
 
     assert result.t3_health == payload
+    assert result.canary_status == "results"
     issue = next(issue for issue in result.issues if issue.code == "t3_ingest_unhealthy")
     assert issue.severity == "critical"
     assert "schema_drift" in issue.message
 
 
-def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, capsys):
+@pytest.mark.parametrize(
+    ("payload", "expected_state", "expected_issue"),
+    [
+        (
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-09.tar.gz",
+            },
+            "verified_bundle",
+            None,
+        ),
+        (
+            {
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-09.tar.gz",
+            },
+            "verified_bundle",
+            None,
+        ),
+        (
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "no-op",
+                "uploaded": False,
+                "verified": True,
+                "message": "no-op, 10 files already covered",
+            },
+            "no_op",
+            None,
+        ),
+        (
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "failed",
+                "uploaded": False,
+                "verified": False,
+                "error": "upload exploded",
+            },
+            "failed",
+            "jsonl_backup_attempt_failed",
+        ),
+    ],
+)
+def test_jsonl_backup_detector_distinguishes_verified_noop_and_failure(
+    tmp_path, payload, expected_state, expected_issue
+):
+    log_path = tmp_path / "jsonl-backup.log"
+    log_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    status, issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+        max_age_seconds=36 * 60 * 60,
+    )
+
+    assert status.state == expected_state
+    assert status.status == payload["status"]
+    assert (issue.code if issue else None) == expected_issue
+
+
+def test_jsonl_backup_detector_reports_absent_malformed_and_stale_attempts(tmp_path):
+    log_path = tmp_path / "jsonl-backup.log"
+    now = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+
+    missing, missing_issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=now,
+        max_age_seconds=36 * 60 * 60,
+    )
+    assert missing.state == "missing"
+    assert missing_issue.code == "jsonl_backup_attempt_missing"
+
+    log_path.write_text("not-json\n", encoding="utf-8")
+    malformed, malformed_issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=now,
+        max_age_seconds=36 * 60 * 60,
+    )
+    assert malformed.state == "invalid"
+    assert malformed_issue.code == "jsonl_backup_attempt_invalid"
+
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-07T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-07.tar.gz",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stale, stale_issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=now,
+        max_age_seconds=36 * 60 * 60,
+        absence_alert_nights=3,
+    )
+    assert stale.state == "stale"
+    assert stale_issue.code == "jsonl_backup_attempt_stale"
+
+
+def test_jsonl_backup_detector_escalates_after_multiple_nights_without_attempt(tmp_path):
+    log_path = tmp_path / "jsonl-backup.log"
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-06T02:00:00+00:00",
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+                "archive": "claude-jsonl-2026-09-06.tar.gz",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    status, issue = health_check.inspect_jsonl_backup_health(
+        log_path,
+        now=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+        max_age_seconds=36 * 60 * 60,
+        absence_alert_nights=2,
+    )
+
+    assert status.state == "stale"
+    assert status.consecutive_nights_without_attempt == 3
+    assert issue.code == "jsonl_backup_attempt_absent_multiple_nights"
+    assert "threshold_nights=2" in issue.message
+
+
+def test_run_health_check_surfaces_jsonl_backup_failure(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    log_path = tmp_path / "jsonl-backup.log"
+    _make_db(db_path, total=1, vector_rows=1)
+    log_path.write_text(
+        json.dumps(
+            {
+                "attempted_at": "2026-09-09T02:00:00+00:00",
+                "status": "failed",
+                "uploaded": False,
+                "verified": False,
+                "error": "upload exploded",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            jsonl_backup_log_path=log_path,
+            source_jsonl_globs=[],
+            queue_dir=tmp_path / "queue",
+            pending_stores_path=tmp_path / "pending-stores.jsonl",
+            watcher_health_path=tmp_path / "watcher-health.json",
+            drain_health_path=tmp_path / "drain-health.json",
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.jsonl_backup is not None
+    assert result.jsonl_backup.state == "failed"
+    assert "jsonl_backup_attempt_failed" in [issue.code for issue in result.issues]
+
+
+def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart_hotlane(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=4, vector_rows=3)
@@ -188,7 +458,8 @@ def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart
     assert "hotlane_backlog_disabled" in [issue.code for issue in first_result.issues]
     assert first_result.backlog_batch == 0
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
-    assert "kickstart" not in capsys.readouterr().err
+    assert not any("kickstart" in message for message in caplog.messages)
+    caplog.clear()
 
     second_result = run_health_check(
         HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True),
@@ -206,11 +477,11 @@ def test_backlog_batch_zero_alarms_but_waits_until_repeated_failure_to_kickstart
     kickstarts = [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
     assert len(kickstarts) == 1
     assert "com.brainlayer.hotlane-brainbar" in " ".join(kickstarts[0])
-    stderr = capsys.readouterr().err
-    assert "heal action" in stderr
-    assert "label=com.brainlayer.hotlane-brainbar" in stderr
-    assert "issue=hotlane_backlog_disabled" in stderr
-    assert "consecutive_failures=2" in stderr
+    log_text = "\n".join(caplog.messages)
+    assert "heal action" in log_text
+    assert "label=com.brainlayer.hotlane-brainbar" in log_text
+    assert "issue=hotlane_backlog_disabled" in log_text
+    assert "consecutive_failures=2" in log_text
 
 
 def test_any_zero_backlog_batch_alarms_when_multiple_hotlanes_are_running(tmp_path):
@@ -326,6 +597,20 @@ def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=1, vector_rows=1)
+    state_path.write_text(
+        json.dumps(
+            {
+                "job_lifecycle": {
+                    "com.brainlayer.maintenance": {
+                        "failed_heals": True,
+                        "interval": True,
+                        "last_exit_code": 1,
+                        "reason": "failed maintenance",
+                    }
+                }
+            }
+        )
+    )
     canary_called = False
 
     def interrupted_count(_db_path, **_kwargs):
@@ -349,6 +634,7 @@ def test_interrupted_missing_embedding_count_writes_slow_state_and_returns_early
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert result.slow_check is True
     assert result.slow_check_stage == "missing_embeddings"
+    assert any(issue.code == "job_failure" and "3 failed runs" in issue.message for issue in result.issues)
     assert saved["slow_check"] is True
     assert saved["slow_check_stage"] == "missing_embeddings"
     assert saved["ts"] == "2026-07-13T09:00:00+00:00"
@@ -526,6 +812,7 @@ def _run_frozen_drain_liveness_scenario(
     quota_blocked_enrichment: bool = False,
     heal: bool = False,
     command_runner=None,
+    reported_progress_stall: bool = False,
 ):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
@@ -553,6 +840,8 @@ def _run_frozen_drain_liveness_scenario(
                 "drained_total": 10,
                 "drain_cycles": 4,
                 "updated_at": (now - heartbeat_age).isoformat(),
+                "state": "drain_progress_stalled" if reported_progress_stall else "ok",
+                "reason": "queue_count=2 oldest_age_seconds=600" if reported_progress_stall else "",
             }
         ),
         encoding="utf-8",
@@ -598,6 +887,20 @@ def _run_frozen_drain_liveness_scenario(
         now_fn=lambda: now,
     )
     return result, holder_pid
+
+
+def test_health_check_surfaces_reported_progress_stall_despite_fresh_heartbeat(tmp_path, monkeypatch):
+    result, _holder_pid = _run_frozen_drain_liveness_scenario(
+        tmp_path,
+        monkeypatch,
+        heartbeat_age=timedelta(seconds=10),
+        pending_store_count=2,
+        reported_progress_stall=True,
+    )
+
+    issue = next(issue for issue in result.issues if issue.code == "drain_progress_stalled")
+    assert issue.severity == "critical"
+    assert "queue_count=2" in issue.message
 
 
 def test_frozen_drain_with_pending_stores_heals_live_index_lock_holder(tmp_path, monkeypatch):
@@ -649,7 +952,7 @@ def test_frozen_drain_quota_blocker_does_not_wedge_lock_holder(tmp_path, monkeyp
     )
 
     issue_codes = [issue.code for issue in result.issues]
-    assert "drain_liveness_quota_blocked" in issue_codes
+    assert "drain_liveness_quota_blocked" not in issue_codes
     assert "drain_liveness_stalled" not in issue_codes
     assert "lock_holder_wedge" not in issue_codes
 
@@ -683,11 +986,11 @@ def test_pending_store_backlog_read_failure_is_reported(tmp_path, monkeypatch):
     assert "pending_stores_count_failed" in [issue.code for issue in result.issues]
 
 
-def test_enrichment_backlog_query_failure_is_reported(tmp_path, monkeypatch):
+def test_health_does_not_count_retired_producer_backlog(tmp_path, monkeypatch):
     def fail_enrichment_backlog(_path):
         raise sqlite3.OperationalError("enrichment backlog unavailable")
 
-    monkeypatch.setattr(health_check, "_enrichment_backlog", fail_enrichment_backlog)
+    monkeypatch.setattr(health_check, "_enrichment_backlog", fail_enrichment_backlog, raising=False)
 
     result, _holder_pid = _run_frozen_drain_liveness_scenario(
         tmp_path,
@@ -696,7 +999,12 @@ def test_enrichment_backlog_query_failure_is_reported(tmp_path, monkeypatch):
         pending_store_count=0,
     )
 
-    assert "enrichment_backlog_count_failed" in [issue.code for issue in result.issues]
+    compat = json.loads((Path(__file__).parent / "fixtures/service-json-retirement-v1.json").read_text())
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert set(payload) == set(compat["health_keys"])
+    codes = {issue["code"] for issue in payload["issues"]}
+    assert codes.isdisjoint(compat["removed_codes"])
+    assert codes.isdisjoint(compat["renamed_codes"])
 
 
 @pytest.mark.parametrize(
@@ -755,6 +1063,157 @@ def test_lock_holder_stale_pidfile_is_ignored_without_false_wedge(
     assert saved["lock_holder_held_ticks"] == 0
 
 
+def test_heal_action_log_includes_the_health_check_timestamp(tmp_path):
+    result = health_check.HealthCheckResult(
+        checked_at="2026-09-15T07:15:00+00:00",
+        ok=False,
+        issues=[health_check.HealthIssue("watcher_stalled", "critical", "stalled")],
+    )
+    stream = StringIO()
+
+    with health_check.health_event_logging(stream):
+        health_check._apply_heals(
+            result=result,
+            issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
+            previous_failures={},
+            previous_tripped=set(),
+            config=health_check.HealthCheckConfig(heal=True, heal_min_consecutive_failures=1),
+            command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+
+    output = stream.getvalue()
+    assert "condition=heal:watcher_stalled" in output
+    assert "timestamp=2026-09-15T07:15:00+00:00" in output
+    assert "heal action label=com.example.watch issue=watcher_stalled" in output
+    assert "consecutive_failures=1 action=kickstart:com.example.watch" in output
+
+
+def test_health_event_logging_keeps_logger_state_and_nested_context_after_exception(caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+    module_logger = health_check.logger
+    original_state = (tuple(module_logger.handlers), module_logger.level, module_logger.propagate)
+    outer_stream = StringIO()
+    inner_stream = StringIO()
+
+    with health_check.health_event_logging(outer_stream):
+        assert (tuple(module_logger.handlers), module_logger.level, module_logger.propagate) == original_state
+        health_check._log_health_event("outer_before", "outer", timestamp="2026-10-09T00:00:00+00:00")
+        with pytest.raises(RuntimeError, match="fixture failure"):
+            with health_check.health_event_logging(inner_stream):
+                health_check._log_health_event("inner", "inner", timestamp="2026-10-09T00:00:00+00:00")
+                raise RuntimeError("fixture failure")
+        assert (tuple(module_logger.handlers), module_logger.level, module_logger.propagate) == original_state
+        health_check._log_health_event("outer_after", "outer", timestamp="2026-10-09T00:00:00+00:00")
+
+    assert (tuple(module_logger.handlers), module_logger.level, module_logger.propagate) == original_state
+    assert "condition=outer_before" in outer_stream.getvalue()
+    assert "condition=outer_after" in outer_stream.getvalue()
+    assert "condition=inner" in inner_stream.getvalue()
+    health_check._log_health_event("restored", "caller logger", timestamp="2026-10-09T00:00:00+00:00")
+    assert any("condition=restored" in record.getMessage() for record in caplog.records)
+
+
+def test_health_event_logging_routes_concurrent_calls_to_their_own_streams():
+    first_stream = StringIO()
+    second_stream = StringIO()
+    first_entered = Event()
+    second_entered = Event()
+    first_logged_while_second_active = Event()
+
+    def first_call():
+        with health_check.health_event_logging(first_stream):
+            health_check._log_health_event("first_before", "first", timestamp="2026-10-09T00:00:00+00:00")
+            first_entered.set()
+            assert second_entered.wait(timeout=5)
+            health_check._log_health_event("first_during", "first", timestamp="2026-10-09T00:00:00+00:00")
+            first_logged_while_second_active.set()
+
+    def second_call():
+        assert first_entered.wait(timeout=5)
+        with health_check.health_event_logging(second_stream):
+            health_check._log_health_event("second_before", "second", timestamp="2026-10-09T00:00:00+00:00")
+            second_entered.set()
+            assert first_logged_while_second_active.wait(timeout=5)
+            health_check._log_health_event("second_after", "second", timestamp="2026-10-09T00:00:00+00:00")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_call)
+        second = pool.submit(second_call)
+        first.result(timeout=10)
+        second.result(timeout=10)
+
+    first_output = first_stream.getvalue()
+    second_output = second_stream.getvalue()
+    assert "condition=first_before" in first_output
+    assert "condition=first_during" in first_output
+    assert "condition=second_before" not in first_output
+    assert "condition=second_after" not in first_output
+    assert "condition=second_before" in second_output
+    assert "condition=second_after" in second_output
+    assert "condition=first_before" not in second_output
+    assert "condition=first_during" not in second_output
+
+
+def test_heal_escalation_site_emits_incident_log(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+    result = health_check.HealthCheckResult(
+        checked_at="2026-09-15T07:15:00+00:00",
+        ok=False,
+        issues=[health_check.HealthIssue("watcher_stalled", "critical", "stalled")],
+    )
+
+    health_check._apply_heals(
+        result=result,
+        issue_labels={"watcher_stalled": ("com.example.watch", tmp_path / "watch.plist")},
+        previous_failures={"com.example.watch:watcher_stalled": 2},
+        previous_tripped=set(),
+        config=health_check.HealthCheckConfig(
+            heal=True,
+            heal_min_consecutive_failures=1,
+            heal_circuit_breaker_limit=3,
+        ),
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert "heal_escalation:com.example.watch:watcher_stalled" in result.actions
+    assert any(
+        "condition=heal:watcher_stalled" in message and "failed repeatedly" in message for message in caplog.messages
+    )
+
+
+def test_expired_pause_sentinel_site_emits_incident_log(tmp_path, caplog):
+    db_path = tmp_path / "brainlayer.db"
+    pause_path = tmp_path / "pause.sentinel"
+    _make_db(db_path, total=1, vector_rows=1)
+    pause_path.write_text(
+        json.dumps(
+            {
+                "labels": ["com.brainlayer.enrichment"],
+                "expires_at": "2026-09-15T06:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.INFO, logger="brainlayer.health_check")
+
+    result = run_health_check(
+        HealthCheckConfig(
+            db_path=db_path,
+            state_path=tmp_path / "health-state.json",
+            pause_sentinel_path=pause_path,
+            queue_dir=tmp_path / "queue",
+            source_jsonl_globs=[],
+        ),
+        ps_output_fn=lambda: "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 4\n",
+        socket_request_fn=_ok_canary,
+        command_runner=lambda _args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        now_fn=lambda: datetime(2026, 9, 15, 7, 15, tzinfo=UTC),
+    )
+
+    assert "pause_sentinel_stale" in [issue.code for issue in result.issues]
+    assert any("condition=pause_expired" in message for message in caplog.messages)
+
+
 def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_breaker(tmp_path, monkeypatch):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
@@ -769,10 +1228,12 @@ def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_
     _write_writer_pidfile(pidfile_dir, db_path, pid=holder_pid, start_time="holder-start")
     monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(pidfile_dir))
     monkeypatch.setattr(VectorStore, "_pid_start_time", staticmethod(lambda _pid: "holder-start"))
-    notifications: list[tuple[str, str]] = []
+    health_events: list[tuple[str, str]] = []
     events: list[dict] = []
     monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
+        health_check,
+        "_log_health_event",
+        lambda condition, message, **_kwargs: health_events.append((condition, message)),
     )
     monkeypatch.setattr(health_check, "_emit_heal_event", events.append)
 
@@ -826,7 +1287,10 @@ def test_lock_holder_wedge_heal_targets_known_holder_label_and_respects_circuit_
     assert "com.brainlayer.index" in " ".join(kickstarts[0])
     assert "com.brainlayer.drain" not in " ".join(kickstarts[0])
     assert "kickstart:com.brainlayer.index" in result.actions
-    assert any(str(holder_pid) in message and "brainlayer index" in message for _title, message in notifications)
+    assert any(
+        condition == "heal:lock_holder_wedge" and str(holder_pid) in message and "brainlayer index" in message
+        for condition, message in health_events
+    )
     assert any(
         event.get("_type") == "heal" and event.get("lock_holder", {}).get("pid") == holder_pid for event in events
     )
@@ -1019,13 +1483,24 @@ def test_brainbar_canary_error_waits_until_repeated_failure_to_kickstart_brainba
 
     assert second_result.ok is False
     assert "brain_search_canary_failed" in [issue.code for issue in second_result.issues]
-    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert any(
+        command[:3] == ["launchctl", "kickstart", "-k"] and "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+    )
 
 
 def test_heal_min_consecutive_failures_can_be_overridden_by_env(monkeypatch):
     monkeypatch.setenv("BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES", "3")
 
     assert HealthCheckConfig().heal_min_consecutive_failures == 3
+
+
+def test_jsonl_backup_absence_alert_requires_multiple_nights_and_is_configurable(monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS", "4")
+    assert HealthCheckConfig().jsonl_backup_absence_alert_nights == 4
+
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS", "1")
+    assert HealthCheckConfig().jsonl_backup_absence_alert_nights == 2
 
 
 def test_health_check_launchagent_runs_every_five_minutes_and_heals():
@@ -1072,7 +1547,7 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
     )
 
     issue_codes = [issue.code for issue in result.issues]
-    assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded"} <= set(issue_codes)
+    assert {"watch_unloaded", "drain_unloaded", "health_check_unloaded", "observability_unloaded"} <= set(issue_codes)
     assert not [command for command in commands if command[:2] == ["launchctl", "enable"]]
     assert [
         "launchctl",
@@ -1080,10 +1555,16 @@ def test_health_check_bootstraps_absent_default_launchd_labels_instead_of_kickst
         f"gui/{__import__('os').getuid()}",
         str(Path("~/Library/LaunchAgents/com.brainlayer.watch.plist").expanduser()),
     ] in commands
+    assert [
+        "launchctl",
+        "bootstrap",
+        f"gui/{os.getuid()}",
+        str(Path("~/Library/LaunchAgents/com.brainlayer.observability.plist").expanduser()),
+    ] in commands
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
 
 
-def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_success(tmp_path):
+def test_health_check_never_bootstraps_absent_enrichment(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=1, vector_rows=1)
@@ -1131,32 +1612,26 @@ def test_health_check_bootstraps_absent_enrichment_and_clears_tripped_after_succ
     )
 
     assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
-    assert [
-        "launchctl",
-        "bootstrap",
-        f"gui/{os.getuid()}",
-        str(Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist").expanduser()),
-    ] in commands
-    assert "bootstrap:com.brainlayer.enrichment" in result.actions
-    saved = json.loads(state_path.read_text(encoding="utf-8"))
-    assert "com.brainlayer.enrichment:enrichment_unloaded" not in saved["heal_tripped"]
+    assert not any("com.brainlayer.enrichment" in " ".join(command) for command in commands)
+    assert not any(
+        "com.brainlayer.enrichment" in " ".join(command) and command[:2] == ["launchctl", "bootstrap"]
+        for command in commands
+    )
+    assert "bootstrap:com.brainlayer.enrichment" not in result.actions
 
 
-def test_health_check_does_not_bootstrap_label_recorded_in_active_pause_sentinel(tmp_path):
+def test_health_check_classifies_unloaded_label_recorded_in_active_pause_as_healthy(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     pause_path = tmp_path / "pause.sentinel"
     _make_db(db_path, total=1, vector_rows=1)
-    pause_path.write_text(
-        json.dumps(
-            {
-                "labels": ["com.brainlayer.enrichment"],
-                "created_at": "2026-08-02T09:00:00+00:00",
-                "expires_at": "2026-08-02T11:00:00+00:00",
-            }
-        ),
-        encoding="utf-8",
-    )
+    pause_payload = {
+        "labels": ["com.brainlayer.enrichment"],
+        "created_at": "2026-08-02T09:00:00+00:00",
+        "expires_at": "2026-08-02T11:00:00+00:00",
+        "reason": "provenance safety",
+    }
+    pause_path.write_text(json.dumps(pause_payload), encoding="utf-8")
     commands: list[list[str]] = []
 
     def command_runner(args: list[str]):
@@ -1182,9 +1657,12 @@ def test_health_check_does_not_bootstrap_label_recorded_in_active_pause_sentinel
     )
 
     enrichment_commands = [command for command in commands if "com.brainlayer.enrichment" in " ".join(command)]
-    assert "enrichment_unloaded" in [issue.code for issue in result.issues]
+    assert "enrichment_unloaded" not in [issue.code for issue in result.issues]
+    assert result.ok is True
     assert not [command for command in enrichment_commands if command[:2] == ["launchctl", "bootstrap"]]
     assert not [command for command in enrichment_commands if command[:2] == ["launchctl", "enable"]]
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["pause_sentinel"] == pause_payload
 
 
 def test_health_check_bootstraps_non_paused_labels_during_active_pause(tmp_path, monkeypatch):
@@ -1236,6 +1714,7 @@ def test_health_check_bootstraps_non_paused_labels_during_active_pause(tmp_path,
         "com.brainlayer.watch",
         "com.brainlayer.drain",
         "com.brainlayer.health-check",
+        "com.brainlayer.observability",
     }
 
 
@@ -1265,11 +1744,12 @@ def test_health_check_surfaces_disabled_launchd_action(tmp_path, monkeypatch):
         now_fn=lambda: datetime(2026, 8, 2, 10, 0, tzinfo=UTC),
     )
 
-    assert "disabled:com.brainlayer.enrichment" in result.actions
+    assert "disabled:com.brainlayer.watch" in result.actions
+    assert "disabled:com.brainlayer.enrichment" not in result.actions
 
 
 def test_run_health_check_references_mode_d_detector_helpers():
-    source = inspect.getsource(health_check.run_health_check)
+    source = inspect.getsource(health_check._run_health_check_locked)
 
     for helper_name in ("_pause_sentinel_state", "_source_recent", "_queue_stats", "_path_age_seconds"):
         assert helper_name in source
@@ -1378,9 +1858,15 @@ def _run_queue_backlog_health(config, command_runner):
 
 
 def _capture_queue_notifications(monkeypatch) -> list[tuple[str, str]]:
+    monkeypatch.delenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", raising=False)
+    monkeypatch.delenv("BRAINLAYER_ENRICH_ENABLED", raising=False)
     notifications: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        health_check, "_push_notification", lambda title, message: notifications.append((title, message))
+        health_check,
+        "_log_health_event",
+        lambda condition, message, **_kwargs: notifications.append(
+            ("BrainLayer queue backlog" if condition == "queue_backlog" else condition, message)
+        ),
     )
     return notifications
 
@@ -1396,12 +1882,13 @@ def test_pause_aware_heal_decision_blocks_only_an_entirely_paused_enrichment_que
     }
 
     def explanation():
-        return health_check._paused_enrichment_queue_explanation(
-            queue_dir, 1, pause_payload=pause_payload, pause_active=True
-        )
+        return health_check._legacy_queue_hold_explanation(queue_dir, 1, pause_payload=pause_payload, pause_active=True)
 
     reason = explanation()
-    assert reason == "enrichment lane paused since 2026-08-04; drain restart would be a no-op"
+    assert (
+        reason
+        == "historical metadata updates held by maintenance sentinel since 2026-08-04; drain restart would be a no-op"
+    )
 
     queue_file.write_text('{"kind":"store_memory"}\n', encoding="utf-8")
     assert explanation() is None
@@ -1433,21 +1920,84 @@ def test_paused_enrichment_backlog_reports_skipped_heal_and_prior_failure_count(
         json.dumps({"drain_drained_total": 10, "heal_failures": {"com.brainlayer.drain:queue_backed_up": 85}}),
         encoding="utf-8",
     )
-    config.drain_health_path.write_text(json.dumps({"drained_total": 10}), encoding="utf-8")
+    snapshot = {"drained_total": 10, "updated_at": "2026-09-08T11:30:00Z", "state": "drain_progress_stalled"}
+    config.drain_health_path.write_text(json.dumps(snapshot), encoding="utf-8")
     commands: list[list[str]] = []
     notifications = _capture_queue_notifications(monkeypatch)
 
     result = _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
 
     queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
-    queue_page = next(message for title, message in notifications if title == "BrainLayer queue backlog")
-    for message in (queue_issue.message, queue_page):
-        assert "heal=skipped" in message and "heal_failures=85" in message
-        assert "enrichment lane paused since 2026-08-04" in message
-        assert "drain restart would be a no-op" in message
+    assert "heal=skipped" in queue_issue.message and "heal_failures=85" in queue_issue.message
+    assert "historical metadata updates held by maintenance sentinel since 2026-08-04" in queue_issue.message
+    assert "drain restart would be a no-op" in queue_issue.message
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
     assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+    assert "drain_no_progress" not in [issue.code for issue in result.issues]
+    assert "drain_progress_stalled" not in [issue.code for issue in result.issues]
+    snapshot["updated_at"] = "2026-09-08T11:20:00Z"
+    config.drain_health_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    stale_result = _run_queue_backlog_health(config, _loaded_launchd_runner([]))
+    assert "drain_liveness_stalled" in [issue.code for issue in stale_result.issues]
     saved = json.loads(state_path.read_text(encoding="utf-8"))
     assert "com.brainlayer.drain:queue_backed_up" not in saved["heal_failures"]
+
+
+def test_paused_enrichment_backlog_below_page_threshold_never_heals_or_toasts(tmp_path, monkeypatch):
+    config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=True)
+    config = replace(
+        config,
+        queue_auto_heal_count=25,
+        queue_page_count=200,
+        heal_min_consecutive_failures=2,
+    )
+    for index in range(30):
+        (queue_dir / f"enrichment-{index}.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    pause_path.write_text(
+        json.dumps(
+            {
+                "paused_at": "2026-09-08T11:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "labels": ["com.brainlayer.enrichment"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    notifications = _capture_queue_notifications(monkeypatch)
+
+    results = [_run_queue_backlog_health(config, _loaded_launchd_runner(commands)) for _ in range(4)]
+
+    for result in results:
+        queue_issue = next(issue for issue in result.issues if issue.code == "queue_backed_up")
+        assert "heal=skipped" in queue_issue.message
+        assert "drain restart would be a no-op" in queue_issue.message
+    assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+    assert notifications == []
+
+
+def test_unpaused_enrichment_backlog_below_page_threshold_still_heals(tmp_path, monkeypatch):
+    config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=True)
+    config = replace(
+        config,
+        queue_auto_heal_count=25,
+        queue_page_count=200,
+        heal_min_consecutive_failures=2,
+    )
+    for index in range(30):
+        (queue_dir / f"enrichment-{index}.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    commands: list[list[str]] = []
+    _capture_queue_notifications(monkeypatch)
+
+    for _ in range(4):
+        _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
+
+    assert [
+        "launchctl",
+        "kickstart",
+        "-k",
+        f"gui/{os.getuid()}/com.brainlayer.drain",
+    ] in commands
 
 
 def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path, monkeypatch):
@@ -1473,7 +2023,7 @@ def test_unpaused_backlog_still_attempts_drain_heal_and_reports_outcome(tmp_path
     assert "action=kickstart:com.brainlayer.drain" in queue_page
 
 
-def test_unchanged_pause_explained_backlog_pages_again_only_after_change_or_pause_lift(tmp_path, monkeypatch):
+def test_pause_explained_backlog_logs_once_per_signature_until_pause_lifts(tmp_path, monkeypatch):
     config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=False)
     (queue_dir / "enrichment-one.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
     pause_path.write_text(
@@ -1498,6 +2048,39 @@ def test_unchanged_pause_explained_backlog_pages_again_only_after_change_or_paus
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 3
 
 
+@pytest.mark.parametrize(
+    "queue_kinds",
+    [
+        ["watcher_chunk", "watcher_chunk", "watcher_chunk"],
+        ["enrichment_update", "watcher_chunk", "enrichment_update"],
+    ],
+    ids=["watcher-only", "mixed"],
+)
+def test_enrichment_pause_does_not_silence_unexplained_backlog(
+    tmp_path,
+    monkeypatch,
+    queue_kinds,
+):
+    config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=False)
+    for index, kind in enumerate(queue_kinds):
+        (queue_dir / f"queued-{index}.jsonl").write_text(
+            json.dumps({"kind": kind}) + "\n",
+            encoding="utf-8",
+        )
+    pause_path.write_text(
+        json.dumps({"paused_at": "2026-08-04T13:50:36Z", "labels": ["com.brainlayer.enrichment"]}),
+        encoding="utf-8",
+    )
+    notifications = _capture_queue_notifications(monkeypatch)
+
+    _run_queue_backlog_health(
+        config,
+        lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
+
+
 def test_unchanged_unexplained_backlog_pages_every_check(tmp_path, monkeypatch):
     config, _state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=False)
     (queue_dir / "watcher-stuck.jsonl").write_text("{}\n", encoding="utf-8")
@@ -1509,7 +2092,28 @@ def test_unchanged_unexplained_backlog_pages_every_check(tmp_path, monkeypatch):
     assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
 
 
-def test_old_paused_queue_pages_as_not_attempted_below_auto_heal_count(tmp_path, monkeypatch):
+def test_disabled_enrichment_backlog_pages_immediately_after_reenable(tmp_path, monkeypatch):
+    config, state_path, queue_dir, _pause_path = _queue_backlog_config(tmp_path, heal=False)
+    (queue_dir / "enrichment-one.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
+    notifications = _capture_queue_notifications(monkeypatch)
+
+    def runner(_command):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED", "0")
+
+    _run_queue_backlog_health(config, runner)
+
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
+    assert "queue_backlog_notice" in json.loads(state_path.read_text(encoding="utf-8"))
+
+    monkeypatch.delenv("BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED")
+    _run_queue_backlog_health(config, runner)
+
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 2
+
+
+def test_old_paused_queue_below_auto_heal_count_does_not_page(tmp_path, monkeypatch):
     config, _state_path, queue_dir, pause_path = _queue_backlog_config(tmp_path, heal=True)
     config = replace(config, queue_auto_heal_count=25, queue_page_oldest_seconds=0)
     (queue_dir / "enrichment-old.jsonl").write_text(ENRICHMENT_EVENT, encoding="utf-8")
@@ -1518,9 +2122,7 @@ def test_old_paused_queue_pages_as_not_attempted_below_auto_heal_count(tmp_path,
 
     _run_queue_backlog_health(config, lambda _command: SimpleNamespace(returncode=0, stdout="", stderr=""))
 
-    queue_page = next(message for title, message in notifications if title == "BrainLayer queue backlog")
-    assert "heal=not_attempted" in queue_page
-    assert "outcome=below auto-heal count 25" in queue_page
+    assert [title for title, _message in notifications].count("BrainLayer queue backlog") == 1
 
 
 def test_success_tick_clears_heal_breaker_state(tmp_path):
@@ -1594,7 +2196,7 @@ def _empty_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> d
     }
 
 
-def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tmp_path):
+def test_empty_canary_is_healthy_and_never_kickstarts_a_live_brainbar_daemon(tmp_path):
     """Measured on the M1, 2026-09-06: heal_failures reached 97 for this exact key.
 
     Restarting a daemon that is answering cannot put content into an index, so the
@@ -1619,8 +2221,11 @@ def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tm
             command_runner=commands.append,
             now_fn=_clock_at(minute),
         )
-        assert result.ok is False
-        assert "brain_search_canary_empty" in [issue.code for issue in result.issues]
+        assert result.ok is True
+        assert result.canary_ok is True
+        assert result.canary_status == "empty"
+        assert result.canary_result_count == 0
+        assert not [issue for issue in result.issues if issue.code.startswith("brain_search_canary_")]
 
     assert not any(
         "com.brainlayer.brainbar-daemon" in " ".join(command)
@@ -1628,11 +2233,13 @@ def test_empty_canary_is_reported_but_never_kickstarts_a_live_brainbar_daemon(tm
         if command[:3] == ["launchctl", "kickstart", "-k"]
     ), commands
     saved = json.loads(state_path.read_text(encoding="utf-8"))
-    assert "com.brainlayer.brainbar-daemon:brain_search_canary_empty" not in saved["heal_failures"]
+    assert saved["canary_status"] == "empty"
+    assert saved["canary_result_count"] == 0
+    assert not [key for key in saved["heal_failures"] if "brain_search_canary" in key]
 
 
-def test_unanswered_canary_still_kickstarts_the_daemon(tmp_path):
-    """The socket failing to answer IS evidence about the daemon; that path is unchanged."""
+def test_failed_retrieval_still_kickstarts_the_daemon(tmp_path):
+    """A returned isError is a failed retrieval, not an empty corpus."""
     db_path = tmp_path / "brainlayer.db"
     state_path = tmp_path / "health-state.json"
     _make_db(db_path, total=3, vector_rows=3)
@@ -1653,12 +2260,109 @@ def test_unanswered_canary_still_kickstarts_the_daemon(tmp_path):
         "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 128 --enrich-limit 25\n"
     )
     for minute in (25, 30):
-        run_health_check(
+        result = run_health_check(
             config,
             ps_output_fn=_ps_output_stub(ps_output),
             socket_request_fn=failed_canary,
             command_runner=commands.append,
             now_fn=_clock_at(minute),
         )
+        assert result.canary_status == "retrieval_failed"
+        assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
 
-    assert any("com.brainlayer.brainbar-daemon" in " ".join(command) for command in commands)
+    assert any(
+        command[:3] == ["launchctl", "kickstart", "-k"] and "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+    )
+    assert json.loads(state_path.read_text(encoding="utf-8"))["canary_status"] == "retrieval_failed"
+
+
+def test_transport_error_is_distinct_and_still_kickstarts_the_daemon(tmp_path):
+    db_path = tmp_path / "brainlayer.db"
+    state_path = tmp_path / "health-state.json"
+    _make_db(db_path, total=3, vector_rows=3)
+    commands: list[list[str]] = []
+
+    def timed_out_canary(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
+        raise TimeoutError("socket read timed out")
+
+    config = HealthCheckConfig(db_path=db_path, state_path=state_path, heal=True)
+    ps_output = (
+        "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py --interval 1 --backlog-batch 128 --enrich-limit 25\n"
+    )
+    for minute in (25, 30):
+        result = run_health_check(
+            config,
+            ps_output_fn=_ps_output_stub(ps_output),
+            socket_request_fn=timed_out_canary,
+            command_runner=commands.append,
+            now_fn=_clock_at(minute),
+        )
+        assert result.canary_status == "transport_failed"
+        assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
+
+    assert any(
+        command[:3] == ["launchctl", "kickstart", "-k"] and "com.brainlayer.brainbar-daemon" in " ".join(command)
+        for command in commands
+    )
+    assert json.loads(state_path.read_text(encoding="utf-8"))["canary_status"] == "transport_failed"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        [],
+        "not-an-object",
+        {},
+        {"jsonrpc": "2.0", "id": 1, "result": {}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": "not-an-array"}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": []}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text"}]}},
+    ],
+    ids=[
+        "top-level-list",
+        "top-level-scalar",
+        "missing-result",
+        "missing-content",
+        "non-array-content",
+        "empty-content",
+        "missing-text",
+    ],
+)
+def test_malformed_canary_content_fails_closed_as_retrieval_failure(tmp_path, response):
+    db_path = tmp_path / "brainlayer.db"
+    _make_db(db_path, total=3, vector_rows=3)
+
+    def missing_content(_socket_path: Path, _query: str, _timeout_seconds: float) -> dict:
+        return response
+
+    result = run_health_check(
+        HealthCheckConfig(db_path=db_path, state_path=tmp_path / "health-state.json"),
+        ps_output_fn=lambda: (
+            "123 /usr/bin/python scripts/hotlane_brainbar_daemon.py "
+            "--interval 1 --backlog-batch 128 --enrich-limit 25\n"
+        ),
+        socket_request_fn=missing_content,
+        command_runner=lambda _args: None,
+        now_fn=_clock_at(25),
+    )
+
+    assert result.ok is False
+    assert result.canary_ok is False
+    assert result.canary_status == "retrieval_failed"
+    assert "brain_search_canary_failed" in [issue.code for issue in result.issues]
+
+
+@pytest.mark.parametrize("label", ["com.brainlayer.enrich", "com.brainlayer.enrichment"])
+def test_health_helpers_refuse_retired_labels_even_with_stale_configuration(label, tmp_path):
+    commands = []
+
+    def runner(args):
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert health_check._kickstart(label, runner) == f"retired:{label}"
+    assert health_check._bootstrap_if_absent(label, tmp_path / "stale.plist", runner) == f"retired:{label}"
+    assert health_check._launchd_label_loaded(label, runner) is None
+    assert health_check._launchd_process_state(label, runner) is None
+    assert commands == []

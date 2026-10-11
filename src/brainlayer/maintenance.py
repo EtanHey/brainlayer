@@ -4,31 +4,49 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
+import functools
 import json
 import os
+import re
+import signal
 import sqlite3
+import statistics
 import subprocess
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any, Callable, Mapping, Sequence
 
 import apsw
 
-from .backup_daily import WEEKLY_RETENTION, run_backup
+from .backup_daily import (
+    BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV,
+    DAILY_RETENTION,
+    DEFAULT_STAGING_DIR,
+    WEEKLY_RETENTION,
+    BackupAlreadyRunningError,
+    _backup_log_path,
+    _recent_verified_backup_for_reuse,
+)
 from .drain import BurnDrainResult, burn_drain_once
-from .launchd_primitive import is_launchd_label_loaded
+from .drive_credentials import _atomic_write
+from .launchd_primitive import is_launchd_label_disabled, is_launchd_label_loaded
 from .paths import get_db_path
 from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .pipeline.code_intelligence import _pid_is_alive, _pid_start_time
 from .queue_io import get_queue_dir
 from .wal_checkpoint import checkpoint
 
 PAUSE_SENTINEL_PATH = DEFAULT_PAUSE_SENTINEL_PATH
 
 MAINTENANCE_DATASET = "brainlayer-maintenance"
-DEFAULT_SERVICES = ("watch", "enrichment", "index", "drain")
-REFEED_SERVICES = ("watch", "enrichment", "index")
+DEFAULT_SERVICES = ("watch", "index", "drain")
+REFEED_SERVICES = ("watch", "index")
 EXPECTED_WRITER_PATTERNS = (
     "BrainBar",
     "brainlayer watch",
@@ -38,13 +56,35 @@ EXPECTED_WRITER_PATTERNS = (
     "drain_daemon.py",
     "com.brainlayer.",
 )
+QUIESCE_EXIT_TIMEOUT_SECONDS = 45.0
+_WATCHDOG_DISABLED_BEFORE = "_fleet_watchdog_disabled_before"
+MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
+SEARCH_LATENCY_TARGET_MS = 50.0
+# Ten times the target distinguishes sustained pathological delay from scheduler jitter.
+SEARCH_LATENCY_FAILURE_MS = 500.0
+SEARCH_LATENCY_SAMPLES = 5
+# Keep in parity with BrainLayerMaintenanceExit.deliberateDeferrals in BrainBar.
+# Exit 75 is also used for real failures; only these whole reasons are deliberate skips.
+DELIBERATE_DEFERRALS = (
+    r"^outside quiet window: now=\S+ start_hour=\d+ duration_minutes=\d+$",
+    r"^recent queue write activity: \d+ file\(s\) modified recently$",
+    r"^queue depth growing: before=\d+ after=\d+$",
+    r"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$",
+)
+
+
+def _is_deliberate_deferral(reason: str) -> bool:
+    return "failed to resume" not in reason.casefold() and any(
+        re.fullmatch(pattern, reason, flags=re.IGNORECASE) for pattern in DELIBERATE_DEFERRALS
+    )
 
 
 class MaintenanceAbort(RuntimeError):
-    def __init__(self, reason: str, *, code: int = 75) -> None:
+    def __init__(self, reason: str, *, code: int = 75, detail: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
         self.code = code
+        self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -80,8 +120,10 @@ class MaintenanceResult:
     data_dir_before_bytes: int | None = None
     data_dir_after_bytes: int | None = None
     search_latency_ms: float | None = None
+    warnings: list[str] = field(default_factory=list)
     vacuum_before_bytes: int | None = None
     vacuum_after_bytes: int | None = None
+    backup_status: str | None = None
     actions: list[str] = field(default_factory=list)
 
 
@@ -91,7 +133,12 @@ class MaintenanceConfig:
     queue_dir: Path = field(default_factory=get_queue_dir)
     quarantine_root: Path = field(default_factory=lambda: Path.home() / ".brainlayer" / "quarantine" / "stale-queue")
     log_path: Path = field(
-        default_factory=lambda: Path.home() / ".local" / "share" / "brainlayer" / "logs" / "maintenance.log"
+        default_factory=lambda: Path(
+            os.environ.get(
+                "BRAINLAYER_MAINTENANCE_LOG_PATH",
+                Path.home() / ".local" / "share" / "brainlayer" / "logs" / "maintenance.log",
+            )
+        )
     )
     repo_root: Path = field(default_factory=lambda: Path(os.environ.get("BRAINLAYER_REPO_ROOT", Path.cwd())))
     now_fn: Callable[[], dt.datetime] = field(default_factory=lambda: lambda: dt.datetime.now().astimezone())
@@ -100,10 +147,19 @@ class MaintenanceConfig:
     idle_sample_seconds: float = 5.0
     recent_write_grace_seconds: float = 180.0
     expected_writer_patterns: Sequence[str] = EXPECTED_WRITER_PATTERNS
+    backup_staging_dir: Path = field(
+        default_factory=lambda: Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", DEFAULT_STAGING_DIR))
+    )
+    backup_log_path: Path | None = None
+    backup_wait_timeout_seconds: float = 2 * 60 * 60
+    backup_wait_poll_seconds: float = 30
+    backup_reuse_max_age_hours: float = 6
 
 
-def run_command(args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(args), text=True, capture_output=True, check=check)
+def run_command(args: Sequence[str], *, check: bool = True, timeout=None) -> subprocess.CompletedProcess[str]:
+    if timeout is None and args and args[0] == "launchctl":
+        timeout = QUIESCE_EXIT_TIMEOUT_SECONDS
+    return subprocess.run(list(args), text=True, capture_output=True, check=check, timeout=timeout)
 
 
 def _write_log(path: Path, event: dict[str, Any]) -> None:
@@ -350,6 +406,8 @@ def quarantine_stale_queue_files(
 
 
 def _launchd_label(service: str) -> str:
+    if service == "fleet-watchdog":
+        return "com.etanhey.brainlayer-fleet-watchdog"
     return f"com.brainlayer.{service}"
 
 
@@ -361,13 +419,22 @@ def _bootout_service(service: str) -> bool:
     return result.returncode == 0
 
 
-def _service_is_loaded(service: str) -> bool:
-    state = is_launchd_label_loaded(
-        _launchd_label(service),
-        command_runner=lambda args: run_command(args, check=False),
-    )
+def _service_is_loaded(service: str, *, timeout: float | None = None) -> bool:
+    try:
+        state = is_launchd_label_loaded(
+            _launchd_label(service),
+            command_runner=lambda args: run_command(args, check=False, timeout=timeout),
+        )
+    except Exception as exc:
+        raise MaintenanceAbort(
+            f"cannot determine whether launchd service {service} is loaded ({type(exc).__name__})",
+            detail=f"state:{_launchd_label(service)}",
+        ) from None
     if state is None:
-        raise MaintenanceAbort(f"cannot determine whether launchd service {service} is loaded")
+        raise MaintenanceAbort(
+            f"cannot determine whether launchd service {service} is loaded",
+            detail=f"state:{_launchd_label(service)}",
+        )
     return state
 
 
@@ -391,37 +458,193 @@ def _launchd_dir_for_resume(repo_root: Path) -> Path:
     return get_launchd_dir()
 
 
-def _verify_enrichment_template_flex_backend(repo_root_or_launchd_dir: Path) -> None:
-    launchd_dir = _as_launchd_dir(repo_root_or_launchd_dir)
-    env_template_path = launchd_dir / "brainlayer.env.example"
-    if not env_template_path.exists():
-        raise MaintenanceAbort(f"BrainLayer env template not found: {env_template_path}")
-    env_template = env_template_path.read_text(encoding="utf-8")
-    service_tier = None
-    for raw_line in env_template.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        line = line.removeprefix("export ").strip()
-        key, separator, value = line.partition("=")
-        if separator and key.strip() == "BRAINLAYER_GEMINI_SERVICE_TIER":
-            service_tier = value.strip().strip("'\"").lower()
-    if service_tier != "flex":
-        raise MaintenanceAbort("BrainLayer env template no longer uses Gemini Flex backend")
-
-
 def _resume_service(repo_root: Path, service: str) -> None:
+    if service in {"enrich", "enrichment"}:
+        raise MaintenanceAbort(f"service {service} is retired; refusing to resume")
+    if service in {"brainbar", "brainbar-daemon", "fleet-watchdog"}:
+        # These already-installed jobs have no normal install.sh service option
+        # (or own a different namespace). Restore their existing configuration.
+        plist = Path.home() / "Library" / "LaunchAgents" / f"{_launchd_label(service)}.plist"
+        run_command(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], check=True)
+        return
     launchd_dir = _launchd_dir_for_resume(repo_root)
-    if service == "enrichment":
-        _verify_enrichment_template_flex_backend(launchd_dir)
     run_command([str(launchd_dir / "install.sh"), service], check=True)
 
 
+def _wait_for_service_exit(service: str) -> None:
+    deadline = monotonic() + QUIESCE_EXIT_TIMEOUT_SECONDS
+    while _service_is_loaded(service, timeout=max(0.001, deadline - monotonic())):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service}; it remains loaded",
+                detail=f"loaded:{_launchd_label(service)}",
+            )
+        sleep(min(0.1, remaining))
+
+
+def _watchdog_hold_path() -> Path:
+    return PAUSE_SENTINEL_PATH.with_name("fleet-watchdog-hold.json").expanduser()
+
+
+@contextmanager
+def _watchdog_hold_lock(path: Path):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise MaintenanceAbort(
+                "watchdog hold busy", detail=f"hold-active:{_launchd_label('fleet-watchdog')}"
+            ) from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def _watchdog_hold_owner_alive(path: Path) -> bool | None:
+    try:
+        record = json.loads(path.read_text())
+        pid, start = record["pid"], record["pid_start_time"]
+        if path.is_symlink() or type(pid) is not int or pid <= 0 or not isinstance(start, str) or not start:
+            raise ValueError
+        if not _pid_is_alive(pid):
+            return False
+        current = _pid_start_time(pid)
+        if not current:
+            raise ValueError
+        return current == start
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        raise MaintenanceAbort(
+            "watchdog hold state unknown", detail=f"hold-state:{_launchd_label('fleet-watchdog')}"
+        ) from None
+
+
+def _watchdog_recovery_paused(path: Path) -> bool:
+    payload, active, _ = pause_sentinel_state(path.with_name("pause.sentinel"), dt.datetime.now(dt.UTC))
+    return bool(active and pause_applies_to_label(payload, _launchd_label("fleet-watchdog"))) or (
+        "fleet-watchdog" in _maintenance_keep_down_services()
+    )
+
+
+def _recover_watchdog_hold(path: Path, command_runner=None, alert_path: Path | None = None) -> bool:
+    owner_alive = _watchdog_hold_owner_alive(path)
+    if owner_alive is None:
+        return False
+    if owner_alive:
+        raise MaintenanceAbort("watchdog hold owner alive", detail=f"hold-active:{_launchd_label('fleet-watchdog')}")
+    if _watchdog_recovery_paused(path):
+        raise MaintenanceAbort("watchdog recovery paused", detail=f"hold-state:{_launchd_label('fleet-watchdog')}")
+    runner = command_runner or (lambda args: run_command(args, check=False))
+    target = f"gui/{os.getuid()}"
+    label = _launchd_label("fleet-watchdog")
+    plist = Path.home() / "Library/LaunchAgents" / f"{label}.plist"
+    for args in (["launchctl", "enable", f"{target}/{label}"], ["launchctl", "bootstrap", target, str(plist)]):
+        result = runner(args)
+        if getattr(result, "returncode", None) != 0:
+            if args[1] == "bootstrap" and is_launchd_label_loaded(label, command_runner=runner) is True:
+                continue  # An interrupted prior recovery may have already restored it.
+            raise MaintenanceAbort("watchdog recovery failed", detail=f"hold-state:{label}")
+    from .job_alerts import report
+
+    report(
+        "fleet-watchdog-hold", "BrainLayer recovered a stale fleet-watchdog hold; supervisor restored", path=alert_path
+    )
+    path.unlink()
+    return True
+
+
+def recover_fleet_watchdog_hold(
+    *, path: Path | None = None, command_runner=None, alert_path: Path | None = None
+) -> bool:
+    """Recover only a dead/reused owner's hold; a live or unknown owner refuses."""
+    path = path or _watchdog_hold_path()
+    if not path.exists():
+        return False
+    with _watchdog_hold_lock(path):
+        return _recover_watchdog_hold(path, command_runner, alert_path)
+
+
+@contextmanager
+def sigterm_cleanup():
+    """Unwind CLI work on SIGTERM, allowing its finally to restore services."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def terminate(*_):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise SystemExit(143)
+
+    previous = signal.signal(signal.SIGTERM, terminate)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> None:
+    if not services:
+        return
+    path = _watchdog_hold_path()
+    with _watchdog_hold_lock(path):
+        _recover_watchdog_hold(path)
+        disabled = is_launchd_label_disabled(
+            _launchd_label("fleet-watchdog"), command_runner=lambda args: run_command(args, check=False)
+        )
+        if disabled is None:
+            raise MaintenanceAbort(
+                "watchdog disabled state unknown", detail=f"state:{_launchd_label('fleet-watchdog')}"
+            )
+        if not disabled:
+            start = _pid_start_time(os.getpid())
+            if not start:
+                raise MaintenanceAbort(
+                    "watchdog owner unknown", detail=f"hold-state:{_launchd_label('fleet-watchdog')}"
+                )
+            _atomic_write(
+                path, {"pid": os.getpid(), "pid_start_time": start, "started_at": dt.datetime.now(dt.UTC).isoformat()}
+            )
+            fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        booted_out[_WATCHDOG_DISABLED_BEFORE] = disabled
+        if not disabled:
+            try:
+                run_command(
+                    ["launchctl", "disable", f"gui/{os.getuid()}/{_launchd_label('fleet-watchdog')}"], check=True
+                )
+            except Exception:
+                raise MaintenanceAbort(
+                    "watchdog hold failed", detail=f"disable:{_launchd_label('fleet-watchdog')}"
+                ) from None
+    services = ("fleet-watchdog", *(service for service in services if service != "fleet-watchdog"))
     for service in services:
-        booted_out[service] = bool(_bootout_service(service))
+        try:
+            booted_out[service] = bool(_bootout_service(service))
+        except Exception as exc:
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service} ({type(exc).__name__})",
+                detail=f"bootout:{_launchd_label(service)}",
+            ) from None
         if not booted_out[service] and _service_is_loaded(service):
-            raise MaintenanceAbort(f"failed to quiesce launchd service {service}; it remains loaded")
+            raise MaintenanceAbort(
+                f"failed to quiesce launchd service {service}; it remains loaded",
+                detail=f"bootout:{_launchd_label(service)}",
+            )
+        _wait_for_service_exit(service)
+        if service == "fleet-watchdog" and not disabled:
+            booted_out[service] = True  # An owned hold must restore even an already-absent supervisor.
+
+
+def _clean_git_env() -> dict[str, str]:
+    """Ignore caller Git routing so ``-C repo_root`` remains authoritative."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
 
 
 def _git_head_sha(repo_root: Path) -> str | None:
@@ -431,12 +654,30 @@ def _git_head_sha(repo_root: Path) -> str | None:
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
             timeout=30,
             check=True,
         )
     except Exception:
         return None
     return out.stdout.strip() or None
+
+
+def _git_toplevel(repo_root: Path) -> Path | None:
+    """Return the checkout root only when Git can classify ``repo_root``."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            env=_clean_git_env(),
+            timeout=30,
+            check=True,
+        )
+    except Exception:
+        return None
+    value = out.stdout.strip()
+    return Path(value).resolve() if value else None
 
 
 def _git_merged_head_sha(repo_root: Path) -> str | None:
@@ -446,6 +687,7 @@ def _git_merged_head_sha(repo_root: Path) -> str | None:
             ["git", "-C", str(repo_root), "fetch", "--quiet", "origin", "main"],
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
             timeout=60,
             check=False,
         )
@@ -453,6 +695,7 @@ def _git_merged_head_sha(repo_root: Path) -> str | None:
             ["git", "-C", str(repo_root), "rev-parse", "origin/main"],
             capture_output=True,
             text=True,
+            env=_clean_git_env(),
             timeout=30,
             check=True,
         )
@@ -464,12 +707,13 @@ def _git_merged_head_sha(repo_root: Path) -> str | None:
 def _assert_running_merged_code(repo_root: Path, *, strict: bool = False) -> None:
     """Refuse to run code that is not the merged code.
 
-    The nightly job runs `python -m brainlayer.maintenance` from an EDITABLE install,
-    so `import brainlayer` resolves to the WORKING TREE. On 2026-08-05 that tree was 8
-    commits behind origin/main and #650's pause-sentinel fix -- merged hours earlier --
-    was simply not on disk. The job would have run stale code and reported success.
+    A source-installed nightly job resolves imports to the working tree. On 2026-08-05
+    that tree was 8 commits behind origin/main and would have run stale code. A packaged
+    install is different: it has no BrainLayer checkout, and Git must not walk upward
+    from site-packages into an unrelated ancestor repository such as Homebrew's tap.
 
-    Either we run the merged code, or we abort LOUDLY. Never silently stale.
+    Source checkouts either match merged code or abort loudly. Installed artifacts skip
+    only this checkout-specific comparison; their integrity is covered at build/release.
     """
     if os.environ.get("PYTEST_CURRENT_TEST"):
         # Under pytest the working tree is legitimately a feature branch, which is not
@@ -479,6 +723,15 @@ def _assert_running_merged_code(repo_root: Path, *, strict: bool = False) -> Non
         return
     if os.environ.get("BRAINLAYER_MAINTENANCE_ALLOW_STALE") == "1":
         print("maintenance: BRAINLAYER_MAINTENANCE_ALLOW_STALE=1 -- skipping freshness check", file=sys.stderr)
+        return
+
+    git_toplevel = _git_toplevel(repo_root)
+    if git_toplevel != repo_root.resolve():
+        print(
+            "maintenance: installed artifact is not an editable BrainLayer checkout; "
+            "skipping working-tree freshness check",
+            file=sys.stderr,
+        )
         return
 
     head = _git_head_sha(repo_root)
@@ -521,7 +774,7 @@ def _service_is_deliberately_paused(service: str) -> bool:
     payload, active, _stale = pause_sentinel_state(PAUSE_SENTINEL_PATH, datetime.now(UTC))
     if not active:
         return False
-    return pause_applies_to_label(payload, f"com.brainlayer.{service}")
+    return pause_applies_to_label(payload, _launchd_label(service))
 
 
 def _maintenance_keep_down_services() -> set[str]:
@@ -538,7 +791,21 @@ def _resume_services(
 ) -> list[tuple[str, Exception]]:
     failures: list[tuple[str, Exception]] = []
     keep_down = _maintenance_keep_down_services()
+    held = loaded_before is not None and _WATCHDOG_DISABLED_BEFORE in loaded_before
+    if held:
+        services = (*(service for service in services if service != "fleet-watchdog"), "fleet-watchdog")
     for service in services:
+        if service in {"enrich", "enrichment"}:
+            print(f"service {service} is retired; leaving it down", file=sys.stderr)
+            continue
+        if service == "fleet-watchdog" and held:
+            if loaded_before[_WATCHDOG_DISABLED_BEFORE]:
+                continue  # Never undo an operator disable.
+            try:
+                run_command(["launchctl", "enable", f"gui/{os.getuid()}/{_launchd_label(service)}"], check=True)
+            except Exception as exc:
+                failures.append((service, exc))
+                continue
         if loaded_before is not None and not loaded_before.get(service, False):
             print(f"maintenance did not boot out service {service}; leaving it down", file=sys.stderr)
             continue
@@ -553,6 +820,8 @@ def _resume_services(
             continue
         try:
             _resume_service(repo_root, service)
+            if service == "fleet-watchdog" and held:
+                _watchdog_hold_path().unlink(missing_ok=True)
         except Exception as exc:
             failures.append((service, exc))
     return failures
@@ -586,24 +855,34 @@ def _directory_size(path: Path) -> int:
     return total
 
 
-def _verify_search_latency(db_path: Path, *, threshold_ms: float = 50.0) -> float | None:
+def _verify_search_latency(db_path: Path, *, threshold_ms: float = SEARCH_LATENCY_FAILURE_MS) -> float | None:
+    """Measure warm query latency; connection setup and one cold query are excluded."""
     if not db_path.exists():
         return None
-    started = time.perf_counter()
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
     try:
         has_fts = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts' LIMIT 1"
         ).fetchone()
-        if has_fts:
-            conn.execute("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1", ("brainlayer",)).fetchall()
-        else:
-            conn.execute("SELECT id FROM chunks LIMIT 1").fetchall()
+        query, params = (
+            ("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 1", ("brainlayer",))
+            if has_fts
+            else ("SELECT id FROM chunks LIMIT 1", ())
+        )
+        conn.execute(query, params).fetchall()
+        samples = []
+        for _ in range(SEARCH_LATENCY_SAMPLES):
+            started = time.perf_counter()
+            conn.execute(query, params).fetchall()
+            samples.append((time.perf_counter() - started) * 1000)
     finally:
         conn.close()
-    latency_ms = (time.perf_counter() - started) * 1000
+    latency_ms = statistics.median(samples)
     if latency_ms > threshold_ms:
-        raise MaintenanceAbort(f"post-maintenance search latency too high: {latency_ms:.1f}ms > {threshold_ms:.1f}ms")
+        raise MaintenanceAbort(
+            f"post-maintenance search latency pathological: {latency_ms:.1f}ms > {threshold_ms:.1f}ms",
+            code=1,
+        )
     return latency_ms
 
 
@@ -640,6 +919,199 @@ def _run_gates(config: MaintenanceConfig) -> None:
     _check_lsof_clean(config)
 
 
+@contextmanager
+def _maintenance_lock(db_path: Path):
+    """Serialize scheduled maintenance and FTS repair on the same database."""
+    lock_path = db_path.parent / ".maintenance.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + MAINTENANCE_LOCK_TIMEOUT_SECONDS
+    with lock_path.open("a+b") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MaintenanceAbort("maintenance lock timed out", code=77) from None
+                print("maintenance: waiting for another maintenance job", file=sys.stderr, flush=True)
+                time.sleep(min(30, remaining))
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _serialize_maintenance(func: Callable[..., MaintenanceResult]) -> Callable[..., MaintenanceResult]:
+    @functools.wraps(func)
+    def wrapped(mode: str, *, config: MaintenanceConfig | None = None, dry_run: bool = False) -> MaintenanceResult:
+        resolved = config or MaintenanceConfig()
+        if dry_run:
+            return func(mode, config=resolved, dry_run=True)
+        with _maintenance_lock(resolved.db_path):
+            return func(mode, config=resolved, dry_run=False)
+
+    return wrapped
+
+
+@sigterm_cleanup()
+def run_coordinated_fts_repair(db_path: Path, *, repo_root: Path | None = None) -> dict[str, int]:
+    """Repair the configured DB only after resident writers have been quiesced."""
+    with _maintenance_lock(db_path):
+        return _run_coordinated_fts_repair_unlocked(db_path, repo_root=repo_root)
+
+
+def _run_coordinated_fts_repair_unlocked(db_path: Path, *, repo_root: Path | None = None) -> dict[str, int]:
+    from .runtime_store import WriterRuntimeStore
+
+    services = DEFAULT_SERVICES
+    loaded_before = {service: _service_is_loaded(service) for service in services}
+    booted_out: dict[str, bool] = {}
+    body_error: BaseException | None = None
+    try:
+        _quiesce_services(services, booted_out)
+        with WriterRuntimeStore(db_path) as store:
+            result = store.repair_fts(rebuild_trigram=True)
+    except BaseException as exc:
+        body_error = exc
+        raise
+    finally:
+        root = repo_root or Path(os.environ.get("BRAINLAYER_REPO_ROOT", Path.cwd()))
+        resume_failures = _resume_services(root, services, booted_out)
+        if resume_failures and body_error is not None:
+            body_error.add_note(_format_resume_failures(resume_failures))
+    if resume_failures:
+        raise MaintenanceAbort(_format_resume_failures(resume_failures))
+    return result
+
+
+def _backup_lock_is_held(staging_dir: Path) -> bool:
+    lock_path = staging_dir / ".backup.lock"
+    if not lock_path.exists():
+        return False
+    with lock_path.open("a+b") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return False
+
+
+def _recent_verified_backup(config: MaintenanceConfig) -> dict[str, Any] | None:
+    log_path = config.backup_log_path or _backup_log_path(None, db_path=config.db_path)
+    return _recent_verified_backup_for_reuse(
+        log_path,
+        config.db_path,
+        now=config.now_fn(),
+        max_age_hours=config.backup_reuse_max_age_hours,
+    )
+
+
+def _remaining_quiet_window_seconds(config: MaintenanceConfig) -> int:
+    now = config.now_fn()
+    start = now.replace(hour=config.quiet_window_start_hour, minute=0, second=0, microsecond=0)
+    if now < start:
+        start -= dt.timedelta(days=1)
+    end = start + dt.timedelta(minutes=config.quiet_window_duration_minutes)
+    return max(0, int((end - now).total_seconds()))
+
+
+def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) -> dict[str, Any]:
+    """Use the daily process-group supervisor with a deadline inside the quiet window."""
+    if WEEKLY_RETENTION != DAILY_RETENTION:
+        raise MaintenanceAbort("weekly retention differs from supervised daily backup; VACUUM skipped", code=76)
+    env = os.environ.copy()
+    env.update(
+        {
+            "BRAINLAYER_DB": str(config.db_path),
+            "BRAINLAYER_BACKUP_STAGING_DIR": str(config.backup_staging_dir),
+            "BRAINLAYER_BACKUP_LOG_PATH": str(config.backup_log_path or _backup_log_path(None, db_path=config.db_path)),
+            "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(timeout_seconds),
+            BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV: str(config.backup_reuse_max_age_hours),
+        }
+    )
+    env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "brainlayer.backup_daily"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds + 10)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise MaintenanceAbort("fresh weekly backup timed out; VACUUM skipped", code=76) from exc
+    if process.returncode != 0:
+        if _backup_lock_is_held(config.backup_staging_dir):
+            raise BackupAlreadyRunningError("backup lock acquired during fresh weekly backup")
+        raise MaintenanceAbort(f"fresh weekly backup exited {process.returncode}; VACUUM skipped", code=76)
+    for line in reversed(stdout.splitlines()):
+        try:
+            result = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, dict) and "verified" in result:
+            return result
+    raise MaintenanceAbort(
+        f"fresh weekly backup returned no receipt ({len(stderr)} stderr bytes); VACUUM skipped", code=76
+    )
+
+
+def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
+    deadline = time.monotonic() + config.backup_wait_timeout_seconds
+    waited = False
+    while True:
+        try:
+            held = _backup_lock_is_held(config.backup_staging_dir)
+        except OSError as exc:
+            raise MaintenanceAbort(f"backup lock unreadable ({type(exc).__name__}); VACUUM skipped", code=76) from exc
+        if not held:
+            try:
+                receipt = _recent_verified_backup(config)
+            except OSError as exc:
+                raise MaintenanceAbort(
+                    f"backup receipt unreadable ({type(exc).__name__}); VACUUM skipped", code=76
+                ) from exc
+            if receipt is not None and WEEKLY_RETENTION == DAILY_RETENTION:
+                _write_log(config.log_path, {"mode": "full", "backup_status": "reused_verified", "waited": waited})
+                return receipt
+            remaining_window = _remaining_quiet_window_seconds(config)
+            if remaining_window < 1:
+                raise MaintenanceAbort("no quiet-window time remains for fresh backup; VACUUM skipped", code=76)
+            try:
+                backup = _run_bounded_weekly_backup(config, remaining_window)
+            except BackupAlreadyRunningError:
+                held = True
+            except Exception as exc:
+                raise MaintenanceAbort(f"weekly backup failed ({type(exc).__name__}); VACUUM skipped", code=76) from exc
+            else:
+                drive_file = backup.get("drive_file")
+                if (
+                    backup.get("verified") is not True
+                    or backup.get("uploaded") is not True
+                    or not isinstance(drive_file, dict)
+                    or not isinstance(drive_file.get("id"), str)
+                ):
+                    raise MaintenanceAbort("weekly backup was not verified; VACUUM skipped", code=76)
+                return backup
+        waited = True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _write_log(config.log_path, {"mode": "full", "backup_status": "wait_timeout"})
+            raise MaintenanceAbort("backup wait timed out; VACUUM skipped", code=76)
+        _write_log(config.log_path, {"mode": "full", "backup_status": "waiting", "remaining_seconds": round(remaining)})
+        time.sleep(min(config.backup_wait_poll_seconds, remaining))
+
+
+@_serialize_maintenance
 def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_run: bool = False) -> MaintenanceResult:
     _assert_running_merged_code((config or MaintenanceConfig()).repo_root)
     if mode not in {"light", "full", "burn"}:
@@ -660,21 +1132,49 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     )
     if dry_run:
         result.actions.append(f"would run {mode} maintenance")
+        if mode == "full" and _backup_lock_is_held(config.backup_staging_dir):
+            result.actions.append("would wait for running backup")
         _write_log(config.log_path, {"mode": mode, "dry_run": True, "stale_queue": asdict(result.stale_queue)})
         return result
+
+    # The daily backup is online. Wait while services still run, before quiescing
+    # writers or starting the destructive VACUUM phase.
+    backup = None
+    backup_abort = None
+    post_backup_gates_failed = False
+    if mode == "full":
+        try:
+            backup = _weekly_backup(config)
+            result.backup_status = "verified"
+        except MaintenanceAbort as exc:
+            if exc.code != 76:
+                raise
+            backup_abort = exc
+            result.backup_status = "unavailable"
+            result.actions.append(f"vacuum_skipped={exc.reason}")
+        try:
+            _run_gates(config)
+        except MaintenanceAbort as exc:
+            post_backup_gates_failed = True
+            backup_abort = MaintenanceAbort(f"post-backup gate failed: {exc.reason}; VACUUM skipped", code=76)
+            result.backup_status = "gates_failed"
+            result.actions.append(f"vacuum_skipped={backup_abort.reason}")
+            backup = None
 
     services = DEFAULT_SERVICES
     if mode == "burn":
         services = (*REFEED_SERVICES, "drain")
     resume_failures: list[tuple[str, Exception]] = []
     body_error: BaseException | None = None
+    if post_backup_gates_failed:
+        services = ()
     loaded_before = {service: _service_is_loaded(service) for service in services}
     booted_out: dict[str, bool] = {}
     try:
         _quiesce_services(tuple(loaded_before), booted_out)
-        result.checkpoint = _checkpoint_full(config.db_path)
-        if mode == "full":
-            backup = run_backup(retention_policy=WEEKLY_RETENTION)
+        if not post_backup_gates_failed:
+            result.checkpoint = _checkpoint_full(config.db_path)
+        if mode == "full" and backup is not None:
             result.actions.append(f"verified_drive_backup={backup.get('drive_file', {}).get('id')}")
             result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path)
             result.checkpoint = _checkpoint_full(config.db_path)
@@ -682,7 +1182,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             result.burn = _run_burn_until_empty(config)
             if result.burn.failed_files:
                 raise MaintenanceAbort("burn drain failed; queue files preserved")
-        else:
+        elif not post_backup_gates_failed:
             result.stale_queue = quarantine_stale_queue_files(
                 db_path=config.db_path,
                 queue_dir=config.queue_dir,
@@ -709,6 +1209,11 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     result.queue_after_files = len(_queue_files(config.queue_dir))
     result.data_dir_after_bytes = _directory_size(config.db_path.parent)
     result.search_latency_ms = _verify_search_latency(config.db_path)
+    if result.search_latency_ms is not None and result.search_latency_ms > SEARCH_LATENCY_TARGET_MS:
+        result.warnings.append(
+            f"post-maintenance search latency above target: {result.search_latency_ms:.1f}ms > "
+            f"{SEARCH_LATENCY_TARGET_MS:.1f}ms"
+        )
     event = {
         "mode": mode,
         "dry_run": False,
@@ -722,11 +1227,17 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         "data_dir_before_bytes": result.data_dir_before_bytes,
         "data_dir_after_bytes": result.data_dir_after_bytes,
         "search_latency_ms": result.search_latency_ms,
+        "warnings": result.warnings,
         "vacuum_before_bytes": result.vacuum_before_bytes,
         "vacuum_after_bytes": result.vacuum_after_bytes,
+        "backup_status": result.backup_status,
     }
     _write_log(config.log_path, event)
     _emit_telemetry(event)
+    if backup_abort is not None:
+        # Exit 76 means light maintenance completed, but the required verified
+        # backup was unavailable and the destructive VACUUM phase was skipped.
+        raise backup_abort
     return result
 
 
@@ -744,12 +1255,19 @@ def _result_to_dict(result: MaintenanceResult) -> dict[str, Any]:
         "data_dir_before_bytes": result.data_dir_before_bytes,
         "data_dir_after_bytes": result.data_dir_after_bytes,
         "search_latency_ms": result.search_latency_ms,
+        "warnings": result.warnings,
         "vacuum_before_bytes": result.vacuum_before_bytes,
         "vacuum_after_bytes": result.vacuum_after_bytes,
+        "backup_status": result.backup_status,
         "actions": result.actions,
     }
 
 
+def _failure_alert(mode: str, reason: str, log_path: Path) -> str:
+    return f"BrainLayer {mode} maintenance failed: {reason}. Retry after resolving the failure; inspect {log_path}"
+
+
+@sigterm_cleanup()
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run safety-gated BrainLayer maintenance.")
     modes = parser.add_mutually_exclusive_group()
@@ -759,11 +1277,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Run gates and report actions without touching state")
     args = parser.parse_args(argv)
     mode = "full" if args.full else "burn" if args.burn else "light"
+    log_path = MaintenanceConfig().log_path
     try:
         result = run_maintenance(mode, dry_run=args.dry_run)
     except MaintenanceAbort as exc:
+        deferred = exc.code == 75 and _is_deliberate_deferral(exc.reason)
+        if not args.dry_run:
+            _write_log(
+                log_path,
+                {"status": "deferred" if deferred else "aborted", "mode": mode, "reason": exc.reason},
+            )
+            if not deferred:
+                from .job_alerts import report
+
+                report(f"maintenance-{mode}", _failure_alert(mode, exc.reason, log_path))
         print(json.dumps({"status": "aborted", "reason": exc.reason}, sort_keys=True), flush=True)
         return exc.code
+    except Exception as exc:
+        if not args.dry_run:
+            reason = type(exc).__name__
+            _write_log(log_path, {"status": "failed", "mode": mode, "reason": reason})
+            from .job_alerts import report
+
+            report(
+                f"maintenance-{mode}",
+                f"BrainLayer {mode} maintenance hit an unexpected error ({reason}); see {log_path}",
+            )
+        raise
+    if not args.dry_run:
+        from .job_alerts import report
+
+        report(f"maintenance-{mode}", None)
     print(json.dumps({"status": "ok", **_result_to_dict(result)}, sort_keys=True), flush=True)
     return 0
 

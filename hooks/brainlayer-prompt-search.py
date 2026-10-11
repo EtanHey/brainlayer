@@ -324,7 +324,7 @@ DEEP_TRIGGERS = {
 # Keywords that signal assumption-prone prompts (personal facts, biography, specs)
 # When detected: inject a search-before-assume reminder.
 # Source: Phase 3 session mining — agents assumed M4 Max (wrong), tax history (wrong),
-# Avi Tour (voice transcription error). All would have been caught by brain_search.
+# Rina Tour (voice transcription error). All would have been caught by brain_search.
 ASSUME_TRIGGERS = {
     "hardware",
     "laptop",
@@ -1135,6 +1135,16 @@ def record_injection_event(
     """Best-effort write of an injection event for BrainBar's live viewer."""
     if not db_path or not session_id:
         return
+
+    try:
+        from brainlayer.pipeline.secret_scrub import scrub_secrets
+    except ImportError:
+        return
+    try:
+        # Scan the complete prompt before truncation can sever a token shape.
+        prompt = scrub_secrets(prompt).text
+    except Exception:
+        return  # Best-effort telemetry must fail closed without blocking a prompt.
 
     conn = None
     try:

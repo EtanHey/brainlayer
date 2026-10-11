@@ -12,76 +12,17 @@ Verifies that:
 # ── Schema tests ──────────────────────────────────────────────────────────────
 
 
-def test_gemini_response_schema_has_entities_field():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    props = GEMINI_RESPONSE_SCHEMA["properties"]
-    assert "entities" in props, "GEMINI_RESPONSE_SCHEMA must have an 'entities' property"
-
-
-def test_gemini_response_schema_entities_is_required():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    required = GEMINI_RESPONSE_SCHEMA.get("required", [])
-    assert "entities" in required, "'entities' must be in the required fields"
-
-
-def test_gemini_response_schema_entities_is_array_of_objects():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    entities_schema = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]
-    assert entities_schema["type"] == "array"
-    items = entities_schema["items"]
-    assert items["type"] == "object"
-    assert "name" in items["properties"]
-    assert "type" in items["properties"]
-
-
-def test_gemini_response_schema_entity_type_enum():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    entity_type = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]["items"]["properties"]["type"]
-    expected_types = {"person", "agent", "company", "project", "technology", "tool", "concept", "topic", "source"}
-    assert set(entity_type["enum"]) == expected_types
-
-
-def test_gemini_response_schema_entity_items_require_name_and_type():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    items = GEMINI_RESPONSE_SCHEMA["properties"]["entities"]["items"]
-    assert "required" in items
-    assert "name" in items["required"]
-    assert "type" in items["required"]
-
-
-def test_build_gemini_config_includes_response_schema():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA, _build_gemini_config
-
-    config = _build_gemini_config()
-    assert "response_schema" in config
-    assert config["response_schema"] is GEMINI_RESPONSE_SCHEMA
-
-
-def test_gemini_response_schema_requires_sentiment_fields():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    required = set(GEMINI_RESPONSE_SCHEMA.get("required", []))
-    assert "sentiment_label" in required
-    assert "sentiment_score" in required
-    assert "sentiment_signals" in required
-
-
 # ── Prompt tests ──────────────────────────────────────────────────────────────
 
 
 def test_enrichment_prompt_mentions_entities_field():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert '"entities"' in ENRICHMENT_PROMPT, "ENRICHMENT_PROMPT must include an 'entities' field in the JSON example"
 
 
 def test_enrichment_prompt_says_non_code_entities():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert "non-code entities" in ENRICHMENT_PROMPT.lower(), (
         "ENRICHMENT_PROMPT must instruct to extract non-code entities only"
@@ -89,7 +30,7 @@ def test_enrichment_prompt_says_non_code_entities():
 
 
 def test_enrichment_prompt_excludes_code_symbols():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     lower = ENRICHMENT_PROMPT.lower()
     assert "variable names" in lower, "Prompt must mention excluding variable names"
@@ -99,7 +40,7 @@ def test_enrichment_prompt_excludes_code_symbols():
 
 
 def test_enrichment_prompt_lists_entity_types():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     lower = ENRICHMENT_PROMPT.lower()
     for etype in ["person", "company", "project", "technology", "tool", "concept"]:
@@ -107,7 +48,7 @@ def test_enrichment_prompt_lists_entity_types():
 
 
 def test_enrichment_prompt_adds_meta_research_and_short_chunk_guidance():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert "META-RESEARCH DETECTION" in ENRICHMENT_PROMPT
     assert '"meta-research"' in ENRICHMENT_PROMPT
@@ -119,7 +60,7 @@ def test_enrichment_prompt_adds_meta_research_and_short_chunk_guidance():
 
 
 def test_enrichment_prompt_keeps_epistemic_debt_and_sentiment_rubrics():
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     lower = ENRICHMENT_PROMPT.lower()
     assert "epistemic rubric" in lower
@@ -133,7 +74,7 @@ def test_enrichment_prompt_keeps_epistemic_debt_and_sentiment_rubrics():
 def test_parse_enrichment_extracts_valid_entities():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -158,7 +99,7 @@ def test_parse_enrichment_extracts_valid_entities():
 def test_parse_enrichment_rejects_invalid_entity_type():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -183,7 +124,7 @@ def test_parse_enrichment_rejects_invalid_entity_type():
 def test_parse_enrichment_normalizes_entity_type_aliases_and_source_subtypes():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -208,7 +149,7 @@ def test_parse_enrichment_normalizes_entity_type_aliases_and_source_subtypes():
 def test_parse_enrichment_rejects_entities_missing_name():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -230,7 +171,7 @@ def test_parse_enrichment_rejects_entities_missing_name():
 def test_parse_enrichment_handles_missing_entities_gracefully():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -249,7 +190,7 @@ def test_parse_enrichment_handles_missing_entities_gracefully():
 def test_parse_enrichment_caps_entities_at_20():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -268,7 +209,7 @@ def test_parse_enrichment_caps_entities_at_20():
 def test_parse_enrichment_normalizes_entity_type_case():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -291,7 +232,7 @@ def test_parse_enrichment_normalizes_entity_type_case():
 def test_parse_enrichment_strips_entity_name_whitespace():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -312,7 +253,7 @@ def test_parse_enrichment_strips_entity_name_whitespace():
 def test_parse_enrichment_handles_null_entities():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -331,7 +272,7 @@ def test_parse_enrichment_handles_null_entities():
 def test_parse_enrichment_handles_non_list_entities():
     import json
 
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {

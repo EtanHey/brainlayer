@@ -11,7 +11,6 @@ import os
 import re
 import sqlite3
 import subprocess
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -715,36 +714,6 @@ def collect_worker_verdicts(
     return verdicts
 
 
-def _llm_for_backend(backend: str) -> Callable[[str], str]:
-    from .pipeline import enrichment
-
-    resolved_backend = os.environ.get("BRAINLAYER_JUDGE_BACKEND", backend)
-
-    def call(prompt: str) -> str:
-        response = enrichment.call_llm(prompt, timeout=60, backend=resolved_backend)
-        if response is None:
-            raise RuntimeError(f"judge backend {resolved_backend} returned no response")
-        return response
-
-    return call
-
-
-def judge_clusters_with_backend(
-    clusters: list[dict[str, Any]],
-    *,
-    backend: str,
-    db_path: str | Path | None = None,
-    gits_root: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    llm = _llm_for_backend(backend)
-    verdicts = []
-    for cluster in clusters:
-        packet = gather_evidence_for_cluster(cluster, db_path=db_path, gits_root=gits_root)
-        verdicts.append(judge_cluster_with_llm(packet, llm=llm, max_attempts=2))
-        time.sleep(0.01)
-    return verdicts
-
-
 __all__ = [
     "CLOSED_ENUM_TEXT",
     "CONFIDENCE_VALUES",
@@ -758,7 +727,6 @@ __all__ = [
     "emit_prompt_files",
     "gather_evidence_for_cluster",
     "judge_cluster_with_llm",
-    "judge_clusters_with_backend",
     "load_flag_batch_clusters",
     "parse_verdict_json",
     "render_markdown_table",

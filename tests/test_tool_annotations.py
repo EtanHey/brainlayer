@@ -20,7 +20,6 @@ EXPECTED_TOOLS = [
     "brain_get_person",
     "brain_supersede",
     "brain_archive",
-    "brain_enrich",
 ]
 
 # Tools that only read data — no writes, no side effects
@@ -41,7 +40,6 @@ WRITE_TOOLS = {
     "brain_update",
     "brain_supersede",
     "brain_archive",
-    "brain_enrich",
 }
 
 # Tools whose repeated calls produce the same result (safe to retry)

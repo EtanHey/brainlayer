@@ -461,7 +461,7 @@ def test_stats_reports_progress(batch_file, decisions_file):
 def test_dashboard_export_round_trips_voice_decision_as_v1(batch_file, decisions_file):
     dashboard_export = {
         "schema": DECISIONS_SCHEMA,
-        "source": "kg-phase1-flag-batch-2026-06-05",
+        "source": "synthetic-flag-batch",
         "rules": {},
         "per_category": {
             "diagnosis-flag": {"total": 1, "explicit": 0, "by_rule": 0, "undecided": 1, "rule": None},
@@ -506,7 +506,7 @@ def test_voice_rewrite_preserves_unknown_dashboard_fields(batch_file, decisions_
         json.dumps(
             {
                 "schema": DECISIONS_SCHEMA,
-                "source": "kg-phase1-flag-batch-2026-06-05",
+                "source": "synthetic-flag-batch",
                 "rules": {},
                 "per_category": {},
                 "counts": {},
@@ -541,7 +541,7 @@ def test_record_decision_stamps_schema_on_legacy_decisions_file(batch_file, deci
     decisions_file.write_text(
         json.dumps(
             {
-                "source": "kg-phase1-flag-batch-2026-06-05",
+                "source": "synthetic-flag-batch",
                 "rules": {},
                 "per_category": {},
                 "counts": {},

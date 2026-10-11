@@ -22,11 +22,12 @@ Publish BrainLayer to the official [MCP Registry](https://registry.modelcontextp
 Terminal recording (VHS) demonstrating search, store, recall, and entity lookup in a real workflow.
 
 ### Architecture Decision Records
-Formalize key design decisions (sqlite-vec, RRF scoring, enrichment pipeline) as ADRs in `docs/adr/`.
+Formalize key design decisions (sqlite-vec, RRF scoring, the historical enrichment pipeline) as ADRs in `docs/adr/`.
 
 ## Phase Plans
 
-Detailed implementation plans for specific features:
+Historical implementation plans; LLM enrichment is retired.
+History: [retirement details](enrichment.md).
 
 - [Phase 3: Brain Digest](plans/2026-02-25-phase-3-brain-digest.md) — entity extraction, relations, sentiment analysis
 - [Phase 6: Sentiment Analysis](plans/2026-02-25-phase-6-sentiment.md) — communication style and sentiment pipeline

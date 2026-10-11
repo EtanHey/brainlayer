@@ -1,5 +1,9 @@
 # BrainLayer launch readiness audit
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 **BrainLayer enters a booming MCP ecosystem with a strong technical differentiator but needs strategic packaging to stand out.** The MCP protocol now powers **97 million monthly SDK downloads** across **10,000+ servers**, backed by the Linux Foundation's Agentic AI Foundation with Anthropic, Google, Microsoft, AWS, and OpenAI as members. BrainLayer's 12-tool suite with hybrid semantic+keyword search and LLM enrichment offers a genuine leap over the official MCP memory server (basic text matching on a JSON file) and a compelling open-source alternative to mem0's cloud-centric model. The window is open: memory is the fastest-growing MCP category, the official MCP Registry launched just months ago, and no dominant open-source MCP-native memory server has yet emerged.
 
 This audit covers the full launch surface — ecosystem requirements, competitive positioning, documentation, branding, distribution, and a prioritized checklist with effort estimates.

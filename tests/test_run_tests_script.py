@@ -3,12 +3,14 @@
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "run_tests.sh"
 HOOK_PATH = Path(__file__).resolve().parent.parent / ".githooks" / "pre-push"
+GATE_RUNNER_PATH = Path(__file__).resolve().parent.parent / "scripts" / "ci" / "run_with_deadline.py"
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -61,6 +63,7 @@ _SCRUBBED_ENV_PREFIXES = ("BRAINLAYER_CHANGED_FILES", "BRAINLAYER_PREPUSH")
 
 def _script_env() -> dict[str, str]:
     env = os.environ.copy()
+    env["GOLEMS_HEAVY_SUITE_HELPER"] = os.devnull  # Never queue synthetic suites on the fleet lock.
     for key in [key for key in env if key.startswith(_SCRUBBED_ENV_PREFIXES)]:
         env.pop(key, None)
     # An inherited GIT_DIR/GIT_WORK_TREE overrides the cwd, so a script copied OUTSIDE a repo would
@@ -157,10 +160,15 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
             [
                 "#!/usr/bin/env bash",
                 "{",
+                '  echo "PREPUSH=${BRAINLAYER_PREPUSH:-<unset>}"',
                 '  echo "SCOPE=${BRAINLAYER_PREPUSH_SCOPE:-<unset>}"',
                 '  echo "RANGE=${BRAINLAYER_CHANGED_FILES_RANGE:-<unset>}"',
                 '  echo "FILES=${BRAINLAYER_CHANGED_FILES:-<unset>}"',
                 '  echo "TAG=${BRAINLAYER_PREPUSH_TAG:-<unset>}"',
+                '  echo "GIT_DIR=${GIT_DIR:-<unset>}"',
+                '  echo "GIT_INDEX_FILE=${GIT_INDEX_FILE:-<unset>}"',
+                '  echo "GIT_WORK_TREE=${GIT_WORK_TREE:-<unset>}"',
+                '  echo "GIT_COMMON_DIR=${GIT_COMMON_DIR:-<unset>}"',
                 '} >> "$HOOK_ENV_LOG"',
                 "exit 0",
                 "",
@@ -170,6 +178,9 @@ def _install_pre_push_hook(repo: Path, tmp_path: Path) -> Path:
     hook = repo / ".githooks" / "pre-push"
     hook.parent.mkdir(parents=True)
     hook.write_text(HOOK_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    runner = repo / "scripts" / "ci" / "run_with_deadline.py"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text(GATE_RUNNER_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     return env_log
 
 
@@ -300,6 +311,49 @@ def test_run_tests_aggregates_exit_codes_and_keeps_running(tmp_path: Path) -> No
     assert result.returncode == 6
     assert pytest_log.read_text().strip()
     assert bun_log.read_text().strip()
+
+
+def test_run_tests_passes_per_test_timeout_to_every_pytest_invocation(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+    pytest_log, _ = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=None)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["PYTEST_LOG"] = str(pytest_log)
+
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = pytest_log.read_text().splitlines()
+    assert calls
+    assert all("--timeout=300 --timeout-method=thread" in call for call in calls)
+
+
+def test_gate_deadline_names_a_stuck_test_and_fails_boundedly() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(GATE_RUNNER_PATH),
+            "--seconds",
+            "0.2",
+            "--label",
+            "pre-push",
+            "--",
+            sys.executable,
+            "-u",
+            "-c",
+            "import time; print('tests/test_arbitration.py::test_stuck ', end='', flush=True); time.sleep(60)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 124
+    assert "tests/test_arbitration.py::test_stuck" in result.stderr
+    assert "push blocked" in result.stderr
 
 
 def test_run_tests_skips_bun_when_no_typescript_tests_exist(tmp_path: Path) -> None:
@@ -1051,6 +1105,34 @@ def test_changed_only_scope_maps_package_init_to_version_consistency_tests(
     assert f"{test_root}/ -v" not in logged
 
 
+def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_hook_python.py").write_text("test placeholder\n")
+    (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
+
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["BRAINLAYER_TEST_ROOT"] = str(test_root)
+    env["BRAINLAYER_USE_UV"] = "0"
+    env["BRAINLAYER_PREPUSH"] = "1"
+    env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
+    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/__main__.py"
+    env["PYTEST_LOG"] = str(pytest_log)
+    env["BUN_LOG"] = str(bun_log)
+
+    result = subprocess.run(  # noqa: S603 - returncode is asserted below
+        ["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, check=False
+    )
+
+    assert result.returncode == 0, result.stdout
+    logged = pytest_log.read_text()
+    assert str(test_root / "test_hook_python.py") in logged
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
+
+
 def test_changed_only_scope_escalates_when_the_build_sha_sibling_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -1302,6 +1384,44 @@ def test_pre_push_hook_leaves_a_branch_push_alone(tmp_path: Path) -> None:
     assert "RANGE=<unset>" in handed
 
 
+def test_pre_push_hook_scrubs_git_routing_only_after_parsing_refs(tmp_path: Path) -> None:
+    """The hook may use its Git context, but the test runner must never inherit it.
+
+    Git exports these variables to hooks launched from a linked worktree. An inherited `GIT_DIR`
+    overrides every fixture's `git -C`: that exact shape let an otherwise disposable `git init`
+    rewrite this repository's shared config and refs. Feed a real branch ref first, then assert the
+    runner boundary removed all four routing variables.
+    """
+    repo = _repo_with_two_tags(tmp_path)
+    linked = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "-b", "fixture-linked", str(linked), "HEAD")
+    (linked / "scripts").mkdir()
+    env_log = _install_pre_push_hook(linked, tmp_path)
+    git_dir = subprocess.check_output(
+        ["git", "-C", str(linked), "rev-parse", "--absolute-git-dir"],
+        text=True,
+        env=_clean_git_env(),
+    ).strip()
+    sha = _rev_parse(linked, "HEAD")
+
+    result = _run_hook(
+        linked,
+        env_log,
+        f"refs/heads/fixture-linked {sha} refs/heads/fixture-linked {'0' * 40}\n",
+        extra_env={
+            "GIT_DIR": git_dir,
+            "GIT_INDEX_FILE": str(Path(git_dir) / "index"),
+            "GIT_WORK_TREE": str(linked),
+            "GIT_COMMON_DIR": str(repo / ".git"),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    handed = env_log.read_text(encoding="utf-8")
+    for name in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR"):
+        assert f"{name}=<unset>" in handed
+
+
 def test_pre_push_hook_leaves_a_mixed_branch_and_tag_push_alone(tmp_path: Path) -> None:
     """A branch riding along carries changes no tag range covers, so the branch wins."""
     repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
@@ -1331,9 +1451,8 @@ def test_pre_push_hook_ignores_a_tag_deletion(tmp_path: Path) -> None:
     result = _run_hook(repo, env_log, f"(delete) {'0' * 40} refs/tags/v1.1.0 {sha}\n")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    handed = env_log.read_text()
-    assert "SCOPE=<unset>" in handed
-    assert "RANGE=<unset>" in handed
+    assert not env_log.exists(), "a tag deletion must not start the suite"
+    assert "delete-only" in result.stdout
 
 
 def test_pre_push_hook_respects_an_explicit_changed_set_on_a_tag_push(tmp_path: Path) -> None:
@@ -1787,3 +1906,48 @@ def test_a_mapped_watchdog_change_still_falls_back_when_another_source_is_unmapp
     assert result.returncode == 0
     assert "falling back to full pytest unit suite" in result.stdout
     assert "src/brainlayer/no_such_module.py" in result.stdout
+
+
+@pytest.mark.parametrize("helper_mode", ["present", "missing", "unset-home", "empty-override"])
+@pytest.mark.parametrize("suite_exit", [0, 7])
+def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_exit: int) -> None:
+    helper_exists = helper_mode == "present"
+    repo, env_log = _repo_with_the_pre_push_hook(tmp_path)
+    suite = repo / "scripts" / "run_tests.sh"
+    suite.write_text(suite.read_text().replace("exit 0", f"exit {suite_exit}"))
+    helper = tmp_path / "helper with spaces.py"
+    if helper_exists:
+        helper.write_text(
+            "import os, subprocess, sys\n"
+            "assert sys.argv[1:] == ['--', 'python3', 'scripts/ci/run_with_deadline.py', "
+            "'--seconds', '1800', '--label', 'pre-push', '--', 'bash', 'scripts/run_tests.sh']\n"
+            "print('FAKE HEAVY HELPER', flush=True)\n"
+            "sys.exit(subprocess.call(sys.argv[2:]))\n"
+        )
+    env = _script_env()
+    env.update(
+        HOME=str(tmp_path),
+        GOLEMS_HEAVY_LOCK=str(tmp_path / "heavy.lock"),
+        GOLEMS_HEAVY_SUITE_HELPER=str(helper),
+        HOOK_ENV_LOG=str(env_log),
+    )
+    if helper_mode == "unset-home":
+        env.pop("HOME", None)
+        env.pop("GOLEMS_HEAVY_SUITE_HELPER", None)
+    elif helper_mode == "empty-override":
+        env["GOLEMS_HEAVY_SUITE_HELPER"] = ""
+    git_keys = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR")
+    env.update(dict.fromkeys(git_keys, "synthetic"))
+    command = ["bash", str(repo / ".githooks" / "pre-push")]
+    result = subprocess.run(  # noqa: S603 - fixture hook, returncode asserted by callers
+        command, cwd=repo, env=env, input="", capture_output=True, text=True, timeout=20, check=False
+    )
+    assert result.returncode == suite_exit, result.stdout + result.stderr
+    assert env_log.exists(), "suite did not run"
+    assert (
+        "FAKE HEAVY HELPER" in result.stdout
+        if helper_exists
+        else ("heavy-suite: helper missing; running unqueued" in result.stderr)
+    )
+    assert all(f"{key}=<unset>" in env_log.read_text() for key in git_keys)
+    assert "PREPUSH=1" in env_log.read_text()

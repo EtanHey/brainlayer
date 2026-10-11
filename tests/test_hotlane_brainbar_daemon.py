@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import plistlib
 import sqlite3
 import sys
 from pathlib import Path
@@ -25,7 +26,8 @@ def _raise_if_called(message: str):
     return inner
 
 
-def test_hotlane_cycle_runs_enrichment_through_same_writer_store():
+@pytest.mark.retired_enrichment
+def test_hotlane_cycle_ignores_retired_enrichment_through_same_writer_store():
     hotlane = _load_hotlane_module()
     writer_store = object()
     calls = []
@@ -46,12 +48,9 @@ def test_hotlane_cycle_runs_enrichment_through_same_writer_store():
     )
 
     assert result.embedded == 0
-    assert result.enrich_attempted == 2
-    assert result.enriched == 1
-    assert calls == [
-        ("candidates", writer_store, 5),
-        ("enrich", writer_store, {"limit": 25, "since_hours": 8760}),
-    ]
+    assert result.enrich_attempted == 0
+    assert result.enriched == 0
+    assert calls == [("candidates", writer_store, 5)]
 
 
 def test_hotlane_cycle_can_disable_enrichment():
@@ -767,6 +766,132 @@ def test_split_cycle_bootstraps_missing_db_before_readonly_open(tmp_path):
     assert opened_modes == [False, True]
 
 
+@pytest.mark.parametrize("committed_prefix", [0, 1])
+@pytest.mark.parametrize("lock_error", ["BusyError", "LockedError"])
+def test_split_cycle_retries_pending_batch_after_busy_write(tmp_path, monkeypatch, committed_prefix, lock_error):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)",
+        [(chunk_id, f"text {chunk_id}", f"2026-09-23T00:00:0{index}Z") for index, chunk_id in enumerate("abc")],
+    )
+    state = hotlane.PendingCandidateScanState()
+    monkeypatch.setattr(hotlane, "PENDING_CANDIDATE_SCAN_STATE", state)
+    writes = []
+
+    def write_vectors(_path, vectors):
+        chunk_ids = [vector.chunk_id for vector in vectors]
+        writes.append(chunk_ids)
+        for chunk_id in chunk_ids[:committed_prefix] if len(writes) == 1 else chunk_ids:
+            conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_id,))
+        conn.commit()
+        if len(writes) == 1:
+            raise getattr(hotlane.apsw, lock_error)("database is locked")
+        return len(chunk_ids)
+
+    def cycle():
+        return hotlane._run_split_cycle(
+            db_path=db_path,
+            vector_store_cls=lambda _path, readonly=False: SimpleNamespace(conn=conn, close=lambda: None),
+            embed_fn=lambda _text: [0.0],
+            embed_batch_fn=lambda texts: [[0.0] for _text in texts],
+            recent_limit=0,
+            backlog_batch=2,
+            enrich_limit=0,
+            enrich_since_hours=8760,
+            write_vectors_fn=write_vectors,
+        )
+
+    try:
+        with pytest.raises(getattr(hotlane.apsw, lock_error), match="database is locked"):
+            cycle()
+        assert state.active is False
+        assert state.after_created_at is None
+        assert state.after_rowid == 0
+        assert cycle().embedded == 2
+        assert writes == [["a", "b"], (["a", "b"] if committed_prefix == 0 else ["b", "c"])]
+    finally:
+        conn.close()
+
+
+def test_split_cycle_skips_poison_row_after_non_lock_write_error(tmp_path, monkeypatch, caplog):
+    hotlane = _load_hotlane_module()
+    db_path = tmp_path / "brainlayer.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE chunks (
+            id TEXT PRIMARY KEY,
+            content TEXT,
+            created_at TEXT,
+            archived_at TEXT,
+            superseded_by TEXT,
+            aggregated_into TEXT,
+            archived INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active'
+        );
+        CREATE TABLE chunk_vectors_rowids (id TEXT PRIMARY KEY);
+        """
+    )
+    conn.executemany(
+        "INSERT INTO chunks (id, content, created_at) VALUES (?, ?, ?)",
+        [(chunk_id, f"text {chunk_id}", f"2026-09-23T00:00:0{index}Z") for index, chunk_id in enumerate("ab")],
+    )
+    state = hotlane.PendingCandidateScanState()
+    monkeypatch.setattr(hotlane, "PENDING_CANDIDATE_SCAN_STATE", state)
+    writes = []
+
+    def write_vectors(_path, vectors):
+        chunk_ids = [vector.chunk_id for vector in vectors]
+        writes.append(chunk_ids)
+        if "a" in chunk_ids:
+            raise ValueError("poison vector")
+        conn.execute("INSERT INTO chunk_vectors_rowids (id) VALUES (?)", (chunk_ids[0],))
+        conn.commit()
+        return len(chunk_ids)
+
+    def cycle():
+        return hotlane._run_split_cycle(
+            db_path=db_path,
+            vector_store_cls=lambda _path, readonly=False: SimpleNamespace(conn=conn, close=lambda: None),
+            embed_fn=lambda _text: [0.0],
+            recent_limit=0,
+            backlog_batch=1,
+            enrich_limit=0,
+            enrich_since_hours=8760,
+            write_vectors_fn=write_vectors,
+        )
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="brainlayer.hotlane_brainbar"):
+            with pytest.raises(ValueError, match="poison vector"):
+                cycle()
+        assert state.active is True
+        assert state.after_created_at == "2026-09-23T00:00:00Z"
+        assert cycle().embedded == 1
+        assert writes == [["a"], ["b"]]
+        assert "chunk_ids=['a']" in caplog.text
+        assert "ValueError" in caplog.text
+    finally:
+        conn.close()
+
+
 def test_write_embedded_vectors_skips_when_content_changed_after_snapshot():
     hotlane = _load_hotlane_module()
     events = []
@@ -868,7 +993,7 @@ def test_write_embedded_vectors_clears_search_cache_after_partial_commit(monkeyp
         lambda db_path: cleared.append(db_path),
     )
 
-    with pytest.raises(RuntimeError, match="second vector failed"):
+    assert (
         hotlane._write_embedded_vectors(
             FakeStore(),
             [
@@ -876,9 +1001,48 @@ def test_write_embedded_vectors_clears_search_cache_after_partial_commit(monkeyp
                 hotlane.EmbeddedVector("chunk-2", "content two", [0.2]),
             ],
         )
+        == 1
+    )
 
     assert upserted == ["chunk-1", "chunk-2"]
     assert cleared == [Path("/tmp/brainlayer.db")]
+
+
+def test_write_embedded_vectors_skips_poison_row_within_same_batch(monkeypatch, caplog):
+    hotlane = _load_hotlane_module()
+    upserted = []
+
+    class FakeCursor:
+        def execute(self, sql, params=()):
+            if sql.strip().startswith("SELECT 1"):
+                return SimpleNamespace(fetchone=lambda: (1,))
+            return []
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakeStore:
+        db_path = Path("/tmp/brainlayer.db")
+        conn = FakeConn()
+
+        def _upsert_chunk_vector(self, _cursor, chunk_id, _embedding):
+            upserted.append(chunk_id)
+            if chunk_id == "poison":
+                raise ValueError("poison vector")
+
+    monkeypatch.setattr("brainlayer.search_repo.clear_hybrid_search_cache", lambda _db_path: None)
+    vectors = [
+        hotlane.EmbeddedVector("poison", "bad content", [0.1]),
+        hotlane.EmbeddedVector("valid", "good content", [0.2]),
+    ]
+    with caplog.at_level(logging.ERROR, logger="brainlayer.hotlane_brainbar"):
+        count = hotlane._write_embedded_vectors(FakeStore(), vectors)
+
+    assert count == 1
+    assert upserted == ["poison", "valid"]
+    assert "chunk_id=poison" in caplog.text
+    assert "ValueError" in caplog.text
 
 
 def test_write_embedded_vectors_path_upserts_without_vectorstore_writer_pidfile(tmp_path, monkeypatch):
@@ -951,7 +1115,8 @@ def test_split_cycle_embeds_all_hot_candidates_before_writer_revalidation(tmp_pa
     assert result.embedded == 1
 
 
-def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
+@pytest.mark.retired_enrichment
+def test_hotlane_run_keeps_retired_enrichment_zero_after_failed_cycle():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []
 
@@ -962,7 +1127,7 @@ def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
     def fake_cycle(**kwargs):
         scheduled_enrich_limits.append(kwargs["enrich_limit"])
         if len(scheduled_enrich_limits) == 1:
-            raise RuntimeError("gemini transient failure")
+            raise RuntimeError("local embedding transient failure")
         return hotlane.CycleResult()
 
     hotlane.run(
@@ -984,7 +1149,7 @@ def test_hotlane_run_advances_enrich_timer_before_failed_cycle():
         max_cycles=2,
     )
 
-    assert scheduled_enrich_limits == [25, 0]
+    assert scheduled_enrich_limits == [0, 0]
 
 
 def test_hotlane_run_requests_cpu_embedding_device_by_default():
@@ -1031,7 +1196,7 @@ def test_hotlane_run_preserves_positional_only_model_factory():
     )
 
 
-def test_hotlane_run_disables_enrichment_after_daily_cap():
+def test_hotlane_run_ignores_legacy_daily_cap_diagnostics():
     hotlane = _load_hotlane_module()
     scheduled_enrich_limits = []
 
@@ -1064,7 +1229,7 @@ def test_hotlane_run_disables_enrichment_after_daily_cap():
         max_cycles=2,
     )
 
-    assert scheduled_enrich_limits == [25, 0]
+    assert scheduled_enrich_limits == [0, 0]
 
 
 def test_hotlane_run_opens_and_closes_writer_store_each_cycle(tmp_path):
@@ -1189,7 +1354,7 @@ def test_hotlane_run_logs_high_priority_backpressure_once_per_blocked_state(tmp_
     yield_logs = [
         record
         for record in caplog.records
-        if record.getMessage() == "durable high-priority queue has backlog; suppressing hot embedding and enrichment"
+        if record.getMessage() == "durable high-priority queue has backlog; suppressing hot embedding"
     ]
     assert len(yield_logs) == 2
     assert len(cycle_calls) == 2
@@ -1271,6 +1436,40 @@ def test_hotlane_run_reserves_due_backlog_slice_during_high_priority_queue_backl
     assert cycle_calls[0]["backlog_batch"] == hotlane.DEFAULT_BACKLOG_BATCH
     assert cycle_calls[0]["enrich_limit"] == 0
     assert sleeps == [0.25, 0.25]
+
+
+def test_installed_hotlane_backlog_args_schedule_reserved_slices(tmp_path):
+    hotlane = _load_hotlane_module()
+    plist_path = Path(__file__).resolve().parents[1] / "scripts/launchd/com.brainlayer.hotlane-brainbar.plist"
+    args = plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
+    backlog_interval = float(args[args.index("--backlog-interval") + 1])
+    backlog_batch = int(args[args.index("--backlog-batch") + 1])
+    calls = []
+
+    class FakeStore:
+        def close(self):
+            pass
+
+    hotlane.run(
+        db_path=tmp_path / "brainlayer.db",
+        interval=1.0,
+        recent_limit=5,
+        backlog_interval=backlog_interval,
+        backlog_batch=backlog_batch,
+        enrich_interval=10.0,
+        enrich_limit=0,
+        enrich_since_hours=8760,
+        vector_store_cls=lambda _path: FakeStore(),
+        model_factory=lambda: SimpleNamespace(embed_query=lambda _text: [0.0]),
+        cycle_fn=lambda **kwargs: calls.append(kwargs) or hotlane.CycleResult(),
+        time_fn=iter([100.0, 100.0, 104.0, 107.0]).__next__,
+        sleep_fn=lambda _seconds: None,
+        max_cycles=3,
+        queue_depth_fn=lambda _queue_dir: 3,
+        high_priority_queue_depth_fn=lambda _queue_dir: 1,
+    )
+
+    assert [(call["recent_limit"], call["backlog_batch"]) for call in calls] == [(0, 16), (0, 16)]
 
 
 def test_hotlane_run_repeats_reserved_backlog_slice_during_continuous_pressure(tmp_path):

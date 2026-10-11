@@ -88,13 +88,7 @@ final class DashboardRedesignSnapshotTests: XCTestCase {
             pendingStoreQueueDepth: 27,
             pendingStoreOldestQueuedAt: now.addingTimeInterval(-9 * 60),
             pendingStoreFlushRatePerMinute: 0,
-            watcherHealth: BrainDatabase.DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 7.4,
-                realtimeInsertsPerMinute: 6.8
-            )
+            watcherHealth: WatcherHealthFileRead.unreadable(path: "fixture/watcher-health.json", reason: "no parseable updated_at")
         )
     }
 

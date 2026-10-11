@@ -1,5 +1,9 @@
 # Spotlight Exclusion Setup Design
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 ## Goal
 
 BrainLayer setup must exclude every high-churn runtime tree from Spotlight before it creates

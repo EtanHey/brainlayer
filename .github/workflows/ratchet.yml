@@ -17,7 +17,6 @@ name: Ratchet
 
 on:
   pull_request:
-    branches: [main]
     # `labeled` is here so the `ratchet:signatures` opt-in works the moment it is applied, instead
     # of waiting for the next push. The other three are GitHub's defaults, listed back explicitly
     # because naming `types` at all replaces them.
@@ -56,6 +55,8 @@ jobs:
     outputs:
       signatures: ${{ steps.decide.outputs.signatures }}
       reason: ${{ steps.decide.outputs.reason }}
+      quiesce: ${{ steps.decide.outputs.quiesce }}
+      heartbeat: ${{ steps.decide.outputs.heartbeat }}
     steps:
       # fetch-depth 0 so the base commit is present for the diff below. `gh api
       # repos/.../pulls/N/files` was the obvious way to list changed files and it is WRONG here:
@@ -108,6 +109,111 @@ jobs:
             echo 'RATCHET_EOF'
           } >> "$GITHUB_OUTPUT"
           echo "::notice title=Signature parity::signatures=${decision} — ${reason}"
+          # ~1 minute of macOS time, trigger-gated; no keg/model install.
+          git diff --name-only "$BASE_SHA" HEAD > "$changed"
+          quiesce=false
+          if jq -e 'index("ratchet:quiesce")' <<<"$LABELS" > /dev/null || \
+             grep -Eq '^(src/brainlayer/(maintenance|launchd_primitive)\.py|scripts/(ratchet_quiesce\.py|ci_ratchet_table\.py|launchd/fleet-watchdog\.sh)|tests/test_ratchet_quiesce\.py|\.github/workflows/ratchet\.yml)$' "$changed"; then
+            quiesce=true
+          fi
+          echo "quiesce=$quiesce" >> "$GITHUB_OUTPUT"
+          heartbeat=false
+          if jq -e 'index("ratchet:heartbeat")' <<<"$LABELS" > /dev/null || \
+             grep -Eq '^(src/brainlayer/(watcher(_bridge)?|queue_io)\.py|brain-bar/Sources/BrainBar/Dashboard/(WatcherHealthStatus|DashboardMetricFormatter|PipelineState)\.swift|scripts/(watcher_heartbeat_.*|ci_ratchet_table\.py)|tests/test_watcher_heartbeat_.*\.py|\.github/workflows/ratchet\.yml)$' "$changed"; then
+            heartbeat=true
+          fi
+          echo "heartbeat=$heartbeat" >> "$GITHUB_OUTPUT"
+
+  heartbeat:
+    name: watcher heartbeat freshness and recovery
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.heartbeat == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.measure.outputs.report }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install .
+      - name: Measure private producer and compiled consumer
+        id: measure
+        run: |
+          mkdir -p "${RUNNER_TEMP}/heartbeat"
+          python scripts/watcher_heartbeat_ratchet.py --out "${RUNNER_TEMP}/heartbeat/heartbeat.json"
+          echo "report=$(jq -c . "${RUNNER_TEMP}/heartbeat/heartbeat.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Retain measured compiled consumer and report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: watcher-heartbeat-evidence
+          path: ${{ runner.temp }}/heartbeat/
+          if-no-files-found: error
+
+  quiesce:
+    name: quiesce revival (real launchd)
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.quiesce == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.measure.outputs.report }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: measured
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: e59cf87142c88db044dd701cf5ee993267c8d090
+          path: bug
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install replay import dependencies (no embedding model)
+        run: |
+          python -m venv "${RUNNER_TEMP}/replay-venv"
+          "${RUNNER_TEMP}/replay-venv/bin/python" -m pip install apsw sqlite-vec requests rich pydantic numpy abydos deprecation orjson pyyaml
+          echo "${RUNNER_TEMP}/replay-venv/bin" >> "$GITHUB_PATH"
+      - name: Measure bug RED and PR GREEN against real launchd
+        id: measure
+        env:
+          BRAINLAYER_FORBID_EMBEDDING_MODEL: "1"
+          BRAINLAYER_FORBID_BRAINBAR_SOCKET: "1"
+        run: |
+          set -euo pipefail
+          for variant in bug head; do
+            args=(--source measured)
+            if [[ "$variant" == bug ]]; then args=(--source bug --expect-red); fi
+            python measured/scripts/ratchet_quiesce.py \
+              --namespace "com.brainlayer.ratchettest.${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}" \
+              --home "${RUNNER_TEMP}/quiesce-${variant}" --out "${RUNNER_TEMP}/${variant}.json" "${args[@]}"
+          done
+          report=$(jq -nc --slurpfile bug "${RUNNER_TEMP}/bug.json" --slurpfile head "${RUNNER_TEMP}/head.json" '{bug: $bug[0], head: $head[0]}')
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+          echo "$report" >> "$GITHUB_STEP_SUMMARY"
+      - name: Always remove every test LaunchAgent
+        if: ${{ always() }}
+        run: |
+          rc=0
+          for variant in bug head; do
+            python measured/scripts/ratchet_quiesce.py --cleanup \
+              --namespace "com.brainlayer.ratchettest.${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${variant}" \
+              --home "${RUNNER_TEMP}/quiesce-${variant}" || rc=1
+          done
+          exit "$rc"
 
   # ------------------------------------------------------------------------------------------
   # `signature_valid`, measured for real.
@@ -178,9 +284,7 @@ jobs:
           RUNNER_LABEL: macos-15/${{ runner.arch }}
         run: |
           set -euo pipefail
-          # One verdict, three values, and only `clean` lets this job go green: `invalid` means
-          # files failed codesign, `unmeasured` means the job ran and produced no counts. Deriving
-          # the pass/fail from the count alone left `unmeasured` looking like a pass.
+          # Only `clean` lets this job go green: signatures, loadability, and inventory must pass.
           verdict=unmeasured
           invalid=""
           keg=""
@@ -231,6 +335,14 @@ jobs:
               # -- two CI statuses contradicting each other about the same measurement.
               if [[ "$valid" -eq 0 && "$invalid" -eq 0 ]]; then
                 verdict=unmeasured
+              elif [[ "$rc" -ne 0 && "$invalid" -eq 0 ]]; then
+                # Signatures can all be valid while dyld refuses a malformed native extension.
+                verdict=load_failed
+                detail="$(grep -m1 '^LOAD_FAILED ' "$out" || awk 'NF { print; exit }' "$err")"
+                report="$(jq -nc \
+                  --arg stage 'trusted/scripts/release-verify-signatures.sh' \
+                  --arg detail "loadability gate exited ${rc}: ${detail:-no diagnostic}" \
+                  '{status: "failed", stage: $stage, detail: $detail}')"
               else
                 verdict=clean
                 [[ "$invalid" -eq 0 ]] || verdict=invalid
@@ -264,7 +376,7 @@ jobs:
       # pass at a glance -- and AGENTS.md is explicit that an invalid `*.so`/`*.dylib` blocks
       # release and deploy. `unmeasured` fails for the same reason: a job that was asked to measure
       # and did not is a finding, not a quiet success.
-      - name: Fail this job on an invalid signature
+      - name: Fail this job on invalid signatures or loadability
         if: ${{ !cancelled() && steps.verify.outputs.verdict != 'clean' }}
         env:
           VERDICT: ${{ steps.verify.outputs.verdict }}
@@ -272,26 +384,94 @@ jobs:
         run: |
           if [[ "$VERDICT" == "invalid" ]]; then
             echo "::error title=Invalid keg signature::${INVALID} native extension(s) failed codesign --verify; see the ratchet table."
+          elif [[ "$VERDICT" == "load_failed" ]]; then
+            echo "::error title=Native loadability failed::a signed extension failed the bounded dlopen gate; see the ratchet table."
           else
             echo "::error title=Signatures unmeasured::the parity job produced no codesign counts (verdict: ${VERDICT:-none}); see the ratchet table."
           fi
           exit 1
+
+  retirement:
+    name: global model retirement (installed + native)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build immutable wheel and exercise private installed/native fixtures
+        run: |
+          set -euo pipefail
+          python scripts/retirement_run.py \
+            --source "$GITHUB_WORKSPACE" \
+            --sha "${{ github.event.pull_request.head.sha }}" \
+            --dependency-ref "${{ github.event.pull_request.base.sha }}" \
+            --work "${RUNNER_TEMP}/retirement-work" \
+            --out "${RUNNER_TEMP}/retirement-report.json"
+      - name: Always publish the retirement outcome and raw fixture evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: global-model-retirement
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/retirement-report.json
+            ${{ runner.temp }}/retirement-work/*-probe.json
+            ${{ runner.temp }}/retirement-work/*-events.jsonl
+            ${{ runner.temp }}/retirement-work/*-cli.log
+            ${{ runner.temp }}/retirement-work/*-probe.log
+            ${{ runner.temp }}/retirement-work/native-tests.log
+            ${{ runner.temp }}/retirement-work/native-build.log
+            ${{ runner.temp }}/retirement-work/build.log
+
+  no-enrichment-render:
+    name: BrainBar renders no enrichment status
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Build real synthetic render binary
+        run: swift build --package-path brain-bar --product BrainBar -j 2
+      - name: Prove retired reads absent and historical sentinel data retained
+        run: swift test --package-path brain-bar -j 2 --filter BrainBarNoEnrichmentQueryTests
+      - name: Render every no-enrichment surface
+        run: |
+          python3 scripts/brainbar_no_enrichment_ratchet.py \
+            --binary brain-bar/.build/debug/BrainBar \
+            --out "${RUNNER_TEMP}/brainbar-render-report.json"
+      - name: Retain synthetic render receipt only
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainbar-no-enrichment-render
+          path: ${{ runner.temp }}/brainbar-render-report.json
+          if-no-files-found: error
 
   table:
     name: ratchet table
     # `needs` ORDERS these; the job-level `if` is what keeps the table unconditional. A skipped
     # `signatures` job would otherwise skip `table` too, leaving the previous commit's table
     # standing on the PR -- the same crime as printing an unmeasured number, committed by omission.
-    needs: [gate, signatures]
+    needs: [gate, signatures, quiesce, retirement, no-enrichment-render, heartbeat]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth 2, so `commit provenance` can PROVE this checkout is the commit the run was
-      # triggered for. On a pull_request event the checkout is GitHub's synthetic merge ref, whose
-      # sha is on no PR page anywhere -- #759's table printed `13fa724278bf` while the PR's head was
-      # `4632f979` -- and the PR-head sha a reviewer can see is that merge commit's SECOND PARENT.
-      # At depth 1 the checkout is the shallow boundary and git reports it as having no parents, so
-      # the row could not tell "this is the right commit" from "git cannot say".
+      # UI, retirement and table explicitly measure the triggering PR head.
+      # Depth 2 preserves parent lineage for the existing commit-provenance gate.
       # ...and `persist-credentials: false` matters MOST here, because this is the one job that
       # EXECUTES code out of the PR tree: `python -m build --wheel` runs the PR's own build backend.
       # A persisted token sitting in `.git/config` would be readable by that backend on a
@@ -299,6 +479,7 @@ jobs:
       # the means to edit its gate.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -527,9 +708,41 @@ jobs:
       #   - it does NOT run when this job was CANCELLED, because `always()` is true for cancelled
       #     jobs, and a superseded run reaching the comment step could PATCH a stale table over the
       #     newer run's.
+      - name: Read exact-head retirement outcome
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: global-model-retirement
+          path: ${{ runner.temp }}/retirement
+
+      - name: Download actual-view render receipt
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: brainbar-no-enrichment-render
+          path: ${{ runner.temp }}/brainbar-render
+
+      - name: Read compiled heartbeat evidence
+        if: ${{ !cancelled() && needs.gate.outputs.heartbeat != 'false' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: watcher-heartbeat-evidence
+          path: ${{ runner.temp }}/heartbeat
+
       - name: Collect ratchet rows
         id: collect
         if: ${{ !cancelled() }}
+        env:
+          QUIESCE_REPORT: ${{ needs.quiesce.outputs.report }}
+          QUIESCE_RESULT: ${{ needs.quiesce.result }}
+          QUIESCE_GATE: ${{ needs.gate.outputs.quiesce }}
+          RETIREMENT_RESULT: ${{ needs.retirement.result }}
+          RENDER_RESULT: ${{ needs.no-enrichment-render.result }}
+          HEARTBEAT_RESULT: ${{ needs.heartbeat.result }}
+          HEARTBEAT_GATE: ${{ needs.gate.outputs.heartbeat }}
+          TRIGGER_RESULT: ${{ needs.gate.result }}
         run: |
           set -euo pipefail
           # One arg per line, read back as an array: the gate's reason is free prose and must never
@@ -571,11 +784,38 @@ jobs:
           # green -- a false green in the ratchet itself. The collector now fails closed and reports
           # RED for either case. rc is captured without `set +e` so a real crash still cannot pass.
           rc=0
+          if [[ "$RETIREMENT_RESULT" != success ]]; then
+            mkdir -p "${RUNNER_TEMP}/retirement"
+            printf '{}' > "${RUNNER_TEMP}/retirement/retirement-report.json"
+          fi
+          if [[ "$RENDER_RESULT" != success ]]; then
+            mkdir -p "${RUNNER_TEMP}/brainbar-render"
+            printf '{}' > "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json"
+          fi
+          HEARTBEAT_ARGS=(--watcher-heartbeat-unavailable 'macOS native probe trigger-gated: no affected path or ratchet:heartbeat label')
+          if [[ "$HEARTBEAT_GATE" != false || "$TRIGGER_RESULT" != success ]]; then
+            mkdir -p "${RUNNER_TEMP}/heartbeat"
+            if [[ "$HEARTBEAT_RESULT" != success || "$TRIGGER_RESULT" != success ]]; then
+              printf '{}' > "${RUNNER_TEMP}/heartbeat/heartbeat.json"
+            fi
+            HEARTBEAT_ARGS=(--watcher-heartbeat-report "${RUNNER_TEMP}/heartbeat/heartbeat.json")
+          fi
+          QUIESCE_ARGS=(--quiesce-unavailable 'macOS replay trigger-gated: no affected path or ratchet:quiesce label')
+          if [[ "$QUIESCE_GATE" != false ]]; then
+            printf '%s' "$QUIESCE_REPORT" > "${RUNNER_TEMP}/quiesce.json"
+            # Empty/malformed report or a failed job (including cleanup) is RED.
+            if [[ "$QUIESCE_RESULT" != success ]]; then printf '{}' > "${RUNNER_TEMP}/quiesce.json"; fi
+            QUIESCE_ARGS=(--quiesce-report "${RUNNER_TEMP}/quiesce.json")
+          fi
           python scripts/ci_ratchet_table.py \
             --wheel-glob 'dist/*.whl' \
             "${COMMIT_ARGS[@]}" \
             "${ATTESTATION_ARGS[@]}" \
             "${SIGNATURE_ARGS[@]}" \
+            "${QUIESCE_ARGS[@]}" \
+            "${HEARTBEAT_ARGS[@]}" \
+            --retirement-report "${RUNNER_TEMP}/retirement/retirement-report.json" \
+            --brainbar-render-report "${RUNNER_TEMP}/brainbar-render/brainbar-render-report.json" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --out "${RUNNER_TEMP}/ratchet.md" || rc=$?
           if [[ ! -s "${RUNNER_TEMP}/ratchet.md" ]]; then

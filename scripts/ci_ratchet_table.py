@@ -75,6 +75,7 @@ import shutil
 import socket as socket_module
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
@@ -1168,7 +1169,7 @@ PROVENANCE_NOTES = (
     "Sha half of #749 keg-mode provenance: a keg built from this wheel can answer "
     "`__build_sha__`. The helper-age and served-process predicates need a running BrainBar "
     "and are measured only by `scripts/sprint_gate.py` on an installed Mac. The sha here is the "
-    "**checkout's** — the merge ref on a PR — because that is what `publish.yml` stamps at release "
+    "**checkout's** — the explicit PR head in ratchet.yml — because that is what `publish.yml` stamps at release "
     "time; the PR-head sha this table describes is the one in `commit provenance` above."
 )
 
@@ -1677,6 +1678,65 @@ def row_fallback_debt(probe: Probe, _corpus: dict) -> Row:
     return Row("fallback replay debt", RED, value, method, FALLBACK_NOTES)
 
 
+PRE_PUSH_DELETE_BUG_SHA = "44ecbf5ba6f1ada3b965797559eee90c94b45595"
+DELETE_REF = f"(delete) {'0' * 40} refs/heads/fixture {'a' * 40}\n"
+
+
+def replay_pre_push(hook: Path, refs: str) -> tuple[subprocess.CompletedProcess[str], int]:
+    """Execute the checkout's real hook; only its expensive suite is a sentinel."""
+    bash = shutil.which("bash")
+    if bash is None:
+        raise FileNotFoundError("bash binary unavailable for real hook replay")
+    with tempfile.TemporaryDirectory(prefix="brainlayer-prepush-") as directory:
+        fixture = Path(directory)
+        scripts = fixture / "scripts"
+        (scripts / "ci").mkdir(parents=True)
+        shutil.copyfile(ROOT / "scripts/ci/run_with_deadline.py", scripts / "ci/run_with_deadline.py")
+        sentinel = fixture / "suite-starts"
+        (scripts / "run_tests.sh").write_text('echo started >> "$SUITE_STARTS"\n', encoding="utf-8")
+        env = {
+            key: value
+            for key, value in _clean_git_env().items()
+            if not key.startswith(("BRAINLAYER_", "GOLEMS_HEAVY_"))
+        }
+        env.update(
+            HOME=str(fixture),
+            GOLEMS_HEAVY_SUITE_HELPER=str(fixture / "absent-helper"),
+            SUITE_STARTS=str(sentinel),
+        )
+        result = subprocess.run(
+            [bash, str(hook.resolve()), "origin", "fixture.invalid"],
+            cwd=fixture,
+            input=refs,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            env=env,
+            check=False,
+        )
+        starts = len(sentinel.read_text().splitlines()) if sentinel.exists() else 0
+        return result, starts
+
+
+def row_pre_push_delete(probe: Probe, _corpus: dict) -> Row:
+    name = "pre-push: delete-only push runs no suite"
+    method = "real checkout hook · delete-only stdin · sentinel suite runner"
+    notes = (
+        f"Bug SHA: `{PRE_PUSH_DELETE_BUG_SHA}` (RED replay, 2026-10-06). "
+        f"Fix: #1084; measured at `{probe.measured_sha or probe.head_sha or 'unread'}`. "
+        "Ceiling: **0 suite starts**; hook must exit 0 and announce the delete-only skip."
+    )
+    try:
+        result, starts = replay_pre_push(ROOT / ".githooks/pre-push", DELETE_REF)
+    except (OSError, subprocess.SubprocessError) as error:
+        return Row(name, RED, f"n/a — real hook replay failed: {error}", method, notes)
+    passed = result.returncode == 0 and starts == 0 and "delete-only" in result.stdout
+    value = f"{starts} suite starts · exit {result.returncode}"
+    if not passed:
+        value += f" · replay output: {result.stdout.strip()} {result.stderr.strip()}"
+    return Row(name, GREEN if passed else RED, value, method, notes)
+
+
 # `row_commit_provenance` leads: every other row's value belongs to the commit it names, so a
 # reader has to see that sha before reading a number measured against it. `baseline attestation`
 # is second for the same reason: it names what the numbers are measured AGAINST.
@@ -1685,11 +1745,88 @@ ROW_BUILDERS = (
     row_baseline_attestation,
     row_provenance,
     row_fallback_debt,
+    row_pre_push_delete,
     row_mapped_bytes,
     row_search_latency,
     row_idle_cpu,
     row_signature_valid,
 )
+
+
+def row_brainbar_no_enrichment(report: Path | None, expected_sha: str | None) -> Row:
+    from scripts.brainbar_no_enrichment_ratchet import ROW, read_report
+
+    payload, problem = read_report(report, expected_sha)
+    return Row(
+        ROW,
+        RED if problem else GREEN,
+        problem or f"{len(payload['captures'])} actual-view captures; active pending-store/replay retained",
+        "macOS DEBUG binary · AppKit actual views · Vision OCR + icon RGBA comparison · private synthetic state",
+        "Missing render capability/evidence is RED. Historical data is retained; this is source-build proof, not installed-app proof.",
+    )
+
+
+def row_quiesce(report: Path | None, unavailable: str | None, measured_sha: str | None) -> Row:
+    name = "maintenance quiesce: services stay down under a reviving watchdog"
+    method = "real launchd · GitHub macOS runner · real maintenance + fleet-watchdog"
+    notes = "Fix: #1076 (`bc6d690f4331387485678d0247e19e14e6ef8d97`). Ceiling: 0 revivals; supervisor held, both resumed, no hold marker."
+    if report is None:
+        return Row(name, NA, f"n/a — {unavailable}", method, notes)
+    try:
+        data = json.loads(report.read_text())
+        bug, head = data["bug"], data["head"]
+        if not (
+            bug["sha"] == "e59cf87142c88db044dd701cf5ee993267c8d090"
+            and measured_sha
+            and head["sha"] == measured_sha
+            and bug["status"] == "RED"
+            and bug["revived"] is True
+            and head["status"] == "GREEN"
+            and head["revived"] is False
+            and head["held"] is True
+            and head["resume_errors"] == []
+        ):
+            raise ValueError("replay SHA or verdict mismatch")
+        for replay in (bug, head):
+            if not (
+                all(replay[key] is True for key in ("positive_control", "resumed", "marker_removed"))
+                and replay["interval_seconds"] > 0
+                and replay["window_seconds"] >= 2 * replay["interval_seconds"]
+            ):
+                raise ValueError("replay postcondition missing")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return Row(
+            name, RED, f"real launchd RED/GREEN evidence missing or invalid: {type(error).__name__}", method, notes
+        )
+    return Row(
+        name,
+        GREEN,
+        "baseline RED | PR GREEN | Δ fixed | ceiling 0 revivals",
+        method,
+        notes + f" Bug SHA: `{bug['sha']}`; measured at `{head['sha']}` ({head['window_seconds']} s).",
+    )
+
+
+def row_retirement(report: Path | None, measured_sha: str | None) -> Row:
+    from scripts.retirement_report import validate
+
+    name = "no cloud model call reachable anywhere"
+    method = "immutable installed wheel (default + dev) + AST source + actual native BrainBar"
+    notes = "Synthetic private fixtures; SDK absence gated on merged R10b. Exact-head candidate proof, not deployment."
+    try:
+        if report is None:
+            raise ValueError("required retirement report missing")
+        values = validate(json.loads(report.read_text()), measured_sha)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return Row(name, RED, f"global absence unproved: {error}", method, notes)
+    return Row(
+        name,
+        GREEN,
+        f"{values['source_files']} source files; {values['installed_modules']} installed imports; "
+        f"{values['native_tests']} native tests; wheel `{values['wheel_sha256'][:12]}`; 0 candidate attempts",
+        method,
+        notes,
+    )
 
 
 def collect(probe: Probe, corpus: dict) -> list[Row]:
@@ -1863,6 +2000,78 @@ def attest_refusal(args: argparse.Namespace, probe: Probe, rows: list[Row], corp
     return attest_flags_problem(args) or attest_checkout_problem(args.main_sha, probe, rows, corpus)
 
 
+def row_watcher_heartbeat(report: Path | None, unavailable: str | None, measured_sha: str | None) -> Row:
+    from scripts.brainbar_source_identity import source_identity
+    from scripts.watcher_heartbeat_ratchet import (
+        CASES,
+        SOURCES,
+        digest,
+        validate_artifact,
+        validate_completion,
+        validate_stores,
+    )
+    from scripts.watcher_heartbeat_ratchet import ROOT as heartbeat_root
+
+    name = "Watcher heartbeat freshness and recovery"
+    method = "private Python producer -> compiled Swift consumer"
+    notes = "Preserves genuine silence; independent agent stores cannot revive the watcher. Not a load or installed-UI measurement."
+    if report is None and unavailable:
+        return Row(name, NA, f"n/a — {unavailable}", method, notes)
+    try:
+        if report is None:
+            raise ValueError("missing producer/consumer report")
+        data = json.loads(report.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("report must be an object")
+        if (
+            type(data.get("schema")) is not int
+            or data["schema"] != 2
+            or data.get("status") != "measured"
+            or data.get("head") != measured_sha
+            or not measured_sha
+            or not SHA_PATTERN.fullmatch(measured_sha)
+        ):
+            raise ValueError("unmeasured or wrong-head report")
+        identity = source_identity(heartbeat_root)
+        if identity["head"] != measured_sha or identity["dirty"]:
+            raise ValueError("actual checkout is dirty or differs from measured head")
+        if data.get("sources") != {p: digest(heartbeat_root / p) for p in SOURCES}:
+            raise ValueError("source hashes do not match checkout")
+        if not isinstance(data.get("binary_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", data["binary_sha256"]):
+            raise ValueError("missing compiled binary identity")
+        validate_artifact(data, report.parent)
+        validate_stores(data["stores"])
+        cases = data["cases"]
+        expected = {
+            k: "running" for k in ("fresh", "refresh_recovery", "boundary_300", "future", "timezone", "scan_recovery")
+        }
+        expected.update({k: "degraded" for k in ("stale", "unrelated_store", "boundary_over_300", "scan_in_progress")})
+        expected.update(missing="unknown", malformed="unknown", stopped="stopped")
+        if len(cases) != len(expected) or {c["name"] for c in cases} != set(expected) or CASES != set(expected):
+            raise ValueError("missing or duplicate freshness case")
+        if any(c["expected"] != expected[c["name"]] or c["observed"] != expected[c["name"]] for c in cases):
+            raise ValueError("freshness contract failed")
+        counts = data["producer_poll_counts"]
+        if len(counts) != 2 or any(type(n) is not int for n in counts) or counts[0] < 1 or counts[1] != counts[0] + 1:
+            raise ValueError("producer progress not measured")
+        if type(data["watcher_queued_chunks"]) is not int or data["watcher_queued_chunks"] < 1:
+            raise ValueError("watcher bridge did not emit ingest")
+        validate_completion(data["completed_health"], counts[1])
+        scan = data["scan_progress"]
+        if type(scan["delay_seconds"]) is not float or not 1 <= scan["delay_seconds"] < 10:
+            raise ValueError("controlled filesystem delay not measured")
+        if (
+            any(type(scan[key]) is not int for key in ("stat_calls", "independent_stores", "completed_poll"))
+            or scan["stat_calls"] < 1
+            or scan["independent_stores"] != len(data["stores"][1:])
+            or scan["completed_poll"] != data["completed_health"]["poll_count"]
+        ):
+            raise ValueError("delayed scan and independent stores not measured")
+    except Exception as error:
+        return Row(name, RED, str(error), method, notes)
+    return Row(name, GREEN, f"{len(cases)} cases; polls {counts[0]} -> {counts[1]}", method, notes)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--wheel", type=Path, help="Wheel built from the checked-out tree (provenance row)")
@@ -1942,6 +2151,20 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--run-url", help="Link back to the workflow run that produced this table")
+    parser.add_argument(
+        "--quiesce-report", type=Path, help="Real macOS launchd RED/GREEN report; missing or invalid is RED"
+    )
+    parser.add_argument("--quiesce-unavailable", help="Explicit reason the macOS quiesce replay was not triggered")
+    parser.add_argument(
+        "--retirement-report", type=Path, help="Required exact-head installed/native global model absence receipt"
+    )
+    parser.add_argument(
+        "--brainbar-render-report", type=Path, help="Actual no-enrichment view evidence; missing is RED"
+    )
+    parser.add_argument(
+        "--watcher-heartbeat-report", type=Path, help="Actual private producer/compiled consumer evidence"
+    )
+    parser.add_argument("--watcher-heartbeat-unavailable", help="Explicit reason the native probe was not triggered")
     parser.add_argument("--out", type=Path, help="Also write the rendered table here")
     attest = parser.add_argument_group(
         "attesting (main runs only)",
@@ -1971,6 +2194,18 @@ def main(argv: list[str] | None = None) -> int:
         args.fallback_gits_root,
     )
     rows = collect(probe, corpus)
+    # Main's baseline attestor calibrates the original resource rows, not UI evidence.
+    # Every normal/PR collector run requires this render row, including absent reports.
+    if not args.attest_out or args.brainbar_render_report:
+        rows.append(row_brainbar_no_enrichment(args.brainbar_render_report, probe.head_sha))
+    if not args.attest_out or args.watcher_heartbeat_report or args.watcher_heartbeat_unavailable:
+        rows.append(
+            row_watcher_heartbeat(args.watcher_heartbeat_report, args.watcher_heartbeat_unavailable, probe.head_sha)
+        )
+    if args.quiesce_report or args.quiesce_unavailable:
+        rows.append(row_quiesce(args.quiesce_report, args.quiesce_unavailable, args.measured_sha))
+    if args.retirement_report or args.measured_sha:
+        rows.append(row_retirement(args.retirement_report, args.measured_sha))
     now = datetime.now(timezone.utc)
     table = render(rows, probe, args.run_url, now)
 

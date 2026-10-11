@@ -21,6 +21,36 @@ from scripts import ci_ratchet_table as ratchet
 from scripts import sprint_gate
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_view_row(monkeypatch):
+    # These older unit fixtures isolate other table contracts. They cannot render macOS views.
+    # The report handoff's fail-closed cases live in test_brainbar_no_enrichment_ratchet.py;
+    # real native render/mutation receipts, not this fixture, prove the new row.
+    monkeypatch.setattr(
+        ratchet,
+        "row_brainbar_no_enrichment",
+        lambda *_: ratchet.Row(
+            "BrainBar renders no enrichment status",
+            ratchet.GREEN,
+            "isolated unit fixture",
+            "unit fixture",
+            "not native proof",
+        ),
+    )
+    # Other table unit fixtures do not run a native watcher/consumer. Its real proof is separate.
+    monkeypatch.setattr(
+        ratchet,
+        "row_watcher_heartbeat",
+        lambda *_: ratchet.Row(
+            "Watcher heartbeat freshness and recovery",
+            ratchet.GREEN,
+            "isolated unit fixture",
+            "unit fixture",
+            "not native proof",
+        ),
+    )
+
+
 def _clean_git_env() -> dict[str, str]:
     # An inherited GIT_DIR/GIT_WORK_TREE (a git hook runs the suite) overrides `-C`, so the decoy
     # repo's commits would land in the REAL repo. Same guard as tests/test_build_sha.py and
@@ -33,6 +63,19 @@ WORKFLOW = ROOT / ".github" / "workflows" / "ratchet.yml"
 CORPUS = json.loads((ROOT / "tests" / "fixtures" / "sprint_gate" / "corpus.json").read_text(encoding="utf-8"))
 HEAD = "a" * 40
 NOW = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
+
+
+def retirement_receipt(tmp_path, sha):
+    from tests.test_retirement_report import valid
+
+    report = valid()
+    report["source_sha"] = report["source"]["sha"] = sha
+    report["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+    for profile in report["profiles"]:
+        profile["source_sha"] = sha
+    path = tmp_path / "retirement-unit-receipt.json"
+    path.write_text(json.dumps(report))
+    return path
 
 
 def make_wheel(tmp_path: Path, stamp: str | None) -> Path:
@@ -450,7 +493,7 @@ def test_the_two_shas_in_the_table_say_which_is_which(tmp_path: Path) -> None:
     the merge ref from the PR head is back in #759, just with more numbers."""
     rows = ratchet.collect(commit_probe(tmp_path), CORPUS)
     assert "commit provenance" in row(rows, "provenance").notes
-    assert "merge ref on a PR" in row(rows, "provenance").notes
+    assert "explicit PR head in ratchet.yml" in row(rows, "provenance").notes
 
 
 def test_the_commit_row_leads_the_table(tmp_path: Path) -> None:
@@ -523,7 +566,21 @@ def test_main_is_green_on_the_commit_it_was_triggered_for(tmp_path: Path, capsys
     head = ratchet.git_head()
     assert head is not None
     wheel = make_wheel(tmp_path, head)
-    assert ratchet.main(["--wheel", str(wheel), "--measured-sha", head, "--pr-head-sha", head]) == 0
+    assert (
+        ratchet.main(
+            [
+                "--wheel",
+                str(wheel),
+                "--measured-sha",
+                head,
+                "--pr-head-sha",
+                head,
+                "--retirement-report",
+                str(retirement_receipt(tmp_path, head)),
+            ]
+        )
+        == 0
+    )
     assert f"measured `{head[:12]}` == PR head" in capsys.readouterr().out
 
 
@@ -1180,6 +1237,13 @@ def test_the_signature_job_verifies_the_keg_with_the_release_script() -> None:
     assert "brew install etanhey/layers/brainlayer" in install
 
 
+def test_the_signature_job_fails_when_loadability_fails_with_valid_signatures() -> None:
+    verify = workflow_steps("signatures")["Codesign-verify every native extension in the keg"]["run"]
+    assert '[[ "$rc" -ne 0 && "$invalid" -eq 0 ]]' in verify
+    assert "verdict=load_failed" in verify
+    assert "LOAD_FAILED" in verify
+
+
 def test_the_signature_job_is_trigger_gated_and_not_charged_to_every_pr() -> None:
     """A GitHub macOS runner bills at ~10x Linux minutes and this job builds a venv from source.
 
@@ -1250,7 +1314,7 @@ def test_a_non_zero_brew_install_does_not_fail_the_parity_job_by_itself() -> Non
     install = workflow_steps("signatures")["Install the published BrainLayer keg from the tap"]
     assert install["continue-on-error"] is True
     # The verdict is still able to fail it -- otherwise this would be a fail-open.
-    fail_step = workflow_steps("signatures")["Fail this job on an invalid signature"]
+    fail_step = workflow_steps("signatures")["Fail this job on invalid signatures or loadability"]
     assert "steps.verify.outputs.verdict != 'clean'" in fail_step["if"]
 
 
@@ -1328,7 +1392,7 @@ def test_the_signature_job_fails_on_anything_but_a_clean_measurement() -> None:
     which reads as a pass. AGENTS.md blocks release on an invalid `*.so`/`*.dylib`; a sweep that
     never happened proves no less than nothing.
     """
-    fail_step = workflow_steps("signatures")["Fail this job on an invalid signature"]
+    fail_step = workflow_steps("signatures")["Fail this job on invalid signatures or loadability"]
     assert "steps.verify.outputs.verdict != 'clean'" in fail_step["if"]
     assert "exit 1" in fail_step["run"]
     # ...and the two cases are distinguishable in the log, not collapsed into one message.
@@ -1345,7 +1409,7 @@ def test_the_table_job_waits_for_the_signature_job_without_depending_on_it_runni
     table standing on the PR -- the same crime as printing an unmeasured number, by omission.
     """
     table = workflow_jobs()["table"]
-    assert set(table["needs"]) == {"gate", "signatures"}
+    assert set(table["needs"]) == {"gate", "signatures", "quiesce", "retirement", "no-enrichment-render", "heartbeat"}
     assert "!cancelled()" in table["if"] and "always()" not in table["if"]
 
 
@@ -2055,7 +2119,12 @@ def test_the_gate_no_longer_compares_against_a_number_the_pr_wrote(tmp_path: Pat
     measured = write_attestation(
         tmp_path, attestation_dict(main_sha="5" * 40, measured={"latency_baseline_ms.p50": 5000.0})
     )
-    assert ratchet.main(argv + ["--attestation", str(measured)]) == 0
+    assert (
+        ratchet.main(
+            argv + ["--attestation", str(measured), "--retirement-report", str(retirement_receipt(tmp_path, HEAD))]
+        )
+        == 0
+    )
     assert "moved to values measured by main" in capsys.readouterr().out
 
 
@@ -2063,7 +2132,12 @@ def test_main_reads_an_attestation_end_to_end(tmp_path: Path, capsys, monkeypatc
     pin_main_checkout(monkeypatch)
     path = write_attestation(tmp_path, attestation_dict(main_sha="5" * 40))
     argv = ["--wheel", str(make_wheel(tmp_path, HEAD)), "--measured-sha", HEAD, "--pr-head-sha", HEAD]
-    assert ratchet.main(argv + ["--attestation", str(path)]) == 0
+    assert (
+        ratchet.main(
+            argv + ["--attestation", str(path), "--retirement-report", str(retirement_receipt(tmp_path, HEAD))]
+        )
+        == 0
+    )
     assert "matches the main attestation" in capsys.readouterr().out
     assert ratchet.main(argv + ["--attestation-unresolved", "artifact expired"]) == 1
     assert "artifact expired" in capsys.readouterr().err
@@ -3087,3 +3161,68 @@ def test_the_ratchet_suite_scrubs_the_fallback_root_env():
     assertions could become host-dependent, or walk production docs.local during the suite.
     """
     assert "BRAINLAYER_FALLBACK_GITS_ROOT" not in os.environ
+
+
+def test_pre_push_delete_ratchet_runs_real_hook(tmp_path: Path) -> None:
+    result = ratchet.row_pre_push_delete(linux_probe(tmp_path), {})
+    assert result.status == ratchet.GREEN, result.value
+    assert "0 suite starts" in result.value
+    assert ratchet.PRE_PUSH_DELETE_BUG_SHA in result.notes
+    assert f"measured at `{HEAD}`" in result.notes
+    assert "Fix: #1084" in result.notes
+    assert "Fix SHA" not in result.notes
+
+
+@pytest.mark.parametrize(
+    "refs,starts",
+    [
+        (ratchet.DELETE_REF, 0),
+        (ratchet.DELETE_REF * 2, 0),
+        (ratchet.DELETE_REF + f"refs/heads/fixture {'b' * 40} refs/heads/fixture {'a' * 40}\n", 1),
+        (f"refs/tags/v0.0.0 {'b' * 40} refs/tags/v0.0.0 {'0' * 40}\n", 1),
+        ("", 1),
+        (ratchet.DELETE_REF + f"refs/tags/v0.0.0 {'b' * 40} refs/tags/v0.0.0 {'0' * 40}\n", 1),
+        ("refs/heads/fixture\n", 1),
+        (ratchet.DELETE_REF + "refs/heads/fixture\n", 1),
+        (ratchet.DELETE_REF + f"refs/heads/new {'b' * 40} refs/heads/new {'0' * 40}\n", 1),
+        (ratchet.DELETE_REF + f"refs/heads/fixture {'b' * 40} refs/heads/fixture {'a' * 40}", 1),
+    ],
+)
+def test_pre_push_delete_only_boundary(refs: str, starts: int) -> None:
+    result, measured = ratchet.replay_pre_push(ROOT / ".githooks/pre-push", refs)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert measured == starts
+
+
+def test_pre_push_delete_ratchet_missing_hook_is_red(tmp_path: Path, monkeypatch) -> None:
+    probe = linux_probe(tmp_path)
+    runner = tmp_path / "scripts/ci/run_with_deadline.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text((ROOT / "scripts/ci/run_with_deadline.py").read_text())
+    monkeypatch.setattr(ratchet, "ROOT", tmp_path)
+    result = ratchet.row_pre_push_delete(probe, {})
+    assert result.status == ratchet.RED
+    assert "exit 127" in result.value
+
+
+def test_pre_push_delete_row_labels_the_measured_sha(tmp_path: Path) -> None:
+    result = ratchet.row_pre_push_delete(linux_probe(tmp_path, measured_sha="b" * 40), {})
+    assert f"measured at `{'b' * 40}`" in result.notes
+    assert f"measured at `{HEAD}`" not in result.notes
+    assert "Fix: #1084" in result.notes
+
+
+def test_pre_push_delete_missing_bash_is_red(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(ratchet.shutil, "which", lambda _name: None)
+    result = ratchet.row_pre_push_delete(linux_probe(tmp_path), {})
+    assert result.status == ratchet.RED
+    assert "bash" in result.value
+
+
+def test_ui_retirement_and_table_use_the_same_explicit_pr_head():
+    jobs = workflow_jobs()
+    for name in ("no-enrichment-render", "retirement", "table"):
+        checkouts = [s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/checkout")]
+        assert checkouts[0]["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    run = workflow_steps()["Collect ratchet rows"]["run"]
+    assert "--retirement-report" in run and "--brainbar-render-report" in run

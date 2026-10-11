@@ -59,6 +59,7 @@ PACKAGE = SRC / "brainlayer"
 sys.path.insert(0, str(SRC))
 from brainlayer import __version__
 from brainlayer.paths import get_db_path
+from brainlayer.socket_hygiene import refuse_production_brainbar_socket
 
 sys.path.insert(0, str(ROOT))
 from scripts import ratchet_margins as margins  # noqa: E402  (ROOT must be on sys.path first, as SRC is above)
@@ -87,6 +88,7 @@ class MCPClient:
     def __init__(self, path: str, timeout: float):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
+        refuse_production_brainbar_socket(path)
         self.sock.connect(path)
         self.stream = self.sock.makefile("rwb")
         self.request_id = 0

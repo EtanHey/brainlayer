@@ -223,7 +223,7 @@ def test_batch_analyze_sentiment(tmp_path):
 
 def test_enrichment_prompt_includes_sentiment():
     """LLM enrichment prompt asks for sentiment fields."""
-    from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+    from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 
     assert "sentiment_label" in ENRICHMENT_PROMPT
     assert "sentiment_score" in ENRICHMENT_PROMPT

@@ -40,7 +40,7 @@ from typing import Any, Callable, Dict, List, Optional
 import apsw
 
 from .chunk_origin import CHUNK_ORIGIN_PRECOMPACT_CHECKPOINT, detect_chunk_origin
-from .chunk_write import canonical_content_hash, insert_canonical_chunk
+from .chunk_write import canonical_content_hash, insert_canonical_chunk, scrub_chunk_values
 from .content_class import classify_content_class
 from .dedupe import find_duplicate, merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
 from .ingest_guard import reject_recursive_mcp_output
@@ -159,6 +159,11 @@ def store_memory(
     if looks_like_system_prompt(content):
         raise ValueError("system prompt content is not stored in BrainLayer")
 
+    # Before embedding/dedupe/merge: insertion alone cannot guard UPDATE paths.
+    scrubbed = scrub_chunk_values({"content": content, "tags": tags})
+    content = scrubbed["content"]
+    tags = scrubbed["tags"]
+
     # Clamp importance
     if importance is not None:
         importance = max(1, min(10, importance))
@@ -177,7 +182,7 @@ def store_memory(
         related = _find_related(store, embedding, project=project, limit=3)
 
     # Build metadata dict
-    meta = {"memory_type": memory_type}
+    meta = {"memory_type": memory_type, **scrubbed.get("metadata", {})}
     if confidence_score is not None:
         meta["confidence_score"] = confidence_score
     if outcome is not None:
@@ -204,6 +209,7 @@ def store_memory(
     if replayed_by is not None:
         meta["replayed_by"] = replayed_by
 
+    meta = scrub_chunk_values({"metadata": meta})["metadata"]
     resolved_chunk_origin = detect_chunk_origin(content, chunk_origin)
     content_class = classify_content_class(content, content_type=memory_type, tags=tags, source="manual")
     tags_json = json.dumps(tags) if tags else None

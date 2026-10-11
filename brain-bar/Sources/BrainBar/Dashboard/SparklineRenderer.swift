@@ -35,6 +35,9 @@ struct SparklineChartPresentation: Equatable, Sendable {
     let fetchedAt: Date
     let metricDisclosure: String?
     let accessibilitySummary: String?
+    let lastBucketIsPartial: Bool
+    let showsRestingAxes: Bool
+    let plotsSeries: Bool
 
     init(
         label: String,
@@ -48,7 +51,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
         latestBucketName: String = "latest bucket count",
         fetchedAt: Date = Date(),
         metricDisclosure: String? = nil,
-        accessibilitySummary: String? = nil
+        accessibilitySummary: String? = nil,
+        lastBucketIsPartial: Bool = false,
+        showsRestingAxes: Bool = false,
+        plotsSeries: Bool = true
     ) {
         self.label = label
         self.values = values
@@ -62,6 +68,9 @@ struct SparklineChartPresentation: Equatable, Sendable {
         self.fetchedAt = fetchedAt
         self.metricDisclosure = metricDisclosure
         self.accessibilitySummary = accessibilitySummary
+        self.lastBucketIsPartial = lastBucketIsPartial
+        self.showsRestingAxes = showsRestingAxes
+        self.plotsSeries = plotsSeries
     }
 
     var points: [SparklineChartPoint] {
@@ -143,7 +152,11 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     var accessibilityValue: String {
+        guard plotsSeries else { return accessibilitySummary ?? "" }
         var components = ["\(latestBucketName) \(values.last ?? 0)", trendDescription]
+        if lastBucketIsPartial, !values.isEmpty {
+            components.insert("latest bucket is partial", at: 1)
+        }
         if let accessibilitySummary {
             components.insert(accessibilitySummary, at: 0)
         }
@@ -159,23 +172,33 @@ struct SparklineChartPresentation: Equatable, Sendable {
         return components.joined(separator: ", ")
     }
 
+    private var observedMaxValue: Int {
+        max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 0)
+    }
+
     var maxValue: Int {
-        max(values.max() ?? 0, secondaryValues.max() ?? 0, tertiaryValues.max() ?? 0, 1)
+        max(observedMaxValue, 1)
     }
 
-    var tightAxisMax: Int {
-        maxValue <= 5 ? max(maxValue, 1) : axisMax
-    }
+    var tightAxisMax: Int { axisMax }
 
-    /// Rounds the raw peak up to a glanceable 1/2/5 x 10^n tick so y-axis labels are round.
+    /// Uses the largest 1/2/5 decimal step that keeps headroom within 20%.
     var axisMax: Int {
-        let raw = maxValue
+        let raw = observedMaxValue
         guard raw > 1 else { return 1 }
-        let exponent = floor(log10(Double(raw)))
-        let base = pow(10, exponent)
-        let fraction = Double(raw) / base
-        let niceFraction: Double = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10
-        return max(Int((niceFraction * base).rounded(.up)), 1)
+        let magnitude = Int(pow(10, floor(log10(Double(raw)))))
+        let headroomLimit = Int(floor(Double(raw) * 1.20))
+
+        for divisor in [1, 2, 5, 10] {
+            let step = max(magnitude / divisor, 1)
+            let ceiling = ((raw / step) + 1) * step
+            if ceiling <= headroomLimit {
+                return ceiling
+            }
+        }
+
+        // Integer peaks below five cannot always preserve both strict headroom and 20%.
+        return raw + 1
     }
     /// Tick values bottom->top: always includes 0 (baseline) and axisMax (peak).
     var yAxisTicks: [Int] {
@@ -225,6 +248,7 @@ struct SparklineChartPresentation: Equatable, Sendable {
     }
 
     func shouldPlotSeries(_ role: SparklineSeriesRole) -> Bool {
+        guard plotsSeries else { return false }
         guard label(for: role) != nil else { return false }
         if hasMultipleSeries {
             return isSeriesActive(role)
@@ -240,6 +264,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
 
     func visiblePointMarkers(for role: SparklineSeriesRole, compact: Bool) -> [SparklineChartPoint] {
         let rolePoints = points(for: role)
+        if lastBucketIsPartial {
+            guard rolePoints.count > 1 else { return [] }
+            return [rolePoints[rolePoints.count - 2]]
+        }
         guard let latest = rolePoints.last else { return [] }
         if compact {
             return [latest]
@@ -248,6 +276,17 @@ struct SparklineChartPresentation: Equatable, Sendable {
             return rolePoints.filter { $0.value > 0 }
         }
         return [latest]
+    }
+
+    func completePoints(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
+        let rolePoints = points(for: role)
+        return lastBucketIsPartial ? Array(rolePoints.dropLast()) : rolePoints
+    }
+
+    func partialSegmentPoints(for role: SparklineSeriesRole) -> [SparklineChartPoint] {
+        let rolePoints = points(for: role)
+        guard lastBucketIsPartial, rolePoints.count > 1 else { return [] }
+        return Array(rolePoints.suffix(2))
     }
 
     func nonZeroFraction(_ role: SparklineSeriesRole) -> Double {
@@ -289,6 +328,10 @@ struct SparklineChartPresentation: Equatable, Sendable {
             return "last \(Self.durationLabel(seconds: olderSecondsAgo))"
         }
         return "\(Self.durationLabel(seconds: olderSecondsAgo))-\(Self.durationLabel(seconds: newerSecondsAgo)) ago"
+    }
+
+    func xAxisLabel(for bucket: Int) -> String {
+        showsRestingAxes ? relativeBucketLabel(for: bucket) : bucketLabel(for: bucket)
     }
 
     func bucketRecencyLabel(for bucket: Int) -> String {
@@ -465,7 +508,7 @@ struct SparklineChart: View {
             if !compact {
                 HStack {
                     ForEach(xAxisBuckets, id: \.self) { bucket in
-                        Text(presentation.bucketLabel(for: bucket))
+                        Text(presentation.xAxisLabel(for: bucket))
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
@@ -476,7 +519,7 @@ struct SparklineChart: View {
                 }
                 .frame(height: 12)
                 .padding(.horizontal, 16)
-                .opacity(hoveredBucket == nil ? 0 : 1)
+                .opacity(presentation.showsRestingAxes || hoveredBucket != nil ? 1 : 0)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hoveredBucket)
             }
         }
@@ -495,7 +538,7 @@ struct SparklineChart: View {
                 if !compact {
                     ForEach(presentation.tightYAxisTicks, id: \.self) { tick in
                         let y = yPosition(forValue: tick, in: plotFrame)
-                        if tick == 0 || isHovering {
+                        if tick == 0 || presentation.showsRestingAxes || isHovering {
                             Path { p in
                                 p.move(to: CGPoint(x: plotFrame.minX, y: y))
                                 p.addLine(to: CGPoint(x: plotFrame.maxX, y: y))
@@ -507,15 +550,13 @@ struct SparklineChart: View {
                             )
                             .transition(.opacity)
 
-                            if tick != 0 {
-                                Text(DashboardMetricFormatter.axisTickString(tick))
-                                    .font(.system(size: 9, weight: .medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(Color.brainBarTextMuted)
-                                    .frame(width: yAxisGutter - 4, alignment: .trailing)
-                                    .position(x: (yAxisGutter - 4) / 2, y: y)
-                                    .transition(.opacity)
-                            }
+                            Text(DashboardMetricFormatter.axisTickString(tick))
+                                .font(.system(size: 9, weight: .medium))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.brainBarTextMuted)
+                                .frame(width: yAxisGutter - 4, alignment: .trailing)
+                                .position(x: (yAxisGutter - 4) / 2, y: y)
+                                .transition(.opacity)
                         }
                     }
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hoveredBucket)
@@ -524,7 +565,8 @@ struct SparklineChart: View {
                 ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
                     if !compact, presentation.shouldPlotSeries(role) {
                         SparklineSeriesAreaShape(
-                            points: presentation.points(for: role),
+                            points: presentation.completePoints(for: role),
+                            bucketCount: presentation.points(for: role).count,
                             maxValue: plotMax,
                             plotFrame: plotFrame,
                             baselineY: baselineY(for: role, in: plotFrame),
@@ -540,6 +582,26 @@ struct SparklineChart: View {
                                 endPoint: .bottom
                             )
                         )
+                        if !presentation.partialSegmentPoints(for: role).isEmpty {
+                            SparklineSeriesAreaShape(
+                                points: presentation.partialSegmentPoints(for: role),
+                                bucketCount: presentation.points(for: role).count,
+                                maxValue: plotMax,
+                                plotFrame: plotFrame,
+                                baselineY: baselineY(for: role, in: plotFrame),
+                                smoothing: smoothing(for: role)
+                            )
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        color(for: role).opacity(role == .primary ? 0.136 : 0.064),
+                                        color(for: role).opacity(0.0),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        }
                     }
                 }
 
@@ -556,7 +618,7 @@ struct SparklineChart: View {
                     )
                 }
 
-                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                if let hoveredBucket, !compact, presentation.plotsSeries, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
                     let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -573,7 +635,8 @@ struct SparklineChart: View {
                 ForEach(SparklineSeriesRole.allCases, id: \.self) { role in
                     if presentation.shouldPlotSeries(role) {
                         SparklineSeriesPathShape(
-                            points: presentation.points(for: role),
+                            points: presentation.completePoints(for: role),
+                            bucketCount: presentation.points(for: role).count,
                             maxValue: plotMax,
                             plotFrame: plotFrame,
                             smoothing: smoothing(for: role)
@@ -584,6 +647,17 @@ struct SparklineChart: View {
                             radius: !compact && role == .primary ? 4 : 0,
                             y: !compact && role == .primary ? 1 : 0
                         )
+
+                        if !presentation.partialSegmentPoints(for: role).isEmpty {
+                            SparklineSeriesPathShape(
+                                points: presentation.partialSegmentPoints(for: role),
+                                bucketCount: presentation.points(for: role).count,
+                                maxValue: plotMax,
+                                plotFrame: plotFrame,
+                                smoothing: smoothing(for: role)
+                            )
+                            .stroke(color(for: role).opacity(0.4), style: lineStyle(for: role))
+                        }
 
                         ForEach(presentation.visiblePointMarkers(for: role, compact: compact)) { point in
                             Circle()
@@ -611,7 +685,7 @@ struct SparklineChart: View {
                     }
                 }
 
-                if let hoveredBucket, !compact, !presentation.points.isEmpty {
+                if let hoveredBucket, !compact, presentation.plotsSeries, !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), presentation.values.count - 1)
                     let anchorRole = hoverAnchorRole(forBucket: clampedBucket)
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -642,6 +716,7 @@ struct SparklineChart: View {
                 if let hoveredBucket,
                    let hoverLocation,
                    !compact,
+                   presentation.plotsSeries,
                    !presentation.points.isEmpty {
                     let clampedBucket = min(max(hoveredBucket, 0), max(presentation.values.count - 1, 0))
                     let anchorPoint = hoverAnchorPoint(forBucket: clampedBucket, in: plotFrame)
@@ -873,7 +948,7 @@ struct SparklineChart: View {
                                 .foregroundStyle(Color.brainBarTextSecondary)
                                 .lineLimit(1).truncationMode(.tail)
                             Spacer(minLength: 8)
-                            Text("\(row.value)")
+                            Text(DashboardMetricFormatter.integerString(row.value))
                                 .font(.system(size: 11, weight: .semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(Color.brainBarTextPrimary)
@@ -901,6 +976,7 @@ struct SparklineChart: View {
 
 private struct SparklineSeriesPathShape: Shape {
     let points: [SparklineChartPoint]
+    let bucketCount: Int
     let maxValue: Int
     let plotFrame: CGRect
     let smoothing: SparklineSmoothing
@@ -908,6 +984,7 @@ private struct SparklineSeriesPathShape: Shape {
     func path(in rect: CGRect) -> Path {
         SparklineSeriesPathBuilder.topPath(
             for: points,
+            bucketCount: bucketCount,
             maxValue: maxValue,
             plotFrame: plotFrame,
             smoothing: smoothing
@@ -917,6 +994,7 @@ private struct SparklineSeriesPathShape: Shape {
 
 private struct SparklineSeriesAreaShape: Shape {
     let points: [SparklineChartPoint]
+    let bucketCount: Int
     let maxValue: Int
     let plotFrame: CGRect
     let baselineY: CGFloat
@@ -925,6 +1003,7 @@ private struct SparklineSeriesAreaShape: Shape {
     func path(in rect: CGRect) -> Path {
         let renderedPoints = SparklineSeriesPathBuilder.renderedPoints(
             for: points,
+            bucketCount: bucketCount,
             maxValue: maxValue,
             plotFrame: plotFrame
         )
@@ -948,12 +1027,18 @@ private struct SparklineSeriesAreaShape: Shape {
 private enum SparklineSeriesPathBuilder {
     static func topPath(
         for points: [SparklineChartPoint],
+        bucketCount: Int,
         maxValue: Int,
         plotFrame: CGRect,
         smoothing: SparklineSmoothing
     ) -> Path {
         topPath(
-            for: renderedPoints(for: points, maxValue: maxValue, plotFrame: plotFrame),
+            for: renderedPoints(
+                for: points,
+                bucketCount: bucketCount,
+                maxValue: maxValue,
+                plotFrame: plotFrame
+            ),
             plotFrame: plotFrame,
             smoothing: smoothing
         )
@@ -961,15 +1046,16 @@ private enum SparklineSeriesPathBuilder {
 
     static func renderedPoints(
         for points: [SparklineChartPoint],
+        bucketCount: Int,
         maxValue: Int,
         plotFrame: CGRect
     ) -> [CGPoint] {
         points.map { point in
             let x: CGFloat
-            if points.count <= 1 {
+            if bucketCount <= 1 {
                 x = plotFrame.midX
             } else {
-                x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(points.count - 1))
+                x = plotFrame.minX + CGFloat(point.bucket) * (plotFrame.width / CGFloat(bucketCount - 1))
             }
             let normalizedValue = CGFloat(point.value) / CGFloat(max(maxValue, 1))
             return CGPoint(x: x, y: plotFrame.maxY - (normalizedValue * plotFrame.height))
@@ -1283,23 +1369,30 @@ enum SparklineRenderer {
         return NSImage(size: NSSize(width: width, height: height))
     }
 
-    /// Render the three-line pipeline status-bar icon (Agent / Watcher / Enrichment).
+    /// Render the two-line status-bar icon (Agent / Watcher).
     /// isTemplate=false: we want the bright colors, and the baseline guarantees the
     /// icon stays visible on a dark fullscreen menu bar even when all series are idle.
     @MainActor
     static func renderStatusBarIcon(
         agent: [Int],
         watcher: [Int],
-        enrichment: [Int],
+        badgeOn: Bool = false,
         size: NSSize = NSSize(width: 26, height: 14)
     ) -> NSImage {
         let width = max(size.width.rounded(.up), 1)
         let height = max(size.height.rounded(.up), 1)
-        let icon = MenuBarSparklineIcon(series: [
-            .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
-            .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
-            .init(values: enrichment, color: Color(nsColor: BrainBarDesignTokens.Colors.signalFTS5)),
-        ])
+        let icon = ZStack(alignment: .topTrailing) {
+            MenuBarSparklineIcon(series: [
+                .init(values: agent, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesAgent)),
+                .init(values: watcher, color: Color(nsColor: BrainBarDesignTokens.Colors.seriesWatcher)),
+            ])
+            if badgeOn {
+                Circle()
+                    .fill(Color.red)
+                    .overlay(Circle().stroke(Color.white, lineWidth: 0.75))
+                    .frame(width: 6, height: 6)
+            }
+        }
         .frame(width: width, height: height)
 
         let renderer = ImageRenderer(content: icon)

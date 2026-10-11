@@ -37,11 +37,11 @@ def _insert_chunk(store: VectorStore, chunk_id: str, content: str, tags: list[st
 def test_extract_identity():
     from brainlayer.pipeline.correction_mining import extract_corrections
 
-    matches = extract_corrections("Avi Simon is a developer.")
+    matches = extract_corrections("Rina Vale is a developer.")
 
     assert len(matches) == 1
     assert matches[0].pattern_type == "identity"
-    assert matches[0].entity_name == "Avi Simon"
+    assert matches[0].entity_name == "Rina Vale"
     assert matches[0].attribute == "developer"
     assert matches[0].old_value is None
     assert matches[0].new_value == "developer"
@@ -50,11 +50,11 @@ def test_extract_identity():
 def test_extract_negation():
     from brainlayer.pipeline.correction_mining import extract_corrections
 
-    matches = extract_corrections("Avi is not from Wix.")
+    matches = extract_corrections("Rina is not from Wix.")
 
     assert len(matches) == 1
     assert matches[0].pattern_type == "negation"
-    assert matches[0].entity_name == "Avi"
+    assert matches[0].entity_name == "Rina"
     assert matches[0].old_value == "from Wix"
     assert matches[0].new_value is None
 
@@ -62,11 +62,11 @@ def test_extract_negation():
 def test_extract_association():
     from brainlayer.pipeline.correction_mining import extract_corrections
 
-    matches = extract_corrections("Avi works at Lightricks.")
+    matches = extract_corrections("Rina works at Lightricks.")
 
     assert len(matches) == 1
     assert matches[0].pattern_type == "association"
-    assert matches[0].entity_name == "Avi"
+    assert matches[0].entity_name == "Rina"
     assert matches[0].attribute == "works_at"
     assert matches[0].new_value == "Lightricks"
 
@@ -97,10 +97,10 @@ def test_extract_hebrew():
 def test_mine_corrections_from_chunks(store):
     from brainlayer.pipeline.correction_mining import mine_corrections, promote_corrections
 
-    _insert_chunk(store, "chunk-1", "Avi Simon is a developer.", ["correction"])
-    _insert_chunk(store, "chunk-2", "Avi works at Lightricks.", ["clarification"])
+    _insert_chunk(store, "chunk-1", "Rina Vale is a developer.", ["correction"])
+    _insert_chunk(store, "chunk-2", "Rina works at Lightricks.", ["clarification"])
     _insert_chunk(store, "chunk-3", "EtanHey aka Etan Heyman", ["user-correction"])
-    _insert_chunk(store, "chunk-4", "Avi is not from Wix.", ["correction"])
+    _insert_chunk(store, "chunk-4", "Rina is not from Wix.", ["correction"])
 
     stats = mine_corrections(store)
 
@@ -120,7 +120,7 @@ def test_mine_corrections_from_chunks(store):
     assert promotion["aliases_created"] == 1
     assert promotion["manual_review"] == 1
 
-    person = store.get_entity_by_name("person", "Avi Simon")
+    person = store.get_entity_by_name("person", "Rina Vale")
     assert person is not None
     assert person["metadata"]["identity"] == "developer"
 

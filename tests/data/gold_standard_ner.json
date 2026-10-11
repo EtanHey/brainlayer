@@ -26,26 +26,26 @@
   "samples": [
     {
       "id": "gold-001",
-      "text": "Dor Zohar is the CEO and handles UX/UI and product for Domica, our real estate AI startup.",
+      "text": "Person Alpha is the CEO and handles UX/UI and product for Domica, our real estate AI startup.",
       "source": "user_message",
       "language": "en",
       "entities": [
         {
-          "text": "Dor Zohar",
+          "text": "Person Alpha",
           "type": "person",
           "start": 0,
-          "end": 9
+          "end": 12
         },
         {
           "text": "Domica",
           "type": "company",
-          "start": 55,
-          "end": 61
+          "start": 58,
+          "end": 64
         }
       ],
       "relations": [
         {
-          "source": "Dor Zohar",
+          "source": "Person Alpha",
           "target": "Domica",
           "type": "works_at",
           "properties": {
@@ -56,32 +56,32 @@
     },
     {
       "id": "gold-002",
-      "text": "Shachar Gerby is CMO and Maor Noah is CFO at Domica.",
+      "text": "Person Beta is CMO and Person Gamma is CFO at Domica.",
       "source": "user_message",
       "language": "en",
       "entities": [
         {
-          "text": "Shachar Gerby",
+          "text": "Person Beta",
           "type": "person",
           "start": 0,
-          "end": 13
+          "end": 11
         },
         {
-          "text": "Maor Noah",
+          "text": "Person Gamma",
           "type": "person",
-          "start": 25,
-          "end": 34
+          "start": 23,
+          "end": 35
         },
         {
           "text": "Domica",
           "type": "company",
-          "start": 45,
-          "end": 51
+          "start": 46,
+          "end": 52
         }
       ],
       "relations": [
         {
-          "source": "Shachar Gerby",
+          "source": "Person Beta",
           "target": "Domica",
           "type": "works_at",
           "properties": {
@@ -89,7 +89,7 @@
           }
         },
         {
-          "source": "Maor Noah",
+          "source": "Person Gamma",
           "target": "Domica",
           "type": "works_at",
           "properties": {
@@ -247,7 +247,7 @@
     },
     {
       "id": "gold-007",
-      "text": "Cantaloupe AI is a company I previously worked at. Daniel Munk referred me to Avi Simon there.",
+      "text": "Cantaloupe AI is a company I previously worked at. Person Epsilon referred me to Rina Vale there.",
       "source": "user_message",
       "language": "en",
       "entities": [
@@ -258,26 +258,26 @@
           "end": 13
         },
         {
-          "text": "Daniel Munk",
+          "text": "Person Epsilon",
           "type": "person",
           "start": 51,
-          "end": 62
+          "end": 65
         },
         {
-          "text": "Avi Simon",
+          "text": "Rina Vale",
           "type": "person",
-          "start": 78,
-          "end": 87
+          "start": 81,
+          "end": 90
         }
       ],
       "relations": [
         {
-          "source": "Daniel Munk",
-          "target": "Avi Simon",
+          "source": "Person Epsilon",
+          "target": "Rina Vale",
           "type": "referred"
         },
         {
-          "source": "Avi Simon",
+          "source": "Rina Vale",
           "target": "Cantaloupe AI",
           "type": "works_at"
         }
@@ -350,15 +350,15 @@
     },
     {
       "id": "gold-010",
-      "text": "Yuval Nir helped with the initial architecture design for the meeting layer.",
+      "text": "Person Delta helped with the initial architecture design for the meeting layer.",
       "source": "user_message",
       "language": "en",
       "entities": [
         {
-          "text": "Yuval Nir",
+          "text": "Person Delta",
           "type": "person",
           "start": 0,
-          "end": 9
+          "end": 12
         }
       ],
       "relations": []
@@ -978,26 +978,26 @@
     },
     {
       "id": "gold-029",
-      "text": "We need to check with Avi about the Cantaloupe API integration timeline.",
+      "text": "We need to check with Rina about the Cantaloupe API integration timeline.",
       "source": "user_message",
       "language": "en",
       "entities": [
         {
-          "text": "Avi",
+          "text": "Rina",
           "type": "person",
           "start": 22,
-          "end": 25
+          "end": 26
         },
         {
           "text": "Cantaloupe",
           "type": "company",
-          "start": 36,
-          "end": 46
+          "start": 37,
+          "end": 47
         }
       ],
       "relations": [
         {
-          "source": "Avi",
+          "source": "Rina",
           "target": "Cantaloupe",
           "type": "works_at"
         }

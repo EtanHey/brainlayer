@@ -611,14 +611,7 @@ class TestIntegration:
 
         mock_embed = MagicMock(return_value=[0.05] * 1024)
 
-        def mock_faceted(**kw):
-            return {
-                "status": "enriched",
-                "topics": ["vector-search", "sqlite-vec"],
-                "activity": "act:deciding",
-                "domains": ["dom:database", "dom:python"],
-                "confidence": 0.85,
-            }
+        mock_faceted = MagicMock(side_effect=AssertionError("retired faceted callback was invoked"))
 
         result = digest_content(
             content=RESEARCH_500_WORDS,
@@ -631,7 +624,9 @@ class TestIntegration:
 
         assert result["digest_id"].startswith("digest-")
         assert result["summary"] == "Vector Search Backend Selection ADR"
-        assert "vector-search" in result["tags"]
+        assert result["tags"] == []
+        assert result["enrichment"]["status"] == "retired"
+        mock_faceted.assert_not_called()
         assert result["stats"]["entities_found"] >= 0
         assert result["stats"]["chunks_created"] == 1
 

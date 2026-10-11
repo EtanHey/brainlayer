@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etanheyman.com/brainlayer/observability-schema.v1.json",
+  "title": "BrainLayer observability surface v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "db_path", "window_hours", "stores", "emitters", "author_unknown", "backups"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "db_path": {"type": "string", "minLength": 1},
+    "window_hours": {"type": "integer", "const": 24},
+    "stores": {"$ref": "#/$defs/stores"},
+    "emitters": {"$ref": "#/$defs/emitters"},
+    "author_unknown": {"$ref": "#/$defs/author_unknown"},
+    "backups": {"$ref": "#/$defs/backups"}
+  },
+  "$defs": {
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "status", "mtime", "rows_or_bytes", "sha256_first_64kb", "skipped_lines"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "status": {"enum": ["read", "missing", "malformed", "empty", "future"]},
+        "mtime": {"type": ["string", "null"], "format": "date-time"},
+        "rows_or_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "sha256_first_64kb": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "skipped_lines": {"type": "integer", "minimum": 0}
+      }
+    },
+    "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}},
+    "unmeasurable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "inputs"],
+      "properties": {
+        "state": {"const": "unmeasurable"},
+        "reason": {"type": "string", "minLength": 1},
+        "inputs": {"$ref": "#/$defs/inputs"}
+      }
+    },
+    "stores_measured": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "inputs", "total_chunks", "in_window", "by_content_class", "latest"],
+      "properties": {
+        "state": {"const": "measured"},
+        "reason": {"const": ""},
+        "inputs": {"$ref": "#/$defs/inputs"},
+        "total_chunks": {"type": "integer", "minimum": 0},
+        "in_window": {
+          "type": "object", "additionalProperties": false, "required": ["count", "by_hour"],
+          "properties": {
+            "count": {"type": "integer", "minimum": 0},
+            "by_hour": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["hour", "count"], "properties": {"hour": {"type": "string", "format": "date-time"}, "count": {"type": "integer", "minimum": 0}}}}
+          }
+        },
+        "by_content_class": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["content_class", "count"], "properties": {"content_class": {"type": ["string", "null"]}, "count": {"type": "integer", "minimum": 0}}}},
+        "latest": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["chunk_id", "stored_at", "source_class", "emitter", "preview"], "properties": {"chunk_id": {"type": "string"}, "stored_at": {"type": "string", "format": "date-time"}, "source_class": {"type": ["string", "null"]}, "emitter": {"type": ["string", "null"]}, "preview": {"type": "string", "maxLength": 80}}}}
+      }
+    },
+    "stores": {"oneOf": [{"$ref": "#/$defs/stores_measured"}, {"$ref": "#/$defs/unmeasurable"}]},
+    "emitters_measured": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "reason", "inputs", "by_source_class", "by_emitter", "derivation_note", "hidden_from_default_search"],
+      "properties": {
+        "state": {"const": "measured"}, "reason": {"const": ""}, "inputs": {"$ref": "#/$defs/inputs"},
+        "by_source_class": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["source_class", "count", "in_window"], "properties": {"source_class": {"enum": ["cli-agent", "desktop", "subagent", "brain-worker", "fleet-coordination", null]}, "count": {"type": "integer", "minimum": 0}, "in_window": {"type": "integer", "minimum": 0}}}},
+        "by_emitter": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["emitter", "derived_from", "count_in_window"], "properties": {"emitter": {"type": "string", "minLength": 1}, "derived_from": {"enum": ["source", "sender", "source_file"]}, "count_in_window": {"type": "integer", "minimum": 0}}}},
+        "derivation_note": {"const": "metadata.attributionAgent is absent in the 2026-09-13 census; emitter derives from source, then sender, then source_file, or the section is unmeasurable"},
+        "hidden_from_default_search": {"type": "integer", "minimum": 0}
+      }
+    },
+    "emitters": {"oneOf": [{"$ref": "#/$defs/emitters_measured"}, {"$ref": "#/$defs/unmeasurable"}]},
+    "author_unknown_measured": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "reason", "inputs", "never_classified", "classified_unknown", "census_2026_09_13", "trend_7d", "top_source_files"],
+      "properties": {
+        "state": {"const": "measured"}, "reason": {"const": ""}, "inputs": {"$ref": "#/$defs/inputs"},
+        "never_classified": {"type": "object", "additionalProperties": false, "required": ["count", "share", "definition"], "properties": {"count": {"type": "integer", "minimum": 0}, "share": {"type": "number", "minimum": 0, "maximum": 1}, "definition": {"const": "provenance_class IS NULL OR source_class IS NULL, archived_at IS NULL"}}},
+        "classified_unknown": {"type": "object", "additionalProperties": false, "required": ["count", "share", "definition"], "properties": {"count": {"type": "integer", "minimum": 0}, "share": {"type": "number", "minimum": 0, "maximum": 1}, "definition": {"const": "provenance_class = 'unknown', archived_at IS NULL"}}},
+        "census_2026_09_13": {"const": "never_classified = 476,679 of 731,153 live (65.2%); both-NULL = 65,017; classified_unknown literal not observed on the copy"},
+        "trend_7d": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["day", "never_classified", "classified_unknown"], "properties": {"day": {"type": "string", "format": "date"}, "never_classified": {"type": "integer", "minimum": 0}, "classified_unknown": {"type": "integer", "minimum": 0}}}},
+        "top_source_files": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["source_file", "count"], "properties": {"source_file": {"type": "string"}, "count": {"type": "integer", "minimum": 0}}}}
+      }
+    },
+    "author_unknown": {"oneOf": [{"$ref": "#/$defs/author_unknown_measured"}, {"$ref": "#/$defs/unmeasurable"}]},
+    "backups_measured": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "reason", "inputs", "last_verified_upload", "freshness", "threshold_hours", "retention_invariant", "surviving_archives_30d", "launchd", "db_snapshot", "error_type"],
+      "properties": {
+        "state": {"const": "measured"}, "reason": {"const": ""}, "inputs": {"$ref": "#/$defs/inputs"},
+        "last_verified_upload": {"type": ["object", "null"], "additionalProperties": false, "required": ["at", "age_hours", "archive_id", "verified"], "properties": {"at": {"type": "string", "format": "date-time"}, "age_hours": {"type": "number", "minimum": 0}, "archive_id": {"type": "string"}, "verified": {"const": true}}},
+        "freshness": {"enum": ["fresh", "stale", "unknown"]}, "threshold_hours": {"type": "integer", "const": 36},
+        "retention_invariant": {"enum": ["PASS", "FAIL", "unknown"]}, "surviving_archives_30d": {"type": "integer", "minimum": 0},
+        "launchd": {"type": "object", "additionalProperties": false, "required": ["label", "bootstrapped", "disabled_dir_present"], "properties": {"label": {"const": "com.brainlayer.jsonl-backup"}, "bootstrapped": {"type": "boolean"}, "disabled_dir_present": {"type": "boolean"}}},
+        "db_snapshot": {"type": ["object", "null"], "additionalProperties": false, "required": ["last_at", "destination", "verified"], "properties": {"last_at": {"type": "string", "format": "date-time"}, "destination": {"type": "string"}, "verified": {"type": "boolean"}}},
+        "error_type": {"type": ["string", "null"]}
+      }
+    },
+    "backups": {"oneOf": [{"$ref": "#/$defs/backups_measured"}, {"$ref": "#/$defs/unmeasurable"}]}
+  }
+}

@@ -221,7 +221,7 @@ final class MCPRouterTests: XCTestCase {
     func testFullAndOperatorProfilesPreserveCanonicalInventory() throws {
         let canonicalNames = MCPRouter.toolDefinitions.compactMap { $0["name"] as? String }
 
-        XCTAssertEqual(canonicalNames.count, 17)
+        XCTAssertEqual(canonicalNames.count, 16)
         XCTAssertEqual(listedToolNames(MCPRouter(profile: "full")), canonicalNames)
         XCTAssertEqual(listedToolNames(MCPRouter(profile: "operator")), canonicalNames)
     }
@@ -268,7 +268,7 @@ final class MCPRouterTests: XCTestCase {
         let firstResult = try XCTUnwrap(firstExpansion["result"] as? [String: Any])
         XCTAssertEqual(firstResult["expanded"] as? Bool, true)
         XCTAssertEqual(firstResult["already_expanded"] as? Bool, false)
-        XCTAssertEqual((firstResult["registered_tools"] as? [String])?.count, 13)
+        XCTAssertEqual((firstResult["registered_tools"] as? [String])?.count, 12)
         XCTAssertEqual(listedToolNames(router), MCPRouter.toolDefinitions.compactMap { $0["name"] as? String })
 
         let deferredAfterExpansion = router.handle(toolCall(id: 22, name: "brain_tags", arguments: [:]))
@@ -280,7 +280,7 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertEqual(secondResult["expanded"] as? Bool, false)
         XCTAssertEqual(secondResult["already_expanded"] as? Bool, true)
         XCTAssertEqual(secondResult["registered_tools"] as? [String], [])
-        XCTAssertEqual(listedToolNames(router).count, 17)
+        XCTAssertEqual(listedToolNames(router).count, 16)
     }
 
     func testToolsListReturnsAllTools() throws {
@@ -296,14 +296,14 @@ final class MCPRouterTests: XCTestCase {
         let tools = result?["tools"] as? [[String: Any]]
 
         XCTAssertNotNil(tools)
-        XCTAssertEqual(tools?.count, 17, "Should have exactly 17 tools")
+        XCTAssertEqual(tools?.count, 16, "Should have exactly 16 tools")
 
         let toolNames = Set(tools?.compactMap { $0["name"] as? String } ?? [])
         let expected: Set<String> = [
             "brain_search", "brain_store", "brain_recall", "brain_entity",
             "brain_digest", "brain_update", "brain_expand", "brain_tags",
             "brain_subscribe", "brain_unsubscribe", "brain_ack",
-            "brain_get_person", "brain_supersede", "brain_archive", "brain_enrich",
+            "brain_get_person", "brain_supersede", "brain_archive",
             "brain_backup_vacuum_into", "brain_maintenance_rebuild_trigram",
         ]
         XCTAssertEqual(toolNames, expected)
@@ -337,7 +337,7 @@ final class MCPRouterTests: XCTestCase {
 
         let tools = (response["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []
 
-        XCTAssertEqual(tools.count, 17)
+        XCTAssertEqual(tools.count, 16)
         for tool in tools {
             XCTAssertNotNil(
                 tool["annotations"],
@@ -391,7 +391,6 @@ final class MCPRouterTests: XCTestCase {
             "brain_tags": (true, false, true, false),
             "brain_supersede": (false, true, false, false),
             "brain_archive": (false, true, false, false),
-            "brain_enrich": (false, false, false, false),
             "brain_subscribe": (false, false, false, false),
             "brain_unsubscribe": (false, false, true, false),
             "brain_ack": (false, false, true, false),
@@ -496,7 +495,7 @@ final class MCPRouterTests: XCTestCase {
                 text: #"""
 ┌─ brain_search: "techgym speakers workshop" ─ 1 result
 ├─ [1] manual-a0b8a  score:0.97  imp: 8  2026-05-16
-│  brainlayer       │ Michal speakers workshop manual chunk
+│  brainlayer       │ Alex speakers workshop manual chunk
 └─
 """#,
                 metadata: [
@@ -546,17 +545,68 @@ final class MCPRouterTests: XCTestCase {
         XCTAssertNotNil(result["content"] as? [[String: Any]], "Hybrid helper metadata must not overwrite MCP content.")
     }
 
+    func testBrainSearchFullHybridGatesOnlyKGPreamble() throws {
+        let path = NSTemporaryDirectory() + "diet-full-\(UUID().uuidString).db"
+        let db = BrainDatabase(path: path)
+        defer { db.close(); try? FileManager.default.removeItem(atPath: path) }
+        let preamble = "## Search results for fixture\n\n### KG Facts for Fixture\n- fixture depends_on target\n"
+        let body = "\n### 1. Fixture preview\n- ID: full-id\n- Preview: Body mentions KG Facts and must survive"
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(
+            text: preamble + body,
+            metadata: ["structuredContent": ["entity": "Fixture", "total": 1,
+                       "facts": [["relation": "depends_on"]], "results": [["chunk_id": "full-id"]]]]
+        ))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+        let text = try toolText(router.handle(toolCall(id: 176, name: "brain_search", arguments: [
+            "query": "fixture", "detail": "full"
+        ])))
+        XCTAssertFalse(text.contains("### KG Facts for Fixture"), text)
+        XCTAssertTrue(text.contains(body), text)
+        let optedIn = try toolText(router.handle(toolCall(id: 177, name: "brain_search", arguments: [
+            "query": "fixture", "detail": "full", "include_kg": true
+        ])))
+        XCTAssertEqual(optedIn, preamble + body)
+    }
+
+    func testBrainSearchHybridCompactUsesCanonicalPointersAndPreservesMetadata() throws {
+        let path = NSTemporaryDirectory() + "diet-hybrid-\(UUID().uuidString).db"
+        let db = BrainDatabase(path: path)
+        defer { db.close(); try? FileManager.default.removeItem(atPath: path) }
+        let structured: [String: Any] = [
+            "total": 1, "results": [["chunk_id": "hybrid-canonical-id", "score": 0.9876,
+                                     "project": "fixture", "date": "2026-10-01", "snippet": "Hybrid fixture preview",
+                                     "summary": "Separate hybrid summary with different information"]],
+            "search_mode": "fts_fallback", "fallback_reason": "fixture", "degraded": true
+        ]
+        let helper = RecordingHybridSearchClient(response: HybridSearchResponse(
+            text: "## Entity: Fixture\n### KG Facts\n- old boilerplate",
+            metadata: ["structuredContent": structured]
+        ))
+        let router = MCPRouter(profile: "full", hybridSearchClient: helper)
+        router.setDatabase(db)
+        let compact = try toolText(router.handle(toolCall(id: 171, name: "brain_search", arguments: ["query": "fixture"])))
+        XCTAssertTrue(compact.contains("hybrid-canonical-id"), compact)
+        XCTAssertTrue(compact.contains("0.9876"), compact)
+        XCTAssertTrue(compact.contains("P: Hybrid fixture preview"), compact)
+        XCTAssertTrue(compact.contains("S: Separate hybrid summary with different information"), compact)
+        XCTAssertTrue(compact.contains("FTS fallback"), compact)
+        XCTAssertFalse(compact.contains("KG Facts"), compact)
+        let full = try toolText(router.handle(toolCall(id: 172, name: "brain_search", arguments: ["query": "fixture", "detail": "full"])))
+        XCTAssertEqual(full, "## Entity: Fixture\n### KG Facts\n- old boilerplate")
+    }
+
     func testBrainSearchHybridSuccessDoesNotPrependSwiftKGFacts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-no-duplicate-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
-        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertRelation(sourceId: "entity-noa", targetId: "entity-brainlayer", relationType: "works_on")
         try db.insertChunk(
             id: "swift-fts-result",
-            content: "Etan BrainLayer local fallback result",
+            content: "Noa BrainLayer local fallback result",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -574,7 +624,7 @@ final class MCPRouterTests: XCTestCase {
             "method": "tools/call",
             "params": [
                 "name": "brain_search",
-                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+                "arguments": ["query": "Noa BrainLayer", "num_results": 3]
             ] as [String: Any]
         ])
 
@@ -584,7 +634,7 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertEqual(text, helperText)
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertFalse(text.contains("### ◆ Etan"), "Swift KG facts must not duplicate Python helper entity output.")
+        XCTAssertFalse(text.contains("### ◆ Noa"), "Swift KG facts must not duplicate Python helper entity output.")
         XCTAssertFalse(text.contains("WORKS_ON"), "Swift KG facts must not be prepended on hybrid helper success.")
     }
 
@@ -622,7 +672,7 @@ final class MCPRouterTests: XCTestCase {
 
         XCTAssertEqual(helper.requests.count, 1)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
-        XCTAssertFalse(text.contains("fallback-fts"), "Compact labeled markdown should not expose chunk_id by default.")
+        XCTAssertTrue(text.contains("fallback-fts"), "Compact results retain canonical chunk IDs")
         XCTAssertNil(result["structuredContent"])
     }
 
@@ -703,17 +753,17 @@ No results found.
         XCTAssertFalse(text.contains(fullContent))
     }
 
-    func testBrainSearchFallbackStillPrependsSwiftKGFacts() throws {
+    func testBrainSearchFallbackGatesSwiftKGFactsByDefault() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "entity-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "entity-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "entity-brainlayer", type: "project", name: "BrainLayer")
-        try db.insertRelation(sourceId: "entity-etan", targetId: "entity-brainlayer", relationType: "works_on")
+        try db.insertRelation(sourceId: "entity-noa", targetId: "entity-brainlayer", relationType: "works_on")
         try db.insertChunk(
             id: "fallback-kg-result",
-            content: "Etan BrainLayer fallback result from BrainBar database search",
+            content: "Noa BrainLayer fallback result from BrainBar database search",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -730,7 +780,7 @@ No results found.
             "method": "tools/call",
             "params": [
                 "name": "brain_search",
-                "arguments": ["query": "Etan BrainLayer", "num_results": 3]
+                "arguments": ["query": "Noa BrainLayer", "num_results": 3]
             ] as [String: Any]
         ])
 
@@ -739,10 +789,14 @@ No results found.
         let text = content.first?["text"] as? String ?? ""
 
         XCTAssertEqual(helper.requests.count, 1)
-        XCTAssertTrue(text.contains("## Entity: Etan"), text)
-        XCTAssertTrue(text.contains("### KG Facts"), text)
-        XCTAssertTrue(text.contains("works_on: BrainLayer"), text)
+        XCTAssertFalse(text.contains("## Entity: Noa"), text)
+        XCTAssertFalse(text.contains("### KG Facts"), text)
+        XCTAssertFalse(text.contains("works_on: BrainLayer"), text)
         XCTAssertTrue(text.contains("fallback result from BrainBar database search"), text)
+        let optedIn = try toolText(router.handle(toolCall(id: 175, name: "brain_search", arguments: [
+            "query": "Noa BrainLayer", "include_kg": true
+        ])))
+        XCTAssertTrue(optedIn.contains("works_on: BrainLayer"), optedIn)
     }
 
     func testBrainSearchFallbackMarksExpiredKGFactsInEntityHeader() throws {
@@ -750,12 +804,12 @@ No results found.
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "person-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
-        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertRelation(sourceId: "person-noa", targetId: "company-domica", relationType: "cto_of")
         try db.insertChunk(
             id: "fallback-expired-kg-result",
-            content: "Etan Domica fallback result from BrainBar database search",
+            content: "Noa Domica fallback result from BrainBar database search",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -768,7 +822,7 @@ No results found.
                 UPDATE kg_relations
                 SET expired_at = '2026-05-24T00:00:00Z',
                     valid_until = '2026-05-24T00:00:00Z'
-                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                WHERE source_id = 'person-noa' AND target_id = 'company-domica'
                 """,
                 nil,
                 nil,
@@ -782,11 +836,11 @@ No results found.
         router.setDatabase(db)
 
         let text = try toolText(router.handle(toolCall(id: 173, name: "brain_search", arguments: [
-            "query": "Etan Domica",
+            "query": "Noa Domica", "include_kg": true,
             "num_results": 3
         ])))
 
-        XCTAssertTrue(text.contains("## Entity: Etan"), text)
+        XCTAssertTrue(text.contains("## Entity: Noa"), text)
         XCTAssertTrue(text.contains("- cto_of: Domica (expired 2026-05-24)"), text)
     }
 
@@ -795,12 +849,12 @@ No results found.
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
-        try db.insertEntity(id: "person-etan", type: "person", name: "Etan")
+        try db.insertEntity(id: "person-noa", type: "person", name: "Noa")
         try db.insertEntity(id: "company-domica", type: "company", name: "Domica")
-        try db.insertRelation(sourceId: "person-etan", targetId: "company-domica", relationType: "cto_of")
+        try db.insertRelation(sourceId: "person-noa", targetId: "company-domica", relationType: "cto_of")
         try db.insertChunk(
             id: "fallback-lapsed-kg-result",
-            content: "Etan Domica fallback result from BrainBar database search",
+            content: "Noa Domica fallback result from BrainBar database search",
             sessionId: "s1",
             project: "brainlayer",
             contentType: "assistant_text",
@@ -813,7 +867,7 @@ No results found.
                 UPDATE kg_relations
                 SET valid_until = '2025-05-24T00:00:00Z',
                     expired_at = NULL
-                WHERE source_id = 'person-etan' AND target_id = 'company-domica'
+                WHERE source_id = 'person-noa' AND target_id = 'company-domica'
                 """,
                 nil,
                 nil,
@@ -827,7 +881,7 @@ No results found.
         router.setDatabase(db)
 
         let text = try toolText(router.handle(toolCall(id: 174, name: "brain_search", arguments: [
-            "query": "Etan Domica",
+            "query": "Noa Domica", "include_kg": true,
             "num_results": 3
         ])))
 
@@ -895,6 +949,55 @@ No results found.
             "query": "readonly"
         ])))
         XCTAssertTrue(tagsText.contains("readonly-route"), tagsText)
+    }
+
+    func testBrainExpandNeighbourIDsRoundTripWithoutPrefixCollisions() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-expand-ids-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let database = BrainDatabase(path: tempDB)
+        defer { database.close() }
+        let ids = ["0", "1", "2"].map { "rt-rollout--" + String(repeating: $0, count: 64) }
+        for (index, id) in ids.enumerated() {
+            try database.insertChunk(
+                id: id, content: "Neighbour round-trip content \(index)",
+                sessionId: "expand-neighbour-session", project: "brainlayer",
+                contentType: "assistant_text", importance: 5
+            )
+        }
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(database)
+        let text = try toolText(router.handle(toolCall(id: 305, name: "brain_expand", arguments: [
+            "chunk_id": ids[1], "before": 1, "after": 1
+        ])))
+        let renderedIDs = text.split(separator: "\n").compactMap { line -> String? in
+            let prefix = "│  ["
+            guard line.hasPrefix(prefix), let end = line.firstIndex(of: "]") else { return nil }
+            return String(line.dropFirst(prefix.count).prefix(upTo: end))
+        }
+        XCTAssertEqual(renderedIDs, [ids[0], ids[2]])
+        for (index, id) in renderedIDs.enumerated() {
+            let expanded = try toolText(router.handle(toolCall(id: 306 + index, name: "brain_expand", arguments: [
+                "chunk_id": id, "before": 0, "after": 0
+            ])))
+            XCTAssertTrue(expanded.contains("│ Neighbour round-trip content \(index * 2)"), expanded)
+        }
+    }
+
+    func testBrainRecallAdvertisesOnlyImplementedModes() throws {
+        let router = MCPRouter(profile: "full")
+        let recall = try XCTUnwrap(listedTools(router).first { ($0["name"] as? String) == "brain_recall" })
+        let schema = try XCTUnwrap(recall["inputSchema"] as? [String: Any])
+        let properties = try XCTUnwrap(schema["properties"] as? [String: [String: Any]])
+        XCTAssertEqual(properties["mode"]?["enum"] as? [String], ["context", "stats", "injections"])
+        let description = try XCTUnwrap(recall["description"] as? String)
+        XCTAssertTrue(description.contains("session_id"), description)
+        XCTAssertTrue(description.contains("injection"), description)
+        XCTAssertTrue(description.contains("stats"), description)
+        XCTAssertFalse(description.contains("recent sessions"), description)
+        let sessionDescription = try XCTUnwrap(properties["session_id"]?["description"] as? String)
+        XCTAssertTrue(sessionDescription.contains("context"), sessionDescription)
+        XCTAssertFalse(sessionDescription.contains("operations"), sessionDescription)
+        XCTAssertFalse(sessionDescription.contains("summary"), sessionDescription)
     }
 
     func testBrainExpandReturnsFullTargetContentWhenSummaryExists() throws {
@@ -1138,7 +1241,7 @@ No results found.
         let text = content?.first?["text"] as? String ?? ""
 
         XCTAssertTrue(text.contains("Agent message still unread"), "Unread queue searches must preserve BrainBar subscriber cursor behavior.")
-        XCTAssertFalse(text.contains("unread-1"), "Compact labeled markdown should not expose chunk_id by default.")
+        XCTAssertTrue(text.contains("unread-1"), "Compact results retain canonical chunk IDs")
         XCTAssertEqual(helper.requests.count, 0)
     }
 
@@ -1291,7 +1394,7 @@ No results found.
             "params": [
                 "name": "brain_digest",
                 "arguments": [
-                    "content": "Etan Heyman discussed BrainLayer architecture. The project uses SQLite and Swift for a fast retrieval pipeline.",
+                    "content": "Noa Example discussed BrainLayer architecture. The project uses SQLite and Swift for a fast retrieval pipeline.",
                     "project": "gen16-router-scope"
                 ] as [String: Any]
             ] as [String: Any]
@@ -1562,10 +1665,10 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Socket handling code"), "Should contain the brainbar project chunk content")
         XCTAssertFalse(text.contains("Socket connection code"), "Should not contain other project chunk")
-        XCTAssertFalse(text.contains("f-1"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("f-1"), "Compact results retain canonical chunk IDs")
     }
 
     func testBrainSearchFullDetailExposesChunkID() throws {
@@ -1592,7 +1695,7 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Socket handling code"), "Should contain chunk content")
         XCTAssertTrue(text.contains("- ID: detail-1"), "full detail must expose chunk_id for chaining")
     }
@@ -1623,10 +1726,10 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Critical security finding"), "Should contain the high-importance chunk content")
         XCTAssertFalse(text.contains("Security review notes"), "Should not contain low-importance chunk")
-        XCTAssertFalse(text.contains("i-1"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("i-1"), "Compact results retain canonical chunk IDs")
     }
 
     func testBrainSearchPassesSourceFilter() throws {
@@ -1655,7 +1758,7 @@ No results found.
         let text = content?.first?["text"] as? String ?? ""
 
         XCTAssertTrue(text.contains("Sagit meeting notes"))
-        XCTAssertTrue(text.contains("1 of 1 shown"), "Only one matching source should be returned")
+        XCTAssertTrue(text.contains("1/1"), "Only one matching source should be returned")
     }
 
     func testBrainSearchSourceAllKeepsKGAugmentation() throws {
@@ -1684,7 +1787,7 @@ No results found.
             "method": "tools/call",
             "params": [
                 "name": "brain_search",
-                "arguments": ["query": "Sagit Stern TechGym", "source": "all"] as [String: Any]
+                "arguments": ["query": "Sagit Stern TechGym", "source": "all", "include_kg": true] as [String: Any]
             ] as [String: Any]
         ])
 
@@ -1695,7 +1798,7 @@ No results found.
         XCTAssertTrue(text.contains("## Entity: Sagit Stern"))
         XCTAssertTrue(text.contains("lectures_at: TechGym"))
         XCTAssertTrue(text.contains("Sagit Stern delivered the TechGym lecture"))
-        XCTAssertFalse(text.contains("kg-search-ta"), "Compact labeled markdown should not expose chunk_id by default")
+        XCTAssertTrue(text.contains("kg-search-ta"), "Compact results retain canonical chunk IDs")
     }
 
     func testBrainEntityUsesPythonSimpleEntityStructure() throws {
@@ -1708,7 +1811,7 @@ No results found.
             id: "proj-1",
             type: "project",
             name: "BrainLayer",
-            metadata: #"{"language":"Swift","owner":"Etan"}"#
+            metadata: #"{"language":"Swift","owner":"Noa"}"#
         )
         try db.insertEntity(id: "tool-1", type: "tool", name: "Claude Code")
         try db.insertRelation(sourceId: "proj-1", targetId: "tool-1", relationType: "used_by")
@@ -1732,7 +1835,7 @@ No results found.
         XCTAssertTrue(text.contains("## Entity: BrainLayer"))
         XCTAssertTrue(text.contains("### KG Facts"))
         XCTAssertTrue(text.contains("used_by: Claude Code"))
-        XCTAssertTrue(text.contains("### Recent context"))
+        XCTAssertFalse(text.contains("### Recent context"))
     }
 
     func testBrainRecallStatsIncludesProjectAndTypeLists() throws {
@@ -1765,7 +1868,25 @@ No results found.
         XCTAssertTrue(text.contains("Types: assistant_text, user_message"))
     }
 
-    func testBrainRecallMakesStatsFallbackExplicitWithoutChangingWorkingModes() throws {
+    func testBrainRecallRejectsUnsupportedModes() throws {
+        let tempDB = NSTemporaryDirectory() + "brainbar-recall-rejected-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let database = BrainDatabase(path: tempDB)
+        defer { database.close() }
+        let router = MCPRouter(profile: "full")
+        router.setDatabase(database)
+        for mode in ["summary", "sessions", "operations", "plan", "bogus"] {
+            let rejected = router.handle(toolCall(id: 141, name: "brain_recall", arguments: ["mode": mode]))
+            let result = try XCTUnwrap(rejected["result"] as? [String: Any])
+            let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+            let text = try XCTUnwrap(content.first?["text"] as? String)
+            XCTAssertEqual(result["isError"] as? Bool, true, mode)
+            XCTAssertTrue(text.contains("Schema validation error: mode must be one of"), text)
+            XCTAssertFalse(text.contains("BrainLayer Stats"), text)
+        }
+    }
+
+    func testBrainRecallWorkingModesPreserveResponseContracts() throws {
         let tempDB = NSTemporaryDirectory() + "brainbar-recall-fallback-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempDB) }
         let db = BrainDatabase(path: tempDB)
@@ -1793,19 +1914,6 @@ No results found.
         func recall(_ arguments: [String: Any]) throws -> String {
             try toolText(router.handle(toolCall(id: 140, name: "brain_recall", arguments: arguments)))
         }
-
-        for mode in ["summary", "sessions", "operations", "plan"] {
-            let text = try recall(["mode": mode])
-            XCTAssertTrue(text.contains("BrainLayer Stats"), "\(mode): \(text)")
-            XCTAssertTrue(text.contains("brain_recall mode \"\(mode)\" \(fallbackNoticeFragment)"), text)
-        }
-
-        let rejected = router.handle(toolCall(id: 141, name: "brain_recall", arguments: ["mode": "bogus"]))
-        let rejectedResult = try XCTUnwrap(rejected["result"] as? [String: Any])
-        let rejectedContent = try XCTUnwrap(rejectedResult["content"] as? [[String: Any]])
-        let rejectedText = try XCTUnwrap(rejectedContent.first?["text"] as? String)
-        XCTAssertEqual(rejectedResult["isError"] as? Bool, true)
-        XCTAssertTrue(rejectedText.contains("Schema validation error: mode must be one of"))
 
         for arguments in [
             ["mode": "context"],
@@ -1902,10 +2010,10 @@ No results found.
         let content = result?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
 
-        XCTAssertTrue(text.contains("## Search results"), "Should contain markdown header")
+        XCTAssertTrue(text.hasPrefix("## "), "Should contain markdown header")
         XCTAssertTrue(text.contains("Agent message still unread"), "Should contain the unread chunk content")
-        XCTAssertFalse(text.contains("unread-1"), "Compact labeled markdown should not expose chunk_id by default")
-        XCTAssertTrue(text.contains("result"), "Should contain formatted result text")
+        XCTAssertTrue(text.contains("unread-1"), "Compact results retain canonical chunk IDs")
+        XCTAssertTrue(text.contains("ID|score|project|date|source"), "Should label compact result columns")
     }
 
     func testBrainArchiveHidesChunkFromDefaultSearch() throws {
@@ -2028,155 +2136,47 @@ No results found.
         XCTAssertTrue(text.contains("TechGym lecture"))
     }
 
-    func testBrainEnrichRealtimeBackfillsEligibleChunksAndStatsReflectIt() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
-        defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-target",
-            content: "This chunk is long enough to qualify for enrichment and should get a generated summary after backfill runs.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let enrichResponse = router.handle([
-            "jsonrpc": "2.0",
-            "id": 23,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": 1] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let enrichText = ((enrichResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(enrichText.contains("Enriched:"))
-
-        let statsResponse = router.handle([
-            "jsonrpc": "2.0",
-            "id": 24,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["stats": true] as [String: Any]
-            ] as [String: Any]
-        ])
-        let statsText = ((statsResponse["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(statsText.contains("Enrichment Stats"))
-        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-target"))
+    func testRetiredBrainEnrichIsAbsentFromEveryPalette() throws {
+        for profile in ["core", "full", "operator"] {
+            let router = MCPRouter(profile: profile)
+            XCTAssertFalse(listedToolNames(router).contains("brain_enrich"))
+            _ = router.handle(toolCall(id: 90, name: "expand_palette", arguments: [:]))
+            XCTAssertFalse(listedToolNames(router).contains("brain_enrich"))
+        }
     }
 
-    func testBrainEnrichRealtimeSkipsTerminalEnrichStatusChunks() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-terminal-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
+    func testRetiredBrainEnrichRejectsCallsAndPreservesMetadata() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbPath = tempDir.appendingPathComponent("retirement.db").path
+        let db = BrainDatabase(path: dbPath)
         defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-pending",
-            content: "This chunk is long enough to qualify for enrichment and should be processed.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-        try db.insertChunk(
-            id: "enrich-duplicate",
-            content: "This duplicate terminal chunk is long enough but should not be processed again.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-        db.exec("UPDATE chunks SET enrich_status = 'duplicate' WHERE id = 'enrich-duplicate'")
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let response = router.handle([
-            "jsonrpc": "2.0",
-            "id": 28,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": 5] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(text.contains("Attempted: 1"))
-        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-pending"))
-        XCTAssertNil(try chunkEnrichedAt(path: tempDB, id: "enrich-duplicate"))
-    }
-
-    func testBrainEnrichClampsNegativeLimit() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-limit-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
-        defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-limit-target",
-            content: "This chunk is also long enough to qualify for enrichment even if the requested limit is negative.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let response = router.handle([
-            "jsonrpc": "2.0",
-            "id": 25,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": -100] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(text.contains("Enriched:"))
-        XCTAssertNotNil(try chunkEnrichedAt(path: tempDB, id: "enrich-limit-target"))
-    }
-
-    func testBrainEnrichEmptyChunkIDsDoesNotBroadenScope() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-enrich-empty-ids-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
-        let db = BrainDatabase(path: tempDB)
-        defer { db.close() }
-
-        try db.insertChunk(
-            id: "enrich-empty-ids-target",
-            content: "This chunk should stay untouched when brain_enrich receives an explicit empty chunk_ids list.",
-            sessionId: "s1",
-            project: "test",
-            contentType: "assistant_text",
-            importance: 5
-        )
-
-        let router = MCPRouter(profile: "full")
-        router.setDatabase(db)
-        let response = router.handle([
-            "jsonrpc": "2.0",
-            "id": 27,
-            "method": "tools/call",
-            "params": [
-                "name": "brain_enrich",
-                "arguments": ["mode": "realtime", "limit": 5, "chunk_ids": []] as [String: Any]
-            ] as [String: Any]
-        ])
-
-        let text = ((response["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
-        XCTAssertTrue(text.contains("Attempted: 0"))
-        XCTAssertTrue(text.contains("Enriched: 0"))
-        XCTAssertNil(try chunkEnrichedAt(path: tempDB, id: "enrich-empty-ids-target"))
+        try db.insertChunk(id: "pending", content: String(repeating: "Synthetic memory. ", count: 10),
+                           sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        try db.insertChunk(id: "historical", content: "Previously enriched synthetic memory",
+                           sessionId: "s1", project: "test", contentType: "assistant_text", importance: 5)
+        db.exec("UPDATE chunks SET summary = 'Retained summary', enriched_at = '2026-01-01', enrich_status = 'success' WHERE id = 'historical'")
+        let before = try db.enrichmentStats()
+        for profile in ["core", "full", "operator"] {
+            let router = MCPRouter(profile: profile, dbPath: dbPath)
+            router.setDatabase(db)
+            _ = router.handle(toolCall(id: 90, name: "expand_palette", arguments: [:]))
+            for arguments: [String: Any] in [
+                ["mode": "realtime", "limit": 5],
+                ["mode": "batch", "phase": "submit", "chunk_ids": ["pending"]],
+                ["stats": true],
+            ] {
+                let response = router.handle(toolCall(id: 91, name: "brain_enrich", arguments: arguments))
+                XCTAssertEqual((response["error"] as? [String: Any])?["code"] as? Int, -32601)
+                XCTAssertNil(response["result"])
+            }
+        }
+        XCTAssertNil(try chunkEnrichedAt(path: dbPath, id: "pending"))
+        XCTAssertEqual(try chunkEnrichedAt(path: dbPath, id: "historical"), "2026-01-01")
+        XCTAssertEqual(try db.getChunk(id: "historical")?["summary"] as? String, "Retained summary")
+        let after = try db.enrichmentStats()
+        XCTAssertEqual(after.enriched, before.enriched)
+        XCTAssertEqual(after.unenrichedEligible, before.unenrichedEligible)
     }
 
     // MARK: - brain_store queue fallback
@@ -3104,6 +3104,31 @@ No results found.
         let queuedText = try String(contentsOf: queuePath, encoding: .utf8)
         let lines = queuedText.split(whereSeparator: \.isNewline)
         XCTAssertEqual(lines.count, iterations)
+    }
+
+    func testPendingStoreRetryReusesReceiptOnlyWithinConversationAndProject() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restoreQueuePath = setPendingStoreQueuePath(queuePath)
+        defer { restoreQueuePath() }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+
+        func queue(project: String, conversation: String) throws -> (queueID: String, queuedAt: String, chunkID: String) {
+            try db.queuePendingStore(
+                content: "same retry payload", tags: ["retry"], importance: 5,
+                source: "mcp", project: project, conversationID: conversation
+            )
+        }
+        let first = try queue(project: "one", conversation: "session-a")
+        let retry = try queue(project: "one", conversation: "session-a")
+        XCTAssertEqual(retry.queueID, first.queueID)
+        XCTAssertEqual(retry.chunkID, first.chunkID)
+        XCTAssertEqual(retry.queuedAt, first.queuedAt)
+        XCTAssertNotEqual(try queue(project: "two", conversation: "session-a").chunkID, first.chunkID)
+        XCTAssertNotEqual(try queue(project: "one", conversation: "session-b").chunkID, first.chunkID)
+        XCTAssertEqual(db.pendingStoreQueueSnapshot().depth, 3)
     }
 
     func testQueuePendingStoreCreatesPrivateQueueFile() throws {

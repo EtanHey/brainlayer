@@ -12,6 +12,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,8 +33,16 @@ from .dedupe import (
 )
 from .ingest_guard import recursive_mcp_output_reason
 from .paths import get_db_path
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .pause import (
+    DEFAULT_PAUSE_SENTINEL_PATH,
+    pause_applies_to_label,
+    pause_sentinel_state,
+    queue_contains_only_enrichment,
+)
+from .pipeline.secret_scrub import merge_scrub_metadata, scrub_for_storage, scrub_nested, scrub_tags
 from .provenance_integration import enqueue_provenance_resolution_for_entities
+from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL
+from .runtime_store import _without_connection_maintenance_hooks
 from .vector_store import _configure_writer_pragmas
 from .wal_checkpoint import checkpoint_guard
 from .wal_checkpoint import get_wal_size as _wal_size_bytes
@@ -44,19 +53,20 @@ _sleep = time.sleep
 
 _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
-_DEFAULT_DRAIN_OPEN_MAX_RETRIES = 12
-_DEFAULT_DRAIN_OPEN_RETRY_BASE_DELAY_MS = 250.0
-_DEFAULT_DRAIN_OPEN_RETRY_MAX_DELAY_MS = 5000.0
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
+_DEFAULT_DRAIN_BUSY_LOG_INTERVAL_SECONDS = 60.0
+_DEFAULT_DRAIN_ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
+_DEFAULT_DRAIN_ERROR_LOG_BACKUPS = 5
+_DRAIN_PROGRESS_STALE_SECONDS = 300.0
+_DRAIN_PROGRESS_SCAN_INTERVAL_SECONDS = 10.0
 # How many pending fallback files one daemon start may put on the queue. Bounded so a
 # backlog that outgrows the drain cannot be re-enqueued in full on every restart.
 DEFAULT_FALLBACK_REPLAY_ON_START_LIMIT = 50
 FALLBACK_REPLAY_ON_START_ENV = "BRAINLAYER_FALLBACK_REPLAY_ON_START"
 FALLBACK_REPLAY_ON_START_LIMIT_ENV = "BRAINLAYER_FALLBACK_REPLAY_ON_START_LIMIT"
-_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
 # The post-commit WAL checkpoint is best-effort and must stay non-blocking. A
 # truncating checkpoint can wedge the live writer behind long-lived readers on a
 # multi-GB WAL; the scheduled wal-checkpoint job owns truncation.
@@ -64,6 +74,7 @@ _DEFAULT_CHECKPOINT_BUSY_TIMEOUT_MS = 1000
 _DEFAULT_WAL_RESTART_HIGH_WATER_BYTES = 192_000_000
 _DEFAULT_WAL_RESTART_MIN_INTERVAL_SECONDS = 60.0
 _LAST_RESTART_ATTEMPT: dict[Path, float] = {}
+_DRAIN_BLOCKED_EPISODES: dict[Path, _DrainBlockedEpisode] = {}
 
 
 def _drain_busy_timeout_ms() -> int:
@@ -183,22 +194,6 @@ def _post_commit_yield_seconds() -> float:
     return _nonnegative_float_env("BRAINLAYER_DRAIN_POST_COMMIT_YIELD_MS", _DEFAULT_POST_COMMIT_YIELD_MS) / 1000.0
 
 
-def _drain_open_max_retries() -> int:
-    return _positive_int_env("BRAINLAYER_DRAIN_OPEN_MAX_RETRIES", _DEFAULT_DRAIN_OPEN_MAX_RETRIES)
-
-
-def _drain_open_retry_delay_seconds(attempt: int) -> float:
-    base_ms = _nonnegative_float_env(
-        "BRAINLAYER_DRAIN_OPEN_RETRY_BASE_DELAY_MS",
-        _DEFAULT_DRAIN_OPEN_RETRY_BASE_DELAY_MS,
-    )
-    max_ms = _nonnegative_float_env(
-        "BRAINLAYER_DRAIN_OPEN_RETRY_MAX_DELAY_MS",
-        _DEFAULT_DRAIN_OPEN_RETRY_MAX_DELAY_MS,
-    )
-    return min(base_ms * (2**attempt), max_ms) / 1000.0
-
-
 @dataclass
 class ApplyResult:
     chunk_id: str | None = None
@@ -222,6 +217,15 @@ class FallbackReplayMarker:
     chunk_id: str
     project: str | None = None
     origin_repo_path: Path | None = None
+
+
+@dataclass
+class _DrainBlockedEpisode:
+    blocked_since: str
+    blocked_since_monotonic: float
+    busy_events: int = 0
+    last_log_monotonic: float | None = None
+    suppressed_logs: int = 0
 
 
 def _default_db_path() -> Path:
@@ -254,6 +258,47 @@ def _default_drain_health_path() -> Path:
     return _guard_test_runtime_path(path, source="drain health path")
 
 
+def _default_daemon_error_log_path() -> Path:
+    configured = os.environ.get("BRAINLAYER_DRAIN_ERROR_LOG_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "Library" / "Logs" / "brainlayer" / "drain.err.log"
+
+
+def _configure_daemon_logging(
+    *,
+    log_path: Path | None = None,
+    max_bytes: int | None = None,
+    backup_count: int | None = None,
+    configure_root: bool = True,
+) -> RotatingFileHandler:
+    """Give the long-running drain ownership of its rotating error log."""
+    path = log_path or _default_daemon_error_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_max_bytes = max_bytes or _positive_int_env(
+        "BRAINLAYER_DRAIN_ERROR_LOG_MAX_BYTES",
+        _DEFAULT_DRAIN_ERROR_LOG_MAX_BYTES,
+    )
+    resolved_backup_count = backup_count or _positive_int_env(
+        "BRAINLAYER_DRAIN_ERROR_LOG_BACKUPS",
+        _DEFAULT_DRAIN_ERROR_LOG_BACKUPS,
+    )
+    handler = RotatingFileHandler(
+        path,
+        maxBytes=max(1, resolved_max_bytes),
+        backupCount=resolved_backup_count,
+        encoding="utf-8",
+    )
+    if configure_root:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            handlers=[handler],
+            force=True,
+        )
+    return handler
+
+
 def _log(path: Path, message: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat()
@@ -261,31 +306,153 @@ def _log(path: Path, message: str) -> None:
         handle.write(f"{stamp} {message}\n")
 
 
-def _open_connection(db_path: Path) -> apsw.Connection:
-    max_retries = _drain_open_max_retries()
-    for attempt in range(max_retries + 1):
+def _blocking_writer_details(db_path: Path) -> dict[str, Any]:
+    """Return the freshest instrumented writer currently active on this DB."""
+    from .writer_telemetry import _heartbeat_path
+
+    own_heartbeat = _heartbeat_path(db_path)
+    heartbeat_prefix = own_heartbeat.name.rsplit("-", 1)[0]
+    now = time.monotonic()
+    stale_before = time.time() - max(5.0, _drain_busy_timeout_ms() / 1000.0 + 5.0)
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for path in own_heartbeat.parent.glob(f"{heartbeat_prefix}-*.json"):
         try:
-            conn = apsw.Connection(str(db_path))
-            break
-        except Exception as exc:
-            if not _is_busy_error(exc) or attempt >= max_retries:
-                raise
-            delay = _drain_open_retry_delay_seconds(attempt)
-            logger.warning(
-                "Drain DB open hit SQLITE_BUSY (attempt %d/%d); retrying in %.2fs",
-                attempt + 1,
-                max_retries + 1,
-                delay,
+            if path.stat().st_mtime < stale_before:
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            pid = int(payload.get("executor_pid"))
+        except (TypeError, ValueError):
+            pid = None
+        if pid == os.getpid():
+            continue
+        for transaction in payload.get("active_transactions") or []:
+            if not isinstance(transaction, dict):
+                continue
+            try:
+                started_at = float(transaction.get("txn_started_monotonic"))
+            except (TypeError, ValueError):
+                started_at = now
+            producer = str(transaction.get("producer") or "unknown").strip() or "unknown"
+            candidates.append(
+                (
+                    started_at,
+                    {
+                        "blocking_writer_class": producer,
+                        "blocking_writer_pid": pid,
+                        "blocking_writer_seconds": round(max(0.0, now - started_at), 3),
+                    },
+                )
             )
-            _sleep(delay)
+    if not candidates:
+        return {
+            "blocking_writer_class": "unknown",
+            "blocking_writer_pid": None,
+            "blocking_writer_seconds": None,
+        }
+    return min(candidates, key=lambda item: item[0])[1]
+
+
+def _busy_log_interval_seconds() -> float:
+    return _nonnegative_float_env(
+        "BRAINLAYER_DRAIN_BUSY_LOG_INTERVAL_SECONDS",
+        _DEFAULT_DRAIN_BUSY_LOG_INTERVAL_SECONDS,
+    )
+
+
+def _record_drain_blocked(
+    db_path: Path,
+    log_path: Path,
+    exc: BaseException,
+    blocked_reporter: Callable[[dict[str, Any]], None] | None,
+) -> None:
+    resolved = db_path.resolve()
+    now = datetime.now(timezone.utc)
+    now_monotonic = time.monotonic()
+    episode = _DRAIN_BLOCKED_EPISODES.get(resolved)
+    if episode is None:
+        episode = _DrainBlockedEpisode(now.isoformat(), now_monotonic)
+        _DRAIN_BLOCKED_EPISODES[resolved] = episode
+    episode.busy_events += 1
+    blocker = _blocking_writer_details(db_path)
+    state = {
+        "state": "drain_blocked",
+        "reason": f"SQLITE_BUSY after {_drain_busy_timeout_ms()}ms busy timeout: {exc}",
+        "blocked_since": episode.blocked_since,
+        "blocked_seconds": round(max(0.0, now_monotonic - episode.blocked_since_monotonic), 3),
+        "busy_events": episode.busy_events,
+        **blocker,
+    }
+    interval = _busy_log_interval_seconds()
+    log_due = episode.last_log_monotonic is None or now_monotonic - episode.last_log_monotonic >= interval
+    if log_due:
+        suppressed = f" suppressed_retries={episode.suppressed_logs}" if episode.suppressed_logs else ""
+        message = (
+            "drain_blocked"
+            f" writer_class={state['blocking_writer_class']}"
+            f" writer_pid={state['blocking_writer_pid']}"
+            f" blocked_seconds={state['blocked_seconds']:.3f}"
+            f" busy_events={episode.busy_events}{suppressed}"
+        )
+        _log(log_path, message)
+        logger.warning(message)
+        episode.last_log_monotonic = now_monotonic
+        episode.suppressed_logs = 0
     else:
-        raise RuntimeError("unreachable drain open retry state")
-    conn.setbusytimeout(_drain_busy_timeout_ms())
-    conn.enableloadextension(True)
-    conn.loadextension(sqlite_vec.loadable_path())
-    conn.enableloadextension(False)
-    _configure_writer_pragmas(conn)
-    return conn
+        episode.suppressed_logs += 1
+    _report_drain_state(blocked_reporter, state, log_path, log_failure=log_due)
+
+
+def _report_drain_state(reporter, state, log_path, *, log_failure=True) -> None:
+    if reporter is None:
+        return
+    try:
+        reporter(state)
+    except OSError as report_exc:
+        if log_failure:
+            message = f"drain state reporter failed: {report_exc}"
+            try:
+                _log(log_path, message)
+            except OSError:
+                pass
+            logger.warning(message, exc_info=True)
+
+
+def _record_drain_unblocked(
+    db_path: Path,
+    log_path: Path,
+    blocked_reporter: Callable[[dict[str, Any]], None] | None,
+) -> None:
+    episode = _DRAIN_BLOCKED_EPISODES.pop(db_path.resolve(), None)
+    if episode is not None:
+        duration = max(0.0, time.monotonic() - episode.blocked_since_monotonic)
+        _log(log_path, f"drain_unblocked blocked_seconds={duration:.3f} busy_events={episode.busy_events}")
+        logger.info("Drain resumed after %.3fs and %d busy event(s)", duration, episode.busy_events)
+    if episode is not None and blocked_reporter is not None:
+        _report_drain_state(blocked_reporter, {"state": "ok", "reason": ""}, log_path)
+
+
+def _open_connection(db_path: Path) -> apsw.Connection:
+    conn: apsw.Connection | None = None
+    try:
+        # Defer constructor-time PRAGMA optimize/WAL writes. The drain should
+        # wait once, visibly, at its own BEGIN IMMEDIATE instead.
+        with _without_connection_maintenance_hooks():
+            conn = apsw.Connection(str(db_path))
+        conn.setbusytimeout(_drain_busy_timeout_ms())
+        conn.enableloadextension(True)
+        conn.loadextension(sqlite_vec.loadable_path())
+        conn.enableloadextension(False)
+        _configure_writer_pragmas(conn)
+        return conn
+    except Exception:
+        if conn is not None:
+            conn.close()
+        raise
 
 
 def _ensure_drain_db_schema(db_path: Path) -> None:
@@ -754,6 +921,10 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed store event with empty content")
         return ApplyResult()
+    # Scrub before anything is derived from the text: stored row, FTS copy,
+    # summary and content_hash (so dedup keys on the scrubbed text) all follow.
+    content, scrub_metadata = scrub_for_storage(content)
+    content = content.strip()
     chunk_id = event.get("chunk_id") or f"manual-{uuid.uuid4().hex[:16]}"
     recursive_reason = recursive_mcp_output_reason(
         content,
@@ -772,8 +943,13 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         metadata.update(raw_metadata)
     elif raw_metadata:
         logger.warning("Skipping non-object store metadata for chunk_id=%s", event.get("chunk_id"))
+    tags, tag_findings = scrub_tags(event.get("tags"))
+    # Metadata carried in on the event is stored free text too (#962 review N4).
+    metadata, metadata_findings = scrub_nested(metadata)
+    # Content findings merge last: the quarantine count describes the chunk body.
+    for found in (metadata_findings, tag_findings, scrub_metadata):
+        metadata = merge_scrub_metadata(metadata, found)
     supersedes = event.get("supersedes") or metadata.get("supersedes")
-    tags = event.get("tags")
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     conversation_id = event.get("conversation_id") or metadata.get("conversation_id")
     position = None
@@ -962,6 +1138,8 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
         return ApplyResult()
+    content, scrub_metadata = scrub_for_storage(content)
+    content = content.strip()
     # Truncated digest that NAMES the chunk (id suffix + queue key). It is not a
     # content hash: the content_hash column is filled by the canonical contract.
     id_digest = event.get("content_hash") or hashlib.sha256(content.encode()).hexdigest()[:16]
@@ -993,7 +1171,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         {
             "id": chunk_id,
             "content": content,
-            "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest}),
+            "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest, **scrub_metadata}),
             "source_file": source_file,
             "project": event.get("project"),
             "content_type": "assistant_text",
@@ -1015,7 +1193,13 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if not chunk_id:
         logger.warning("Skipping malformed enrichment event without chunk_id")
         return
-    enrichment = event.get("enrichment") or {}
+    from .pipeline.cloud_scrub import scrub_llm_output
+
+    # A queued event may predate the scrub-before-cloud fix, so the drain scrubs
+    # model output itself rather than trusting the producer. A scrub failure
+    # raises and the event is not applied.
+    enrichment = scrub_llm_output(event.get("enrichment") or {})
+    entities = scrub_llm_output(event.get("entities"))
     cols = _columns(conn, "chunks")
     if "content_hash" in cols and event.get("content_hash"):
         row = conn.execute("SELECT content_hash, content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
@@ -1052,8 +1236,8 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
             resolved_query = enrichment["resolved_queries"][0]
         if resolved_query:
             updates["resolved_query"] = resolved_query
-    if "raw_entities_json" in cols and event.get("entities") is not None:
-        updates["raw_entities_json"] = json.dumps(event["entities"])
+    if "raw_entities_json" in cols and entities is not None:
+        updates["raw_entities_json"] = json.dumps(entities)
     if "content_hash" in cols and event.get("content_hash"):
         updates["content_hash"] = event["content_hash"]
     raw_provenance_class = event.get("provenance_class")
@@ -1092,7 +1276,9 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     if updates:
         assignments = ", ".join(f"{col} = ?" for col in updates)
         conn.execute(f"UPDATE chunks SET {assignments} WHERE id = ?", [*updates.values(), chunk_id])
-    _run_enrichment_provenance_hooks(conn, event, chunk_id=chunk_id, provenance_class=provenance_class or "")
+    _run_enrichment_provenance_hooks(
+        conn, {**event, "entities": entities}, chunk_id=chunk_id, provenance_class=provenance_class or ""
+    )
 
 
 def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -1426,7 +1612,7 @@ def burn_drain_once(
     queue_dir.mkdir(parents=True, exist_ok=True)
     max_events_per_transaction = max(1, max_events_per_transaction)
     pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
-    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
+    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
 
     result = BurnDrainResult()
     lock_fd = _acquire_queue_lock(queue_dir)
@@ -1463,7 +1649,9 @@ def burn_drain_once(
                     try:
                         _preserve_remaining_events(path, paused_events)
                     except OSError as exc:
-                        _log(log_path, f"burn drain could not preserve paused enrichment in {path}: {exc}")
+                        _log(
+                            log_path, f"burn drain could not preserve held historical metadata updates in {path}: {exc}"
+                        )
             return result
         queue_telemetry = _queue_telemetry([path for path, _events in batch], all_events)
         batch_includes_store = _events_include_store(all_events)
@@ -1558,7 +1746,10 @@ def burn_drain_once(
                 try:
                     _preserve_remaining_events(path, paused_events)
                 except OSError as exc:
-                    _log(log_path, f"burn drain committed but could not preserve paused enrichment in {path}: {exc}")
+                    _log(
+                        log_path,
+                        f"burn drain committed but could not preserve held historical metadata updates in {path}: {exc}",
+                    )
                 continue
             try:
                 path.unlink()
@@ -1591,6 +1782,7 @@ def drain_once(
     log_path: Path | None = None,
     embed_fn: Callable[[str], list[float]] | None = None,
     pause_sentinel_path: Path | None = None,
+    blocked_reporter: Callable[[dict[str, Any]], None] | None = None,
 ) -> int:
     db_path = db_path or _default_db_path()
     queue_dir = queue_dir or _default_queue_dir()
@@ -1598,12 +1790,13 @@ def drain_once(
     pause_sentinel_path = pause_sentinel_path or DEFAULT_PAUSE_SENTINEL_PATH
     queue_dir.mkdir(parents=True, exist_ok=True)
     pause_payload, pause_active, _pause_stale = pause_sentinel_state(pause_sentinel_path)
-    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, _ENRICHMENT_LABEL)
+    pause_enrichment = pause_active and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
 
     lock_fd = _acquire_queue_lock(queue_dir)
     try:
         files = _select_priority_queue_files(list(queue_dir.glob("*.jsonl")), batch_size)
         if not files:
+            _record_drain_unblocked(db_path, log_path, blocked_reporter)
             return 0
         _log(log_path, f"queue_depth={len(files)}")
 
@@ -1632,7 +1825,7 @@ def drain_once(
                     try:
                         _preserve_remaining_events(path, remaining_events)
                     except OSError as exc:
-                        _log(log_path, f"drain could not preserve paused enrichment in {path}: {exc}")
+                        _log(log_path, f"drain could not preserve held historical metadata updates in {path}: {exc}")
                 continue
             queue_telemetry = _queue_telemetry([path], events_to_apply)
             events_include_store = _events_include_store(events_to_apply)
@@ -1683,6 +1876,7 @@ def drain_once(
                         attempt_drained += 1
                     conn.execute("COMMIT")
                     telemetry_span.finish("commit", rows_touched=attempt_drained)
+                    _record_drain_unblocked(db_path, log_path, blocked_reporter)
                     # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
                     # TRUNCATE can block behind long-lived readers on the live multi-GB
                     # WAL, which stalls queue drain before it can publish health.
@@ -1721,11 +1915,10 @@ def drain_once(
                             pass
                     if telemetry_span is not None:
                         telemetry_span.finish("rollback", error=f"{type(exc).__name__}: {exc}")
-                    if _is_busy_error(exc) and attempt < 4:
-                        delay = 0.05 * (2**attempt)
-                        _log(log_path, f"drain busy; retrying in {delay:.2f}s")
-                        _sleep(delay)
-                        continue
+                    if _is_busy_error(exc):
+                        _record_drain_blocked(db_path, log_path, exc, blocked_reporter)
+                        stop_draining = True
+                        break
                     if events_include_store and _is_missing_chunks_error(exc) and attempt < 4:
                         if conn is not None:
                             conn.close()
@@ -1755,16 +1948,77 @@ def drain_once(
     return drained
 
 
-def _write_drain_health(path: Path, *, drain_cycles: int, drained_total: int) -> None:
+def _write_drain_health(
+    path: Path,
+    *,
+    drain_cycles: int,
+    drained_total: int,
+    last_progress_at: datetime,
+    state: dict[str, Any] | None = None,
+) -> None:
     payload = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "drain_cycles": drain_cycles,
         "drained_total": drained_total,
+        "last_progress_at": last_progress_at.isoformat(),
+        "state": "ok",
+        "reason": "",
     }
+    if state:
+        payload.update(state)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".tmp")
     tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _last_progress_at(path: Path, now: datetime) -> datetime:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8")).get("last_progress_at")
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None and parsed <= now:
+            return parsed.astimezone(timezone.utc)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return now
+
+
+def _queue_progress_state(
+    queue_dir: Path, now: datetime, last_progress_at: datetime
+) -> tuple[dict[str, Any] | None, int | None]:
+    """A fresh daemon heartbeat is not evidence that old queued files are draining."""
+    try:
+        oldest_age = 0.0
+        count = 0
+        for path in queue_dir.glob("*.jsonl"):
+            try:
+                age = max(0.0, now.timestamp() - path.stat().st_mtime)
+            except FileNotFoundError:
+                continue
+            count += 1
+            oldest_age = max(oldest_age, age)
+    except OSError as exc:
+        return {"state": "drain_progress_unknown", "reason": f"queue scan failed: {type(exc).__name__}: {exc}"}, None
+    progress_age = max(0.0, (now - last_progress_at).total_seconds())
+    if count and oldest_age >= _DRAIN_PROGRESS_STALE_SECONDS and progress_age >= _DRAIN_PROGRESS_STALE_SECONDS:
+        pause_payload, pause_active, _ = pause_sentinel_state(DEFAULT_PAUSE_SENTINEL_PATH, now)
+        if (
+            pause_active
+            and pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
+            and queue_contains_only_enrichment(queue_dir, count)
+        ):
+            return {
+                "state": "drain_legacy_queue_held",
+                "reason": f"queue_count={count} contains only historical metadata updates held by the maintenance sentinel",
+            }, count
+        return {
+            "state": "drain_progress_stalled",
+            "reason": (
+                f"queue_count={count} oldest_age_seconds={oldest_age:.0f} "
+                f"last_progress_age_seconds={progress_age:.0f}; no files processed"
+            ),
+        }, count
+    return None, count
 
 
 def _fallback_replay_on_start_enabled() -> bool:
@@ -1829,9 +2083,27 @@ def run_daemon(
     replay_fallbacks_fn: Callable[[], Any] | None = None,
 ) -> None:
     health_path = health_path or Path(os.environ.get("BRAINLAYER_DRAIN_HEALTH_PATH", str(_default_drain_health_path())))
+    last_progress_at = _last_progress_at(health_path, datetime.now(timezone.utc))
     drain_cycles = 0
     drained_total = 0
     swept = False
+    cycle_state: dict[str, Any] = {"state": "ok", "reason": ""}
+    last_cycle_error_log_monotonic: float | None = None
+    suppressed_cycle_errors = 0
+    last_queue_scan_monotonic: float | None = None
+    queue_progress_state: dict[str, Any] | None = None
+
+    def report_state(state: dict[str, Any]) -> None:
+        nonlocal cycle_state
+        cycle_state = state
+        _write_drain_health(
+            health_path,
+            drain_cycles=drain_cycles,
+            drained_total=drained_total,
+            last_progress_at=last_progress_at,
+            state=cycle_state,
+        )
+
     while True:
         if max_cycles is not None and drain_cycles >= max_cycles:
             return
@@ -1846,10 +2118,57 @@ def run_daemon(
                 (replay_fallbacks_fn or replay_fallbacks_on_start)()
             except Exception:
                 logger.warning("Fallback replay sweep failed at drain start; continuing to drain", exc_info=True)
-        drained_total += int(drain_once_fn(batch_size=batch_size) or 0)
+        try:
+            cycle_state = {"state": "ok", "reason": ""}
+            if drain_once_fn is drain_once:
+                drained = drain_once_fn(batch_size=batch_size, blocked_reporter=report_state)
+            else:
+                drained = drain_once_fn(batch_size=batch_size)
+        except Exception as exc:
+            drained = 0
+            cycle_state = {"state": "drain_error", "reason": f"{type(exc).__name__}: {exc}"}
+            now_monotonic = time.monotonic()
+            if (
+                last_cycle_error_log_monotonic is None
+                or now_monotonic - last_cycle_error_log_monotonic >= _busy_log_interval_seconds()
+            ):
+                logger.exception(
+                    "drain cycle failed; continuing after %.2fs backoff (suppressed_failures=%d)",
+                    interval,
+                    suppressed_cycle_errors,
+                )
+                last_cycle_error_log_monotonic = now_monotonic
+                suppressed_cycle_errors = 0
+            else:
+                suppressed_cycle_errors += 1
+        drained_total += int(drained or 0)
+        now = datetime.now(timezone.utc)
+        if drained:
+            last_progress_at = now
+            queue_progress_state = None
+            last_queue_scan_monotonic = None
+        elif (now - last_progress_at).total_seconds() >= _DRAIN_PROGRESS_STALE_SECONDS:
+            monotonic_now = time.monotonic()
+            if (
+                last_queue_scan_monotonic is None
+                or monotonic_now - last_queue_scan_monotonic >= _DRAIN_PROGRESS_SCAN_INTERVAL_SECONDS
+            ):
+                queue_progress_state, queue_count = _queue_progress_state(_default_queue_dir(), now, last_progress_at)
+                last_queue_scan_monotonic = monotonic_now
+                if queue_count == 0:
+                    last_progress_at = now
+                    last_queue_scan_monotonic = None
+            if cycle_state["state"] == "ok" and queue_progress_state is not None:
+                cycle_state = queue_progress_state
         drain_cycles += 1
         try:
-            _write_drain_health(health_path, drain_cycles=drain_cycles, drained_total=drained_total)
+            _write_drain_health(
+                health_path,
+                drain_cycles=drain_cycles,
+                drained_total=drained_total,
+                last_progress_at=last_progress_at,
+                state=cycle_state,
+            )
         except OSError:
             logger.debug("Failed to write drain health snapshot", exc_info=True)
         sleep_fn(interval)
@@ -1883,6 +2202,7 @@ def main() -> int:
     if args.once:
         print(drain_once(batch_size=args.batch_size))
         return 0
+    _configure_daemon_logging()
     try:
         from brainlayer.deploy_drift import record_launch_from_environment
 

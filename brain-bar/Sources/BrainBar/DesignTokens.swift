@@ -20,9 +20,6 @@ enum BrainBarDesignTokens {
         static let textSecondary = NSColor.brainBarHex(0xAEBBD4)
         static let textMuted = NSColor.brainBarHex(0x6B7A98)
 
-        static let graphCanvasLightTop = NSColor.brainBarRGB(red: 242, green: 242, blue: 235)
-        static let graphCanvasLightBottom = NSColor.brainBarRGB(red: 230, green: 235, blue: 240)
-
         static let accent = NSColor.brainBarHex(0x6EA0FF)
         static let accentBright = NSColor.brainBarHex(0x8FB6FF)
         static let accentDeep = NSColor.brainBarHex(0x3F6FE0)
@@ -31,6 +28,24 @@ enum BrainBarDesignTokens {
         static let signalVector = NSColor.brainBarHex(0xF5A524)
         static let signalFTS5 = NSColor.brainBarHex(0x34D399)
         static let signalTrigram = NSColor.brainBarHex(0xA78BFA)
+
+        // Lead palette decision, pending Etan confirmation; signal/series colors stay unchanged.
+        static let statusOK = NSColor.brainBarHex(0x32D74B)
+        static let statusAttention = NSColor.brainBarHex(0xFFD60A)
+        static let statusError = NSColor.brainBarHex(0xFF453A)
+        static let statusUnknown = NSColor.brainBarHex(0x8A8A90)
+
+        static func signalCoverageStatus(indexedCount: Int, eligibleCount: Int, isAvailable: Bool,
+                                         lastError: String? = nil) -> NSColor {
+            if lastError != nil { return statusAttention }
+            guard isAvailable,
+                  eligibleCount > 0,
+                  indexedCount >= 0,
+                  indexedCount <= eligibleCount else {
+                return statusUnknown
+            }
+            return indexedCount == eligibleCount ? statusOK : statusUnknown
+        }
 
         static let seriesAgent = NSColor.brainBarHex(0x22D3EE)
         static let seriesWatcher = NSColor.brainBarHex(0xFB7185)
@@ -64,6 +79,12 @@ enum BrainBarDesignTokens {
     }
 
     enum TypeScale {
+        static let minimumText: CGFloat = 9
+        static func textSize(_ proposed: CGFloat) -> CGFloat { max(minimumText, proposed) }
+        static func minimumScaleFactor(for proposed: CGFloat) -> CGFloat {
+            guard proposed > 0 else { return 1 }
+            return min(1, minimumText / proposed)
+        }
         static let hero: CGFloat = 72
         static let display: CGFloat = 28
         static let title: CGFloat = 20
@@ -163,8 +184,6 @@ extension Color {
     static let brainBarTextPrimary = Color(nsColor: BrainBarDesignTokens.Colors.textPrimary)
     static let brainBarTextSecondary = Color(nsColor: BrainBarDesignTokens.Colors.textSecondary)
     static let brainBarTextMuted = Color(nsColor: BrainBarDesignTokens.Colors.textMuted)
-    static let brainBarGraphCanvasLightTop = Color(nsColor: BrainBarDesignTokens.Colors.graphCanvasLightTop)
-    static let brainBarGraphCanvasLightBottom = Color(nsColor: BrainBarDesignTokens.Colors.graphCanvasLightBottom)
     static let brainBarAccent = Color(nsColor: BrainBarDesignTokens.Colors.accent)
     static let brainBarAccentBright = Color(nsColor: BrainBarDesignTokens.Colors.accentBright)
     static let brainBarAccentDeep = Color(nsColor: BrainBarDesignTokens.Colors.accentDeep)

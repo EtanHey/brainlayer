@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import os
 import re
 import sqlite3
 import time
@@ -16,6 +18,8 @@ from typing import Any
 from urllib.parse import quote
 
 from .vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class _ReadOnlyPromotionStore:
@@ -34,9 +38,31 @@ class _ReadOnlyPromotionStore:
 
 _IDENTITY_TAG_RE = re.compile(r"^[a-z][a-z0-9-]+-[a-z][a-z0-9-]+-identification$")
 _SLUG_TOKEN_RE = re.compile(r"[^a-z0-9]+")
-_KNOWN_GIVEN_NAME_ALIASES = {
-    "michal": {"מיכל"},
-}
+
+
+def _load_known_given_name_aliases() -> dict[str, set[str]]:
+    """Read optional user-owned aliases; the package ships no personal defaults."""
+    config_path = os.environ.get("BRAINLAYER_GIVEN_NAME_ALIASES_PATH")
+    if not config_path:
+        return {}
+    try:
+        payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("given-name aliases must be an object")
+        aliases: dict[str, set[str]] = {}
+        for given, surfaces in payload.items():
+            if not isinstance(given, str) or not given.strip() or not isinstance(surfaces, list):
+                raise ValueError("given-name aliases require non-empty names and string lists")
+            if not all(isinstance(surface, str) and surface.strip() for surface in surfaces):
+                raise ValueError("given-name alias surfaces must be non-empty strings")
+            aliases[given.casefold()] = {surface.casefold() for surface in surfaces}
+        return aliases
+    except (OSError, ValueError) as exc:
+        logger.warning("given-name alias config ignored: %s", type(exc).__name__)
+        return {}
+
+
+_KNOWN_GIVEN_NAME_ALIASES = _load_known_given_name_aliases()
 
 
 @dataclass

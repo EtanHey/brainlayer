@@ -41,9 +41,11 @@ enum WatcherProcessProbeResult: Sendable, Equatable {
     case failure(String)
 }
 
+/// Whether watcher-ingested chunks are landing. Flow only: whether the watcher is healthy is
+/// `WatcherHealthStatus` (#966). BrainBar's replay debt is not watcher work and no longer
+/// feeds this (it was the source of the false "Watcher flow needs attention").
 enum WatcherFlowState: Sendable, Equatable {
     case flowing
-    case stalled
     case runningNoRecentFlow
     case offline
     case runningFlowUnverified
@@ -52,8 +54,7 @@ enum WatcherFlowState: Sendable, Equatable {
     static func derive(
         process: WatcherProcessProbeResult,
         recentDistinctChunkCount: Int,
-        recentFlowReadable: Bool,
-        pendingWorkCount: Int
+        recentFlowReadable: Bool
     ) -> WatcherFlowState {
         switch process {
         case .failure:
@@ -63,7 +64,6 @@ enum WatcherFlowState: Sendable, Equatable {
         case .running:
             guard recentFlowReadable else { return .runningFlowUnverified }
             if recentDistinctChunkCount > 0 { return .flowing }
-            if pendingWorkCount > 0 { return .stalled }
             return .runningNoRecentFlow
         }
     }
@@ -71,7 +71,6 @@ enum WatcherFlowState: Sendable, Equatable {
     var label: String {
         switch self {
         case .flowing: return "FLOWING"
-        case .stalled: return "STALLED"
         case .runningNoRecentFlow: return "RUNNING · NO RECENT FLOW"
         case .offline: return "OFFLINE"
         case .runningFlowUnverified: return "RUNNING · FLOW UNVERIFIED"
@@ -142,7 +141,17 @@ struct DaemonHealthSnapshot: Sendable, Equatable {
     let rssBytes: UInt64
     let uptime: TimeInterval
     let openConnections: Int
-    let lastSeenAt: Date
+    /// Last successful brain-bus socket answer from the daemon — not the sample time.
+    /// `nil` until the daemon has answered at least once (#972).
+    var lastSeenAt: Date?
+    /// The daemon process's real start time, from `proc_bsdinfo`.
+    var startedAt: Date? = nil
+
+    func withLastSeenAt(_ date: Date?) -> DaemonHealthSnapshot {
+        var copy = self
+        copy.lastSeenAt = date
+        return copy
+    }
 }
 
 enum PipelineIndicatorStatus: Sendable, Equatable {
@@ -189,17 +198,14 @@ struct PipelineIndicator: Sendable, Equatable {
 
 struct PipelineIndicators: Sendable, Equatable {
     let indexing: PipelineIndicator
-    let enriching: PipelineIndicator
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> PipelineIndicators {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         let indexingStatus: PipelineIndicatorStatus
-        let enrichingStatus: PipelineIndicatorStatus
 
         if summary.isUnavailable {
             indexingStatus = .unavailable
-            enrichingStatus = .unavailable
         } else {
             indexingStatus = switch summary.ingress.status {
             case .live:
@@ -209,22 +215,10 @@ struct PipelineIndicators: Sendable, Equatable {
             default:
                 .idle
             }
-
-            enrichingStatus = switch summary.enrichment.status {
-            case .live:
-                .live
-            case .recent where summary.queue.status == .draining:
-                .live
-            case .queued:
-                .queued
-            default:
-                stats.pendingEnrichmentCount > 0 ? .queued : .idle
-            }
         }
 
         return PipelineIndicators(
-            indexing: PipelineIndicator(name: "Indexing", status: indexingStatus),
-            enriching: PipelineIndicator(name: "Enriching", status: enrichingStatus)
+            indexing: PipelineIndicator(name: "Indexing", status: indexingStatus)
         )
     }
 }
@@ -236,11 +230,25 @@ enum DashboardFlowLaneStatus: String, Sendable, Equatable {
     case queued
     case idle
     case unavailable
+    /// Watcher-lane pills (#1014 R1 B1), one per non-running `WatcherHealthStatus` state, plus
+    /// a running watcher whose flow evidence is unverified.
+    case running
+    case attention
+    case stopped
+    case unknown
 
     var label: String {
         switch self {
         case .live:
             return "live"
+        case .running:
+            return "running"
+        case .attention:
+            return "needs attention"
+        case .stopped:
+            return "stopped"
+        case .unknown:
+            return "unknown"
         case .recent:
             return "recent"
         case .draining:
@@ -258,10 +266,14 @@ enum DashboardFlowLaneStatus: String, Sendable, Equatable {
 extension DashboardFlowLaneStatus {
     var stateTheme: BrainBarStateTheme {
         switch self {
-        case .live:
+        case .live, .running:
             return .active
-        case .recent, .idle:
+        case .recent, .idle, .unknown:
             return .idle
+        case .attention:
+            return .degraded
+        case .stopped:
+            return .error
         case .draining:
             return .active
         case .queued:
@@ -351,11 +363,17 @@ struct DashboardFlowLane: Sendable, Equatable {
     let tertiaryValues: [Int]
     let tertiarySeriesLabel: String?
     let tertiaryAccentColor: NSColor?
+    /// Whether the chart's flow evidence is readable, when it differs from the pill. The watcher
+    /// lane's pill follows `WatcherHealthStatus` (#1014 R1 B1) while its chart still follows the
+    /// process-and-flow evidence; every other lane has one status for both.
+    var flowEvidence: DashboardFlowLaneStatus? = nil
+
+    /// The status the chart uses to decide whether its evidence is available.
+    var evidenceStatus: DashboardFlowLaneStatus { flowEvidence ?? status }
 }
 
 struct DashboardQueueSummary: Sendable, Equatable {
     let status: DashboardQueueStatus
-    let backlogCount: Int
     let storeHealth: DashboardStoreQueueHealth
     let storeHealthText: String
     let storeDepth: Int
@@ -376,14 +394,16 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let windowLabel: String
     let allCommits: DashboardFlowLane
     let ingress: DashboardFlowLane
+    let agentWriteReadability: MetricEvidenceReadability
     let queue: DashboardQueueSummary
-    let enrichment: DashboardFlowLane
     let watcherFlowState: WatcherFlowState
-    let watcherHealth: DashboardStats.WatcherHealth?
-    let watcherHealthIsFresh: Bool
+    /// The one watcher-health truth every surface renders (#966).
+    let watcherStatus: WatcherHealthStatus
+    /// `watcherStatus.reasonText(now:)` at derive time, so every surface shows the same line.
+    let watcherStatusReason: String?
 
     var isUnavailable: Bool {
-        ingress.status == .unavailable || enrichment.status == .unavailable || queue.status == .unavailable
+        ingress.status == .unavailable || queue.status == .unavailable
     }
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> DashboardFlowSummary {
@@ -391,11 +411,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let allCommitsColor = BrainBarDesignTokens.Colors.accentBright
         let agentStoresColor = BrainBarDesignTokens.Colors.seriesAgent
         let jsonlWatcherColor = BrainBarDesignTokens.Colors.seriesWatcher
-        let enrichmentColor = BrainBarStateTheme.active.theme.color
 
         let writesLive = stats.eventIsLive(stats.lastWriteAt, now: now)
-        let enrichmentsLive = stats.eventIsLive(stats.lastEnrichedAt, now: now)
-        let backlogCount = stats.pendingEnrichmentCount
         let storeOldestAgeSeconds = stats.pendingStoreOldestQueuedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
         let storeHealth = storeQueueHealth(depth: stats.pendingStoreQueueDepth, oldestAgeSeconds: storeOldestAgeSeconds)
         let watcherProcess = stats.watcherProcessProbeResult
@@ -403,8 +420,12 @@ struct DashboardFlowSummary: Sendable, Equatable {
         let watcherFlowState = WatcherFlowState.derive(
             process: watcherProcess,
             recentDistinctChunkCount: stats.watcherRecentDistinctChunkCount,
-            recentFlowReadable: stats.watcherFlowReadability.isReadable,
-            pendingWorkCount: stats.replayDebtBreakdown.deduplicatedTotal
+            recentFlowReadable: stats.watcherFlowReadability.isReadable
+        )
+        let watcherStatus = WatcherHealthStatus.derive(
+            launchd: WatcherLaunchdEvidence(process: stats.watcherProcessProbeResult),
+            file: stats.watcherHealth,
+            now: now
         )
 
         let ingressStatus: DashboardFlowLaneStatus
@@ -416,61 +437,15 @@ struct DashboardFlowSummary: Sendable, Equatable {
             ingressStatus = .idle
         }
 
-        let enrichmentStatus: DashboardFlowLaneStatus
-        if enrichmentsLive {
-            enrichmentStatus = .live
-        } else if backlogCount > 0 {
-            enrichmentStatus = stats.recentEnrichmentCount > 0 ? .recent : .queued
-        } else if stats.recentEnrichmentCount > 0 {
-            enrichmentStatus = .recent
-        } else {
-            enrichmentStatus = .idle
+        let queueStatus: DashboardQueueStatus = switch storeHealth {
+        case .empty: .empty
+        case .activeDraining: .draining
+        case .backlogAccumulating: .growing
+        case .writerStuck: .backlogged
         }
-
-        let queueStatus: DashboardQueueStatus
-        if backlogCount == 0 {
-            queueStatus = (stats.recentWriteCount > 0 || stats.recentEnrichmentCount > 0) ? .stable : .empty
-        } else if writesLive && !enrichmentsLive {
-            queueStatus = .growing
-        } else if enrichmentsLive && !writesLive {
-            queueStatus = .draining
-        } else if writesLive && enrichmentsLive {
-            queueStatus = .stable
-        } else if stats.recentEnrichmentCount > 0 {
-            queueStatus = .draining
-        } else {
-            queueStatus = .backlogged
-        }
-
-        let headline: String
-        let detail: String
-
-        if ingressStatus == .live && queueStatus == .stable && enrichmentStatus == .live {
-            headline = "Writes are landing and enrichments are shipping"
-            detail = "\(stats.recentWriteCount) writes and \(stats.recentEnrichmentCount) enrichments in \(windowLabel.lowercased())."
-        } else if ingressStatus == .live && queueStatus == .growing {
-            headline = "Writes are outrunning enrichments"
-            detail = "\(backlogCount) chunks are waiting while ingress is still active."
-        } else if backlogCount > 0 &&
-            (queueStatus == .draining || enrichmentStatus == .draining || enrichmentStatus == .live) {
-            headline = "Enrichment is draining backlog"
-            detail = "\(backlogCount) chunks remain queued, and completions are still moving."
-        } else if queueStatus == .backlogged || enrichmentStatus == .queued {
-            headline = "Backlog is waiting for enrichment"
-            detail = "\(backlogCount) chunks are queued with no enrichment in the live window."
-        } else if ingressStatus == .recent || enrichmentStatus == .recent {
-            headline = "The flow is cooling down"
-            detail = "Live activity is quiet, but recent movement is still visible in \(windowLabel.lowercased())."
-        } else {
-            headline = "The flow is idle"
-            detail = "No writes or enrichments landed in \(windowLabel.lowercased())."
-        }
-
-        let enrichmentStatusText = enrichmentStatusText(
-            status: enrichmentStatus,
-            stats: stats,
-            windowLabel: windowLabel
-        )
+        let headline = ingressStatus == .live ? "Local indexing active"
+            : (ingressStatus == .recent ? "Recent local writes" : "Local indexing idle")
+        let detail = "\(DashboardMetricFormatter.integerString(stats.recentWriteCount)) writes in \(windowLabel.lowercased())."
 
         return DashboardFlowSummary(
             headline: headline,
@@ -543,9 +518,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
                 tertiarySeriesLabel: nil,
                 tertiaryAccentColor: nil
             ),
+            agentWriteReadability: stats.agentWriteReadability,
             queue: DashboardQueueSummary(
                 status: queueStatus,
-                backlogCount: backlogCount,
                 storeHealth: storeHealth,
                 storeHealthText: storeHealth.label,
                 storeDepth: stats.pendingStoreQueueDepth,
@@ -563,83 +538,22 @@ struct DashboardFlowSummary: Sendable, Equatable {
                     ratePerMinute: stats.pendingStoreFlushRatePerMinute
                 ),
                 title: queueTitle(
-                    status: queueStatus,
-                    backlogCount: backlogCount,
                     storeHealth: storeHealth
                 ),
                 detail: queueDetail(
-                    status: queueStatus,
-                    backlogCount: backlogCount,
                     storeHealth: storeHealth,
                     storeDepth: stats.pendingStoreQueueDepth,
                     storeFlushDepth: stats.pendingStoreFlushQueueDepth,
                     storeReplayDebtDepth: stats.pendingStoreReplayDebtDepth,
                     storeOldestAgeSeconds: storeOldestAgeSeconds,
                     storeFlushRatePerMinute: stats.pendingStoreFlushRatePerMinute,
-                    stats: stats,
-                    windowLabel: windowLabel
+                    stats: stats
                 )
             ),
-            enrichment: DashboardFlowLane(
-                name: "Enriched successfully",
-                status: enrichmentStatus,
-                statusText: enrichmentStatusText,
-                windowLabel: windowLabel,
-                activityWindowMinutes: stats.activityWindowMinutes,
-                rateText: DashboardMetricFormatter.rateString(
-                    totalEvents: stats.recentEnrichmentCount,
-                    activityWindowMinutes: stats.activityWindowMinutes
-                ),
-                volumeText: DashboardMetricFormatter.activitySummaryString(
-                    totalEvents: stats.recentEnrichmentCount,
-                    activityWindowMinutes: stats.activityWindowMinutes
-                ),
-                lastEventText: DashboardMetricFormatter.lastEventString(
-                    lastEventAt: stats.lastEnrichedAt,
-                    activityWindowMinutes: stats.activityWindowMinutes,
-                    now: now
-                ),
-                values: stats.recentEnrichmentBuckets,
-                sparklineLabel: "Successful enrichment completions over \(windowLabel)",
-                latestBucketName: "latest successful-enrichment bucket",
-                accentColor: enrichmentColor,
-                primarySeriesLabel: "Enriched successfully",
-                secondaryValues: [],
-                secondarySeriesLabel: nil,
-                secondaryAccentColor: nil,
-                tertiaryValues: [],
-                tertiarySeriesLabel: nil,
-                tertiaryAccentColor: nil
-            ),
             watcherFlowState: watcherFlowState,
-            watcherHealth: stats.watcherHealth,
-            watcherHealthIsFresh: stats.watcherHealth?.isFresh(now: now) ?? false
+            watcherStatus: watcherStatus,
+            watcherStatusReason: watcherStatus.reasonText(now: now)
         )
-    }
-
-    private static func enrichmentStatusText(
-        status: DashboardFlowLaneStatus,
-        stats: DashboardStats,
-        windowLabel: String
-    ) -> String {
-        if let burstText = enrichmentBurstText(stats: stats) {
-            return burstText
-        }
-
-        switch status {
-        case .live:
-            return "Enrichments live now"
-        case .draining:
-            return "Recent enrichments are draining backlog"
-        case .queued:
-            return "Backlog is queued without live enrichments"
-        case .recent:
-            return "Recent enrichments in \(windowLabel.lowercased())"
-        case .idle:
-            return "No recent enrichments"
-        case .unavailable:
-            return "Unavailable"
-        }
     }
 
     private static func allCommitsStatusText(
@@ -660,6 +574,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "Chunk rows draining"
         case .unavailable:
             return "Chunk rows unavailable"
+        case .running, .attention, .stopped, .unknown:
+            return "Chunk rows \(status.label)"
         }
     }
 
@@ -673,26 +589,9 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "No chunk rows in \(windowLabel)"
         }
         if latestBucketCount > 0 || status == .live {
-            return "\(latestBucketCount) chunk rows in latest source-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) chunk rows in latest source-time bucket"
         }
-        return "\(totalEvents) chunk rows in \(windowLabel)"
-    }
-
-    private static func enrichmentBurstText(stats: DashboardStats) -> String? {
-        guard stats.pendingEnrichmentCount > 0,
-              let latestBucketCount = stats.recentEnrichmentBuckets.last,
-              latestBucketCount >= 25 else {
-            return nil
-        }
-
-        let earlierBucketTotal = stats.recentEnrichmentBuckets.dropLast().reduce(0, +)
-        guard latestBucketCount >= max(earlierBucketTotal * 2, 25) else {
-            return nil
-        }
-
-        let bucketMinutes = max(1, stats.activityWindowMinutes / max(stats.bucketCount, 1))
-        let bucketLabel = DashboardMetricFormatter.shortWindowLabel(minutes: bucketMinutes)
-        return "Backlog drain burst: \(latestBucketCount) enriched in latest \(bucketLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) chunk rows in \(windowLabel)"
     }
 
     private static func storeQueueHealth(depth: Int, oldestAgeSeconds: Int?) -> DashboardStoreQueueHealth {
@@ -709,14 +608,14 @@ struct DashboardFlowSummary: Sendable, Equatable {
 
     private static func storeDepthText(totalDepth: Int, flushDepth: Int, replayDebtDepth: Int) -> String {
         if flushDepth > 0, replayDebtDepth > 0 {
-            let flush = flushDepth == 1 ? "1 queued" : "\(flushDepth) queued"
-            let replay = replayDebtDepth == 1 ? "1 replay debt" : "\(replayDebtDepth) replay debt"
+            let flush = flushDepth == 1 ? "1 queued" : "\(DashboardMetricFormatter.integerString(flushDepth)) queued"
+            let replay = replayDebtDepth == 1 ? "1 replay debt" : "\(DashboardMetricFormatter.integerString(replayDebtDepth)) replay debt"
             return "\(flush), \(replay)"
         }
         if replayDebtDepth > 0 {
-            return replayDebtDepth == 1 ? "1 replay debt" : "\(replayDebtDepth) replay debt"
+            return replayDebtDepth == 1 ? "1 replay debt" : "\(DashboardMetricFormatter.integerString(replayDebtDepth)) replay debt"
         }
-        return totalDepth == 1 ? "1 queued" : "\(totalDepth) queued"
+        return totalDepth == 1 ? "1 queued" : "\(DashboardMetricFormatter.integerString(totalDepth)) queued"
     }
 
     private static func storeOldestAgeText(_ oldestAgeSeconds: Int?) -> String {
@@ -729,8 +628,6 @@ struct DashboardFlowSummary: Sendable, Equatable {
     }
 
     private static func queueTitle(
-        status: DashboardQueueStatus,
-        backlogCount: Int,
         storeHealth: DashboardStoreQueueHealth
     ) -> String {
         if storeHealth == .writerStuck {
@@ -739,33 +636,17 @@ struct DashboardFlowSummary: Sendable, Equatable {
         if storeHealth != .empty {
             return "Queue \(storeHealth.label)"
         }
-        switch status {
-        case .empty:
-            return "Queue empty"
-        case .stable:
-            return backlogCount == 0 ? "Flow balanced" : "Queue stable"
-        case .growing:
-            return "Queue growing"
-        case .draining:
-            return "Queue draining"
-        case .backlogged:
-            return "Queue backlogged"
-        case .unavailable:
-            return "Queue unavailable"
-        }
+        return "Pending stores empty"
     }
 
     private static func queueDetail(
-        status: DashboardQueueStatus,
-        backlogCount: Int,
         storeHealth: DashboardStoreQueueHealth,
         storeDepth: Int,
         storeFlushDepth: Int,
         storeReplayDebtDepth: Int,
         storeOldestAgeSeconds: Int?,
         storeFlushRatePerMinute: Double,
-        stats: DashboardStats,
-        windowLabel: String
+        stats: DashboardStats
     ) -> String {
         if storeHealth != .empty {
             let breakdown = stats.replayDebtBreakdown.detailText
@@ -781,35 +662,18 @@ struct DashboardFlowSummary: Sendable, Equatable {
             return "\(stats.replayDebtBreakdown.detailText)."
         }
 
-        switch status {
-        case .empty:
-            return "No chunks are waiting for enrichment."
-        case .stable:
-            return backlogCount == 0
-                ? "Ingress and enrichment stayed balanced across \(windowLabel.lowercased())."
-                : "\(backlogCount) chunks queued while ingress and enrichment remain balanced."
-        case .growing:
-            return "\(backlogCount) chunks are accumulating faster than enrichments are landing."
-        case .draining:
-            return "\(backlogCount) chunks remain queued, but enrichments are still landing."
-        case .backlogged:
-            return "\(backlogCount) chunks are queued with no enrichments in the live window."
-        case .unavailable:
-            return "Queue state cannot be trusted until the daemon comes back."
-        }
+        return "No pending stores or replay debt."
     }
 }
 
 /// The independent flow series the redesigned dashboard plots as separately
 /// scaled cards. `allCommits` is the legacy internal case for source-time chunk rows;
 /// `agentStores` and `jsonlWatcher` remain source-specific slices so watcher
-/// peaks do not crush the agent series flat. `enrichment` reuses the existing
-/// enrichment lane.
+/// peaks do not crush the agent series flat.
 enum PipelineSeries: String, Sendable, Equatable, CaseIterable, Identifiable {
     case allCommits
     case agentStores
     case jsonlWatcher
-    case enrichment
 
     var id: String { rawValue }
 }
@@ -826,14 +690,12 @@ extension DashboardFlowSummary {
         switch series {
         case .allCommits:
             return allCommits
-        case .enrichment:
-            // Reuse the existing enrichment lane verbatim (keeps its
-            // sparklineReferenceValue benchmark behaviour downstream).
-            return enrichment
         case .agentStores:
             let agentValues = ingress.values
             let agentTotal = agentValues.reduce(0, +)
-            let agentStatus = agentStoreStatus(values: agentValues)
+            let agentStatus = agentWriteReadability.isReadable
+                ? agentStoreStatus(values: agentValues)
+                : .unavailable
             return DashboardFlowLane(
                 name: "Agent-origin chunks",
                 status: agentStatus,
@@ -873,11 +735,10 @@ extension DashboardFlowSummary {
         case .jsonlWatcher:
             let watcherValues = ingress.secondaryValues
             let watcherTotal = watcherValues.reduce(0, +)
-            let watcherStatus = jsonlWatcherStatus(flowState: watcherFlowState)
             return DashboardFlowLane(
                 name: "Watcher-ingested chunks",
-                status: watcherStatus,
-                statusText: watcherFlowState.label,
+                status: jsonlWatcherPill,
+                statusText: jsonlWatcherStatusText,
                 windowLabel: ingress.windowLabel,
                 activityWindowMinutes: ingress.activityWindowMinutes,
                 rateText: DashboardMetricFormatter.rateString(
@@ -888,7 +749,7 @@ extension DashboardFlowSummary {
                     totalEvents: watcherTotal,
                     activityWindowMinutes: ingress.activityWindowMinutes
                 ),
-                lastEventText: jsonlWatcherLastEventText(
+                lastEventText: watcherStatusReason ?? jsonlWatcherLastEventText(
                     totalEvents: watcherTotal,
                     latestBucketCount: watcherValues.last ?? 0,
                     windowLabel: ingress.windowLabel
@@ -903,7 +764,8 @@ extension DashboardFlowSummary {
                 secondaryAccentColor: nil,
                 tertiaryValues: [],
                 tertiarySeriesLabel: nil,
-                tertiaryAccentColor: nil
+                tertiaryAccentColor: nil,
+                flowEvidence: jsonlWatcherStatus(flowState: watcherFlowState)
             )
         }
     }
@@ -937,6 +799,8 @@ extension DashboardFlowSummary {
             return "Agent-origin chunks draining"
         case .unavailable:
             return "Agent-origin chunks unavailable"
+        case .running, .attention, .stopped, .unknown:
+            return "Agent-origin chunks \(status.label)"
         }
     }
 
@@ -946,25 +810,53 @@ extension DashboardFlowSummary {
         latestBucketCount: Int,
         windowLabel: String
     ) -> String {
+        if status == .unavailable {
+            return "Agent-origin flow evidence unavailable"
+        }
         if totalEvents == 0 {
             return "No agent-origin chunks in \(windowLabel)"
         }
         if latestBucketCount > 0 || status == .live {
-            return "\(latestBucketCount) agent-origin chunks in latest source-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) agent-origin chunks in latest source-time bucket"
         }
-        return "\(totalEvents) agent-origin chunks in \(windowLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) agent-origin chunks in \(windowLabel)"
+    }
+
+    /// The watcher lane's pill is a function of the one `WatcherHealthStatus` (#1014 R1 B1): flow
+    /// only refines a Running watcher, so a degraded, stopped or unknown watcher can never show
+    /// a healthy flow pill beside its NEEDS ATTENTION headline.
+    private var jsonlWatcherPill: DashboardFlowLaneStatus {
+        switch watcherStatus {
+        case .running:
+            switch watcherFlowState {
+            case .flowing: .live
+            case .runningNoRecentFlow: .idle
+            case .offline, .runningFlowUnverified, .unknown: .running
+            }
+        case .degraded: .attention
+        case .stopped: .stopped
+        case .unknown: .unknown
+        }
     }
 
     private func jsonlWatcherStatus(flowState: WatcherFlowState) -> DashboardFlowLaneStatus {
         switch flowState {
         case .flowing:
             return .live
-        case .stalled:
-            return .queued
         case .runningNoRecentFlow:
             return .idle
         case .offline, .runningFlowUnverified, .unknown:
             return .unavailable
+        }
+    }
+
+    /// Health first (from `WatcherHealthStatus`), then flow when the watcher is healthy.
+    private var jsonlWatcherStatusText: String {
+        switch watcherStatus {
+        case .running: watcherFlowState.label
+        case .degraded: "NEEDS ATTENTION"
+        case .stopped: "STOPPED"
+        case .unknown: "UNKNOWN"
         }
     }
 
@@ -977,16 +869,15 @@ extension DashboardFlowSummary {
             return "No watcher-ingested chunks in \(windowLabel)"
         }
         if latestBucketCount > 0 {
-            return "\(latestBucketCount) watcher-ingested chunks in latest ingest-time bucket"
+            return "\(DashboardMetricFormatter.integerString(latestBucketCount)) watcher-ingested chunks in latest ingest-time bucket"
         }
-        return "\(totalEvents) watcher-ingested chunks in \(windowLabel)"
+        return "\(DashboardMetricFormatter.integerString(totalEvents)) watcher-ingested chunks in \(windowLabel)"
     }
 }
 
 enum PipelineState: String, Sendable, Equatable {
     case degraded
     case indexing
-    case enriching
     case idle
 
     static func derive(daemon: DaemonHealthSnapshot?, stats: DashboardStats, now: Date = Date()) -> PipelineState {
@@ -997,13 +888,6 @@ enum PipelineState: String, Sendable, Equatable {
         if summary.ingress.status == .live || summary.ingress.status == .recent || summary.queue.status == .growing {
             return .indexing
         }
-        if summary.enrichment.status == .live ||
-            summary.enrichment.status == .queued ||
-            (summary.enrichment.status == .recent && summary.queue.status == .draining) ||
-            summary.queue.status == .draining ||
-            summary.queue.status == .backlogged {
-            return .enriching
-        }
         return .idle
     }
 
@@ -1011,7 +895,6 @@ enum PipelineState: String, Sendable, Equatable {
         switch self {
         case .degraded: return "Degraded"
         case .indexing: return "Indexing"
-        case .enriching: return "Enriching"
         case .idle: return "Idle"
         }
     }
@@ -1020,7 +903,6 @@ enum PipelineState: String, Sendable, Equatable {
         switch self {
         case .degraded: return "exclamationmark.triangle.fill"
         case .indexing: return "waveform.path.ecg"
-        case .enriching: return "sparkles"
         case .idle: return "checkmark.circle.fill"
         }
     }
@@ -1035,8 +917,6 @@ enum PipelineState: String, Sendable, Equatable {
             return .degraded
         case .indexing:
             return .loading
-        case .enriching:
-            return .active
         case .idle:
             return .idle
         }

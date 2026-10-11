@@ -372,7 +372,7 @@ def test_timestamp_only_changes_remain_distinct_chunks(tmp_path):
 
 
 def test_enrichment_content_hash_does_not_disable_dedupe(tmp_path):
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)

@@ -1,9 +1,44 @@
 """Regression tests for fail-closed pytest runtime path isolation."""
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_pytest_session_ignores_user_brainlayer_env_file(tmp_path: Path) -> None:
+    fake_home = tmp_path / "user-home"
+    env_file = fake_home / ".config" / "brainlayer" / "brainlayer.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("BRAINLAYER_INGEST_DENYLIST=~/elsewhere/**\n", encoding="utf-8")
+
+    child_env = os.environ.copy()
+    child_env["HOME"] = str(fake_home)
+    child_env.pop("BRAINLAYER_INGEST_DENYLIST", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "brainlayer.config",
+            "-q",
+            "tests/test_retro_self_pollution_quarantine.py::test_run_apply_refuses_when_retrievability_proof_fails",
+        ],
+        cwd=REPO_ROOT,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_unit_runtime_paths_are_isolated_under_tmp_path(tmp_path: Path) -> None:

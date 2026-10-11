@@ -494,6 +494,22 @@ def resolve_chunk_id(conn: Any, chunk_id: str) -> str:
     return str(row[0])
 
 
+def _rollback_failed_merge(cursor: Any, savepoint: str, original: Exception) -> bool:
+    """Undo a merge if SQLite still has its savepoint; preserve the first error.
+
+    SQLITE_INTERRUPT and RAISE(ROLLBACK) can end the transaction themselves. In that
+    case ROLLBACK TO raises ``no such savepoint`` and must not replace the cause.
+    A failed cleanup also makes a BusyError unsafe to retry on this connection.
+    """
+    try:
+        cursor.execute(f"ROLLBACK TO {savepoint}")
+        cursor.execute(f"RELEASE {savepoint}")
+    except Exception as cleanup_error:
+        original.add_note(f"{savepoint} cleanup failed: {cleanup_error}")
+        return False
+    return True
+
+
 def merge_duplicate_chunk(
     conn: Any,
     *,
@@ -604,16 +620,13 @@ def merge_duplicate_chunk(
                         "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?", (table,)
                     ).fetchone():
                         cursor.execute(f"DELETE FROM {table} WHERE chunk_id = ?", (duplicate_id,))
-        except apsw.BusyError:
-            cursor.execute("ROLLBACK TO dedupe_merge")
-            cursor.execute("RELEASE dedupe_merge")
-            if attempt == BUSY_RETRY_ATTEMPTS - 1:
+        except apsw.BusyError as error:
+            if not _rollback_failed_merge(cursor, "dedupe_merge", error) or attempt == BUSY_RETRY_ATTEMPTS - 1:
                 raise
             time.sleep(_busy_retry_delay(attempt))
             continue
-        except Exception:
-            cursor.execute("ROLLBACK TO dedupe_merge")
-            cursor.execute("RELEASE dedupe_merge")
+        except Exception as error:
+            _rollback_failed_merge(cursor, "dedupe_merge", error)
             raise
         else:
             cursor.execute("RELEASE dedupe_merge")
@@ -687,16 +700,13 @@ def merge_existing_chunk_seen(
                 mechanism="sha256_same_id",
                 hamming_distance_value=0,
             )
-        except apsw.BusyError:
-            cursor.execute("ROLLBACK TO dedupe_seen")
-            cursor.execute("RELEASE dedupe_seen")
-            if attempt == BUSY_RETRY_ATTEMPTS - 1:
+        except apsw.BusyError as error:
+            if not _rollback_failed_merge(cursor, "dedupe_seen", error) or attempt == BUSY_RETRY_ATTEMPTS - 1:
                 raise
             time.sleep(_busy_retry_delay(attempt))
             continue
-        except Exception:
-            cursor.execute("ROLLBACK TO dedupe_seen")
-            cursor.execute("RELEASE dedupe_seen")
+        except Exception as error:
+            _rollback_failed_merge(cursor, "dedupe_seen", error)
             raise
         else:
             cursor.execute("RELEASE dedupe_seen")
@@ -770,16 +780,16 @@ def merge_existing_chunk_content(
                 mechanism="same_id_content_merge",
                 hamming_distance_value=None,
             )
-        except apsw.BusyError:
-            cursor.execute("ROLLBACK TO dedupe_same_id_content")
-            cursor.execute("RELEASE dedupe_same_id_content")
-            if attempt == BUSY_RETRY_ATTEMPTS - 1:
+        except apsw.BusyError as error:
+            if (
+                not _rollback_failed_merge(cursor, "dedupe_same_id_content", error)
+                or attempt == BUSY_RETRY_ATTEMPTS - 1
+            ):
                 raise
             time.sleep(_busy_retry_delay(attempt))
             continue
-        except Exception:
-            cursor.execute("ROLLBACK TO dedupe_same_id_content")
-            cursor.execute("RELEASE dedupe_same_id_content")
+        except Exception as error:
+            _rollback_failed_merge(cursor, "dedupe_same_id_content", error)
             raise
         else:
             cursor.execute("RELEASE dedupe_same_id_content")

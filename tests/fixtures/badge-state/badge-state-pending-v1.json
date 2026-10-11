@@ -1,0 +1,1 @@
+{"alerts": {"expected_first_run_by": "2026-09-15T08:10:00Z", "inputs": [], "reason": "awaiting first health-check run", "state": "pending_first_run"}, "generated_at": "2026-09-15T08:00:00Z", "schema_version": 1}

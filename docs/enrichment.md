@@ -1,10 +1,18 @@
-# Enrichment
+# Enrichment (retired)
 
-BrainLayer enriches indexed chunks with structured metadata using an LLM (Groq by default; Gemini, MLX, or Ollama). Think of it as a librarian cataloging every conversation snippet.
+LLM chunk and session enrichment is retired. There are no supported enrichment
+run, resume, provider, or scheduler activation instructions.
+History: [CHANGELOG](https://github.com/EtanHey/brainlayer/blob/main/CHANGELOG.md).
 
-## Chunk Enrichment
+Local indexing, search, digest, and knowledge graph operations remain available.
+Existing chunk metadata and historical session analysis remain readable; retirement
+does not delete stored rows or their tags, importance, summaries, and provenance.
+Offline prompt emission/collection, graders, fixtures, and local checkpoint replay
+remain available without a cloud model client.
 
-Each chunk gets 15 metadata fields:
+## Historical chunk metadata
+
+The fields below describe existing records, not an active producer:
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -24,84 +32,8 @@ Each chunk gets 15 metadata fields:
 | `sentiment_score` | Sentiment magnitude | `-1.0` to `1.0` |
 | `sentiment_signals` | Words/phrases that indicate the sentiment | "still broken, third time" |
 
-### Running Enrichment
+## Installed credential compatibility
 
-```bash
-# Basic (50 chunks at a time)
-brainlayer enrich
-
-# Larger batches
-brainlayer enrich --batch-size=100
-
-# Process up to 5000 chunks
-brainlayer enrich --max=5000
-
-# With parallel workers
-brainlayer enrich --parallel=3
-```
-
-### Source-Aware Thresholds
-
-Not all chunks are worth enriching. BrainLayer automatically skips chunks that are too short:
-
-| Source | Minimum Length | Reason |
-|--------|---------------|--------|
-| Claude Code | 50 characters | Code context needs substance |
-| WhatsApp / Telegram | 15 characters | Short messages can still be meaningful |
-
-Skipped chunks are tagged as `skipped:too_short` and excluded from enrichment stats.
-
-## Session Enrichment
-
-Session-level analysis extracts structured insights from entire conversations:
-
-```bash
-brainlayer enrich-sessions
-brainlayer enrich-sessions --project my-project --since 2026-01-01
-brainlayer enrich-sessions --stats   # Show progress
-```
-
-Session enrichment extracts:
-
-- **Summary** — what the session was about
-- **Decisions** — architectural and implementation choices made
-- **Corrections** — mistakes caught and fixed
-- **Learnings** — new knowledge gained
-- **Patterns** — recurring approaches identified
-- **Quality scores** — code quality, communication quality
-
-## LLM Backends
-
-Two local backends are supported:
-
-| Backend | Best for | Speed | How to start |
-|---------|----------|-------|-------------|
-| **MLX** | Apple Silicon (M1/M2/M3) | 21-87% faster | `python3 -m mlx_lm.server --model mlx-community/Qwen2.5-Coder-14B-Instruct-4bit --port 8080` |
-| **Ollama** | Any platform | ~1s/chunk (short), ~13s (long) | `ollama serve` + `ollama pull glm4` |
-
-Backend is auto-detected: Apple Silicon defaults to MLX, everything else to Ollama. Override with:
-
-```bash
-BRAINLAYER_ENRICH_BACKEND=mlx brainlayer enrich
-BRAINLAYER_ENRICH_BACKEND=ollama brainlayer enrich
-```
-
-### Performance Tips
-
-- Set `"think": false` in Ollama API calls — GLM-4.7 defaults to thinking mode, adding 350+ tokens and 20s delay for no benefit
-- Use `PYTHONUNBUFFERED=1` for log visibility in background processes
-- MLX parallel workers: each gets its own DB connection (thread-local)
-
-## Stall Detection
-
-If a chunk takes too long (default: 5 minutes), it's automatically killed and skipped:
-
-```bash
-BRAINLAYER_STALL_TIMEOUT=300 brainlayer enrich  # 5 min default
-```
-
-Progress is logged every N chunks:
-
-```bash
-BRAINLAYER_HEARTBEAT_INTERVAL=25 brainlayer enrich  # Log every 25 chunks
-```
+Keep `GOOGLE_API_KEY`, `BRAINLAYER_REQUIRE_GOOGLE_API_KEY`, and the env-run exit-78
+gate until the release re-renders installed hotlane plists.
+See [Configuration](configuration.md) for the retained 1Password-backed key guidance.

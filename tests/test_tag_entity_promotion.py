@@ -33,11 +33,14 @@ def _insert_chunk_with_tags(store, chunk_id, tags, source_file="test.jsonl"):
 
 
 class TestTagPromotionHeuristics:
-    def test_classify_tag_entity_type_uses_spec_heuristics(self):
+    def test_classify_tag_entity_type_uses_spec_heuristics(self, monkeypatch):
         from brainlayer.pipeline.tag_entity_promotion import classify_tag_entity_type
 
         assert classify_tag_entity_type("telegram") == "technology"
-        assert classify_tag_entity_type("andrew-huberman") == "person"
+        from brainlayer.pipeline import tag_entity_promotion
+
+        monkeypatch.setattr(tag_entity_promotion, "PERSON_TAGS", {"alex-example"})
+        assert classify_tag_entity_type("alex-example") == "person"
         assert classify_tag_entity_type("neuroscience") == "topic"
         assert classify_tag_entity_type("hebrew-writing") == "topic"
         assert classify_tag_entity_type("founders-community") == "community"
@@ -141,3 +144,11 @@ class TestTagPromotionExecution:
             "workflow": "concept",
             "device": "entity",
         }
+
+
+def test_person_tags_use_only_local_seed_names():
+    from brainlayer.pipeline.tag_entity_promotion import PERSON_TAGS, _person_tags_from_seed_names
+
+    assert PERSON_TAGS == set()
+    assert _person_tags_from_seed_names([]) == set()
+    assert _person_tags_from_seed_names(["Alex Example"]) == {"alex-example"}

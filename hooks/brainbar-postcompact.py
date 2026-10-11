@@ -36,6 +36,10 @@ def main():
 
     db_path = get_db_path()
     try:
+        from brainlayer.pipeline.secret_scrub import scrub_secrets
+
+        compact_summary = scrub_secrets(compact_summary).text
+        trigger = scrub_secrets(trigger).text
         conn = sqlite3.connect(db_path, timeout=5)
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA busy_timeout = 5000")

@@ -612,7 +612,7 @@ class TestFlushCallback:
         flush = create_flush_callback(db_path, arbitrated=False)
         entry = _make_jsonl_entry(
             role="user",
-            text="No, that's wrong. Avi works at Lightricks.",
+            text="No, that's wrong. Rina works at Lightricks.",
             entry_type="user",
         )
         entry["_source_file"] = "/tmp/projects/test-project/session.jsonl"

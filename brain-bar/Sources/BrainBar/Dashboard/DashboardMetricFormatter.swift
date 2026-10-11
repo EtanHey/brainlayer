@@ -1,18 +1,30 @@
 import Foundation
 
 enum DashboardMetricFormatter {
+    static func integerString(_ value: Int, locale: Locale = .current) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = locale
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
     private static let absoluteTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
 
-    static func axisTickString(_ value: Int) -> String {
+    static func axisTickString(_ value: Int, locale: Locale = .current) -> String {
         if value >= 1000 {
             let thousands = Double(value) / 1000
-            return thousands >= 10 ? "\(Int(thousands.rounded()))k" : String(format: "%.1fk", thousands)
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.locale = locale
+            formatter.minimumFractionDigits = thousands >= 10 ? 0 : 1
+            formatter.maximumFractionDigits = thousands >= 10 ? 0 : 1
+            return "\(formatter.string(from: NSNumber(value: thousands)) ?? String(thousands))k"
         }
-        return "\(value)"
+        return integerString(value, locale: locale)
     }
 
     private static let shortAbsoluteTimeFormatter: DateFormatter = {
@@ -20,6 +32,16 @@ enum DashboardMetricFormatter {
         formatter.dateFormat = "HH:mm"
         return formatter
     }()
+
+    private static let jobDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, HH:mm"
+        return formatter
+    }()
+
+    static func jobDateTimeString(_ date: Date) -> String {
+        jobDateTimeFormatter.string(from: date)
+    }
 
     static func speedString(ratePerMinute: Double) -> String {
         liveBadgeString(ratePerMinute: ratePerMinute)
@@ -57,7 +79,7 @@ enum DashboardMetricFormatter {
         totalEvents: Int,
         activityWindowMinutes: Int = 30
     ) -> String {
-        "\(max(totalEvents, 0)) in \(shortWindowLabel(minutes: activityWindowMinutes))"
+        "\(integerString(max(totalEvents, 0))) in \(shortWindowLabel(minutes: activityWindowMinutes))"
     }
 
     static func lastCompletionString(
@@ -101,6 +123,9 @@ enum DashboardMetricFormatter {
         }
 
         let hoursAgo = Int((secondsAgo / 3600).rounded(.towardZero))
+        if hoursAgo >= 48 {
+            return "2d+ ago"
+        }
         return "\(hoursAgo)h ago"
     }
 

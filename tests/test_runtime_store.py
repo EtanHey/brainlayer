@@ -53,16 +53,27 @@ def test_chromadb_migrate_command_requires_explicit_offline_path(tmp_path, monke
     assert not canonical.exists()
 
 
-def test_repair_fts_command_requires_explicit_offline_copy(tmp_path, monkeypatch):
+def test_repair_fts_command_checks_configured_db_readonly_and_repairs_explicit_copy(tmp_path, monkeypatch):
+    from brainlayer import maintenance
     from brainlayer.cli import app
 
     canonical = tmp_path / "canonical" / "brainlayer.db"
     copy_path = tmp_path / "copy" / "brainlayer.db"
     monkeypatch.setattr("brainlayer.runtime_store._canonical_db_path", lambda: canonical)
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: canonical)
+    VectorStore(canonical).close()
     OfflineMigrator(copy_path).close()
+    canonical_before = canonical.read_bytes()
+    events = []
+    monkeypatch.setattr(maintenance, "_service_is_loaded", lambda _service: True)
+    monkeypatch.setattr(maintenance, "_bootout_service", lambda service: events.append(("stop", service)) or True)
+    monkeypatch.setattr(maintenance, "_resume_service", lambda _root, service: events.append(("start", service)))
 
     missing = CliRunner().invoke(app, ["repair-fts"])
-    assert missing.exit_code != 0
+    assert missing.exit_code == 0, missing.output
+    assert "chunks_fts" in missing.output
+    assert events == [], "scheduled FTS check must not stop services or open a live writer"
+    assert canonical.read_bytes() == canonical_before
 
     repaired = CliRunner().invoke(app, ["repair-fts", str(copy_path)])
     assert repaired.exit_code == 0, repaired.output
@@ -70,6 +81,16 @@ def test_repair_fts_command_requires_explicit_offline_copy(tmp_path, monkeypatch
     refused = CliRunner().invoke(app, ["repair-fts", str(canonical)])
     assert refused.exit_code == 1
     assert "canonical" in refused.output.lower()
+
+
+def test_repair_fts_no_argument_never_enters_live_repair(monkeypatch):
+    from brainlayer import maintenance
+    from brainlayer.cli import app
+
+    monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: Path("/tmp/fixture.db"))
+    monkeypatch.setattr(maintenance, "run_coordinated_fts_repair", lambda _db_path: pytest.fail("live repair"))
+    result = CliRunner().invoke(app, ["repair-fts"])
+    assert result.exit_code != 77
 
 
 def _bootstrap(db_path: Path) -> None:

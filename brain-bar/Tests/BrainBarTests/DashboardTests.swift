@@ -37,6 +37,18 @@ final class DashboardTests: XCTestCase {
         }
     }
 
+    private struct HeartbeatClockBox {
+        let clock: BrainBarLifecycleWatchdog.HeartbeatClock
+
+        init(uptimeNanos: UInt64) {
+            clock = BrainBarLifecycleWatchdog.HeartbeatClock(
+                wallNow: { Date(timeIntervalSince1970: 1_790_000_000) },
+                uptimeNanos: { uptimeNanos },
+                bootSession: { "TEST-BOOT" }
+            )
+        }
+    }
+
     private var db: BrainDatabase!
     private var tempDBPath: String!
     private var fallbackReplayRoot: URL!
@@ -51,6 +63,8 @@ final class DashboardTests: XCTestCase {
         return formatter
     }()
 
+    private var restoreWatcherHealthEnvironment: (() -> Void)?
+
     override func setUp() {
         super.setUp()
         tempDBPath = NSTemporaryDirectory() + "brainbar-dashboard-\(UUID().uuidString).db"
@@ -62,6 +76,7 @@ final class DashboardTests: XCTestCase {
         try? FileManager.default.createDirectory(at: durableQueueRoot, withIntermediateDirectories: true)
         restoreFallbackReplayRoot = setDashboardFallbackReplayGitsRoot(fallbackReplayRoot)
         restoreDurableQueueRoot = setDashboardDurableStoreQueuePath(durableQueueRoot)
+        restoreWatcherHealthEnvironment = isolateWatcherHealthEnvironment(root: fallbackReplayRoot)
         db = BrainDatabase(path: tempDBPath)
     }
 
@@ -69,6 +84,7 @@ final class DashboardTests: XCTestCase {
         db.close()
         restoreFallbackReplayRoot?()
         restoreDurableQueueRoot?()
+        restoreWatcherHealthEnvironment?()
         try? FileManager.default.removeItem(atPath: tempDBPath)
         try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
         try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
@@ -103,13 +119,13 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.chunkCount, 2)
-        XCTAssertEqual(stats.enrichedChunkCount, 1)
-        XCTAssertEqual(stats.pendingEnrichmentCount, 1)
-        XCTAssertEqual(stats.enrichmentPercent, 50.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichedChunkCount, 0)
+        XCTAssertEqual(stats.pendingEnrichmentCount, 0)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets.count, 6)
         XCTAssertEqual(stats.recentEnrichmentBuckets.count, 6)
         XCTAssertGreaterThanOrEqual(stats.recentActivityBuckets.reduce(0, +), 2)
-        XCTAssertGreaterThanOrEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertGreaterThanOrEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
         XCTAssertGreaterThan(stats.databaseSizeBytes, 0)
     }
 
@@ -140,14 +156,10 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.chunkCount, 6)
-        XCTAssertEqual(
-            stats.enrichedChunkCount,
-            1,
-            "The ENRICHED SUCCESSFULLY numerator counts only enrich_status='success'."
-        )
-        XCTAssertEqual(stats.pendingEnrichmentCount, 1)
-        XCTAssertEqual(stats.skippedEnrichmentCount, 3)
-        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 6.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichedChunkCount, 0, "UI no longer queries historical enrichment")
+        XCTAssertEqual(stats.pendingEnrichmentCount, 0)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 0)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
     }
 
     func testWatcherLaneDoesNotCallAnEmptyLatestBucketLive() {
@@ -163,6 +175,7 @@ final class DashboardTests: XCTestCase {
             recentWatcherWriteBuckets: [2, 0, 0],
             recentEnrichmentBuckets: [0, 0, 0],
             activityWindowMinutes: 15,
+            watcherHealth: .readable(WatcherHealthFile(updatedAt: Date().addingTimeInterval(-70), pollCount: 1)),
             watcherProcessProbeResult: .running(pid: 42),
             watcherRecentDistinctChunkCount: 2,
             watcherFlowReadability: .readable
@@ -214,6 +227,40 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.trigramCoveragePercent, 66.666, accuracy: 0.01)
     }
 
+    func testLexicalCoverageExcludesClassesRoutedAwayFromKnowledgeIndexes() throws {
+        db.exec("ALTER TABLE chunks ADD COLUMN source_class TEXT")
+        for (id, route) in [("knowledge", "knowledge"), ("desktop", "knowledge"),
+                            ("operational", "operational"),
+                            ("test", "test"), ("benchmark", "benchmark"), ("cold", "cold")] {
+            try db.insertChunk(id: id, content: "Coverage \(id)", sessionId: "dashboard",
+                               project: "brainlayer", contentType: "assistant_text", importance: 5)
+            db.exec("UPDATE chunks SET content_class = '\(route)' WHERE id = '\(id)'")
+        }
+        db.exec("UPDATE chunks SET source_class = 'desktop' WHERE id = 'desktop'")
+        db.exec("CREATE TABLE IF NOT EXISTS chunk_vectors_rowids(id TEXT PRIMARY KEY)")
+        for id in ["knowledge", "desktop", "operational", "test", "benchmark", "cold"] {
+            db.exec("INSERT INTO chunk_vectors_rowids(id) VALUES ('\(id)')")
+        }
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+        XCTAssertEqual(stats.signalEligibleChunkCount, 6)
+        XCTAssertEqual(stats.ftsEligibleChunkCount, 2)
+        XCTAssertEqual(stats.vectorCoveragePercent, 100)
+        XCTAssertEqual(stats.ftsCoveragePercent, 100)
+        XCTAssertEqual(stats.trigramCoveragePercent, 100)
+        XCTAssertEqual(stats.ftsBacklogCount, 0)
+        XCTAssertEqual(stats.trigramBacklogCount, 0)
+    }
+
+    func testCoverageReadsLegacyChunksWithoutContentClass() throws {
+        try db.insertChunk(id: "legacy-class", content: "Legacy class coverage",
+                           sessionId: "dashboard", project: "brainlayer",
+                           contentType: "assistant_text", importance: 5)
+        db.exec("ALTER TABLE chunks RENAME COLUMN content_class TO legacy_content_class")
+        let coverage = try db.dashboardSignalCoverageSnapshot()
+        XCTAssertEqual(coverage.eligibleChunkCount, 1)
+        XCTAssertEqual(coverage.ftsEligibleChunkCount, 1)
+    }
+
     func testDashboardStatsCanSkipSignalCoverageForHotSnapshot() throws {
         try db.insertChunk(
             id: "hot-snapshot",
@@ -262,7 +309,10 @@ final class DashboardTests: XCTestCase {
             .appendingPathComponent("watcher-health-\(UUID().uuidString).json")
         try """
         {
+          "updated_at": "2026-09-29T21:34:07.711548+00:00",
+          "poll_count": 72,
           "alerting": true,
+          "alert_reasons": ["offset_lag"],
           "files_tracked": 7,
           "max_offset_lag_bytes": 2097152,
           "active_jsonl_entries_per_minute": 44.0,
@@ -277,9 +327,44 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.watcherHealth?.filesTracked, 7)
-        XCTAssertEqual(stats.watcherHealth?.alerting, true)
-        XCTAssertEqual(stats.watcherHealth?.summaryText, "lag 2 MB")
+        guard case let .readable(health) = stats.watcherHealth else {
+            return XCTFail("dashboard stats must carry the watcher-health read, got \(String(describing: stats.watcherHealth))")
+        }
+        XCTAssertEqual(health.pollCount, 72)
+        XCTAssertEqual(health.alertReasons, ["offset_lag"])
+        XCTAssertEqual(health.maxOffsetLagBytes, 2_097_152)
+    }
+
+    /// #1014: the Dashboard reads the health file the WATCHER writes, beside BRAINLAYER_DB, not
+    /// beside BrainBar's own database (BRAINBAR_DB_PATH), which can be a different file.
+    func testDashboardStatsReadsWatcherHealthBesideTheWatchersDatabaseNotBrainBars() throws {
+        let watcherDB = fallbackReplayRoot.appendingPathComponent("watcher-db/brainlayer.db")
+        try FileManager.default.createDirectory(at: watcherDB.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"updated_at": "2026-09-29T21:34:07+00:00", "poll_count": 9, "alert_reasons": []}"#
+            .write(to: watcherDB.deletingLastPathComponent().appendingPathComponent("watcher-health.json"), atomically: true, encoding: .utf8)
+        XCTAssertNotEqual(
+            URL(fileURLWithPath: tempDBPath).deletingLastPathComponent().path,
+            watcherDB.deletingLastPathComponent().path,
+            "BrainBar's DB and the watcher's DB must live apart for this test to mean anything"
+        )
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        guard case let .readable(health) = stats.watcherHealth else {
+            return XCTFail("expected the watcher's health file, got \(String(describing: stats.watcherHealth))")
+        }
+        XCTAssertEqual(health.pollCount, 9)
+    }
+
+    func testDashboardStatsReportsAMissingWatcherHealthFileAsMissing() throws {
+        let healthURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("watcher-health-missing-\(UUID().uuidString).json")
+        let restoreHealthPath = setDashboardWatcherHealthPath(healthURL)
+        defer { restoreHealthPath() }
+
+        let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
+
+        XCTAssertEqual(stats.watcherHealth, .missing(path: healthURL.path))
     }
 
     func testDashboardStatsRecentEnrichmentCountSharesBucketSource() {
@@ -325,8 +410,8 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
         XCTAssertEqual(stats.recentWriteFiveMinuteCount, 2)
-        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 2)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 4)
+        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardStatsBucketsEventsOnFixedWallClockWindowEndingNow() throws {
@@ -356,9 +441,9 @@ final class DashboardTests: XCTestCase {
         }
         let stats = try db.dashboardStats(activityWindowMinutes: 60, bucketCount: 12)
 
-        XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
-        XCTAssertEqual(stats.recentEnrichmentFiveMinuteCount, 1)
-        XCTAssertEqual(stats.recentEnrichmentCount, 4)
+        XCTAssertEqual(stats.recentActivityBuckets, [0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1])
+        XCTAssertEqual(stats.recentWriteFiveMinuteCount, 1)
+        XCTAssertEqual(stats.recentWriteCount, 4)
     }
 
     func testDashboardStatsSplitsLiveWritesIntoAgentStoresAndJSONLWatcherPaths() throws {
@@ -486,7 +571,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertNil(summary.ingress.tertiaryAccentColor)
     }
 
-    func testDashboardStatsComputesVectorETAFromBacklogAndNetDrain() {
+    func testDashboardStatsDoesNotTreatEnrichmentAsVectorThroughput() {
         let stats = DashboardStats(
             chunkCount: 10_105,
             enrichedChunkCount: 0,
@@ -502,8 +587,8 @@ final class DashboardTests: XCTestCase {
             vectorIndexedChunkCount: 0
         )
 
-        XCTAssertEqual(stats.vectorNetDrainRatePerHour, 3_300, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(stats.vectorBacklogETAHours), 10_105.0 / 3_300.0, accuracy: 0.001)
+        XCTAssertNil(stats.vectorNetDrainRatePerHour)
+        XCTAssertNil(stats.vectorBacklogETAHours)
     }
 
     func testDashboardStatsSamplesPendingStoreQueueBeforeReadTransaction() throws {
@@ -604,26 +689,14 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains("trigramBacklogCount"))
     }
 
-    func testDashboardRendersUnavailableCoverageAsComputingWithoutNumericBar() throws {
-        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
-
-        XCTAssertTrue(source.contains("stats.signalCoverageIsAvailable"))
-        XCTAssertTrue(source.contains("isAvailable: Bool"))
-        XCTAssertTrue(source.contains("return \"computing…\""))
-        XCTAssertTrue(source.contains("if signal.isAvailable"))
-    }
-
-    func testVectorSignalDetailMountsAtRootToEscapePipelineAndScrollClips() throws {
+    func testVectorSignalDetailMountsAtRootToEscapeDetailsAndScrollClips() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let bodyRange = try XCTUnwrap(source.range(of: "var body: some View"))
-        let pipelinePanelRange = try XCTUnwrap(source.range(of: "private func pipelinePanel"))
-        // Redesign (feat/brainbar-dashboard-redesign): the old single `writesCard`
-        // helper was split into `writeCardsBand` (+ per-series card helpers). The
-        // band helper is the first function after `pipelinePanel`, so it remains
-        // the correct lower bound for slicing the pipeline-panel source.
-        let writesCardRange = try XCTUnwrap(source[pipelinePanelRange.upperBound...].range(of: "private func writeCardsBand"))
-        let bodySource = String(source[bodyRange.lowerBound..<pipelinePanelRange.lowerBound])
-        let pipelinePanelSource = String(source[pipelinePanelRange.lowerBound..<writesCardRange.lowerBound])
+        let statusStripRange = try XCTUnwrap(source.range(of: "private var statusStrip"))
+        let bodySource = String(source[bodyRange.lowerBound..<statusStripRange.lowerBound])
+        let diagnosticsRange = try XCTUnwrap(source.range(of: "private func diagnostics"))
+        let daemonSummaryRange = try XCTUnwrap(source[diagnosticsRange.upperBound...].range(of: "private var daemonSummary"))
+        let diagnosticsSource = String(source[diagnosticsRange.lowerBound..<daemonSummaryRange.lowerBound])
         let signalColumnRange = try XCTUnwrap(source.range(of: "private func signalColumn"))
         let coverageModelRange = try XCTUnwrap(source[signalColumnRange.upperBound...].range(of: "private struct BrainBarSignalCoverage"))
         let signalColumnSource = String(source[signalColumnRange.lowerBound..<coverageModelRange.lowerBound])
@@ -636,6 +709,8 @@ final class DashboardTests: XCTestCase {
             source.contains("anchorPreference(key: VectorRowAnchorKey.self"),
             "The Vector row click path should mount the detail directly instead of only emitting an anchor preference."
         )
+        XCTAssertFalse(source.contains("vectorSignalRowFrame"), "The removed in-panel frame must not leave dead state.")
+        XCTAssertFalse(source.contains("BrainBarVectorSignalFrameKey"), "Only the root-space frame is still consumed.")
         XCTAssertTrue(
             bodySource.contains(".coordinateSpace(name: BrainBarVectorSignalCoordinateSpace.root)"),
             "The root GeometryReader should define the coordinate space used to position the unclipped Vector detail."
@@ -652,17 +727,11 @@ final class DashboardTests: XCTestCase {
             bodySource.contains(".zIndex(vectorSignalDetailExpanded ? 30 : 0)"),
             "The hoisted Vector detail needs a high zIndex above every sibling pipeline card."
         )
-        XCTAssertFalse(
-            pipelinePanelSource.contains("BrainBarVectorSignalDetail(signal: vectorSignal, compact: layout.compactCards)"),
-            "The Vector detail cannot remain inside the pipeline panel overlay because that panel clips the float."
-        )
-        XCTAssertFalse(
-            pipelinePanelSource.contains(".zIndex(vectorSignalDetailExpanded ? 1 : 0)"),
-            "The old in-panel zIndex workaround should be removed once the float lives at root level."
-        )
-        XCTAssertFalse(
-            pipelinePanelSource.contains(".padding(.top, max(0, 20 - layout.gridSpacing))"),
-            "The old in-panel spacing workaround should be removed once the float lives at root level."
+        XCTAssertTrue(
+            diagnosticsSource.contains("BrainBarDisclosureRow(") &&
+                diagnosticsSource.contains("isExpanded: $panelState.detailsExpanded") &&
+                diagnosticsSource.contains("signalCoveragePanel(layout: layout)"),
+            "Signal coverage should stay inside the one-page Details disclosure while its float mounts at the root."
         )
         XCTAssertFalse(
             signalColumnSource.contains("BrainBarVectorSignalDetail"),
@@ -682,10 +751,160 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(source.contains(".zIndex(vectorSignalDetailExpanded ? 30 : 0)"))
     }
 
+    func testDashboardDisclosureRowsUseFullWidthButtonHitTargetAndKeyboardOnlyFocusRing() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+
+        XCTAssertTrue(
+            source.contains("private struct BrainBarDisclosureRow"),
+            "Dashboard disclosures need one shared interaction contract."
+        )
+        XCTAssertTrue(
+            source.contains(".padding(.vertical, 4)\n                .frame(maxWidth: .infinity, alignment: .leading)\n                .contentShape(Rectangle())"),
+            "The label, caret, and padded row must all belong to the button hit target."
+        )
+        XCTAssertTrue(
+            source.contains(".focusEffectDisabled()"),
+            "The native pointer focus effect must be disabled so it cannot outline the container."
+        )
+        XCTAssertTrue(
+            source.contains("interaction.showsKeyboardFocusRing && (focusStateOverride ?? isFocused)"),
+            "A custom focus indicator must remain available for keyboard navigation only."
+        )
+        XCTAssertFalse(
+            source.contains("DisclosureGroup(isExpanded: $panelState.detailsExpanded)"),
+            "Details must use the full-row disclosure control instead of the caret-only native style."
+        )
+        XCTAssertFalse(
+            source.contains("DisclosureGroup(isExpanded: $replayDebtExpanded)"),
+            "Replay debt must use the full-row disclosure control instead of the caret-only native style."
+        )
+    }
+
+    func testAttentionHeadlineUsesRealDisclosurePathToRevealEveryCountedItem() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let statusStart = try XCTUnwrap(source.range(of: "private var statusStrip: some View"))
+        let statusEnd = try XCTUnwrap(source[statusStart.upperBound...].range(of: "private func summaryTiles"))
+        let statusSource = String(source[statusStart.lowerBound..<statusEnd.lowerBound])
+
+        XCTAssertEqual(
+            source.components(separatedBy: "private var statusStrip: some View").count - 1,
+            1,
+            "Mutation target statusStrip must exist exactly once."
+        )
+        for marker in ["BrainBarDisclosureRow(", "brainbar.dashboard.attention-disclosure", "attentionItems"] {
+            XCTAssertTrue(statusSource.contains(marker), "Working disclosure is missing \(marker)")
+        }
+    }
+
+    func testAttentionDisclosureLabelDoesNotRepeatTheRevealedReason() throws {
+        let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let disclosureStart = try XCTUnwrap(source.range(of: "brainbar.dashboard.attention-disclosure"))
+        let disclosureEnd = try XCTUnwrap(source[disclosureStart.upperBound...].range(of: "Spacer(minLength: 8)"))
+        let disclosureSource = String(source[disclosureStart.lowerBound..<disclosureEnd.lowerBound])
+
+        XCTAssertFalse(
+            disclosureSource.contains("if let reason = status.reason"),
+            "The collapsed control must not repeat an item that expansion reveals."
+        )
+    }
+
+    func testDetailsDisclosureAnimationRetainsContentWithoutResettingScrollOrWindow() throws {
+        let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
+        let controllerSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
+        let rowRange = try XCTUnwrap(rootSource.range(of: "private struct BrainBarDisclosureRow"))
+        let rowEnd = try XCTUnwrap(rootSource[rowRange.upperBound...].range(of: "enum BrainBarDisclosureRowPreview"))
+        let rowSource = String(rootSource[rowRange.lowerBound..<rowEnd.lowerBound])
+        let animationRange = try XCTUnwrap(controllerSource.range(of: "enum BrainBarDisclosureAnimation"))
+        let animationEnd = try XCTUnwrap(controllerSource[animationRange.upperBound...].range(of: "final class BrainBarDashboardPanel"))
+        let animationSource = String(controllerSource[animationRange.lowerBound..<animationEnd.lowerBound])
+        let panelStateRange = try XCTUnwrap(controllerSource.range(of: "final class BrainBarDashboardPanelState"))
+        let panelStateEnd = try XCTUnwrap(controllerSource[panelStateRange.upperBound...].range(of: "final class BrainBarDashboardPanelController"))
+        let panelStateSource = String(controllerSource[panelStateRange.lowerBound..<panelStateEnd.lowerBound])
+
+        XCTAssertFalse(
+            rowSource.contains("if isExpanded {\n                content()\n            }"),
+            "The content must remain mounted while its height interpolates; conditional removal recreates the one-frame blank state."
+        )
+        XCTAssertTrue(rowSource.contains("BrainBarDisclosureAnimation.containerHeight("))
+        XCTAssertTrue(rowSource.contains("BrainBarDisclosureAnimation.animation("))
+        XCTAssertTrue(
+            rowSource.contains(
+                "private func beginExpansionTransition(to expanded: Bool) {\n"
+                    + "        guard !isAnimatingExpansion else { return }"
+            ),
+            "A second activation must not race the active transition completion."
+        )
+        XCTAssertEqual(
+            animationSource.components(separatedBy: "0.25").count - 1,
+            1,
+            "The disclosure duration must have exactly one definition site."
+        )
+        XCTAssertTrue(
+            panelStateSource.contains("BrainBarDisclosureAnimation.windowHeight("),
+            "The panel driver must consume the same coupling model as the disclosure container."
+        )
+    }
+
+    func testPointerDisclosureActivationTogglesWithoutLeavingFocusRing() {
+        var interaction = BrainBarDisclosureInteractionState()
+
+        let pointerExpansion = interaction.activate(isExpanded: false, source: .pointer)
+        XCTAssertTrue(pointerExpansion)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+
+        let keyboardExpansion = interaction.activate(isExpanded: pointerExpansion, source: .keyboard)
+        XCTAssertFalse(keyboardExpansion)
+        XCTAssertTrue(interaction.showsKeyboardFocusRing)
+    }
+
+    func testDisclosureFocusChangeKeepsRingForKeyboardOnly() {
+        var interaction = BrainBarDisclosureInteractionState()
+
+        interaction.registerFocusChange(isFocused: true, source: .pointer)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+
+        interaction.registerFocusChange(isFocused: true, source: .keyboard)
+        XCTAssertTrue(interaction.showsKeyboardFocusRing)
+
+        interaction.registerFocusChange(isFocused: false, source: .keyboard)
+        XCTAssertFalse(interaction.showsKeyboardFocusRing)
+    }
+
+    @MainActor
+    func testDisclosureActivationClassifiesMouseAsPointerAndKeysAsKeyboard() throws {
+        let pointerEvent = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 0
+        ))
+        let keyEvent = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: " ",
+            charactersIgnoringModifiers: " ",
+            isARepeat: false,
+            keyCode: 49
+        ))
+
+        XCTAssertEqual(BrainBarDisclosureActivationSource.current(event: pointerEvent), .pointer)
+        XCTAssertEqual(BrainBarDisclosureActivationSource.current(event: keyEvent), .keyboard)
+        XCTAssertEqual(BrainBarDisclosureActivationSource.current(event: nil), .keyboard)
+    }
+
     func testDashboardCardTopHighlightIsClippedInsideRoundedCorners() throws {
         let source = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let styleRange = try XCTUnwrap(source.range(of: "private struct BrainBarDashboardCardStyle"))
-        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "private struct BrainBarFlowStatusPill"))
+        let nextStructRange = try XCTUnwrap(source[styleRange.upperBound...].range(of: "struct BrainBarFlowStatusPill"))
         let styleSource = String(source[styleRange.lowerBound..<nextStructRange.lowerBound])
 
         XCTAssertFalse(
@@ -706,7 +925,7 @@ final class DashboardTests: XCTestCase {
         let rootSource = try brainBarSourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let processSource = try brainBarSourceFile("Sources/BrainBar/BrainBarProcessControl.swift")
 
-        XCTAssertTrue(rootSource.contains("BrainBarAppControlMenu()"))
+        XCTAssertTrue(rootSource.contains("BrainBarAppControlMenu(databasePath:"))
         XCTAssertTrue(rootSource.contains("Restart BrainBar"))
         XCTAssertTrue(rootSource.contains("Quit BrainBar"))
         XCTAssertTrue(processSource.contains("static func restart"))
@@ -716,23 +935,6 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(processSource.contains("FileManager.default.fileExists"))
         XCTAssertTrue(processSource.contains("URL(fileURLWithPath: \"/usr/bin/open\")"))
         XCTAssertFalse(processSource.contains("URL(fileURLWithPath: \"/bin/sh\")"))
-    }
-
-    @MainActor
-    func testDashboardPanelUsesKeyWindowContractAndSettingsDismissSuppression() throws {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
-        let panel = controller.panelForTesting
-        let panelSource = try brainBarSourceFile("Sources/BrainBar/BrainBarDashboardPanelController.swift")
-        let settingsSource = try brainBarSourceFile("Sources/BrainBar/BrainBarSettingsActions.swift")
-
-        XCTAssertTrue(panel.canBecomeKey)
-        XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertFalse(panel.becomesKeyOnlyIfNeeded)
-        XCTAssertTrue(panelSource.contains("func windowWillClose(_ notification: Notification)"))
-        XCTAssertTrue(panelSource.contains("BrainBarSettingsActions.suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("private(set) static var suppressDashboardResignDismiss"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = true"))
-        XCTAssertTrue(settingsSource.contains("suppressDashboardResignDismiss = false"))
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
@@ -770,20 +972,19 @@ final class DashboardTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: markerPath))
     }
 
-    func testLegacyPopoverSparklineUsesLastFetchAnchor() throws {
-        let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/StatusPopoverView.swift")
-
-        XCTAssertTrue(source.contains("fetchedAt: collector.lastDataFetchedAt ?? Date()"))
-    }
-
     func testBrainBarLifecycleWatchdogWiresUIAndDaemonHeartbeats() throws {
         let watchdog = try brainBarSourceFile("Sources/BrainBarLifecycle/BrainBarLifecycleWatchdog.swift")
         let app = try brainBarSourceFile("Sources/BrainBar/BrainBarApp.swift")
         let server = try brainBarSourceFile("Sources/BrainBar/BrainBarServer.swift")
         let daemon = try brainBarSourceFile("Sources/BrainBarDaemon/BrainBarDaemonMain.swift")
 
-        XCTAssertTrue(watchdog.contains("brainbar-ui.heartbeat"))
-        XCTAssertTrue(watchdog.contains("brainbar-daemon.heartbeat"))
+        let home = "/Users/account502"
+        XCTAssertEqual(BrainBarLifecycleWatchdog.heartbeatPath("ui", home: home),
+                       home + "/Library/Application Support/BrainBar/ui.heartbeat")
+        XCTAssertEqual(BrainBarLifecycleWatchdog.heartbeatPath("daemon", home: home),
+                       home + "/Library/Application Support/BrainBar/daemon.heartbeat")
+        XCTAssertTrue(watchdog.contains("heartbeatPath(\"ui\", home: NSHomeDirectory())"))
+        XCTAssertTrue(watchdog.contains("heartbeatPath(\"daemon\", home: NSHomeDirectory())"))
         XCTAssertTrue(watchdog.contains("SIGTERM"))
         XCTAssertTrue(watchdog.contains("SIGKILL"))
         XCTAssertTrue(watchdog.contains("launchctl"))
@@ -831,18 +1032,24 @@ final class DashboardTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let heartbeatPath = directory.appendingPathComponent("missing.heartbeat").path
+        let heartbeatPath = directory.appendingPathComponent("stale.heartbeat").path
         let relaunched = expectation(description: "watchdog relaunches stale process")
         let state = WatchdogTestState()
+        // A heartbeat written 60 awake-seconds ago. One deterministic check
+        // (no repeating timer) so the relaunch cannot fire twice (#970 B1).
+        let writtenAt = HeartbeatClockBox(uptimeNanos: 1_000_000_000_000)
+        BrainBarLifecycleWatchdog.writeHeartbeat(to: heartbeatPath, clock: writtenAt.clock)
+        let now = HeartbeatClockBox(uptimeNanos: 1_060_000_000_000)
 
         let watchdog = BrainBarLifecycleWatchdog(
             configuration: .init(
                 watchedName: "TestBrainBar",
                 heartbeatPath: heartbeatPath,
-                staleTimeout: 0.01,
-                checkInterval: 0.01,
+                staleTimeout: 45,
+                checkInterval: 10,
                 terminateGraceInterval: 0.02,
-                relaunchCommand: .openBundle("/tmp/TestBrainBar.app")
+                relaunchCommand: .openBundle("/tmp/TestBrainBar.app"),
+                expectedExecutablePath: "/test/TestBrainBar"
             ),
             processProvider: {
                 state.processProvider()
@@ -853,12 +1060,24 @@ final class DashboardTests: XCTestCase {
             relaunch: { _ in
                 state.recordRelaunch()
                 relaunched.fulfill()
+            },
+            clock: now.clock,
+            ownerUID: 502,
+            processIdentity: { pid in
+                switch pid {
+                case 111:
+                    return .init(uid: 502, realUID: 502, startedSeconds: 1,
+                                 startedMicroseconds: 0, executablePath: "/test/TestBrainBar")
+                case 222:
+                    return .init(uid: 501, realUID: 501, startedSeconds: 2,
+                                 startedMicroseconds: 0, executablePath: "/test/TestBrainBar")
+                default: return nil
+                }
             }
         )
 
-        watchdog.start()
-        wait(for: [relaunched], timeout: 1)
-        watchdog.stop()
+        watchdog.checkNow()
+        wait(for: [relaunched], timeout: 2)
 
         let snapshot = state.snapshot()
 
@@ -933,14 +1152,13 @@ final class DashboardTests: XCTestCase {
 
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
-        XCTAssertEqual(stats.enrichedChunkCount, 1)
-        XCTAssertEqual(stats.failedEnrichmentCount, 1)
-        XCTAssertEqual(stats.skippedEnrichmentCount, 1)
+        XCTAssertEqual(stats.enrichedChunkCount, 0)
+        XCTAssertEqual(stats.failedEnrichmentCount, 0)
+        XCTAssertEqual(stats.skippedEnrichmentCount, 0)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
-        XCTAssertEqual(stats.enrichmentPercent, 100.0 / 3.0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
-        let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
-        XCTAssertLessThan(abs(lastEnrichedAt.timeIntervalSinceNow + 300), 10)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
+        XCTAssertNil(stats.lastEnrichedAt)
     }
 
     func testDashboardStatsReturnsZeroPercentForEmptyDatabase() throws {
@@ -949,7 +1167,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.chunkCount, 0)
         XCTAssertEqual(stats.enrichedChunkCount, 0)
         XCTAssertEqual(stats.pendingEnrichmentCount, 0)
-        XCTAssertEqual(stats.enrichmentPercent, 0.0, accuracy: 0.001)
+        XCTAssertEqual(stats.enrichmentPercent, 0, accuracy: 0.001)
         XCTAssertEqual(stats.recentActivityBuckets, [0, 0, 0, 0])
         XCTAssertEqual(stats.recentEnrichmentBuckets, [0, 0, 0, 0])
     }
@@ -1754,6 +1972,40 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(presentation.relativeBucketLabel(for: 2), "10m-5m ago")
     }
 
+    func testSparklineChartPresentationDisclosesPartialLatestBucketToVoiceOver() {
+        let presentation = SparklineChartPresentation(
+            label: "Recent activity sparkline",
+            values: [2, 5, 3],
+            lastBucketIsPartial: true
+        )
+
+        XCTAssertEqual(
+            presentation.accessibilityValue,
+            "latest bucket count 3, latest bucket is partial, trending down"
+        )
+    }
+
+    func testSparklineChartPresentationUsesRelativeLabelsForRestingAxes() {
+        let fetchedAt = Date(timeIntervalSince1970: 1_764_236_400)
+        let restingAxes = SparklineChartPresentation(
+            label: "Ingest",
+            values: Array(repeating: 1, count: 12),
+            activityWindowMinutes: 60,
+            fetchedAt: fetchedAt,
+            showsRestingAxes: true
+        )
+        let hoverOnlyAxes = SparklineChartPresentation(
+            label: "Other chart",
+            values: Array(repeating: 1, count: 12),
+            activityWindowMinutes: 60,
+            fetchedAt: fetchedAt
+        )
+
+        XCTAssertEqual(restingAxes.xAxisLabel(for: 0), "1h-55m ago")
+        XCTAssertEqual(restingAxes.xAxisLabel(for: 11), "last 5m")
+        XCTAssertEqual(hoverOnlyAxes.xAxisLabel(for: 0), hoverOnlyAxes.bucketLabel(for: 0))
+    }
+
     func testSparklineChartPresentationNamesHoverBucketsByRecency() {
         let now = Date(timeIntervalSince1970: 1_764_236_400)
         let presentation = SparklineChartPresentation(
@@ -1883,9 +2135,9 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(sparse.nonZeroFraction(.primary), 0.2, accuracy: 0.001)
         XCTAssertFalse(sparse.isDense(.primary))
         XCTAssertTrue(sparse.isDense(.secondary))
-        XCTAssertEqual(sparse.axisMax, 5)
-        XCTAssertEqual(sparse.tightAxisMax, 3)
-        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 3])
+        XCTAssertEqual(sparse.axisMax, 4)
+        XCTAssertEqual(sparse.tightAxisMax, 4)
+        XCTAssertEqual(sparse.tightYAxisTicks, [0, 2, 4])
 
         let larger = SparklineChartPresentation(
             label: "Writes over 30m",
@@ -1896,6 +2148,51 @@ final class DashboardTests: XCTestCase {
 
         XCTAssertEqual(larger.tightAxisMax, larger.axisMax)
         XCTAssertEqual(larger.axisMax, 10)
+    }
+
+    func testSparklineAxisCeilingStaysJustAboveTheObservedPeak() {
+        let presentation = SparklineChartPresentation(
+            label: "Writes over 30m",
+            values: [0, 51, 71],
+            activityWindowMinutes: 30,
+            fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+        )
+
+        XCTAssertEqual(presentation.axisMax, 80)
+        XCTAssertEqual(presentation.tightAxisMax, 80)
+        XCTAssertGreaterThan(presentation.axisMax, presentation.maxValue)
+        XCTAssertLessThanOrEqual(Double(presentation.axisMax) / Double(presentation.maxValue), 1.15)
+        XCTAssertEqual(presentation.tightYAxisTicks, [0, 40, 80])
+    }
+
+    func testSparklineAxisCeilingKeepsBoundedHeadroomAcrossMagnitudeBoundaries() {
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "Single write", values: [1]).axisMax,
+            1,
+            "A peak of one is the intentional integer exception to strict headroom."
+        )
+
+        let examples = [
+            (peak: 11, ceiling: 12),
+            (peak: 101, ceiling: 120),
+            (peak: 1_001, ceiling: 1_200),
+        ]
+
+        for example in examples {
+            let presentation = SparklineChartPresentation(
+                label: "Writes over 30m",
+                values: [0, example.peak],
+                activityWindowMinutes: 30,
+                fetchedAt: Date(timeIntervalSince1970: 1_764_236_400)
+            )
+
+            XCTAssertEqual(presentation.axisMax, example.ceiling)
+            XCTAssertGreaterThan(presentation.axisMax, example.peak)
+            XCTAssertLessThanOrEqual(
+                Double(presentation.axisMax) / Double(example.peak),
+                1.20
+            )
+        }
     }
 
     func testSparklineCompactMarkersPreferLatestPointForSparseSeries() {
@@ -2134,6 +2431,17 @@ final class DashboardTests: XCTestCase {
         )
     }
 
+    func testDashboardMetricFormatterCapsOldRelativeEventsAtTwoDays() {
+        let now = Date(timeIntervalSince1970: 1_764_236_400)
+        XCTAssertEqual(
+            DashboardMetricFormatter.relativeEventString(
+                lastEventAt: now.addingTimeInterval(-(14 * 24 * 3600)),
+                now: now
+            ),
+            "2d+ ago"
+        )
+    }
+
     func testSparklineRendererCompactClassificationMatchesEndpointAndChartPadding() {
         XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 52, height: 116)))
         XCTAssertTrue(SparklineRenderer.isCompact(size: NSSize(width: 300, height: 20)))
@@ -2264,8 +2572,8 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.recentActivityBuckets.reduce(0, +), 0)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
-        XCTAssertGreaterThan(stats.enrichmentRatePerMinute, 0)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
+        XCTAssertEqual(stats.enrichmentRatePerMinute, 0)
     }
 
     func testDashboardStatsCurrentEnrichmentRateDropsToZeroWhenPipelineIsIdle() throws {
@@ -2287,7 +2595,7 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardStatsTreatsNinetySecondStallAsIdle() throws {
@@ -2309,7 +2617,7 @@ final class DashboardTests: XCTestCase {
         let stats = try db.dashboardStats(activityWindowMinutes: 30, bucketCount: 6)
 
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardStatsCarriesExplicitWindowMetadataAndLastEventTimestamps() throws {
@@ -2335,12 +2643,9 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(stats.bucketCount, 12)
         XCTAssertEqual(stats.liveWindowMinutes, 1)
         XCTAssertNotNil(stats.lastWriteAt)
-        XCTAssertNotNil(stats.lastEnrichedAt)
-        let lastWriteAt = try XCTUnwrap(stats.lastWriteAt)
-        let lastEnrichedAt = try XCTUnwrap(stats.lastEnrichedAt)
-        XCTAssertGreaterThan(lastWriteAt, lastEnrichedAt)
+        XCTAssertNil(stats.lastEnrichedAt)
         XCTAssertEqual(stats.enrichmentRatePerMinute, 0, accuracy: 0.001)
-        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        XCTAssertEqual(stats.recentEnrichmentBuckets.reduce(0, +), 0)
     }
 
     func testDashboardDataVersionChangesAfterExternalWrite() throws {
@@ -2365,6 +2670,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0.05
         )
         defer { collector.stop() }
@@ -2403,6 +2709,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
@@ -2441,6 +2748,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
@@ -2486,6 +2794,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             brainBusEvents: eventSource
         )
         defer { collector.stop() }
@@ -2514,6 +2823,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             brainBusEvents: eventSource
         )
         defer { collector.stop() }
@@ -2535,6 +2845,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0.05,
             autoRefreshInterval: 60,
             brainBusEvents: eventSource
@@ -2558,6 +2869,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 60,
             brainBusEvents: eventSource
@@ -2577,80 +2889,74 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testBrainBusDataEventRefreshesEnrichmentBucketsWithoutLongCoalesceDelay() async throws {
+    func testBrainBusEnrichmentEventDoesNotScheduleDashboardReads() async throws {
         let eventSource = RecordingBrainBusEventSource()
+        let reads = DashboardReadCounter()
+        let path = tempDBPath!
         let collector = StatsCollector(
-            dbPath: tempDBPath,
+            dbPath: path,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
+            liveStatsRefreshDelay: 60,
             autoRefreshInterval: 60,
-            brainBusEvents: eventSource
+            brainBusEvents: eventSource,
+            observeDatabaseChanges: false, // Isolate BrainBus from system-wide Darwin traffic.
+            dashboardStatsProvider: {
+                reads.record()
+                let reader = BrainDatabase(path: path)
+                defer { reader.close() }
+                return try reader.dashboardStats(includeSignalCoverage: false)
+            },
+            signalCoverageStartDelay: 60
         )
         defer { collector.stop() }
-
         collector.start()
-        try await waitForCollector(collector) { $0.lastDataFetchedAt != nil }
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 0)
-
-        try db.insertChunk(
-            id: "brain-bus-live-enrichment",
-            content: "BrainBus enrichment events should refresh the dashboard chart promptly",
-            sessionId: "dashboard",
-            project: "brainlayer",
-            contentType: "assistant_text",
-            importance: 5
-        )
-        db.exec("""
-            UPDATE chunks
-            SET enriched_at = datetime('now'),
-                enrich_status = 'success'
-            WHERE id = 'brain-bus-live-enrichment'
-        """)
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+        let completedReads = reads.count
+        XCTAssertGreaterThan(completedReads, 0)
+        XCTAssertFalse(collector.hasPendingStatsRefresh)
 
         eventSource.publish(.enrichStatus("running"))
-
-        try await waitForCollector(collector, timeout: 0.5) {
-            $0.stats.recentEnrichmentBuckets.reduce(0, +) == 1
-        }
-
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.enrichStatus == "running" }
+        XCTAssertEqual(collector.lastDataFetchedAt, fetchedAt)
+        XCTAssertEqual(reads.count, completedReads)
+        XCTAssertFalse(collector.isRefreshing)
+        XCTAssertFalse(collector.hasPendingStatsRefresh, "Enrichment must not schedule a future dashboard read")
+        XCTAssertEqual(collector.stats.recentEnrichmentCount, 0)
+        eventSource.publish(.queueDepth(1))
+        try await waitForCollector(collector) { $0.heartbeat.lastEvent?.queueDepth == 1 }
+        XCTAssertTrue(collector.hasPendingStatsRefresh, "Retained queue events still schedule reads")
     }
 
     @MainActor
-    func testManualRefreshRepopulatesRecentEnrichmentBuckets() async throws {
+    func testManualRefreshCompletesAndUpdatesRetainedIngestMetrics() async throws {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 60
         )
         defer { collector.stop() }
-
         collector.refresh(force: true)
-        try await waitForCollector(collector) { !$0.isRefreshing }
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 0)
-
+        try await waitForCollector(collector) { !$0.isRefreshing && $0.lastDataFetchedAt != nil }
+        let fetchedAt = try XCTUnwrap(collector.lastDataFetchedAt)
+        let chunksBefore = collector.stats.chunkCount
         try db.insertChunk(
-            id: "manual-refresh-enrichment",
-            content: "Manual refresh should repopulate the enrichment sparkline buckets",
-            sessionId: "dashboard",
-            project: "brainlayer",
-            contentType: "assistant_text",
-            importance: 5
+            id: "manual-refresh-ingest",
+            content: "Manual refresh updates retained ingest metrics without reading enrichment metadata",
+            sessionId: "dashboard", project: "brainlayer", contentType: "assistant_text", importance: 5
         )
-        db.exec("""
-            UPDATE chunks
-            SET created_at = datetime('now', '-45 minutes'),
-                enriched_at = datetime('now'),
-                enrich_status = 'success'
-            WHERE id = 'manual-refresh-enrichment'
-        """)
-
+        db.exec("UPDATE chunks SET created_at=datetime('now'), enriched_at=datetime('now'), enrich_status='success' WHERE id='manual-refresh-ingest'")
         collector.manualRefresh()
-        try await waitForCollector(collector) { $0.stats.recentEnrichmentBuckets.reduce(0, +) == 1 }
-
-        XCTAssertEqual(collector.stats.recentEnrichmentCount, 1)
-        XCTAssertEqual(collector.stats.recentEnrichmentBuckets.reduce(0, +), 1)
+        try await waitForCollector(collector) {
+            $0.lastDataFetchedAt != fetchedAt && !$0.isRefreshing && !$0.isManualRefreshInProgress
+        }
+        XCTAssertEqual(collector.stats.chunkCount, chunksBefore + 1)
+        XCTAssertEqual(collector.stats.recentWriteCount, 1)
+        XCTAssertEqual(collector.stats.recentEnrichmentCount, 0)
     }
 
     @MainActor
@@ -2667,7 +2973,8 @@ final class DashboardTests: XCTestCase {
 
         let collector = StatsCollector(
             dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic
         )
         defer { collector.stop() }
 
@@ -2716,7 +3023,8 @@ final class DashboardTests: XCTestCase {
 
         let collector = StatsCollector(
             dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic
         )
         defer { collector.stop() }
 
@@ -2734,22 +3042,48 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatsCollectorDoesNotResampleAgentActivityOnEveryMutationRefresh() throws {
+    func testStatsCollectorDoesNotResampleAgentActivityOnEveryMutationRefresh() async throws {
         let sampleCounter = AgentActivitySampleCounter()
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
-            agentActivityMonitor: AgentActivityMonitor(snapshotProvider: {
-                sampleCounter.snapshot()
-            })
+            agentActivityMonitor: AgentActivityMonitor(
+                snapshotProvider: { sampleCounter.snapshot() },
+                executablePathResolver: { _ in nil }
+            )
         )
         defer { collector.stop() }
 
         collector.refresh(force: true)
         collector.refresh(force: false)
         collector.refresh(force: false)
+        try await waitForCollector(collector) { _ in sampleCounter.count >= 1 }
+        try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(sampleCounter.count, 1)
+    }
+
+    /// #987 R3: a sample runs `ps` and then `proc_pidpath` for each candidate PID, so it
+    /// runs off the main actor, like the daemon sample (#972), and publishes when done.
+    @MainActor
+    func testStatsCollectorSamplesAgentActivityOffTheMainThread() async throws {
+        let sampleCounter = AgentActivitySampleCounter()
+        let collector = StatsCollector(
+            dbPath: tempDBPath,
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: AgentActivityMonitor(
+                snapshotProvider: { sampleCounter.snapshot() },
+                executablePathResolver: { _ in nil }
+            )
+        )
+        defer { collector.stop() }
+
+        collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.agentActivity.isMeasured }
+
+        XCTAssertEqual(sampleCounter.count, 1)
+        XCTAssertEqual(sampleCounter.mainThreadSamples, 0, "agent activity was sampled on the main thread")
+        XCTAssertTrue(collector.agentActivity.isMeasured)
     }
 
     @MainActor
@@ -2766,6 +3100,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0.05
         )
         defer { collector.stop() }
@@ -2793,6 +3128,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60,
             autoRefreshInterval: 0.05,
             brainBusEvents: nil
@@ -2832,6 +3168,7 @@ final class DashboardTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: brokenPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 60
         )
         defer { collector.stop() }
@@ -2868,31 +3205,20 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testMakeUIStatsCollectorUsesDiscoveredDaemonPIDWhenProvided() throws {
+    func testMakeUIStatsCollectorUsesDiscoveredDaemonPIDWhenProvided() async throws {
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: tempDBPath,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil,
-            daemonPIDProvider: { ProcessInfo.processInfo.processIdentifier }
+            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
         )
         defer { collector.stop() }
 
         collector.refresh(force: true)
+        try await waitForCollector(collector) { $0.daemon != nil }
 
         let snapshot = try XCTUnwrap(collector.daemon)
         XCTAssertEqual(snapshot.pid, ProcessInfo.processInfo.processIdentifier)
-    }
-
-    func testDaemonPIDFileIgnoresPIDForNonDaemonProcess() throws {
-        let pidFile = URL(fileURLWithPath: tempDBPath).deletingLastPathComponent()
-            .appendingPathComponent("brainbar-daemon-\(UUID().uuidString).pid")
-        try "\(ProcessInfo.processInfo.processIdentifier)\n".write(
-            to: pidFile,
-            atomically: true,
-            encoding: .utf8
-        )
-        defer { try? FileManager.default.removeItem(at: pidFile) }
-
-        XCTAssertNil(BrainBarAppSupport.daemonPIDFromFile(pidFile.path))
     }
 
     func test_DashboardFlowSummary_renders_lanes_with_nil_daemon_snapshot() {
@@ -2916,10 +3242,8 @@ final class DashboardTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .live)
-        XCTAssertEqual(summary.enrichment.status, .live)
         XCTAssertNotEqual(summary.queue.status, .unavailable)
         XCTAssertEqual(summary.ingress.volumeText, "3 in 30m")
-        XCTAssertEqual(summary.enrichment.volumeText, "2 in 30m")
     }
 
     func testPipelineStateTreatsMissingDaemonSnapshotAsIdleWhenDatabaseIsSettled() {
@@ -2989,7 +3313,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(state, .indexing)
     }
 
-    func testPipelineStateReportsEnrichingWhenBacklogExistsWithoutFreshWrites() {
+    func testPipelineStateReportsIdleWhenBacklogExistsWithoutFreshWrites() {
         let stats = DashboardStats(
             chunkCount: 20,
             enrichedChunkCount: 12,
@@ -3011,7 +3335,7 @@ final class DashboardTests: XCTestCase {
 
         let state = PipelineState.derive(daemon: daemon, stats: stats)
 
-        XCTAssertEqual(state, .enriching)
+        XCTAssertEqual(state, .idle)
     }
 
     func testPipelineStateReportsIdleForHealthySettledSystem() {
@@ -3040,30 +3364,17 @@ final class DashboardTests: XCTestCase {
     }
 
     @MainActor
-    func testStatusPopoverViewIsAppKitViewController() {
-        let collector = StatsCollector(
-            dbPath: tempDBPath,
-            daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier)
-        )
-        defer { collector.stop() }
-
-        let viewController = StatusPopoverView(collector: collector)
-
-        XCTAssertFalse(viewController.isViewLoaded)
-        _ = viewController.view
-        XCTAssertTrue(viewController.isViewLoaded)
-    }
-
-    @MainActor
     private func waitForCollector(
         _ collector: StatsCollector,
         timeout: TimeInterval = 2.0,
+        file: StaticString = #filePath, line: UInt = #line,
         until predicate: (StatsCollector) -> Bool
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !predicate(collector), Date() < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }
+        XCTAssertTrue(predicate(collector), "Collector wait timed out without satisfying its predicate", file: file, line: line)
     }
 
     private static func absoluteTime(_ date: Date) -> String {
@@ -3107,6 +3418,7 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
 private final class AgentActivitySampleCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var samples = 0
+    private var onMainThread = 0
 
     deinit {}
 
@@ -3114,9 +3426,15 @@ private final class AgentActivitySampleCounter: @unchecked Sendable {
         lock.withLock { samples }
     }
 
+    var mainThreadSamples: Int {
+        lock.withLock { onMainThread }
+    }
+
     func snapshot() -> String {
+        let isMain = Thread.isMainThread
         lock.withLock {
             samples += 1
+            if isMain { onMainThread += 1 }
         }
         return ""
     }
@@ -3250,4 +3568,11 @@ private func writeDashboardPendingStoreQueue(count: Int, to path: URL) throws {
         """
     }
     try lines.joined(separator: "\n").appending("\n").write(to: path, atomically: true, encoding: .utf8)
+}
+
+private final class DashboardReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.withLock { value } }
+    func record() { lock.withLock { value += 1 } }
 }

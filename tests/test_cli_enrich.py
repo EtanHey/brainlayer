@@ -1,34 +1,33 @@
 """Tests for brainlayer enrichment and maintenance CLI routing."""
 
 import json
-import os
-import signal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 
 from brainlayer.cli import app
+from tests.retirement_helpers import forbid_enrichment_controller
 
 runner = CliRunner()
 
 
-def test_cli_enrich_mode_realtime_routes_to_controller(monkeypatch):
+def _assert_enrichment_retired(result):
+    assert result.exit_code == 1
+    assert "Enrichment has been retired" in result.stdout
+
+
+def test_cli_enrich_mode_realtime_does_not_call_controller(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     monkeypatch.setattr("brainlayer.vector_store.VectorStore", lambda path: MagicMock())
     called = {}
 
-    def fake_realtime(store, limit=25, since_hours=24, **kwargs):
-        called.update({"store": store, "limit": limit, "since_hours": since_hours, **kwargs})
-        return SimpleNamespace(mode="realtime", attempted=1, enriched=1, skipped=0, failed=0, errors=[])
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.enrich_realtime", fake_realtime)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--limit", "9", "--since-hours", "12"])
 
-    assert result.exit_code == 0
-    assert called["limit"] == 9
-    assert called["since_hours"] == 12
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
 def test_cli_provenance_sweep_routes_to_answer_leg(monkeypatch):
@@ -85,90 +84,43 @@ def test_cli_provenance_pending_lists_confirm_and_reject_actions(monkeypatch):
     )
 
 
-def test_cli_enrich_supervisor_routes_to_controller(monkeypatch):
+def test_cli_enrich_supervisor_does_not_call_controller(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
-    def fake_supervisor(db_path, limit=0, since_hours=0, stop_event=None):
-        called.update({"db_path": str(db_path), "limit": limit, "since_hours": since_hours, "stop_event": stop_event})
-        return SimpleNamespace(
-            mode="supervisor",
-            cycles=2,
-            attempted=3,
-            enriched=2,
-            skipped=1,
-            failed=0,
-            errors=[],
-            exit_code=0,
-        )
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor"])
 
-    assert result.exit_code == 0
-    assert called["db_path"] == "/tmp/test.db"
-    assert called["limit"] == 200000
-    assert called["since_hours"] == 87600
-    assert called["stop_event"] is not None
-    assert "mode=supervisor" in result.stdout
-    assert "cycles=2" in result.stdout
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
-def test_cli_enrich_supervisor_preserves_explicit_since_hours(monkeypatch):
+def test_cli_enrich_supervisor_rejects_explicit_since_hours(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
-    def fake_supervisor(db_path, limit=0, since_hours=0, stop_event=None):
-        called.update({"limit": limit, "since_hours": since_hours})
-        return SimpleNamespace(
-            mode="supervisor",
-            cycles=1,
-            attempted=0,
-            enriched=0,
-            skipped=0,
-            failed=0,
-            errors=[],
-            exit_code=0,
-        )
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor", "--since-hours", "8760"])
 
-    assert result.exit_code == 0
-    assert called == {"limit": 200000, "since_hours": 8760}
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
-def test_cli_enrich_supervisor_handles_sigterm_gracefully(monkeypatch):
+def test_cli_enrich_supervisor_does_not_install_signal_handlers(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
-    def fake_supervisor(db_path, stop_event=None, **kwargs):
-        os.kill(os.getpid(), signal.SIGTERM)
-        called["stop_event_set"] = stop_event.is_set()
-        return SimpleNamespace(
-            mode="supervisor",
-            cycles=1,
-            attempted=1,
-            enriched=1,
-            skipped=0,
-            failed=0,
-            errors=[],
-            exit_code=0,
-        )
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.run_enrich_supervisor", fake_supervisor)
+    forbid_enrichment_controller(monkeypatch)
 
     result = runner.invoke(app, ["enrich", "--mode", "realtime", "--supervisor"])
 
-    assert result.exit_code == 0
-    assert called["stop_event_set"] is True
-    assert "Stopping enrich supervisor" in result.stdout
-    assert "mode=supervisor" in result.stdout
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
-def test_cli_enrich_mode_batch_submit_routes_to_cloud_backfill(monkeypatch):
+def test_cli_enrich_mode_batch_submit_does_not_call_cloud_backfill(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
@@ -184,17 +136,15 @@ def test_cli_enrich_mode_batch_submit_routes_to_cloud_backfill(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill, raising=False)
 
     result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "submit", "--limit", "50"])
 
-    assert result.exit_code == 0
-    assert called["db_path"] == "/tmp/test.db"
-    assert called["sample"] == 50
-    assert called["submit_only"] is True
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
-def test_cli_enrich_mode_batch_submit_defaults_to_full_batch(monkeypatch):
+def test_cli_enrich_mode_batch_submit_does_not_submit_full_batch(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
@@ -210,17 +160,15 @@ def test_cli_enrich_mode_batch_submit_defaults_to_full_batch(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill, raising=False)
 
     result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "submit"])
 
-    assert result.exit_code == 0
-    assert called["db_path"] == "/tmp/test.db"
-    assert called["sample"] == 0
-    assert called["submit_only"] is True
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
-def test_cli_enrich_mode_batch_drain_submit_routes_to_cloud_backfill(monkeypatch):
+def test_cli_enrich_mode_batch_drain_submit_does_not_call_cloud_backfill(monkeypatch):
     monkeypatch.setattr("brainlayer.cli.get_db_path", lambda: "/tmp/test.db")
     called = {}
 
@@ -245,25 +193,21 @@ def test_cli_enrich_mode_batch_drain_submit_routes_to_cloud_backfill(monkeypatch
             }
         )
 
-    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill)
+    monkeypatch.setattr("brainlayer.cloud_backfill.run_full_backfill", fake_backfill, raising=False)
 
     result = runner.invoke(app, ["enrich", "--mode", "batch", "--phase", "drain-submit", "--limit", "50"])
 
-    assert result.exit_code == 0
-    assert called["db_path"] == "/tmp/test.db"
-    assert called["sample"] == 50
-    assert called["submit_only"] is True
-    assert called["drain_backlog"] is True
+    _assert_enrichment_retired(result)
+    assert called == {}
 
 
 def test_cli_enrich_mode_local_is_rejected():
     result = runner.invoke(app, ["enrich", "--mode", "local"])
 
-    assert result.exit_code != 0
-    assert "Invalid mode: local" in result.stdout
+    _assert_enrichment_retired(result)
 
 
-def test_cli_enrich_stats_prints_progress(monkeypatch):
+def test_cli_enrich_stats_does_not_read_progress(monkeypatch):
     store = MagicMock()
     store.get_enrichment_stats.return_value = {
         "total_chunks": 10,
@@ -277,16 +221,14 @@ def test_cli_enrich_stats_prints_progress(monkeypatch):
 
     result = runner.invoke(app, ["enrich", "--stats"])
 
-    assert result.exit_code == 0
-    assert "Total:" in result.stdout
-    assert "Enriched:" in result.stdout
-    assert "Remaining:" in result.stdout
+    _assert_enrichment_retired(result)
+    store.get_enrichment_stats.assert_not_called()
 
 
 def test_cli_enrich_invalid_mode_rejected():
     result = runner.invoke(app, ["enrich", "--mode", "wrong"])
 
-    assert result.exit_code != 0
+    _assert_enrichment_retired(result)
 
 
 def test_cli_decay_routes_to_decay_job(monkeypatch):
@@ -351,3 +293,14 @@ def test_cli_wal_checkpoint_reports_guard_timeout_as_json_error(monkeypatch):
 
     assert result.exit_code == 1
     assert json.loads(result.stdout) == {"error": "checkpoint guard acquisition timed out after 10.0s"}
+
+
+def test_retired_enrich_is_hidden_and_does_not_resolve_database(monkeypatch):
+    from typer.main import get_command
+
+    def forbidden_db():
+        raise AssertionError("retired command resolved a DB")
+
+    monkeypatch.setattr("brainlayer.cli.get_db_path", forbidden_db)
+    assert get_command(app).commands["enrich"].hidden is True
+    _assert_enrichment_retired(runner.invoke(app, ["enrich"]))

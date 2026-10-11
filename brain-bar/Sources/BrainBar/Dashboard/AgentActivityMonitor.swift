@@ -40,21 +40,39 @@ struct AgentPresence: Sendable, Equatable {
 
     var isActive: Bool { count > 0 }
 
-    var liveProcessLabel: String {
-        count == 1 ? "1 live agent process" : "\(count) live agent processes"
+    var liveSessionLabel: String {
+        count == 1 ? "1 live agent session" : "\(DashboardMetricFormatter.integerString(count)) live agent sessions"
     }
 
     var accessibilityLabel: String {
-        "\(family.label): \(liveProcessLabel) from ps"
+        "\(family.label): \(liveSessionLabel) from ps"
     }
 }
 
 struct AgentActivitySnapshot: Sendable, Equatable {
     let presences: [AgentPresence]
+    let measurement: MetricEvidenceReadability
+
+    init(
+        presences: [AgentPresence],
+        measurement: MetricEvidenceReadability = .readable
+    ) {
+        self.presences = presences
+        self.measurement = measurement
+    }
 
     static let empty = AgentActivitySnapshot(
         presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) }
     )
+
+    static func unavailable(_ reason: String) -> AgentActivitySnapshot {
+        AgentActivitySnapshot(
+            presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: 0) },
+            measurement: .unreadable(reason)
+        )
+    }
+
+    var isMeasured: Bool { measurement.isReadable }
 
     var totalActiveAgents: Int {
         presences.reduce(0) { $0 + $1.count }
@@ -65,63 +83,334 @@ struct AgentActivitySnapshot: Sendable, Equatable {
     }
 
     var summaryText: String {
+        if case let .unreadable(reason) = measurement {
+            return "Agent activity unavailable: \(reason)"
+        }
         switch totalActiveAgents {
         case 0:
-            return "No agent processes live"
+            return "No agent sessions live"
         case 1:
-            return "1 agent process live"
+            return "1 agent session live"
         default:
-            return "\(totalActiveAgents) agent processes live"
+            return "\(DashboardMetricFormatter.integerString(totalActiveAgents)) agent sessions live"
         }
     }
+
+    /// Per-CLI counts in a fixed order, zeros included, so the row never reflows.
+    var breakdownText: String {
+        Self.breakdownOrder
+            .map { "\(DashboardMetricFormatter.integerString(count(for: $0))) \($0.label)" }
+            .joined(separator: " · ")
+    }
+
+    /// The Runtime card's "Agents" value (#971).
+    var runtimeRowText: String {
+        guard isMeasured else { return summaryText }
+        let total = DashboardMetricFormatter.integerString(totalActiveAgents)
+        let sessions = totalActiveAgents == 1 ? "1 session" : "\(total) sessions"
+        return "\(sessions) · \(breakdownText)"
+    }
+
+    static let breakdownOrder: [AgentFamily] = [.claude, .codex, .gemini, .cursor]
+
+    static let countingDefinition =
+        "Agents = top-level Claude, Codex, Gemini and Cursor CLI sessions; app helpers, MCP bridges and each session's child processes are not counted."
 }
 
-final class AgentActivityMonitor {
+final class AgentActivityMonitor: Sendable {
     private let snapshotProvider: @Sendable () -> String?
+    private let executablePathResolver: @Sendable (Int32) -> String?
+    private let argv0Resolver: @Sendable (Int32) -> String?
 
-    init(snapshotProvider: @escaping @Sendable () -> String? = AgentActivityMonitor.captureProcessSnapshot) {
+    /// The live process probes are named explicitly (`.live`) where production builds a
+    /// monitor; tests inject synthetic process rows and path/argv resolvers.
+    init(
+        snapshotProvider: @escaping @Sendable () -> String?,
+        executablePathResolver: @escaping @Sendable (Int32) -> String?,
+        argv0Resolver: @escaping @Sendable (Int32) -> String? = { _ in nil }
+    ) {
         self.snapshotProvider = snapshotProvider
+        self.executablePathResolver = executablePathResolver
+        self.argv0Resolver = argv0Resolver
     }
+
+    /// The live process table: `ps` rows, and the kernel's executable path per candidate PID.
+    static let live = AgentActivityMonitor(
+        snapshotProvider: AgentActivityMonitor.captureProcessSnapshot,
+        executablePathResolver: AgentActivityMonitor.kernelExecutablePath,
+        argv0Resolver: AgentActivityMonitor.kernelArgv0
+    )
 
     func sample() -> AgentActivitySnapshot {
-        guard let snapshot = snapshotProvider() else { return .empty }
-        return Self.parse(snapshot)
+        guard let snapshot = snapshotProvider() else { return .unavailable("ps capture failed") }
+        return Self.parse(snapshot, executablePath: executablePathResolver, argv0: argv0Resolver)
     }
 
-    static func parse(_ snapshot: String) -> AgentActivitySnapshot {
-        var actualCounts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
-        var wrapperCounts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
-
-        for rawLine in snapshot.split(whereSeparator: \.isNewline) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-            let parts = line.split(maxSplits: 2, omittingEmptySubsequences: true) { $0 == " " || $0 == "\t" }
-            guard parts.count == 3 else { continue }
-
-            let executable = String(parts[1]).lowercased()
-            let command = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let lowerCommand = command.lowercased()
-
-            guard !isIgnoredProcess(executable: executable, command: lowerCommand) else { continue }
-
-            if let family = detectActualFamily(executable: executable, command: lowerCommand) {
-                actualCounts[family, default: 0] += 1
-                continue
-            }
-
-            if let family = detectWrapperFamily(executable: executable, command: lowerCommand) {
-                wrapperCounts[family, default: 0] += 1
-            }
-        }
-
-        let presences = AgentFamily.allCases.map { family in
-            let actual = actualCounts[family, default: 0]
-            let wrappers = wrapperCounts[family, default: 0]
-            return AgentPresence(family: family, count: actual > 0 ? actual : wrappers)
-        }
-
-        return AgentActivitySnapshot(presences: presences)
+    struct ProcessRow: Equatable {
+        let pid: Int32
+        let parentPID: Int32
+        /// Lowercased `ucomm` (16-character short name, may contain spaces).
+        let executable: String
+        /// Lowercased `args`.
+        let command: String
+        /// The kernel's path for this PID's executable, resolved for a row that names an agent
+        /// CLI, before it is classified. Nil when unresolved.
+        var executablePath: String? = nil
     }
+
+    /// `ucomm` is printed left-justified in a fixed MAXCOMLEN (16) column, so it can be
+    /// split off by width even when it contains spaces ("Codex (Service)").
+    static let ucommColumnWidth = 16
+
+    /// Counts agent SESSIONS (#971): a row is a candidate when it looks like an agent
+    /// CLI and is not an app-bundled helper, bridge/proxy, or non-session mode; a
+    /// candidate counts only when none of its ancestors is itself a candidate, so a
+    /// session's wrappers, MCP children and nested CLIs fold into that one session.
+    /// `executablePath` answers where a PID's executable lives (#987); it alone decides app
+    /// bundling (#990), because args text cannot say where a spaced argv[0] ends and a later
+    /// argument may name any bundle.
+    static func parse(
+        _ snapshot: String,
+        executablePath: (Int32) -> String? = { _ in nil },
+        argv0: (Int32) -> String? = { _ in nil }
+    ) -> AgentActivitySnapshot {
+        let rows = snapshot.split(whereSeparator: \.isNewline).compactMap(parseRow)
+        var parentByPID: [Int32: Int32] = [:]
+        var candidates: [Int32: AgentFamily] = [:]
+        for var row in rows {
+            parentByPID[row.pid] = row.parentPID
+            guard mentionsAnAgent(row) else { continue }
+            // The kernel path is resolved BEFORE classification (#1019 R1): it marks where a
+            // spaced argv[0] ends, so the binary, its role and its flags are read correctly.
+            row.executablePath = executablePath(row.pid)
+            guard let family = candidateFamily(row, Invocation(command: row.command, kernelPath: row.executablePath, actualArgv0: argv0(row.pid))),
+                  !isAppOrSystemExecutable(row.executablePath) else { continue }
+            candidates[row.pid] = family
+        }
+
+        var counts = Dictionary(uniqueKeysWithValues: AgentFamily.allCases.map { ($0, 0) })
+        for (pid, family) in candidates where !hasCandidateAncestor(pid, parentByPID: parentByPID, candidates: candidates) {
+            counts[family, default: 0] += 1
+        }
+
+        return AgentActivitySnapshot(
+            presences: AgentFamily.allCases.map { AgentPresence(family: $0, count: counts[$0, default: 0]) }
+        )
+    }
+
+    /// argv[0] and the arguments after it. ps prints argv joined by spaces, so a path with a space
+    /// ("AI Tools") would split into two tokens. KERN_PROCARGS2 supplies the actual argv[0],
+    /// which can differ from proc_pidpath when launched through a symlink (#1022).
+    struct Invocation: Equatable {
+        let argv0: String
+        let arguments: [String]
+
+        init(command: String, kernelPath: String?, actualArgv0: String? = nil) {
+            let path = kernelPath?.lowercased() ?? ""
+            let actual = actualArgv0?.lowercased() ?? ""
+            let rest: Substring
+            if !actual.isEmpty, command == actual || command.hasPrefix(actual + " ") {
+                argv0 = actual
+                rest = command.dropFirst(actual.count)
+            } else if !path.isEmpty, command == path || command.hasPrefix(path + " ") {
+                argv0 = path
+                rest = command.dropFirst(path.count)
+            } else {
+                let first = command.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+                argv0 = first.first.map(String.init) ?? ""
+                rest = first.count > 1 ? first[1] : ""
+            }
+            arguments = rest.split(whereSeparator: \.isWhitespace).map(String.init)
+        }
+
+        /// The executable's file name, e.g. `claude` for `/Users/u/AI Tools/claude`.
+        var binary: String { argv0.split(separator: "/").last.map(String.init) ?? argv0 }
+    }
+
+    /// Only rows that name an agent CLI somewhere are classified, and only those pay for a
+    /// kernel path lookup.
+    private static func mentionsAnAgent(_ row: ProcessRow) -> Bool {
+        ["claude", "codex", "gemini", "cursor", "agy"].contains { row.command.contains($0) || row.executable.contains($0) }
+    }
+
+    static func parseRow(_ rawLine: Substring) -> ProcessRow? {
+        var rest = rawLine.drop(while: \.isWhitespace)
+        guard let pidEnd = rest.firstIndex(where: \.isWhitespace),
+              let pid = Int32(rest[..<pidEnd]) else { return nil }
+        rest = rest[pidEnd...].drop(while: \.isWhitespace)
+        guard let parentEnd = rest.firstIndex(where: \.isWhitespace),
+              let parentPID = Int32(rest[..<parentEnd]) else { return nil }
+        rest = rest[rest.index(after: parentEnd)...]
+
+        let executable: Substring
+        let command: Substring
+        if rest.count > ucommColumnWidth,
+           rest[rest.index(rest.startIndex, offsetBy: ucommColumnWidth)] == " " {
+            executable = rest.prefix(ucommColumnWidth)
+            command = rest.dropFirst(ucommColumnWidth + 1)
+        } else {
+            let parts = rest.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+            executable = parts.first ?? ""
+            command = parts.count > 1 ? parts[1] : ""
+        }
+        return ProcessRow(
+            pid: pid,
+            parentPID: parentPID,
+            executable: executable.trimmingCharacters(in: .whitespaces).lowercased(),
+            command: command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
+    }
+
+    private static func candidateFamily(_ row: ProcessRow, _ invocation: Invocation) -> AgentFamily? {
+        let executable = row.executable
+        let command = row.command
+        guard !command.isEmpty,
+              !nonSessionExecutables.contains(executable),
+              !isBridgeOrProxy(executable: executable, invocation: invocation),
+              !isNonSessionMode(invocation),
+              !isIgnoredProcess(executable: executable, invocation: invocation)
+        else { return nil }
+        return detectActualFamily(executable: executable, command: command)
+            ?? bareCLIFamilies[invocation.binary]
+            ?? detectWrapperFamily(executable: executable, command: command)
+    }
+
+    /// A CLI named by its argv[0] file name (`claude`, `/Users/u/AI Tools/claude`), including one
+    /// started with no arguments, which the "claude " detectors miss.
+    private static let bareCLIFamilies: [String: AgentFamily] = [
+        "claude": .claude,
+        "codex": .codex,
+        "gemini": .gemini,
+        "cursor-agent": .cursor,
+    ]
+
+    private static func hasCandidateAncestor(
+        _ pid: Int32,
+        parentByPID: [Int32: Int32],
+        candidates: [Int32: AgentFamily]
+    ) -> Bool {
+        var visited: Set<Int32> = [pid]
+        var current = parentByPID[pid]
+        while let ancestor = current, ancestor > 1, visited.insert(ancestor).inserted {
+            if candidates[ancestor] != nil { return true }
+            current = parentByPID[ancestor]
+        }
+        return false
+    }
+
+    /// Helpers shipped inside a desktop app bundle (ChatGPT.app's Codex framework and bundled
+    /// `codex`, Claude.app, Cursor.app) and system executables are never CLI sessions. Only
+    /// the kernel path decides (#990): a CLI under /Applications that is not in a bundle, or
+    /// whose arguments name one, is a session.
+    private static func isAppOrSystemExecutable(_ executablePath: String?) -> Bool {
+        isInsideAppBundle(executablePath) || executablePath?.lowercased().hasPrefix("/system/") == true
+    }
+
+    /// An executable inside a `*.app/Contents/` bundle is an app helper wherever the bundle
+    /// lives (#984: Codex's computer-use helper under `~/.codex/computer-use/`). That
+    /// includes any Python.app-hosted process, framework or Homebrew (#987 N1); no agent CLI
+    /// is Python-hosted today. An unresolved path is not app-bundled.
+    private static func isInsideAppBundle(_ executablePath: String?) -> Bool {
+        guard let executablePath else { return false }
+        let directories = executablePath.lowercased().split(separator: "/").dropLast()
+        return zip(directories, directories.dropFirst()).contains { $0.hasSuffix(".app") && $1 == "contents" }
+    }
+
+    /// The kernel's path for the executable `pid` is running (`proc_pidpath`, symlinks
+    /// resolved). Unlike args text, a space in it is always part of the path. Nil when the
+    /// process has exited or the kernel refuses; the caller then does not treat the row as
+    /// app-bundled.
+    static func kernelExecutablePath(_ pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN)) // PROC_PIDPATHINFO_MAXSIZE
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// KERN_PROCARGS2 stores argc, then the exec path, NUL padding, and the original
+    /// NUL-terminated argv strings. argv[0] preserves a symlink launcher path.
+    static func kernelArgv0(_ pid: Int32) -> String? {
+        var argmax: Int32 = 0
+        var argmaxSize = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.argmax", &argmax, &argmaxSize, nil, 0) == 0, argmax > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: Int(argmax))
+        var size = bytes.count
+        var mib: [Int32] = [CTL_KERN, 49, pid] // KERN_PROCARGS2 is hidden behind __APPLE_API_UNSTABLE.
+        let result = bytes.withUnsafeMutableBytes { buffer in
+            sysctl(&mib, u_int(mib.count), buffer.baseAddress, &size, nil, 0)
+        }
+        guard result == 0,
+              size > MemoryLayout<Int32>.size else { return nil }
+        return argv0(fromProcessArgs: Array(bytes.prefix(size)))
+    }
+
+    static func argv0(fromProcessArgs bytes: [UInt8]) -> String? {
+        let size = bytes.count
+        guard size > MemoryLayout<Int32>.size else { return nil }
+        let argc = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        guard argc > 0 else { return nil }
+        var offset = MemoryLayout<Int32>.size
+        guard let execEnd = bytes[offset..<size].firstIndex(of: 0) else { return nil }
+        offset = execEnd
+        while offset < size && bytes[offset] == 0 { offset += 1 }
+        guard offset < size, let argvEnd = bytes[offset..<size].firstIndex(of: 0), argvEnd > offset else { return nil }
+        return String(bytes: bytes[offset..<argvEnd], encoding: .utf8)
+    }
+
+    /// Shells, launch wrappers and text tools are never the session process: a real
+    /// CLI session is always its own row (`ucomm` = the Claude version string, codex,
+    /// node, gemini, agy …), so dropping these loses no session. It also drops a
+    /// detached helper that rewrote `$0` (cmuxlayer's inbox tail), whose ps args then
+    /// show its leftover environment, `CMUX_CLAUDE_WRAPPER_SHIM=…/claude` included.
+    private static let nonSessionExecutables: Set<String> = [
+        "sh", "bash", "zsh", "fish", "dash", "login", "env", "sudo", "nohup", "timeout",
+        "caffeinate", "script", "tmux", "screen", "perl", "tail", "cat", "sed", "less",
+    ]
+
+    private static let bridgeExecutables: Set<String> = ["brainlayer-mcp-stdio-bridge", "socat", "mcplayer"]
+
+    private static func isBridgeOrProxy(executable: String, invocation: Invocation) -> Bool {
+        // `ucomm` is truncated to 16 characters ("brainlayer-mcp-s").
+        return bridgeExecutables.contains(invocation.binary)
+            || bridgeExecutables.contains { String($0.prefix(ucommColumnWidth)) == executable }
+    }
+
+    /// Agent binaries run in a role that is not an interactive or headless session.
+    /// Each role belongs to the binary that defines it (#977 R2 B3) and is read from
+    /// its argv POSITION, never from words anywhere in the args, where they may just be
+    /// prompt text (#977 R1 B2):
+    /// - `claude --chrome-native-host` (first argument), `claude mcp serve` and
+    ///   `claude remote-control` (#982; the `--remote-control` FLAG is a session);
+    /// - `codex app-server` / `mcp-server` / `remote-control` (#982), after every global flag.
+    private static func isNonSessionMode(_ invocation: Invocation) -> Bool {
+        let arguments = invocation.arguments
+        switch invocation.binary {
+        case "claude":
+            if arguments.first == "--chrome-native-host" || arguments.first == "remote-control" { return true }
+            return arguments.count >= 2 && arguments[0] == "mcp" && arguments[1] == "serve"
+        case "codex":
+            var index = 0
+            while index < arguments.count, arguments[index].hasPrefix("-") {
+                // A value-taking flag written as two tokens consumes its value too; `--x=value`
+                // and boolean flags are one token.
+                index += codexValueFlags.contains(arguments[index]) ? 2 : 1
+            }
+            guard index < arguments.count else { return false }
+            return codexNonSessionRoles.contains(arguments[index])
+        default:
+            return false
+        }
+    }
+
+    private static let codexNonSessionRoles: Set<String> = ["app-server", "mcp-server", "remote-control"]
+
+    /// `codex --help` global options that take a value (#982), lowercased as ps args are read
+    /// (`-C` is `-c`, which also takes a value). Every other flag is boolean.
+    private static let codexValueFlags: Set<String> = [
+        "-c", "--config", "--enable", "--disable", "--remote", "--remote-auth-token-env",
+        "-i", "--image", "-m", "--model", "--local-provider", "-p", "--profile",
+        "-s", "--sandbox", "--cd", "--add-dir", "-a", "--ask-for-approval",
+    ]
 
     static func runSnapshotCommand(executableURL: URL, arguments: [String]) -> String? {
         let process = Process()
@@ -145,54 +434,24 @@ final class AgentActivityMonitor {
         return String(data: data, encoding: .utf8)
     }
 
+    static let psArguments = ["-axo", "pid=,ppid=,ucomm=,args="]
+
     private static func captureProcessSnapshot() -> String? {
         runSnapshotCommand(
             executableURL: URL(fileURLWithPath: "/bin/ps"),
-            arguments: ["-axo", "pid=,ucomm=,args="]
+            arguments: psArguments
         )
     }
 
-    private static func isIgnoredProcess(executable: String, command: String) -> Bool {
-        if isAgentEntrypoint(executable: executable, command: command) {
-            return false
-        }
-
-        let noiseTokens = [
-            "/applications/claude.app",
-            "claude helper",
-            "crashpad",
-            "cursoruiviewservice",
-            "rg -n",
-            "awk ",
-            "grep ",
-            "ps -axo",
-        ]
-        if noiseTokens.contains(where: { command.contains($0) }) {
+    /// Helpers and text tools, recognised by the executable (`ucomm`) or argv[0] only (#990,
+    /// #1019 R1 B2). A word like "grep" or "crashpad" later in the ARGUMENTS is just an argument:
+    /// it never drops a real CLI. Claude.app's processes are also dropped by their kernel path.
+    private static func isIgnoredProcess(executable: String, invocation: Invocation) -> Bool {
+        let noiseNames = ["claude helper", "crashpad", "cursoruiviewservice"]
+        if noiseNames.contains(where: { executable.contains($0) || invocation.argv0.contains($0) }) {
             return true
         }
-        if executable == "rg" || executable == "awk" || executable == "grep" {
-            return true
-        }
-        return false
-    }
-
-    private static func isAgentEntrypoint(executable: String, command: String) -> Bool {
-        if executable == "agy" || executable == "codex" || executable == "cursor" {
-            return true
-        }
-        if command.hasPrefix("claude ")
-            || command.hasPrefix("codex ")
-            || command.hasPrefix("gemini ") {
-            return true
-        }
-        if commandHasCursorCLIEntryPoint(command) {
-            return true
-        }
-        if command.contains("/.bun/bin/codex")
-            || commandHasCursorAgentSession(command) {
-            return true
-        }
-        return false
+        return ["rg", "awk", "grep", "ps"].contains(executable)
     }
 
     private static func detectActualFamily(executable: String, command: String) -> AgentFamily? {

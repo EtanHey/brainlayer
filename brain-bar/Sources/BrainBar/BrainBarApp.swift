@@ -2,6 +2,20 @@ import AppKit
 import BrainBarLifecycle
 import SwiftUI
 
+enum BrainBarAppMenuCommands {
+    static let settingsSceneTitle = "Settings…"
+    static let settingsSceneEntryCount = 0
+    static let manualCommandTitles = [settingsSceneTitle]
+
+    static func isSettingsTitle(_ title: String) -> Bool {
+        title.replacingOccurrences(of: "...", with: "…") == settingsSceneTitle
+    }
+
+    static var settingsEntryCountForTesting: Int {
+        settingsSceneEntryCount + manualCommandTitles.filter(isSettingsTitle).count
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let runtime = BrainBarRuntime()
@@ -9,11 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusPopoverController: BrainBarStatusPopoverController?
     private var collector: StatsCollector?
     private var dashboardPanel: BrainBarDashboardPanelController?
-    private var quickCaptureHotkey: HotkeyManager?
+    private var toggleHotkey: HotkeyManager?
     private var pendingBrainBarURLs: [URL] = []
     private var hotkeyFileWatcher: DispatchSourceFileSystemObject?
     private var uiHeartbeatTimer: DispatchSourceTimer?
     private var daemonWatchdog: BrainBarLifecycleWatchdog?
+    private var driveAuthTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
@@ -45,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureRuntimeCallbacks()
 
         runtime.hotkeyStatus.onFallbackChange = { [weak self] in
-            self?.configureQuickCaptureHotkey()
+            self?.configureToggleHotkey()
         }
 
         let dashboardPanel = BrainBarDashboardPanelController(runtime: runtime)
@@ -59,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[BrainBar] Starting UI shell; database at %@", dbPath)
         let collector = BrainBarAppSupport.makeUIStatsCollector(
             dbPath: dbPath,
+            agentActivityMonitor: .live,
             brainBusEvents: BrainBusClient()
         )
         self.collector = collector
@@ -66,8 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         flushPendingBrainBarURLs()
 
+        // Google Drive access for backups: checked at launch and every 30 minutes, so the day-6
+        // "expires in N h" banner appears without anyone opening Backups.
+        runtime.driveAuth.install(runner: ProcessBrainLayerCLIRunner())
+        Task { [driveAuth = runtime.driveAuth] in await driveAuth.refreshStatus() }
+        driveAuthTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.runtime.driveAuth.refreshStatus() }
+        }
+
         collector.start()
-        configureQuickCaptureHotkey()
+        configureToggleHotkey()
         NSLog("[BrainBar] Runtime wired — launchMode=%@", String(describing: runtime.launchMode))
     }
 
@@ -80,8 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         uiHeartbeatTimer = nil
         daemonWatchdog?.stop()
         daemonWatchdog = nil
+        driveAuthTimer?.invalidate()
+        driveAuthTimer = nil
         hotkeyFileWatcher?.cancel()
-        quickCaptureHotkey?.stop()
+        toggleHotkey?.stop()
         collector?.stop()
     }
 
@@ -93,25 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ingestBrainBarURLs(urls)
     }
 
-    func showSearchPanel() {
-        runtime.presentQuickAction(.search)
-        showDashboardPanel()
-    }
-
-    func showQuickCapturePanel() {
-        runtime.presentQuickAction(.capture)
-        showDashboardPanel()
-    }
-
     private func configureRuntimeCallbacks() {
         runtime.onToggleRequested = { [weak self] in
             self?.toggleWindowSurface(nil)
-        }
-        runtime.onSearchRequested = { [weak self] in
-            self?.showSearchPanel()
-        }
-        runtime.onQuickCaptureRequested = { [weak self] in
-            self?.showQuickCapturePanel()
         }
     }
 
@@ -125,18 +135,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startDaemonWatchdog() {
-        let watchdog = BrainBarLifecycleWatchdog.makeDaemonWatchdog()
+        let watchdog = BrainBarLifecycleWatchdog.makeDaemonWatchdog(socketPath: BrainBarServer.defaultSocketPath())
         daemonWatchdog = watchdog
         watchdog.start()
     }
 
     @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
         guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue else {
-            NSLog("[BrainBar] URL event missing direct object: %@", event.description)
+            NSLog("[BrainBar] URL event missing direct object")
             return
         }
         guard let url = URL(string: urlString) else {
-            NSLog("[BrainBar] Malformed URL in event: %@", urlString)
+            NSLog("[BrainBar] Malformed URL in event (%d characters)", urlString.count)
             return
         }
         ingestBrainBarURLs([url])
@@ -145,7 +155,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hotkey File Watcher
 
     private static let toggleFlagPath = "/tmp/.brainbar-toggle"
-    private static let searchFlagPath = "/tmp/.brainbar-search"
 
     private func startHotkeyFileWatcher() {
         let fd = Darwin.open("/tmp", O_EVTONLY)
@@ -168,10 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(atPath: Self.toggleFlagPath)
             runtime.handleToggleRequest()
         }
-        if FileManager.default.fileExists(atPath: Self.searchFlagPath) {
-            try? FileManager.default.removeItem(atPath: Self.searchFlagPath)
-            showSearchPanel()
-        }
     }
 
     // MARK: - Menu Bar Popover
@@ -189,11 +194,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Quick Capture / Search
+    // MARK: - Hotkey
 
-    private func configureQuickCaptureHotkey() {
-        quickCaptureHotkey?.stop()
-        quickCaptureHotkey = nil
+    private func configureToggleHotkey() {
+        toggleHotkey?.stop()
+        toggleHotkey = nil
 
         guard runtime.hotkeyStatus.useCGEventTapFallback else {
             runtime.hotkeyStatus.refreshStatusLine(eventTapActive: false)
@@ -211,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hotkey = HotkeyManager(gesture: gesture)
         hotkey.configure(keycodes: [118, 129], useModifierMode: false)
         let started = hotkey.start()
-        quickCaptureHotkey = started ? hotkey : nil
+        toggleHotkey = started ? hotkey : nil
         runtime.hotkeyStatus.refreshStatusLine(eventTapActive: started)
 
         if !started {
@@ -249,50 +254,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func isReadyToHandleBrainBarURL() -> Bool {
-        true
+        dashboardPanel != nil && statusPopoverController != nil
     }
 
     private func handleBrainBarURL(_ url: URL) {
         guard let action = BrainBarURLAction.parse(url: url) else {
-            NSLog("[BrainBar] Unhandled URL %@", url.absoluteString)
+            NSLog("[BrainBar] Unhandled URL (scheme=%@ host=%@)", url.scheme ?? "", url.host ?? "")
             return
         }
 
         switch action {
         case .toggle:
             runtime.handleToggleRequest()
-        case .search:
-            showSearchPanel()
+        case .dashboard, .settings:
+            dashboardPanel?.showURLDestination(action)
         }
     }
 }
 
-@main
 struct BrainBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         Settings {
-            BrainBarSettingsView()
+            EmptyView()
         }
         .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Settings...") {
-                    BrainBarSettingsActions.openSettingsWindow()
+            CommandGroup(replacing: .appSettings) {
+                Button(BrainBarAppMenuCommands.settingsSceneTitle) {
+                    BrainBarSettingsActions.openSettingsWindow(databasePath: appDelegate.runtime.databasePath)
                 }
-
-                Button("Toggle BrainBar") {
-                    appDelegate.runtime.handleToggleRequest()
-                }
-
-                Button("Search BrainLayer") {
-                    appDelegate.showSearchPanel()
-                }
-                .keyboardShortcut("k", modifiers: [.command])
-
-                Button("Capture Note") {
-                    appDelegate.showQuickCapturePanel()
-                }
+                .keyboardShortcut(",", modifiers: [.command])
             }
         }
     }

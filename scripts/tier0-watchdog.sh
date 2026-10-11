@@ -5,11 +5,8 @@ set -u
 
 TIER0_LAUNCHCTL=${TIER0_LAUNCHCTL:-/bin/launchctl}
 TIER0_STAT=${TIER0_STAT:-/usr/bin/stat}
-TIER0_OSASCRIPT=${TIER0_OSASCRIPT:-/usr/bin/osascript}
-TIER0_CURL=${TIER0_CURL:-/usr/bin/curl}
 TIER0_DATE=${TIER0_DATE:-/bin/date}
 TIER0_ID=${TIER0_ID:-/usr/bin/id}
-TIER0_SLEEP=${TIER0_SLEEP:-/bin/sleep}
 TIER0_DIRNAME=${TIER0_DIRNAME:-/usr/bin/dirname}
 TIER0_MKDIR=${TIER0_MKDIR:-/bin/mkdir}
 TIER0_GREP=${TIER0_GREP:-/usr/bin/grep}
@@ -29,12 +26,9 @@ TIER0_HEALTH_PLIST_PATH=${TIER0_HEALTH_PLIST_PATH:-$HOME/Library/LaunchAgents/co
 TIER0_LOG_PATH=${TIER0_LOG_PATH:-$HOME/.local/share/brainlayer/logs/tier0-watchdog.log}
 TIER0_ALERT_STATE_PATH=${TIER0_ALERT_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-alert-state}
 TIER0_RUN_STATE_PATH=${TIER0_RUN_STATE_PATH:-$HOME/.local/share/brainlayer/tier0-watchdog-last-run}
-TIER0_NOTIFY_ENDPOINT=${TIER0_NOTIFY_ENDPOINT:-http://localhost:3847/notify}
 TIER0_STALE_SECONDS=${TIER0_STALE_SECONDS:-900}
 TIER0_REPEAT_ALERT_SECONDS=${TIER0_REPEAT_ALERT_SECONDS:-1800}
 TIER0_MISSED_RUN_GRACE_SECONDS=${TIER0_MISSED_RUN_GRACE_SECONDS:-600}
-TIER0_ALERT_TIMEOUT_SECONDS=${TIER0_ALERT_TIMEOUT_SECONDS:-3}
-TIER0_NOTIFY_TIMEOUT_SECONDS=${TIER0_NOTIFY_TIMEOUT_SECONDS:-3}
 
 require_positive_integer() {
     variable_name=$1
@@ -61,8 +55,6 @@ require_epoch() {
 require_positive_integer TIER0_STALE_SECONDS "$TIER0_STALE_SECONDS"
 require_positive_integer TIER0_REPEAT_ALERT_SECONDS "$TIER0_REPEAT_ALERT_SECONDS"
 require_positive_integer TIER0_MISSED_RUN_GRACE_SECONDS "$TIER0_MISSED_RUN_GRACE_SECONDS"
-require_positive_integer TIER0_ALERT_TIMEOUT_SECONDS "$TIER0_ALERT_TIMEOUT_SECONDS"
-require_positive_integer TIER0_NOTIFY_TIMEOUT_SECONDS "$TIER0_NOTIFY_TIMEOUT_SECONDS"
 
 if [ -n "${TIER0_NOW_EPOCH:-}" ]; then
     now_epoch=$TIER0_NOW_EPOCH
@@ -96,61 +88,9 @@ record_own_run() {
     printf '%s\n' "$now_epoch" > "$TIER0_RUN_STATE_PATH"
 }
 
-wait_for_alerts() {
-    remaining=$TIER0_ALERT_TIMEOUT_SECONDS
-
-    while [ "$remaining" -gt 0 ]; do
-        any_running=0
-        for child_pid in "$@"; do
-            if kill -0 "$child_pid" 2>/dev/null; then
-                any_running=1
-            fi
-        done
-        if [ "$any_running" -eq 0 ]; then
-            break
-        fi
-        if ! "$TIER0_SLEEP" 1 2>/dev/null; then
-            remaining=0
-            break
-        fi
-        remaining=$((remaining - 1))
-    done
-
-    for child_pid in "$@"; do
-        if kill -0 "$child_pid" 2>/dev/null; then
-            kill "$child_pid" 2>/dev/null || :
-        fi
-    done
-    for child_pid in "$@"; do
-        wait "$child_pid" 2>/dev/null || :
-    done
-}
-
-alert_all_channels() {
+log_incident() {
     reason=$1
-    notify_payload='{"title":"BrainLayer Tier-0 alert","body":"Health-check is unavailable or stale; see the Tier-0 log.","source":"alerts"}'
-
-    (
-        log_dir=$($TIER0_DIRNAME "$TIER0_LOG_PATH" 2>/dev/null) || exit 1
-        "$TIER0_MKDIR" -p "$log_dir" 2>/dev/null || exit 1
-        printf 'epoch=%s label=%s reason=%s\n' "$now_epoch" "$TIER0_LABEL" "$reason" >> "$TIER0_LOG_PATH"
-    ) &
-    log_pid=$!
-
-    "$TIER0_OSASCRIPT" \
-        -e 'display notification "Health-check is unavailable or stale; see the Tier-0 log." with title "BrainLayer Tier-0 watchdog"' \
-        >/dev/null 2>&1 &
-    osascript_pid=$!
-
-    "$TIER0_CURL" -fsS \
-        --max-time "$TIER0_NOTIFY_TIMEOUT_SECONDS" \
-        -X POST "$TIER0_NOTIFY_ENDPOINT" \
-        -H 'Content-Type: application/json' \
-        --data "$notify_payload" \
-        >/dev/null 2>&1 &
-    curl_pid=$!
-
-    wait_for_alerts "$log_pid" "$osascript_pid" "$curl_pid"
+    log_tier0_event "$reason"
 }
 
 should_alert() {
@@ -265,10 +205,11 @@ if [ "$failure_key" = state_stale ] && [ "$own_run_recorded" -eq 1 ] \
     exit 0
 fi
 
-# Detection and all due alert attempts intentionally precede every recovery command.
+# Detection and every due incident log intentionally precede every recovery command.
 if should_alert "$failure_key"; then
-    alert_all_channels "$failure_reason"
-    record_alert "$failure_key" || :
+    if log_incident "$failure_reason"; then
+        record_alert "$failure_key" || :
+    fi
 fi
 
 if [ "$label_loaded" -eq 0 ]; then

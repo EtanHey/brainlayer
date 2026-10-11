@@ -115,27 +115,11 @@ class TestGroqNERCaller:
         assert len(entities) == 2
         assert len(relations) == 1
 
-    def test_groq_ner_raises_named_error_when_model_is_unavailable(self):
-        """The KG caller must not hide a dead model behind an Optional result."""
-        from unittest.mock import MagicMock, patch
+    def test_direct_groq_ner_sender_is_absent(self):
+        from brainlayer.pipeline import kg_extraction_groq
 
-        import pytest
-
-        from brainlayer.pipeline.groq import GroqModelUnavailableError
-        from brainlayer.pipeline.kg_extraction_groq import call_groq_ner
-
-        mock_response = MagicMock(status_code=404)
-        mock_response.json.return_value = {"error": {"code": "model_not_found", "message": "model does not exist"}}
-
-        with (
-            patch.dict(
-                "os.environ",
-                {"GROQ_API_KEY": "gsk_test123", "BRAINLAYER_GROQ_MODEL": "retired/model"},
-            ),
-            patch("requests.post", return_value=mock_response),
-            pytest.raises(GroqModelUnavailableError, match=r"retired/model.*unavailable"),
-        ):
-            call_groq_ner("test prompt")
+        assert not hasattr(kg_extraction_groq, "call_groq_ner")
+        assert not hasattr(kg_extraction_groq, "RateLimiter")
 
     def test_multi_chunk_ner_prompt(self):
         """Multi-chunk NER prompt should include all chunk contents."""
@@ -202,6 +186,13 @@ class TestVectorStoreClose:
         assert getattr(store._local, "read_conn", None) is None
 
 
+_TEST_SEED_ENTITIES = {
+    "person": ["Person Alpha"],
+    "company": ["Example Corp"],
+    "project": ["brainlayer", "Sample Project"],
+}
+
+
 class TestEnrichmentHookFix:
     """The enrichment hook should pass seed entities and enable LLM extraction."""
 
@@ -216,17 +207,15 @@ class TestEnrichmentHookFix:
 
     def test_extract_with_seeds_finds_entities(self):
         """With real seed entities, extraction finds known names."""
-        from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
 
-        text = "Etan Heyman is building brainlayer for memory management."
-        result = extract_entities_combined(text, DEFAULT_SEED_ENTITIES, use_llm=False)
+        text = "Person Alpha is building brainlayer for memory management."
+        result = extract_entities_combined(text, _TEST_SEED_ENTITIES, use_llm=False)
         names = {e.text.lower() for e in result.entities}
-        assert "etan heyman" in names
+        assert "person alpha" in names
         assert "brainlayer" in names
 
     def test_kg_from_chunk_with_seeds(self, store):
         """extract_kg_from_chunk with seeds should create entities in KG."""
-        from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
         from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
 
         # Insert a test chunk
@@ -234,7 +223,7 @@ class TestEnrichmentHookFix:
             "INSERT INTO chunks (id, content, source, project, metadata, source_file) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 "test-chunk-1",
-                "Etan Heyman is working on brainlayer with Dor Zohar at Domica.",
+                "Person Alpha is working on brainlayer with Person Alpha at Example Corp.",
                 "test",
                 "test",
                 "{}",
@@ -245,18 +234,18 @@ class TestEnrichmentHookFix:
         stats = extract_kg_from_chunk(
             store=store,
             chunk_id="test-chunk-1",
-            seed_entities=DEFAULT_SEED_ENTITIES,
+            seed_entities=_TEST_SEED_ENTITIES,
             use_llm=False,
         )
 
-        assert stats["entities_created"] >= 3  # Etan, brainlayer, Dor, Domica
+        assert stats["entities_created"] >= 3  # Person Alpha, brainlayer, Dor, Example Corp
         assert stats["chunks_linked"] >= 3
 
         # Verify entities are in KG
         cursor = store._read_cursor()
         entities = list(cursor.execute("SELECT name, entity_type FROM kg_entities"))
         entity_names = {e[0].lower() for e in entities}
-        assert "etan heyman" in entity_names
+        assert "person alpha" in entity_names
         assert "brainlayer" in entity_names
 
     def test_explicit_mention_not_downgraded(self, store):
@@ -284,12 +273,11 @@ class TestEnrichmentHookFix:
 
     def test_kg_with_llm_mock(self, store):
         """extract_kg_from_chunk with mock LLM should extract more entities."""
-        from brainlayer.pipeline.batch_extraction import DEFAULT_SEED_ENTITIES
         from brainlayer.pipeline.kg_extraction import extract_kg_from_chunk
 
         store.conn.cursor().execute(
             "INSERT INTO chunks (id, content, source, project, metadata, source_file) VALUES (?, ?, ?, ?, ?, ?)",
-            ("test-chunk-2", "Etan Heyman deploys FastAPI to Railway.", "test", "test", "{}", "test.jsonl"),
+            ("test-chunk-2", "Person Alpha deploys FastAPI to Railway.", "test", "test", "{}", "test.jsonl"),
         )
 
         def mock_llm(prompt):
@@ -300,7 +288,7 @@ class TestEnrichmentHookFix:
                         {"text": "Railway", "type": "tool"},
                     ],
                     "relations": [
-                        {"source": "Etan Heyman", "target": "FastAPI", "type": "uses"},
+                        {"source": "Person Alpha", "target": "FastAPI", "type": "uses"},
                     ],
                 }
             )
@@ -308,7 +296,7 @@ class TestEnrichmentHookFix:
         stats = extract_kg_from_chunk(
             store=store,
             chunk_id="test-chunk-2",
-            seed_entities=DEFAULT_SEED_ENTITIES,
+            seed_entities=_TEST_SEED_ENTITIES,
             use_llm=True,
             llm_caller=mock_llm,
         )
@@ -333,26 +321,55 @@ def test_groq_rebuild_entity_payload_preserves_source_subtype():
     assert entity.start == 6
 
 
-def test_tier2_groq_ner_propagates_model_unavailable(monkeypatch):
-    from brainlayer.pipeline.groq import GroqModelUnavailableError
+@pytest.mark.parametrize("flag", ["--tier2", "--resume", "--chunks-per-call", "--limit"])
+def test_kg_rebuild_rejects_cloud_flags_before_database(monkeypatch, flag):
+    import sys
+
     from scripts import kg_rebuild
 
-    class Cursor:
-        def execute(self, _query, _params):
-            return [("chunk-1", "x" * 60)]
+    db_attempts = []
 
-    class Store:
-        def _read_cursor(self):
-            return Cursor()
+    def forbidden_db(*args, **kwargs):
+        db_attempts.append(args)
+        raise AssertionError("retired flags must not open a database")
 
-    def unavailable(_prompt):
-        raise GroqModelUnavailableError("configured Groq model is unavailable")
+    monkeypatch.setattr(kg_rebuild, "VectorStore", forbidden_db)
+    monkeypatch.setattr(sys, "argv", ["kg_rebuild", flag] + (["5"] if flag in {"--chunks-per-call", "--limit"} else []))
+    with pytest.raises(SystemExit) as error:
+        kg_rebuild.main()
+    assert error.value.code == 2
+    assert db_attempts == []
 
-    monkeypatch.setattr(kg_rebuild, "call_groq_ner", unavailable)
-    monkeypatch.setattr(kg_rebuild.RateLimiter, "wait_if_needed", lambda self: None)
 
-    with pytest.raises(GroqModelUnavailableError, match="configured Groq model"):
-        kg_rebuild.tier2_groq_ner(Store(), limit=1, chunks_per_call=1)
+def test_kg_rebuild_has_no_direct_cloud_route():
+    from scripts import kg_rebuild
+
+    assert not hasattr(kg_rebuild, "tier2_groq_ner")
+    assert not hasattr(kg_rebuild, "call_groq_ner")
+
+
+def test_local_rebuild_preserves_chunk_and_checkpoint_and_resolves_entities(store, tmp_path, monkeypatch):
+    from scripts import kg_rebuild
+
+    checkpoint = tmp_path / "progress.json"
+    checkpoint.write_text('{"tier2_processed": 41}')
+    monkeypatch.setattr(kg_rebuild, "DEFAULT_SEED_ENTITIES", _TEST_SEED_ENTITIES)
+    content = "Person Alpha builds brainlayer at Example Corp."
+    store.conn.cursor().execute(
+        "INSERT INTO chunks (id, content, source, summary, tags, metadata, source_file) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("local-rebuild", content, "test", "Historical summary", '["python"]', "{}", "synthetic.jsonl"),
+    )
+    before = list(store.conn.cursor().execute("SELECT * FROM chunks WHERE id = 'local-rebuild'"))
+    stats = kg_rebuild.tier1_seed_and_tags(store, batch_size=1)
+    assert stats["chunks_processed"] == 1
+    assert stats["entities_created"] >= 3
+    assert stats["chunks_linked"] >= 3
+    assert stats["errors"] == 0
+    assert list(store.conn.cursor().execute("SELECT * FROM chunks WHERE id = 'local-rebuild'")) == before
+    assert checkpoint.read_text() == '{"tier2_processed": 41}'
+    entity_ids = list(store.conn.cursor().execute("SELECT id FROM kg_entities ORDER BY id"))
+    kg_rebuild.tier1_seed_and_tags(store, batch_size=1)
+    assert list(store.conn.cursor().execute("SELECT id FROM kg_entities ORDER BY id")) == entity_ids
 
 
 def test_kg_rebuild_module_import_does_not_require_python_dotenv(monkeypatch):
@@ -373,3 +390,10 @@ def test_kg_rebuild_module_import_does_not_require_python_dotenv(monkeypatch):
     module = importlib.import_module("scripts.kg_rebuild")
 
     assert callable(module.extracted_entity_from_groq_payload)
+
+
+def test_unused_cloud_kg_progress_helpers_are_removed():
+    from scripts import kg_rebuild
+
+    for name in ("load_progress", "save_progress", "PROGRESS_FILE"):
+        assert not hasattr(kg_rebuild, name), name

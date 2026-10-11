@@ -5,6 +5,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -71,12 +72,6 @@ def test_active_daemon_launchd_hygiene_matrix():
             "LowPriorityIO": False,
             "KeepAlive": True,
         },
-        "scripts/launchd/com.brainlayer.enrichment.plist": {
-            "ProcessType": "Background",
-            "ExitTimeOut": 120,
-            "LowPriorityIO": False,
-            "KeepAlive": True,
-        },
         "scripts/launchd/com.brainlayer.watch.plist": {
             "ProcessType": "Background",
             "ExitTimeOut": 30,
@@ -96,8 +91,12 @@ def test_active_daemon_launchd_hygiene_matrix():
             "KeepAlive": True,
             "ThrottleInterval": 10,
         },
+        # Standard, not Background or Adaptive (Etan, 2026-09-24): Background pins the embedder at
+        # scheduler priority 4 (~5.6 vectors/min), and Adaptive only leaves Background on XPC activity,
+        # which this daemon never has. Nice 10 still yields to foreground work.
         "scripts/launchd/com.brainlayer.hotlane-brainbar.plist": {
-            "ProcessType": "Background",
+            "ProcessType": "Standard",
+            "Nice": 10,
             "ExitTimeOut": 30,
             "LowPriorityIO": True,
             "KeepAlive": True,
@@ -128,8 +127,9 @@ def test_active_daemon_launchd_hygiene_matrix():
 
     hotlane = _load("scripts/launchd/com.brainlayer.hotlane-brainbar.plist")
     hotlane_args = hotlane["ProgramArguments"]
-    assert hotlane_args[hotlane_args.index("--backlog-batch") + 1] == "4"
-    assert hotlane_args[hotlane_args.index("--enrich-limit") + 1] == "0"
+    assert hotlane_args[hotlane_args.index("--backlog-interval") + 1] == "7.0"
+    assert hotlane_args[hotlane_args.index("--backlog-batch") + 1] == "16"
+    assert not any(arg.startswith("--enrich-") for arg in hotlane_args)
 
     backup = _load("scripts/launchd/com.brainlayer.backup-daily.plist")
     assert "KeepAlive" not in backup
@@ -261,19 +261,6 @@ def test_script_launchagents_use_installed_package_imports():
         _assert_uses_installed_package_not_source_path(path, plist)
 
 
-def test_enrichment_launchagent_sources_standard_env_file_without_embedded_google_key():
-    plist = _load("scripts/launchd/com.brainlayer.enrichment.plist")
-    env = plist["EnvironmentVariables"]
-    args = plist["ProgramArguments"]
-
-    assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
-    assert env["BRAINLAYER_REQUIRE_GOOGLE_API_KEY"] == "1"
-    assert "GOOGLE_API_KEY" not in env
-    assert "__GOOGLE_API_KEY__" not in plistlib.dumps(plist).decode("utf-8")
-    assert args[:2] == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__"]
-    assert args[2:] == ["enrich", "--mode", "realtime", "--supervisor"]
-
-
 def test_all_script_launchagents_source_unified_config_file():
     for path in sorted((REPO_ROOT / "scripts/launchd").glob("com.brainlayer.*.plist")):
         plist = plistlib.loads(path.read_bytes())
@@ -374,6 +361,89 @@ def test_launchd_env_loader_required_google_key_allows_op_backed_declaration_wit
     assert result.returncode == 0
 
 
+def test_launchd_env_loader_records_real_start_before_exec(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    record_dir = tmp_path / ".local/share/brainlayer/job-runs"
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "index",
+            "XPC_SERVICE_NAME": "com.brainlayer.index",
+            "HOME": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    recorded = int((record_dir / "com.brainlayer.index.started").read_text().strip())
+    assert abs(recorded - time.time()) < 5
+
+
+def test_launchd_run_record_uses_label_when_watchdog_shares_watch_gate(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("BRAINLAYER_SYSTEM_ENABLED=1\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    record_dir = tmp_path / ".local/share/brainlayer/job-runs"
+    record_dir.mkdir(parents=True)
+    watcher_record = record_dir / "com.brainlayer.watch.started"
+    watcher_record.write_text("111\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "watch",
+            "XPC_SERVICE_NAME": "com.brainlayer.throughput-watchdog",
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert watcher_record.read_text(encoding="utf-8") == "111\n"
+    assert (record_dir / "com.brainlayer.throughput-watchdog.started").exists()
+
+
+def test_launchd_run_record_updates_even_when_env_gate_exits_78(tmp_path):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    record_dir = tmp_path / ".local/share/brainlayer/job-runs"
+    record_dir.mkdir(parents=True)
+    record = record_dir / "com.brainlayer.index.started"
+    record.write_text("111\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(loader), "/usr/bin/true"],
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "BRAINLAYER_ENV_FILE": str(tmp_path / "missing.env"),
+            "BRAINLAYER_LAUNCHD_SERVICE": "index",
+            "XPC_SERVICE_NAME": "com.brainlayer.index",
+        },
+        capture_output=True,
+        text=True,
+        timeout=2,
+        check=False,
+    )
+
+    assert result.returncode == 78
+    assert abs(int(record.read_text(encoding="utf-8").strip()) - time.time()) < 5
+
+
 def test_launchd_env_loader_rejects_world_writable_env_file(tmp_path):
     loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
     env_file = tmp_path / "brainlayer.env"
@@ -424,6 +494,33 @@ def test_launchd_env_loader_honors_service_disable_toggle(tmp_path):
 
     assert result.returncode == 0
     assert "disabled by config" in result.stderr
+
+
+@pytest.mark.parametrize("enabled, expected_exit", [("0", 0), ("1", 42)])
+def test_launchd_env_loader_honors_hotlane_toggle(tmp_path, enabled, expected_exit):
+    loader = REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text(
+        f"BRAINLAYER_LAUNCHD_HOTLANE_ENABLED={enabled}\nBRAINLAYER_DISABLED_SLEEP_SECONDS=0\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    result = subprocess.run(
+        [str(loader), "/bin/sh", "-c", "exit 42"],
+        env={
+            **os.environ,
+            "BRAINLAYER_ENV_FILE": str(env_file),
+            "BRAINLAYER_LAUNCHD_SERVICE": "hotlane-brainbar",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_exit, result.stderr
+    if enabled == "0":
+        assert "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED" in result.stderr
 
 
 def test_launchd_env_loader_normalizes_auto_enrich_false_values(tmp_path):
@@ -480,7 +577,7 @@ def test_launchd_env_loader_skip_disable_gates_still_checks_required_key(tmp_pat
     assert "GOOGLE_API_KEY not set" in result.stderr
 
 
-def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
+def test_launchd_installer_accepts_google_key_without_retired_enrichment_config(tmp_path):
     launchd_dir = tmp_path / "launchd"
     launchd_dir.mkdir()
     shutil.copy(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh", launchd_dir / "brainlayer-env-run.sh")
@@ -517,6 +614,7 @@ def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
             "HOME": str(tmp_path),
             "BRAINLAYER_BIN": "/usr/bin/true",
             "PYTHON_BIN": "/usr/bin/true",
+            "BRAINLAYER_PYTHON": "/usr/bin/true",
             "BRAINLAYER_ENV_FILE": str(env_file),
         },
         capture_output=True,
@@ -524,9 +622,7 @@ def test_launchd_installer_rejects_key_only_enrichment_config(tmp_path):
         check=False,
     )
 
-    assert result.returncode != 0
-    assert "missing BRAINLAYER_ENRICH_ENABLED" in result.stderr
-    assert "missing required enrichment config keys" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_launchd_installer_wires_health_check_target():
@@ -538,6 +634,19 @@ def test_launchd_installer_wires_health_check_target():
     assert "remove_plist health-check" in install_source
 
 
+def test_launchd_installer_wires_observability_target_for_fresh_installs():
+    install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+
+    assert "./scripts/launchd/install.sh observability" in install_source
+    assert "observability)" in install_source
+    assert "install_plist observability" in install_source
+    assert (
+        "install_many maintenance-nightly maintenance-weekly health-check log-cap observability p0-counter"
+        in install_source
+    )
+    assert "remove_plist observability" in install_source
+
+
 def test_launchd_installer_wires_t3_ingest_target():
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
 
@@ -545,6 +654,130 @@ def test_launchd_installer_wires_t3_ingest_target():
     assert "t3-ingest)" in install_source
     assert "install_plist t3-ingest" in install_source
     assert "remove_plist t3-ingest" in install_source
+
+
+def _render_t3_selection(tmp_path, settings):
+    source = (REPO_ROOT / "scripts/launchd/install.sh").read_text()
+    head = "render_t3_ingest_selection() {"
+    helper = head + source.split("\n" + head, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    env_file = tmp_path / "brainlayer.env"
+    env_file.write_text("\n".join(f'{key}="{value}"' for key, value in settings.items()) + "\n")
+    env_file.chmod(0o600)
+    rendered = tmp_path / "rendered.plist"
+    original = (REPO_ROOT / "scripts/launchd/com.brainlayer.t3-ingest.plist").read_bytes()
+    rendered.write_bytes(original)
+    harness = tmp_path / "render.sh"
+    harness.write_text(helper + '\nrender_t3_ingest_selection "$1"\n')
+    # No launchctl or model/DB access: execute the real env loader and renderer.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("BRAINLAYER_T3_") and key != "BRAINLAYER_DB"
+    }
+    env.update(
+        BRAINLAYER_ENV_FILE=str(env_file),
+        BRAINLAYER_ENV_RUN=str(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh"),
+        BRAINLAYER_PYTHON=__import__("sys").executable,
+        PYTHONPATH=str(REPO_ROOT / "src"),
+        HOME=str(tmp_path),
+    )
+    result = subprocess.run(
+        ["/bin/bash", str(harness), str(rendered)], env=env, capture_output=True, text=True, timeout=20
+    )
+    return result, rendered, original
+
+
+def test_t3_selection_default_retains_legacy_daily_schedule(tmp_path):
+    result, rendered, _ = _render_t3_selection(tmp_path, {})
+    assert result.returncode == 0, result.stderr
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"][3:7] == [
+        "--state-db",
+        str(tmp_path / ".t3/userdata/state.sqlite"),
+        "--projection-version",
+        "1",
+    ]
+    assert plist["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
+    assert "StartInterval" not in plist
+    assert plist["RunAtLoad"] is True
+
+
+def test_t3_selection_v2_paths_schedule_and_reverse_render(tmp_path):
+    destination = tmp_path / "private & data" / "brainlayer.db"
+    state = tmp_path / "source <v2>.sqlite"
+    result, rendered, _ = _render_t3_selection(
+        tmp_path,
+        {
+            "BRAINLAYER_T3_INGEST_STATE_DB": state,
+            "BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "2",
+            "BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "60",
+            "BRAINLAYER_DB": destination,
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    plist = plistlib.loads(rendered.read_bytes())
+    assert plist["ProgramArguments"][3:] == [
+        "--state-db",
+        str(state),
+        "--projection-version",
+        "2",
+        "--db",
+        str(destination),
+        "--health-path",
+        str(destination.parent / "t3-health.json"),
+    ]
+    assert "StartCalendarInterval" not in plist
+    assert plist["StartInterval"] == 60
+    assert plist["RunAtLoad"] is True
+    assert "KeepAlive" not in plist
+    result, rendered, _ = _render_t3_selection(tmp_path, {"BRAINLAYER_T3_INGEST_HEALTH_PATH": tmp_path / "health.json"})
+    assert result.returncode == 0, result.stderr
+    reverted = plistlib.loads(rendered.read_bytes())
+    assert reverted["StartCalendarInterval"] == {"Hour": 3, "Minute": 45}
+    assert "StartInterval" not in reverted
+    assert reverted["ProgramArguments"][-1] == str(tmp_path / "health.json")
+    assert not destination.exists() and not state.exists()
+
+
+@pytest.mark.parametrize("projection_version", ["1", "2"])
+def test_t3_selection_empty_health_override_uses_database_parent(tmp_path, projection_version):
+    """The real env loader may preserve a blank optional health-path setting."""
+    destination = tmp_path / "uncreated" / "copy.db"
+    state = tmp_path / "unused-source.sqlite"
+    result, rendered, _ = _render_t3_selection(
+        tmp_path,
+        {
+            "BRAINLAYER_DB": destination,
+            "BRAINLAYER_T3_INGEST_STATE_DB": state,
+            "BRAINLAYER_T3_INGEST_PROJECTION_VERSION": projection_version,
+            "BRAINLAYER_T3_INGEST_HEALTH_PATH": "",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    argv = plistlib.loads(rendered.read_bytes())["ProgramArguments"]
+    assert argv[argv.index("--health-path") + 1] == str(destination.parent / "t3-health.json")
+    assert not destination.exists() and not state.exists()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "2"},
+        {"BRAINLAYER_T3_INGEST_PROJECTION_VERSION": "3"},
+        {"BRAINLAYER_T3_INGEST_STATE_DB": "relative.sqlite"},
+        {"BRAINLAYER_DB": "relative.db"},
+        {"BRAINLAYER_T3_INGEST_HEALTH_PATH": "relative.json"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "59"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "86401"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": "1.5"},
+        {"BRAINLAYER_T3_INGEST_INTERVAL_SECONDS": ""},
+    ],
+)
+def test_t3_selection_invalid_is_atomic(tmp_path, settings):
+    result, rendered, original = _render_t3_selection(tmp_path, settings)
+    assert result.returncode != 0
+    assert "ERROR:" in result.stderr
+    assert rendered.read_bytes() == original
 
 
 def test_launchd_installer_wires_throughput_watchdog_target():
@@ -569,7 +802,7 @@ def test_launchd_installer_uses_bootstrap_not_legacy_load_unload():
 
 
 @pytest.mark.parametrize("form", ["disabled", "true"])
-@pytest.mark.parametrize("name", ["watch", "hotlane-brainbar", "enrichment"])
+@pytest.mark.parametrize("name", ["watch", "hotlane-brainbar"])
 def test_launchd_installer_load_plist_skips_operator_disabled_label(tmp_path, name, form):
     """An operator `launchctl disable` is a standing order: load_plist must not enable/bootstrap it."""
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
@@ -678,7 +911,11 @@ def test_launchd_installer_hotlane_skip_bypasses_runtime_verification(tmp_path):
         f'SCRIPT_DIR="{script_dir}"\nLAUNCH_DIR="{tmp_path}"\nLOG_DIR="{tmp_path}"\nBRAINLAYER_LOG_DIR="{tmp_path}"\n'
         "PYTHON_BIN=/usr/bin/true\nBRAINLAYER_BIN=x\nBRAINLAYER_DIR=x\nBRAINLAYER_LAUNCHD_DIR=x\nBRAINLAYER_PYTHON=x\n"
         "BRAINLAYER_ENV_FILE=x\nBRAINLAYER_ENV_RUN=x\nHOTLANE_BRAINBAR_DST=x\nLOAD_PLIST_SKIPPED=0\n"
-        "install_hotlane_brainbar_daemon() { :; }\ninstall_env_runner() { :; }\nverify_config_file() { :; }\n"
+        "install_hotlane_brainbar_daemon() { :; }\ninstall_env_runner() { :; }\n"
+        "install_job_wrapper() { BRAINLAYER_JOB_WRAPPER=x; }\n"
+        "cleanup_install_temp() { :; }\n"
+        'install_rendered_plist() { mv "$1" "$2"; PLIST_CHANGED=1; }\n'
+        "verify_config_file() { :; }\n"
         f'verify_hotlane_runtime() {{ touch "{verify_marker}"; return 1; }}\n'
         + _fn("label_disabled_by_operator")
         + _fn("load_plist")

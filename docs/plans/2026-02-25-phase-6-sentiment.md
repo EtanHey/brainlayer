@@ -1,5 +1,9 @@
 # Phase 6: Sentiment + Conversation Analysis — Implementation Plan
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Extract frustration, positive, confusion, and satisfaction signals from conversation chunks using two-tier detection (rule-based + LLM enrichment).

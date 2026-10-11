@@ -25,32 +25,8 @@ def _sanitizer():
     )
 
 
-def test_build_prompt_renders_v2_fields_and_60_40_truncation():
-    from brainlayer.pipeline.enrichment import build_prompt
-
-    head = "H" * 4800
-    middle = "M" * 1200
-    tail = "T" * 3200
-    prompt = build_prompt(
-        {
-            "content": head + middle + tail,
-            "project": "test",
-            "content_type": "user_message",
-        }
-    )
-
-    assert '"key_facts"' in prompt
-    assert '"resolved_queries"' in prompt
-    assert '"relation"' in prompt
-    assert "[...truncated middle...]" in prompt
-    assert head in prompt
-    assert tail in prompt
-    assert middle not in prompt
-    assert "{{" not in prompt
-
-
 def test_prompt_signature_emits_once_across_threads(monkeypatch):
-    from brainlayer.pipeline import enrichment
+    from brainlayer.pipeline import enrichment_prompts as enrichment
 
     writes = []
     monkeypatch.setattr(enrichment.os, "write", lambda fd, data: writes.append((fd, data)) or len(data))
@@ -67,7 +43,7 @@ def test_prompt_signature_emits_once_across_threads(monkeypatch):
 
 
 def test_prompt_signature_swallow_oserror_and_logs_debug(monkeypatch):
-    from brainlayer.pipeline import enrichment
+    from brainlayer.pipeline import enrichment_prompts as enrichment
 
     debug_logs = []
     monkeypatch.setattr(enrichment.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("pipe closed")))
@@ -84,7 +60,7 @@ def test_prompt_signature_swallow_oserror_and_logs_debug(monkeypatch):
 
 
 def test_build_external_prompt_uses_v2_truncation():
-    from brainlayer.pipeline.enrichment import build_external_prompt
+    from brainlayer.pipeline.enrichment_prompts import build_external_prompt
 
     head = "A" * 4800
     middle = "B" * 1200
@@ -105,7 +81,7 @@ def test_build_external_prompt_uses_v2_truncation():
 
 
 def test_parse_enrichment_extracts_v2_fields_and_entity_relation():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -139,7 +115,7 @@ def test_parse_enrichment_extracts_v2_fields_and_entity_relation():
 
 
 def test_parse_enrichment_keeps_legacy_resolved_query_when_plural_missing():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -159,7 +135,7 @@ def test_parse_enrichment_keeps_legacy_resolved_query_when_plural_missing():
 
 
 def test_parse_enrichment_extracts_sentiment_fields():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -180,7 +156,7 @@ def test_parse_enrichment_extracts_sentiment_fields():
 
 
 def test_parse_enrichment_rejects_invalid_sentiment_label():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -199,7 +175,7 @@ def test_parse_enrichment_rejects_invalid_sentiment_label():
 
 
 def test_parse_enrichment_skips_missing_sentiment_fields():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -217,7 +193,7 @@ def test_parse_enrichment_skips_missing_sentiment_fields():
 
 
 def test_parse_enrichment_rejects_boolean_sentiment_score():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -236,7 +212,7 @@ def test_parse_enrichment_rejects_boolean_sentiment_score():
 
 
 def test_parse_enrichment_rejects_non_finite_sentiment_score():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = """
     {
@@ -255,7 +231,7 @@ def test_parse_enrichment_rejects_non_finite_sentiment_score():
 
 
 def test_parse_enrichment_rejects_overflowing_integer_sentiment_score():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -274,7 +250,7 @@ def test_parse_enrichment_rejects_overflowing_integer_sentiment_score():
 
 
 def test_parse_enrichment_normalizes_label_lowercase():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -291,7 +267,7 @@ def test_parse_enrichment_normalizes_label_lowercase():
 
 
 def test_parse_enrichment_clamps_score_bounds():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     high = json.dumps(
         {
@@ -320,7 +296,7 @@ def test_parse_enrichment_clamps_score_bounds():
 
 
 def test_parse_enrichment_deduplicates_signals_order_preserved():
-    from brainlayer.pipeline.enrichment import parse_enrichment
+    from brainlayer.pipeline.enrichment_results import parse_enrichment
 
     raw = json.dumps(
         {
@@ -335,16 +311,6 @@ def test_parse_enrichment_deduplicates_signals_order_preserved():
 
     assert result is not None
     assert result["sentiment_signals"] == ["oops", "nah", "nah2"]
-
-
-def test_gemini_schema_supports_v2_fields():
-    from brainlayer.enrichment_controller import GEMINI_RESPONSE_SCHEMA
-
-    props = GEMINI_RESPONSE_SCHEMA["properties"]
-
-    assert "key_facts" in props
-    assert "resolved_queries" in props
-    assert "relation" in props["entities"]["items"]["properties"]
 
 
 def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
@@ -396,7 +362,7 @@ def test_update_enrichment_persists_v2_json_fields_and_fts(tmp_path):
 def test_apply_enrichment_persists_entities_and_relation_context(tmp_path):
     import json
 
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
 
     store = VectorStore(tmp_path / "test.db")
     try:

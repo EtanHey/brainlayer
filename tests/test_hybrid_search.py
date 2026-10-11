@@ -892,14 +892,14 @@ class TestHybridSearch:
         _insert_chunk(
             store,
             chunk_id="meta-noise-upper",
-            content="BRAIN_ENTITY(query='Avi') returned a tool transcript block",
+            content="BRAIN_ENTITY(query='Rina') returned a tool transcript block",
             embedding=query_embedding,
             importance=5.0,
         )
         _insert_chunk(
             store,
             chunk_id="real-hit-lower",
-            content="avi profile: whatsapp name is aviel and taba is inactive",
+            content="rina profile: whatsapp name is aviel and taba is inactive",
             embedding=[v + 0.00005 for v in query_embedding],
             importance=5.0,
         )

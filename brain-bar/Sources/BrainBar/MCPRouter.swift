@@ -8,6 +8,7 @@
 // Also handles notifications (no response) and unknown methods (error).
 
 import Foundation
+import BrainBarLifecycle
 
 final class MCPRouter: @unchecked Sendable {
     private enum ToolProfile {
@@ -156,9 +157,56 @@ final class MCPRouter: @unchecked Sendable {
     private final class PendingStoreDrainScheduler: @unchecked Sendable {
         let queue: DispatchQueue
         let registry = PendingStoreDrainRegistry()
+        let backupGate = PendingStoreBackupGate()
+        let onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
 
-        init(queue: DispatchQueue) {
+        init(
+            queue: DispatchQueue,
+            onFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)?
+        ) {
             self.queue = queue
+            self.onFlushed = onFlushed
+        }
+    }
+
+    /// Keeps a background replay from holding the pending-file lock while
+    /// VACUUM owns the write connection. Waiting here never blocks the socket.
+    private final class PendingStoreBackupGate: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var backupRequested = false
+        private var activeDrains = 0
+
+        func requestBackup() {
+            condition.lock()
+            backupRequested = true
+            condition.unlock()
+        }
+
+        func waitForDrains() {
+            condition.lock()
+            while activeDrains > 0 { condition.wait() }
+            condition.unlock()
+        }
+
+        func finishBackup() {
+            condition.lock()
+            backupRequested = false
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        func withDrain<T>(_ body: () -> T) -> T {
+            condition.lock()
+            while backupRequested { condition.wait() }
+            activeDrains += 1
+            condition.unlock()
+            defer {
+                condition.lock()
+                activeDrains -= 1
+                condition.broadcast()
+                condition.unlock()
+            }
+            return body()
         }
     }
 
@@ -167,22 +215,27 @@ final class MCPRouter: @unchecked Sendable {
     private let hybridSearchClient: HybridSearchClientProtocol?
     private let dbPath: String?
     private let hybridSearchBudget: TimeInterval
+    private let receiptStore: BrainBarOperationReceipts
     private let toolProfile: ToolProfile
     private let pendingStoreDrainScheduler: PendingStoreDrainScheduler
     private let defaultPaletteSession = PaletteSession()
     let entityCache = EntityCache()
     private static let defaultStringMaxLength = 256
     private static let defaultStringArrayMaxItems = 100
+    // Legacy index_new IDs contain the full source path plus a numeric position.
+    // Budget for a 4096-character path + suffix, with opaque-ID headroom; retain
+    // a finite protocol cap rather than truncating or rewriting persisted IDs.
+    private static let chunkIdentifierMaxLength = 8_192
     private static let stringMaxLengths: [String: Int] = [
         "action": 64,
         "agent_id": 128,
-        "chunk_id": 128,
+        "chunk_id": chunkIdentifierMaxLength,
         "content": 200_000,
         "detail": 16,
         "mode": 32,
         "name": 256,
-        "new_chunk_id": 128,
-        "old_chunk_id": 128,
+        "new_chunk_id": chunkIdentifierMaxLength,
+        "old_chunk_id": chunkIdentifierMaxLength,
         "project": 256,
         "query": 4_096,
         "reason": 1_024,
@@ -192,7 +245,7 @@ final class MCPRouter: @unchecked Sendable {
         "target_path": 4_096
     ]
     private static let stringArrayLimits: [String: (maxItems: Int, itemMaxLength: Int)] = [
-        "chunk_ids": (maxItems: 500, itemMaxLength: 128),
+        "chunk_ids": (maxItems: 500, itemMaxLength: chunkIdentifierMaxLength),
         "tags": (maxItems: 100, itemMaxLength: 128)
     ]
 
@@ -202,20 +255,28 @@ final class MCPRouter: @unchecked Sendable {
         hybridSearchBudget: TimeInterval = 0.8,
         dbPath: String? = nil,
         pendingStoreDrainQueue: DispatchQueue? = nil,
-        backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970
+        onPendingStoresFlushed: (@Sendable ([BrainDatabase.FlushedPendingStore]) -> Void)? = nil,
+        backupWriterStartedAtUnix: TimeInterval = Date().timeIntervalSince1970,
+        receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts()
     ) {
         self.toolProfile = Self.resolveToolProfile(profile)
         self.hybridSearchClient = hybridSearchClient
         self.hybridSearchBudget = max(0.001, hybridSearchBudget)
+        self.receiptStore = receiptStore
         self.dbPath = dbPath
         self.pendingStoreDrainScheduler = PendingStoreDrainScheduler(
             queue: pendingStoreDrainQueue ?? DispatchQueue(
                 label: "com.brainlayer.brainbar.pending-store-drain",
                 qos: .utility
-            )
+            ),
+            onFlushed: onPendingStoresFlushed
         )
         self.backupWriterStartedAtUnix = backupWriterStartedAtUnix
     }
+
+#if DEBUG
+    var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
+#endif
 
     private static func resolveToolProfile(_ explicitProfile: String?) -> ToolProfile {
         let environmentProfile = ProcessInfo.processInfo.environment[profileEnvironmentKey]
@@ -232,7 +293,7 @@ final class MCPRouter: @unchecked Sendable {
         default:
             if explicitProfile == nil, let rawProfile = environmentProfile {
                 let message = "BrainBar: unknown \(profileEnvironmentKey)=\(rawProfile); using core profile\n"
-                FileHandle.standardError.write(Data(message.utf8))
+                BrainBarSignalSafety.write(Data(message.utf8), to: .standardError, context: "tool profile warning")
             }
             return .core
         }
@@ -341,6 +402,21 @@ final class MCPRouter: @unchecked Sendable {
         Self.scheduleExistingPendingStoreScan(scheduler: scheduler, db: db, delay: 0)
     }
 
+    /// Resume durable stores queued while the socket's VACUUM INTO was running.
+    /// A restart also scans the same queue in setDatabases.
+    func scheduleDrainAfterBackup() {
+        guard let database else { return }
+        scheduleDrainForExistingPendingStores(db: database)
+    }
+
+    func backupSnapshotStarted() {
+        pendingStoreDrainScheduler.backupGate.requestBackup()
+    }
+
+    func backupSnapshotFinished() {
+        pendingStoreDrainScheduler.backupGate.finishBackup()
+    }
+
     private static func scheduleExistingPendingStoreScan(
         scheduler: PendingStoreDrainScheduler,
         db: BrainDatabase,
@@ -348,33 +424,35 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-            guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
-                scheduleExistingPendingStoreScan(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: min(
-                        pendingStoreDrainMaxDelay,
-                        max(pendingStoreDrainInitialDelay, delay * 2)
+            scheduler.backupGate.withDrain {
+                guard let snapshot = db.pendingStoreQueueSnapshotIfReadable() else {
+                    scheduleExistingPendingStoreScan(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: min(
+                            pendingStoreDrainMaxDelay,
+                            max(pendingStoreDrainInitialDelay, delay * 2)
+                        )
                     )
-                )
-                return
-            }
-            var scheduledAny = false
-            for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
-                scheduledAny = true
-                Self.schedulePendingStoreDrain(
-                    scheduler: scheduler,
-                    db: db,
-                    chunkID: String(identity.dropFirst("chunk:".count)),
-                    delay: Self.pendingStoreDrainInitialDelay
-                )
-            }
-            if !scheduledAny && snapshot.depth > 0 {
-                Self.scheduleIdentitylessLegacyFlush(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: Self.pendingStoreDrainInitialDelay
-                )
+                    return
+                }
+                var scheduledAny = false
+                for identity in snapshot.identityKeys where identity.hasPrefix("chunk:") {
+                    scheduledAny = true
+                    Self.schedulePendingStoreDrain(
+                        scheduler: scheduler,
+                        db: db,
+                        chunkID: String(identity.dropFirst("chunk:".count)),
+                        delay: Self.pendingStoreDrainInitialDelay
+                    )
+                }
+                if !scheduledAny && snapshot.depth > 0 {
+                    Self.scheduleIdentitylessLegacyFlush(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: Self.pendingStoreDrainInitialDelay
+                    )
+                }
             }
         }
     }
@@ -389,24 +467,29 @@ final class MCPRouter: @unchecked Sendable {
     ) {
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db, db.isOpen else { return }
-            _ = db.flushPendingStores(
-                busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
-                retries: mcpStoreRetries
-            )
-            guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
-                scheduleIdentitylessLegacyFlush(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: min(delay * 2, 60)
+            scheduler.backupGate.withDrain {
+                let flushedStores = db.flushPendingStores(
+                    busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
+                    retries: mcpStoreRetries
                 )
-                return
-            }
-            if after.depth > 0 {
-                scheduleIdentitylessLegacyFlush(
-                    scheduler: scheduler,
-                    db: db,
-                    delay: min(delay * 2, 60)
-                )
+                if !flushedStores.isEmpty {
+                    scheduler.onFlushed?(flushedStores)
+                }
+                guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
+                    scheduleIdentitylessLegacyFlush(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: min(delay * 2, 60)
+                    )
+                    return
+                }
+                if after.depth > 0 {
+                    scheduleIdentitylessLegacyFlush(
+                        scheduler: scheduler,
+                        db: db,
+                        delay: min(delay * 2, 60)
+                    )
+                }
             }
         }
     }
@@ -427,7 +510,11 @@ final class MCPRouter: @unchecked Sendable {
 
     /// Handle a parsed JSON-RPC request and return a response.
     /// Returns empty dict for notifications (no id).
-    func handle(_ request: [String: Any], session: PaletteSession? = nil) -> [String: Any] {
+    func handle(
+        _ request: [String: Any],
+        session: PaletteSession? = nil,
+        deferStoreForBackup: Bool = false
+    ) -> [String: Any] {
         let paletteSession = session ?? defaultPaletteSession
         guard let method = request["method"] as? String else {
             return jsonRPCError(id: request["id"], code: -32600, message: "Invalid request: missing method")
@@ -454,7 +541,8 @@ final class MCPRouter: @unchecked Sendable {
             return handleToolsCall(
                 id: id,
                 params: request["params"] as? [String: Any] ?? [:],
-                session: paletteSession
+                session: paletteSession,
+                deferStoreForBackup: deferStoreForBackup
             )
         case "resources/list":
             return handleResourcesList(id: id)
@@ -509,7 +597,12 @@ final class MCPRouter: @unchecked Sendable {
 
     // MARK: - tools/call
 
-    private func handleToolsCall(id: Any, params: [String: Any], session: PaletteSession) -> [String: Any] {
+    private func handleToolsCall(
+        id: Any,
+        params: [String: Any],
+        session: PaletteSession,
+        deferStoreForBackup: Bool = false
+    ) -> [String: Any] {
         guard let toolName = params["name"] as? String else {
             return jsonRPCError(id: id, code: -32602, message: "Missing tool name")
         }
@@ -534,12 +627,33 @@ final class MCPRouter: @unchecked Sendable {
             return jsonRPCError(id: id, code: -32601, message: message)
         }
 
+        let startedAt = ProcessInfo.processInfo.systemUptime
         // Dispatch to handler
         do {
             try Self.validate(arguments: arguments, for: toolName)
-            let output = try dispatchTool(name: toolName, arguments: arguments, session: session)
+            let output = try dispatchTool(
+                name: toolName,
+                arguments: arguments,
+                session: session,
+                deferStoreForBackup: deferStoreForBackup
+            )
+            if toolName == "brain_search" || toolName == "brain_store" {
+                let elapsed = Int(max(0, (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded())
+                let kind: BrainBarOperationReceipt.Kind = toolName == "brain_search" ? .search : .ingest
+                let count = toolName == "brain_search"
+                    ? BrainBarOperationReceipt.searchCount(in: output.text)
+                    : (output.metadata["stored_new"] as? Bool).map { $0 ? 1 : 0 }
+                receiptStore.record(BrainBarOperationReceipt(kind: kind, durationMillis: elapsed, count: count))
+            }
             return toolCallResult(id: id, output: output)
         } catch {
+            if toolName == "brain_search" || toolName == "brain_store" {
+                let elapsed = Int(max(0, (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded())
+                let kind: BrainBarOperationReceipt.Kind = toolName == "brain_search" ? .search : .ingest
+                receiptStore.record(BrainBarOperationReceipt(
+                    kind: kind, durationMillis: elapsed, count: nil, failed: true
+                ))
+            }
             return [
                 "jsonrpc": "2.0",
                 "id": id,
@@ -594,13 +708,14 @@ final class MCPRouter: @unchecked Sendable {
     private func dispatchTool(
         name: String,
         arguments: [String: Any],
-        session: PaletteSession
+        session: PaletteSession,
+        deferStoreForBackup: Bool = false
     ) throws -> ToolOutput {
         switch name {
         case "brain_search":
             return try handleBrainSearch(arguments)
         case "brain_store":
-            return try handleBrainStore(arguments, session: session)
+            return try handleBrainStore(arguments, session: session, deferForBackup: deferStoreForBackup)
         case "brain_get_person":
             return try handleBrainGetPerson(arguments)
         case "brain_recall":
@@ -619,8 +734,6 @@ final class MCPRouter: @unchecked Sendable {
             return try handleBrainSupersede(arguments)
         case "brain_archive":
             return try handleBrainArchive(arguments)
-        case "brain_enrich":
-            return try handleBrainEnrich(arguments)
         case "brain_subscribe":
             return try handleBrainSubscribe(arguments)
         case "brain_unsubscribe":
@@ -640,8 +753,10 @@ final class MCPRouter: @unchecked Sendable {
 
     private func handleBrainSearch(_ args: [String: Any]) throws -> ToolOutput {
         let profileStartedAt = SearchProfileLogger.now()
-        let profileQueryID = (args["_profile_query_id"] as? String)
-            ?? (SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil)
+        // This router is the trusted boundary: the profile id is always its own.
+        // A client `_profile_query_id` is ignored, never echoed, forwarded or logged;
+        // a valid shape does not make it server-chosen (#993 round 2, B1).
+        let profileQueryID = SearchProfileLogger.isEnabled ? SearchProfileLogger.newQueryID() : nil
         guard let query = args["query"] as? String else {
             throw ToolError.missingParameter("query")
         }
@@ -677,6 +792,7 @@ final class MCPRouter: @unchecked Sendable {
         )
 
         func localKGSection() -> String {
+            guard args["include_kg"] as? Bool == true else { return "" }
             let hasActiveFilters = project != nil || sourceCountsAsFilter || tag != nil || subscriberID != nil || importanceMin != nil
             if hasActiveFilters {
                 return ""
@@ -709,7 +825,8 @@ final class MCPRouter: @unchecked Sendable {
                     query: query,
                     results: typedResults,
                     total: typedResults.count,
-                    detail: args["detail"] as? String ?? "compact"
+                    detail: args["detail"] as? String ?? "compact",
+                    scopedProject: project
                 ),
                 [:]
             )
@@ -738,9 +855,20 @@ final class MCPRouter: @unchecked Sendable {
                         metadata = fallback.metadata
                         kgSection = localKGSection()
                     } else {
-                        textSection = response.text
+                        if args["detail"] as? String != "full",
+                           let structured = response.metadata["structuredContent"] as? [String: Any],
+                           let results = structured["results"] as? [[String: Any]] {
+                            textSection = TextFormatter.formatSearchResults(
+                                query: query, results: results.map(SearchResult.init(payload:)),
+                                total: structured["total"] as? Int ?? results.count,
+                                scopedProject: project
+                            ) + hybridSearchNotices(structured)
+                            kgSection = localKGSection()
+                        } else {
+                            textSection = hybridFullText(response, includeKG: args["include_kg"] as? Bool == true)
+                            kgSection = ""
+                        }
                         metadata = sanitizedHybridMetadata(response.metadata)
-                        kgSection = ""
                     }
                 } else {
                     NSLog("[BrainBar] Hybrid search helper exceeded %.3fs budget, falling back to BrainBar database search", hybridSearchBudget)
@@ -750,7 +878,7 @@ final class MCPRouter: @unchecked Sendable {
                     kgSection = localKGSection()
                 }
             } catch {
-                NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", String(describing: error))
+                NSLog("[BrainBar] Hybrid search helper failed, falling back to BrainBar database search: %@", HybridSearchHelperError.loggable(error))
                 let fallback = try searchViaBrainBarDatabase()
                 textSection = fallback.text
                 metadata = fallback.metadata
@@ -767,7 +895,7 @@ final class MCPRouter: @unchecked Sendable {
         if kgSection.isEmpty {
             return ToolOutput(text: textSection, metadata: metadata)
         }
-        return ToolOutput(text: kgSection + "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" + textSection, metadata: metadata)
+        return ToolOutput(text: kgSection + "\n\n" + textSection, metadata: metadata)
     }
 
     private func hybridSearchResponseIsEmpty(_ response: HybridSearchResponse) -> Bool {
@@ -812,6 +940,33 @@ final class MCPRouter: @unchecked Sendable {
         return try resultBox.get()?.get()
     }
 
+    private func hybridFullText(_ response: HybridSearchResponse, includeKG: Bool) -> String {
+        guard !includeKG,
+              let structured = response.metadata["structuredContent"] as? [String: Any],
+              let entity = structured["entity"] as? String,
+              let facts = structured["facts"] as? [[String: Any]], !facts.isEmpty,
+              let preamble = response.text.range(of: "\n### KG Facts for \(entity)\n"),
+              let firstResult = response.text.range(of: "\n### 1.", range: preamble.upperBound..<response.text.endIndex)
+        else { return response.text }
+        // The helper's known KG framing precedes result 1. Preserve the complete
+        // result body, including any headings inside the retrieved document.
+        return String(response.text[..<preamble.lowerBound]) + String(response.text[firstResult.lowerBound...])
+    }
+
+    private func hybridSearchNotices(_ structured: [String: Any]) -> String {
+        var notices: [String] = []
+        if structured["search_mode"] as? String == "fts_fallback" {
+            notices.append("Search mode: FTS fallback (\(structured["fallback_reason"] as? String ?? "unknown")); vector embedding was skipped.")
+        }
+        if structured["kg_degraded"] as? Bool == true {
+            notices.append("KG search degraded: \(structured["kg_degrade_reason"] as? String ?? "unknown")")
+        }
+        if structured["order"] as? String == "origin" {
+            notices.append("Order: origin (\(structured["order_scope"] as? String ?? "unknown"))")
+        }
+        return notices.isEmpty ? "" : "\n" + notices.joined(separator: "\n")
+    }
+
     private func sanitizedHybridMetadata(_ metadata: [String: Any]) -> [String: Any] {
         var allowed: [String: Any] = [:]
         if let structuredContent = metadata["structuredContent"] {
@@ -851,13 +1006,28 @@ final class MCPRouter: @unchecked Sendable {
         return arguments
     }
 
-    private func handleBrainStore(_ args: [String: Any], session: PaletteSession) throws -> ToolOutput {
+    private func handleBrainStore(
+        _ args: [String: Any],
+        session: PaletteSession,
+        deferForBackup: Bool = false
+    ) throws -> ToolOutput {
         guard let content = args["content"] as? String else {
             throw ToolError.missingParameter("content")
         }
         let tags = args["tags"] as? [String] ?? []
         let importance = args["importance"] as? Int ?? 5
         let project = args["project"] as? String
+        if deferForBackup {
+            return try queueBrainStore(
+                content: content,
+                tags: tags,
+                importance: importance,
+                source: "mcp",
+                project: project,
+                conversationID: session.conversationID,
+                reason: "BACKUP_SNAPSHOT"
+            )
+        }
         guard let db = database else {
             return try queueBrainStore(
                 content: content,
@@ -886,7 +1056,9 @@ final class MCPRouter: @unchecked Sendable {
                 return ToolOutput(
                     text: Formatters.formatStoreResult(
                         chunkId: stored.chunkID,
-                        tags: tags,
+                        // Echo what was stored, not what was sent (#962 review N3):
+                        // the receipt lands in the agent transcript.
+                        tags: tags.map { SecretScrubber.scrub($0).text },
                         outcome: stored.outcome,
                         useColor: false
                     ),
@@ -960,13 +1132,15 @@ final class MCPRouter: @unchecked Sendable {
 
         scheduler.queue.asyncAfter(deadline: .now() + delay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-            drainPendingStoreTarget(
-                scheduler: scheduler,
-                db: db,
-                chunkID: chunkID,
-                drainKey: drainKey,
-                delay: delay
-            )
+            scheduler.backupGate.withDrain {
+                drainPendingStoreTarget(
+                    scheduler: scheduler,
+                    db: db,
+                    chunkID: chunkID,
+                    drainKey: drainKey,
+                    delay: delay
+                )
+            }
         }
     }
 
@@ -1003,6 +1177,9 @@ final class MCPRouter: @unchecked Sendable {
             busyTimeoutMillis: mcpStoreBusyTimeoutMillis,
             retries: mcpStoreRetries
         )
+        if !flushedStores.isEmpty {
+            scheduler.onFlushed?(flushedStores)
+        }
         guard let after = db.pendingStoreQueueSnapshotIfReadable() else {
             reschedulePendingStoreDrain(
                 scheduler: scheduler,
@@ -1042,13 +1219,15 @@ final class MCPRouter: @unchecked Sendable {
             : min(pendingStoreDrainMaxDelay, max(pendingStoreDrainInitialDelay, delay * 2.0))
         scheduler.queue.asyncAfter(deadline: .now() + nextDelay) { [weak scheduler, weak db] in
             guard let scheduler, let db else { return }
-            drainPendingStoreTarget(
-                scheduler: scheduler,
-                db: db,
-                chunkID: chunkID,
-                drainKey: drainKey,
-                delay: nextDelay
-            )
+            scheduler.backupGate.withDrain {
+                drainPendingStoreTarget(
+                    scheduler: scheduler,
+                    db: db,
+                    chunkID: chunkID,
+                    drainKey: drainKey,
+                    delay: nextDelay
+                )
+            }
         }
     }
 
@@ -1151,9 +1330,10 @@ final class MCPRouter: @unchecked Sendable {
     private func handleBrainRecall(_ args: [String: Any]) throws -> ToolOutput {
         let db = try readDB()
         let mode = args["mode"] as? String ?? "stats"
+        let limit = min(100, max(1, args["limit"] as? Int ?? 8))
         if mode == "injections" {
             let sessionId = args["session_id"] as? String
-            let events = try db.listInjectionEvents(sessionID: sessionId, limit: 20)
+            let events = try db.listInjectionEvents(sessionID: sessionId, limit: limit)
             if events.isEmpty {
                 return ToolOutput(text: "│ No injection events found")
             }
@@ -1172,7 +1352,7 @@ final class MCPRouter: @unchecked Sendable {
         if mode == "context" {
             let sessionId = args["session_id"] as? String ?? ""
             if !sessionId.isEmpty {
-                let results = try db.recallSession(sessionId: sessionId, limit: 20)
+                let results = try db.recallSession(sessionId: sessionId, limit: limit)
                 let typedResults = results.map(SearchResult.init(payload:))
                 return ToolOutput(text: TextFormatter.formatRecalledContext(query: "session:\(sessionId)", results: typedResults))
             }
@@ -1267,7 +1447,7 @@ final class MCPRouter: @unchecked Sendable {
         if !context.isEmpty {
             lines.append("\u{251c}\u{2500} Context (\(context.count) chunks)")
             for c in context {
-                let cid = (c["chunk_id"] as? String ?? "").prefix(12)
+                let cid = c["chunk_id"] as? String ?? ""
                 let snippet = String(((c["content"] as? String) ?? "").prefix(80))
                 lines.append("\u{2502}  [\(cid)] \(snippet)")
             }
@@ -1362,36 +1542,6 @@ final class MCPRouter: @unchecked Sendable {
         return ToolOutput(text: jsonEncode(payload))
     }
 
-    private func handleBrainEnrich(_ args: [String: Any]) throws -> ToolOutput {
-        let mode = args["mode"] as? String ?? "realtime"
-        let limit = max(1, min(args["limit"] as? Int ?? 25, 5_000))
-        let sinceHours = args["since_hours"] as? Int ?? 8_760
-        let phase = args["phase"] as? String ?? "run"
-        let chunkIDs = args["chunk_ids"] as? [String]
-        let stats = args["stats"] as? Bool ?? false
-        let db = try writeDB()
-
-        if stats {
-            let summary = try db.enrichmentStats()
-            let lines = [
-                "\u{250c}\u{2500} Enrichment Stats",
-                "\u{2502} Total: \(summary.totalChunks)  Enriched: \(summary.enriched) (\(summary.enrichedPercentText))  Remaining: \(summary.unenrichedEligible)  Skipped: \(summary.skippedTooShort)",
-                "\u{2502} Last 24h: \(summary.enrichedLast24Hours) enriched",
-                "\u{2514}\u{2500}",
-            ]
-            return ToolOutput(text: lines.joined(separator: "\n"))
-        }
-
-        let result = try db.enrichChunks(
-            mode: mode,
-            limit: limit,
-            sinceHours: sinceHours,
-            phase: phase,
-            chunkIDs: chunkIDs
-        )
-        return ToolOutput(text: Formatters.formatDigestResult(result: result, useColor: false))
-    }
-
     private func handleBrainSubscribe(_ args: [String: Any]) throws -> ToolOutput {
         guard let _ = (args["agent_id"] as? String) ?? (args["subscriber_id"] as? String) else {
             throw ToolError.missingParameter("agent_id")
@@ -1478,6 +1628,7 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("target_path")
         }
         let db = try writeDB()
+        pendingStoreDrainScheduler.backupGate.waitForDrains()
         let bytes = try db.vacuumInto(targetPath: targetPath)
         let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes)
         return ToolOutput(
@@ -1733,13 +1884,23 @@ final class MCPRouter: @unchecked Sendable {
         ],
         [
             "name": "brain_recall",
-            "description": "Get session-level context: what you are working on now, recent sessions, one session's detail, or knowledge-base stats. For topic lookup use brain_search.",
+            "description": "Recall one session's context (requires session_id), injection events, "
+                + "or knowledge-base stats (default). For topic lookup use brain_search.",
             "annotations": MCPRouter.recallAnnotations,
             "inputSchema": MCPRouter.limitedInputSchema([
                 "type": "object",
                 "properties": [
-                    "mode": ["type": "string", "enum": ["context", "sessions", "operations", "plan", "summary", "stats", "injections"], "description": "Recall mode"],
-                    "session_id": ["type": "string", "description": "Session ID for operations/summary mode"],
+                    "mode": [
+                        "type": "string",
+                        "enum": ["context", "stats", "injections"],
+                        "description": "Recall mode"
+                    ],
+                    "session_id": [
+                        "type": "string",
+                        "description": "Session ID for context mode; optional filter for injections"
+                    ],
+                    "limit": ["type": "integer", "maximum": 100,
+                              "description": "Result cap (default: 8)"]
                 ] as [String: Any],
             ] as [String: Any])
         ],
@@ -1848,22 +2009,6 @@ final class MCPRouter: @unchecked Sendable {
                     "reason": ["type": "string", "description": "Optional reason for archiving"],
                 ] as [String: Any],
                 "required": ["chunk_id"]
-            ] as [String: Any])
-        ],
-        [
-            "name": "brain_enrich",
-            "description": "Backfill summaries and enrichment metadata on existing chunks.",
-            "annotations": MCPRouter.writeAnnotations,
-            "inputSchema": MCPRouter.limitedInputSchema([
-                "type": "object",
-                "properties": [
-                    "mode": ["type": "string", "enum": ["realtime", "batch"], "description": "Enrichment mode"],
-                    "limit": ["type": "integer", "description": "Maximum number of chunks to process"],
-                    "since_hours": ["type": "integer", "description": "Only enrich chunks from the last N hours in realtime mode"],
-                    "phase": ["type": "string", "enum": ["submit", "poll", "import", "run"], "description": "Batch phase"],
-                    "chunk_ids": ["type": "array", "items": ["type": "string"], "description": "Optional explicit chunk IDs to enrich"],
-                    "stats": ["type": "boolean", "description": "Return progress statistics only"],
-                ] as [String: Any],
             ] as [String: Any])
         ],
         [

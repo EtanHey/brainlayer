@@ -2,7 +2,7 @@
 
 Extracts named entities and relationships using multiple strategies:
 1. Seed entity matching (known entities by string match)
-2. LLM-based extraction (structured output from local LLM)
+2. Caller-supplied extraction callbacks (no built-in model transport)
 3. ML model extraction (GLiNER/DictaBERT — future)
 
 Each strategy returns ExtractedEntity/ExtractedRelation with confidence scores
@@ -11,18 +11,11 @@ and source provenance.
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
-
-_FALSEY = {"0", "false", "no"}
-
-
-def _llm_extraction_enabled() -> bool:
-    return os.environ.get("BRAINLAYER_LLM_ENTITY_EXTRACTION", "1").lower() not in _FALSEY
 
 
 @dataclass
@@ -185,7 +178,7 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 ## Entity types (be precise — choose the most specific type):
 - person: Human individuals (First Last). NOT repos, tools, or agents.
 - agent: AI coding agents (orcClaude, coachClaude, brainClaude, Ralph, etc.). NOT humans.
-- company: Businesses and organizations (Anthropic, Weby, Cantaloupe AI).
+- company: Businesses and organizations (Example Corp, Anthropic, OpenAI).
 - project: Code repositories, apps, products (BrainLayer, VoiceLayer, 6PM).
 - tool: Developer tools and services (Docker, Railway, Supabase, CodeRabbit).
 - technology: Languages, frameworks, protocols (SQLite, SwiftUI, MCP, TypeScript).
@@ -197,15 +190,15 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 - owns: person → project/company/source. "Etan owns BrainLayer"
 - hosts: person → source. "Andrew Huberman hosts Huberman Lab"
 - appears_on: person → source. "Andy Galpin appears_on Huberman Lab"
-- works_at: person → company. "Josh Anderson works at Cantaloupe AI"
+- works_at: person → company. "Alex Example works at Example Corp"
 - uses: entity → tool/technology. "BrainLayer uses SQLite"
 - depends_on: project → technology/tool. "VoiceLayer depends on whisper-cpp"
 - deployed_on: project/service → tool. "Golems deployed on Railway"
 - fixes: agent/person → topic/project. "brainClaude fixes dark mode regression"
 - configures: config → project/service. "CLAUDE.md configures BrainLayer hooks"
 - spawns: agent → agent. "orcClaude spawns brainlayerClaude"
-- client_of: person → person/company. "Yuval is client of Etan"
-- affiliated_with: person → company. "Josh affiliated with Cantaloupe AI"
+- client_of: person → person/company. "Alex Example is a client of Blair Sample"
+- affiliated_with: person → company. "Alex Example is affiliated with Example Corp"
 - coaches: agent → entity. "coachClaude coaches scheduling"
 - builds: person/agent → project. "Etan builds VoiceLayer"
 - related_to: generic fallback (use ONLY if no specific type fits)
@@ -218,7 +211,7 @@ _NER_PROMPT_TEMPLATE = """Extract ALL named entities and relationships from this
 - Each relation MUST have a substantive description — reject empty relations
 - Strength is 0.0-1.0: explicit statements=0.9+, implied=0.5-0.8, speculative=0.3-0.5
 - Decompose N-ary relationships into binary pairs
-- Include Hebrew entity names if present (e.g., MeHayom/מהיום)
+- Include Hebrew entity names if present (e.g., דוגמה)
 - If no entities found, return: {{"entities": [], "relations": []}}
 
 Text:
@@ -271,8 +264,15 @@ def parse_llm_ner_response(response: str, source_text: str) -> tuple[list[Extrac
     if not response:
         return entities, relations
 
-    # Extract JSON from response
+    # Extract JSON from response. Entity names, relation facts and free-form
+    # relation properties are model-authored and reach the KG tables, so scrub
+    # them like any LLM output — after normalizing JSON nested in their strings,
+    # so a token behind a JSON escape is scrubbed too (fail-closed past the bound).
     parsed = _extract_json(response)
+    if parsed:
+        from .cloud_scrub import normalize_json_strings, scrub_llm_output
+
+        parsed = scrub_llm_output(normalize_json_strings(parsed))
     if not parsed:
         return entities, relations
 
@@ -372,18 +372,18 @@ def extract_entities_llm(
 
     Args:
         text: Source text to extract from.
-        llm_caller: Callable(prompt) -> str. If None, uses Gemini via enrichment_controller.
+        llm_caller: Explicit Callable(prompt) -> str. No implicit model backend remains.
         enable_gleaning: If True, re-prompt for missed entities (catches 20-40% more).
             Default False to avoid doubling LLM calls. Enable for high-value chunks.
 
     Returns:
         Tuple of (entities, relations).
     """
-    if not text.strip() or (llm_caller is None and not _llm_extraction_enabled()):
+    if not text.strip():
         return [], []
 
     if llm_caller is None:
-        llm_caller = _get_default_llm_caller()
+        raise RuntimeError("Implicit LLM entity extraction has been retired. Supply an explicit extraction callback.")
 
     # Pass 1: Primary extraction
     prompt = build_ner_prompt(text)
@@ -426,25 +426,6 @@ def extract_entities_llm(
             unique_relations.append(r)
 
     return entities, unique_relations
-
-
-def _get_default_llm_caller():
-    """Get the best available LLM caller — Gemini first, then enrichment.call_llm."""
-    try:
-        from ..enrichment_controller import call_gemini_for_extraction
-
-        return call_gemini_for_extraction
-    except (ImportError, RuntimeError):
-        pass
-
-    try:
-        from .enrichment import call_llm
-
-        return call_llm
-    except ImportError:
-        pass
-
-    raise RuntimeError("No LLM backend available for entity extraction")
 
 
 # ── GLiNER-based extraction ──
@@ -731,8 +712,8 @@ def extract_entities_combined(
         gliner_entities = extract_entities_gliner(text)
         all_entities.extend(gliner_entities)
 
-    # 3. LLM-based extraction (slower, moderate confidence)
-    if use_llm:
+    # 3. Explicit callback extraction; default ingest/digest/connect stay local.
+    if use_llm and llm_caller is not None:
         llm_entities, llm_relations = extract_entities_llm(text, llm_caller)
         all_entities.extend(llm_entities)
         all_relations.extend(llm_relations)

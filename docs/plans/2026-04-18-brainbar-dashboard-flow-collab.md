@@ -1,5 +1,9 @@
 # BrainBar Dashboard Flow Collab
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 ## Goal
 Finish the second-pass BrainBar dashboard refactor without mixing `live agent CLIs` into `indexed writes` or letting the queue/runtime cards dominate the layout.
 

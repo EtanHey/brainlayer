@@ -36,10 +36,7 @@ final class BrainDatabase: @unchecked Sendable {
     private static let fallbackReplayGitsRootEnv = "BRAINBAR_FALLBACK_REPLAY_GITS_ROOT"
     private static let brainLayerQueueDirEnv = "BRAINLAYER_QUEUE_DIR"
     private static let agentWriteSourceWhereClause = "COALESCE(LOWER(TRIM(source)), '') IN ('mcp', 'manual', 'digest', 'precompact-hook', 'brain_store', 'pending', 'fallback', 'fallback-replay')"
-    private static let lexicalDefenseReplacements: [String: [String]] = [
-        "hershkovitz": ["Hershkovits"],
-        "hershkovits": ["Hershkovitz"]
-    ]
+    private static let lexicalDefenseReplacements: [String: [String]] = [:]
 
     enum TrigramStartupRepairDecision: Equatable {
         case noRepairNeeded
@@ -75,56 +72,69 @@ final class BrainDatabase: @unchecked Sendable {
 
     struct SignalCoverageSnapshot: Sendable, Equatable {
         let eligibleChunkCount: Int
+        let ftsEligibleChunkCount: Int
         let vectorIndexedChunkCount: Int
         let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
+
+        init(eligibleChunkCount: Int, ftsEligibleChunkCount: Int? = nil,
+             vectorIndexedChunkCount: Int, ftsIndexedChunkCount: Int, trigramIndexedChunkCount: Int) {
+            self.eligibleChunkCount = eligibleChunkCount
+            self.ftsEligibleChunkCount = ftsEligibleChunkCount ?? eligibleChunkCount
+            self.vectorIndexedChunkCount = vectorIndexedChunkCount
+            self.ftsIndexedChunkCount = ftsIndexedChunkCount
+            self.trigramIndexedChunkCount = trigramIndexedChunkCount
+        }
+    }
+
+    /// "Agent writes (24 h)" (#965, Etan's ruling A): BrainLayer AGENT `brain_store` writes only.
+    /// Measured, or unknown with the reason, never a silent 0.
+    enum BrainStoreWriteCount: Sendable, Equatable {
+        case measured(Int)
+        case unknown(String)
+    }
+
+    /// Every BrainBar `brain_store` path writes `source = 'mcp'`: the direct store, the busy-DB
+    /// queue, the backup-snapshot deferral and the pending-queue drain (MCPRouter.handleBrainStore).
+    /// Watcher-ingested transcripts, hooks (`precompact-hook`), `digest`, the `brainlayer store` CLI
+    /// (`manual`) and Python replays (`pending`, `fallback-replay`) write other sources and are
+    /// not counted. Enrichment updates existing rows and never creates one.
+    /// The hot-currentness benchmark enqueues synthetic chunks through the same queue: it writes
+    /// `source = 'benchmark'`, and the rows it wrote earlier as `mcp` carry its `benchmark_label`
+    /// metadata key, which brain_store never sets (#1026 review B1). Malformed metadata is not
+    /// a benchmark marker, so it cannot fail the query.
+    static let brainStoreWriteWhereClause = """
+        COALESCE(LOWER(TRIM(source)), '') = 'mcp' \
+        AND (CASE WHEN json_valid(metadata) THEN json_type(metadata, '$.benchmark_label') END) IS NULL
+        """
+    static let brainStoreWriteWindowHours = 24
+
+    /// New chunks agents stored with `brain_store` in the rolling 24 h ending at `now`, by
+    /// `created_at` (any stored timestamp format, normalised to UTC epoch seconds).
+    func brainStoreWriteCount(now: Date = Date()) -> BrainStoreWriteCount {
+        guard let db else { return .unknown("database not open") }
+        do {
+            let columns = try tableColumns(name: "chunks", on: db)
+            for column in ["source", "created_at", "metadata"] where !columns.contains(column) {
+                return .unknown("chunks.\(column) column missing")
+            }
+            let cutoff = now.addingTimeInterval(-Double(Self.brainStoreWriteWindowHours) * 3_600)
+            // Both window edges at the stored precision, not whole seconds (#1026 review B2).
+            let nowSeconds = now.timeIntervalSince1970
+            let seconds = try indexedTimestampSeconds(
+                column: "created_at",
+                whereClause: Self.brainStoreWriteWhereClause,
+                since: cutoff
+            )
+            return .measured(seconds.filter { $0 <= nowSeconds }.count)
+        } catch {
+            return .unknown("brain_store count query failed: \(error)")
+        }
     }
 
     struct DashboardStats: Sendable, Equatable {
-        struct WatcherHealth: Sendable, Equatable {
-            let alerting: Bool
-            let filesTracked: Int
-            let maxOffsetLagBytes: Int
-            let activeEntriesPerMinute: Double
-            let realtimeInsertsPerMinute: Double
-            let updatedAt: Date?
-
-            init(
-                alerting: Bool,
-                filesTracked: Int,
-                maxOffsetLagBytes: Int,
-                activeEntriesPerMinute: Double,
-                realtimeInsertsPerMinute: Double,
-                updatedAt: Date? = nil
-            ) {
-                self.alerting = alerting
-                self.filesTracked = filesTracked
-                self.maxOffsetLagBytes = maxOffsetLagBytes
-                self.activeEntriesPerMinute = activeEntriesPerMinute
-                self.realtimeInsertsPerMinute = realtimeInsertsPerMinute
-                self.updatedAt = updatedAt
-            }
-
-            var summaryText: String {
-                if alerting {
-                    if maxOffsetLagBytes >= 1_048_576 {
-                        return "lag \(Int((Double(maxOffsetLagBytes) / 1_048_576.0).rounded())) MB"
-                    }
-                    return "coverage alert"
-                }
-                if filesTracked > 0 {
-                    return "\(filesTracked) files"
-                }
-                return "idle"
-            }
-
-            func isFresh(now: Date = Date(), maxAgeSeconds: TimeInterval = 300) -> Bool {
-                guard let updatedAt else { return false }
-                return now.timeIntervalSince(updatedAt) <= maxAgeSeconds
-            }
-        }
-
         let chunkCount: Int
+        // Compatibility slots for old synthetic snapshots; live UI readers do not query them.
         let enrichedChunkCount: Int
         let failedEnrichmentCount: Int
         let skippedEnrichmentCount: Int
@@ -134,6 +144,7 @@ final class BrainDatabase: @unchecked Sendable {
         let databaseSizeBytes: Int64
         let recentActivityBuckets: [Int]
         let recentAgentWriteBuckets: [Int]
+        let agentWriteReadability: MetricEvidenceReadability
         let recentWatcherWriteBuckets: [Int]
         let recentEnrichmentBuckets: [Int]
         let recentWriteFiveMinuteCount: Int
@@ -144,6 +155,7 @@ final class BrainDatabase: @unchecked Sendable {
         let lastWriteAt: Date?
         let lastEnrichedAt: Date?
         let signalEligibleChunkCount: Int
+        let ftsEligibleChunkCount: Int
         let vectorIndexedChunkCount: Int
         let ftsIndexedChunkCount: Int
         let trigramIndexedChunkCount: Int
@@ -152,11 +164,14 @@ final class BrainDatabase: @unchecked Sendable {
         let pendingStoreFlushQueueDepth: Int
         let pendingStoreOldestQueuedAt: Date?
         let pendingStoreFlushRatePerMinute: Double
-        let watcherHealth: WatcherHealth?
+        /// watcher-health.json beside the resolved DB, read by `WatcherHealthReader` (#966).
+        /// nil only where nothing sampled it (tests, previews).
+        let watcherHealth: WatcherHealthFileRead?
         let replayDebtBreakdown: ReplayDebtBreakdown
         let watcherProcessProbeResult: WatcherProcessProbeResult?
         let watcherRecentDistinctChunkCount: Int
         let watcherFlowReadability: MetricEvidenceReadability
+        let brainStoreWrites: BrainStoreWriteCount
 
         init(
             chunkCount: Int,
@@ -169,6 +184,7 @@ final class BrainDatabase: @unchecked Sendable {
             databaseSizeBytes: Int64,
             recentActivityBuckets: [Int],
             recentAgentWriteBuckets: [Int]? = nil,
+            agentWriteReadability: MetricEvidenceReadability? = nil,
             recentWatcherWriteBuckets: [Int]? = nil,
             recentEnrichmentBuckets: [Int],
             recentWriteFiveMinuteCount: Int = 0,
@@ -179,6 +195,7 @@ final class BrainDatabase: @unchecked Sendable {
             lastWriteAt: Date? = nil,
             lastEnrichedAt: Date? = nil,
             signalEligibleChunkCount: Int? = nil,
+            ftsEligibleChunkCount: Int? = nil,
             vectorIndexedChunkCount: Int = 0,
             ftsIndexedChunkCount: Int = 0,
             trigramIndexedChunkCount: Int = 0,
@@ -187,12 +204,14 @@ final class BrainDatabase: @unchecked Sendable {
             pendingStoreFlushQueueDepth: Int? = nil,
             pendingStoreOldestQueuedAt: Date? = nil,
             pendingStoreFlushRatePerMinute: Double = 0,
-            watcherHealth: WatcherHealth? = nil,
+            watcherHealth: WatcherHealthFileRead? = nil,
             replayDebtBreakdown: ReplayDebtBreakdown? = nil,
             watcherProcessProbeResult: WatcherProcessProbeResult? = nil,
             watcherRecentDistinctChunkCount: Int? = nil,
-            watcherFlowReadability: MetricEvidenceReadability? = nil
+            watcherFlowReadability: MetricEvidenceReadability? = nil,
+            brainStoreWrites: BrainStoreWriteCount = .unknown("not measured")
         ) {
+            self.brainStoreWrites = brainStoreWrites
             self.chunkCount = chunkCount
             self.enrichedChunkCount = enrichedChunkCount
             self.failedEnrichmentCount = failedEnrichmentCount
@@ -202,7 +221,10 @@ final class BrainDatabase: @unchecked Sendable {
             self.enrichmentRatePerMinute = enrichmentRatePerMinute
             self.databaseSizeBytes = databaseSizeBytes
             self.recentActivityBuckets = recentActivityBuckets
-            self.recentAgentWriteBuckets = recentAgentWriteBuckets ?? recentActivityBuckets
+            self.recentAgentWriteBuckets = recentAgentWriteBuckets
+                ?? Array(repeating: 0, count: recentActivityBuckets.count)
+            self.agentWriteReadability = agentWriteReadability
+                ?? (recentAgentWriteBuckets == nil ? .unreadable("agent-origin flow evidence not supplied") : .readable)
             self.recentWatcherWriteBuckets = recentWatcherWriteBuckets ?? Array(repeating: 0, count: recentActivityBuckets.count)
             self.recentEnrichmentBuckets = recentEnrichmentBuckets
             self.recentWriteFiveMinuteCount = recentWriteFiveMinuteCount
@@ -213,6 +235,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.lastWriteAt = lastWriteAt
             self.lastEnrichedAt = lastEnrichedAt
             self.signalEligibleChunkCount = signalEligibleChunkCount ?? chunkCount
+            self.ftsEligibleChunkCount = ftsEligibleChunkCount ?? self.signalEligibleChunkCount
             self.vectorIndexedChunkCount = vectorIndexedChunkCount
             self.ftsIndexedChunkCount = ftsIndexedChunkCount
             self.trigramIndexedChunkCount = trigramIndexedChunkCount
@@ -259,26 +282,13 @@ final class BrainDatabase: @unchecked Sendable {
             return Double(recentWriteCount) / Double(activityWindowMinutes)
         }
 
-        var recentWriteRatePerHour: Double {
-            writeRatePerMinute * 60
-        }
-
-        var recentEnrichmentRatePerHour: Double {
-            guard activityWindowMinutes > 0 else { return 0 }
-            return (Double(recentEnrichmentCount) / Double(activityWindowMinutes)) * 60
-        }
-
-        var vectorNetDrainRatePerHour: Double {
-            // Vector rows do not currently carry per-vector timestamps. Until
-            // they do, use the real dashboard window: recent enrichment
-            // completions minus recent writes, which is the net backlog drain
-            // signal available in DashboardStats.
-            max(recentEnrichmentRatePerHour - recentWriteRatePerHour, 0)
-        }
+        // Vector rows have no completion timestamp. Enrichment completions do
+        // not measure hot-lane embedding throughput or backlog drain.
+        var vectorNetDrainRatePerHour: Double? { nil }
 
         var vectorBacklogETAHours: Double? {
-            guard vectorBacklogCount > 0, vectorNetDrainRatePerHour > 0 else { return nil }
-            return Double(vectorBacklogCount) / vectorNetDrainRatePerHour
+            guard vectorBacklogCount > 0, let rate = vectorNetDrainRatePerHour, rate > 0 else { return nil }
+            return Double(vectorBacklogCount) / rate
         }
 
         func eventIsLive(_ date: Date?, now: Date = Date()) -> Bool {
@@ -300,11 +310,11 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         var ftsBacklogCount: Int {
-            max(signalEligibleChunkCount - ftsIndexedChunkCount, 0)
+            max(ftsEligibleChunkCount - ftsIndexedChunkCount, 0)
         }
 
         var trigramBacklogCount: Int {
-            max(signalEligibleChunkCount - trigramIndexedChunkCount, 0)
+            max(ftsEligibleChunkCount - trigramIndexedChunkCount, 0)
         }
 
         var vectorCoveragePercent: Double {
@@ -312,16 +322,17 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         var ftsCoveragePercent: Double {
-            coveragePercent(indexedCount: ftsIndexedChunkCount)
+            coveragePercent(indexedCount: ftsIndexedChunkCount, eligibleCount: ftsEligibleChunkCount)
         }
 
         var trigramCoveragePercent: Double {
-            coveragePercent(indexedCount: trigramIndexedChunkCount)
+            coveragePercent(indexedCount: trigramIndexedChunkCount, eligibleCount: ftsEligibleChunkCount)
         }
 
-        private func coveragePercent(indexedCount: Int) -> Double {
-            guard signalEligibleChunkCount > 0 else { return 100 }
-            return (Double(indexedCount) / Double(signalEligibleChunkCount)) * 100
+        private func coveragePercent(indexedCount: Int, eligibleCount: Int? = nil) -> Double {
+            let denominator = eligibleCount ?? signalEligibleChunkCount
+            guard denominator > 0 else { return 100 }
+            return (Double(indexedCount) / Double(denominator)) * 100
         }
 
         /// Returns a copy whose per-series buckets + activity window are replaced
@@ -341,6 +352,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: buckets.allWriteBuckets,
                 recentAgentWriteBuckets: buckets.agentWriteBuckets,
+                agentWriteReadability: buckets.agentWriteReadability,
                 recentWatcherWriteBuckets: buckets.watcherWriteBuckets,
                 recentEnrichmentBuckets: buckets.enrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -351,6 +363,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
@@ -363,7 +376,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: buckets.watcherFlowReadability
+                watcherFlowReadability: buckets.watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -379,6 +393,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -389,6 +404,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
@@ -401,7 +417,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -417,6 +434,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -427,6 +445,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount,
@@ -439,7 +458,49 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: result,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
+            )
+        }
+
+        func withWatcherHealth(_ health: WatcherHealthFileRead?) -> DashboardStats {
+            DashboardStats(
+                chunkCount: chunkCount,
+                enrichedChunkCount: enrichedChunkCount,
+                failedEnrichmentCount: failedEnrichmentCount,
+                skippedEnrichmentCount: skippedEnrichmentCount,
+                pendingEnrichmentCount: pendingEnrichmentCount,
+                enrichmentPercent: enrichmentPercent,
+                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                databaseSizeBytes: databaseSizeBytes,
+                recentActivityBuckets: recentActivityBuckets,
+                recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
+                recentWatcherWriteBuckets: recentWatcherWriteBuckets,
+                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                activityWindowMinutes: activityWindowMinutes,
+                bucketCount: bucketCount,
+                liveWindowMinutes: liveWindowMinutes,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: lastEnrichedAt,
+                signalEligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
+                vectorIndexedChunkCount: vectorIndexedChunkCount,
+                ftsIndexedChunkCount: ftsIndexedChunkCount,
+                trigramIndexedChunkCount: trigramIndexedChunkCount,
+                signalCoverageIsAvailable: signalCoverageIsAvailable,
+                pendingStoreQueueDepth: pendingStoreQueueDepth,
+                pendingStoreFlushQueueDepth: pendingStoreFlushQueueDepth,
+                pendingStoreOldestQueuedAt: pendingStoreOldestQueuedAt,
+                pendingStoreFlushRatePerMinute: pendingStoreFlushRatePerMinute,
+                watcherHealth: health,
+                replayDebtBreakdown: replayDebtBreakdown,
+                watcherProcessProbeResult: watcherProcessProbeResult,
+                watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -455,6 +516,7 @@ final class BrainDatabase: @unchecked Sendable {
                 databaseSizeBytes: databaseSizeBytes,
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
+                agentWriteReadability: agentWriteReadability,
                 recentWatcherWriteBuckets: recentWatcherWriteBuckets,
                 recentEnrichmentBuckets: recentEnrichmentBuckets,
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
@@ -465,6 +527,7 @@ final class BrainDatabase: @unchecked Sendable {
                 lastWriteAt: lastWriteAt,
                 lastEnrichedAt: lastEnrichedAt,
                 signalEligibleChunkCount: coverage.eligibleChunkCount,
+                ftsEligibleChunkCount: coverage.ftsEligibleChunkCount,
                 vectorIndexedChunkCount: coverage.vectorIndexedChunkCount,
                 ftsIndexedChunkCount: coverage.ftsIndexedChunkCount,
                 trigramIndexedChunkCount: coverage.trigramIndexedChunkCount,
@@ -477,7 +540,8 @@ final class BrainDatabase: @unchecked Sendable {
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherProcessProbeResult: watcherProcessProbeResult,
                 watcherRecentDistinctChunkCount: watcherRecentDistinctChunkCount,
-                watcherFlowReadability: watcherFlowReadability
+                watcherFlowReadability: watcherFlowReadability,
+                brainStoreWrites: brainStoreWrites
             )
         }
 
@@ -485,6 +549,7 @@ final class BrainDatabase: @unchecked Sendable {
             guard signalCoverageIsAvailable else { return nil }
             return SignalCoverageSnapshot(
                 eligibleChunkCount: signalEligibleChunkCount,
+                ftsEligibleChunkCount: ftsEligibleChunkCount,
                 vectorIndexedChunkCount: vectorIndexedChunkCount,
                 ftsIndexedChunkCount: ftsIndexedChunkCount,
                 trigramIndexedChunkCount: trigramIndexedChunkCount
@@ -611,6 +676,7 @@ final class BrainDatabase: @unchecked Sendable {
         let bucketCount: Int
         let allWriteBuckets: [Int]
         let agentWriteBuckets: [Int]
+        let agentWriteReadability: MetricEvidenceReadability = .readable
         let watcherWriteBuckets: [Int]
         let enrichmentBuckets: [Int]
         let watcherFlowReadability: MetricEvidenceReadability
@@ -709,6 +775,10 @@ final class BrainDatabase: @unchecked Sendable {
         let createdAt: String?
         let chunkID: String?
         let conversationID: String?
+        // Providers redacted when the item was queued. The queued content is
+        // already scrubbed, so replay would otherwise find nothing to record.
+        let secretScrubRedactions: [String]?
+        let secretScrubQuarantineCount: Int?
 
         enum CodingKeys: String, CodingKey {
             case content
@@ -721,6 +791,8 @@ final class BrainDatabase: @unchecked Sendable {
             case createdAt = "created_at"
             case chunkID = "chunk_id"
             case conversationID = "conversation_id"
+            case secretScrubRedactions = "secret_scrub_redactions"
+            case secretScrubQuarantineCount = "secret_scrub_quarantine_count"
         }
 
         init(
@@ -733,7 +805,9 @@ final class BrainDatabase: @unchecked Sendable {
             queuedAt: String? = nil,
             createdAt: String? = nil,
             chunkID: String? = nil,
-            conversationID: String? = nil
+            conversationID: String? = nil,
+            secretScrubRedactions: [String]? = nil,
+            secretScrubQuarantineCount: Int? = nil
         ) {
             self.content = content
             self.tags = tags
@@ -745,6 +819,8 @@ final class BrainDatabase: @unchecked Sendable {
             self.createdAt = createdAt
             self.chunkID = chunkID
             self.conversationID = conversationID
+            self.secretScrubRedactions = secretScrubRedactions
+            self.secretScrubQuarantineCount = secretScrubQuarantineCount
         }
 
         init(from decoder: Decoder) throws {
@@ -759,77 +835,39 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
             chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
             conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
+            secretScrubRedactions = try container.decodeIfPresent([String].self, forKey: .secretScrubRedactions)
+            secretScrubQuarantineCount = try container.decodeIfPresent(Int.self, forKey: .secretScrubQuarantineCount)
         }
-    }
 
-    struct ConversationChunk: Sendable, Equatable, Identifiable {
-        let chunkID: String
-        let content: String
-        let contentType: String
-        let sender: String
-        let importance: Double
-        let createdAt: String
-        let summary: String
-        let isTarget: Bool
-        let sourceFile: String
-        let sourceEndOffset: Int64?
-        let tags: [String]
-
-        var id: String { chunkID }
-
-        init(
-            chunkID: String,
-            content: String,
-            contentType: String,
-            sender: String = "",
-            importance: Double,
-            createdAt: String,
-            summary: String,
-            isTarget: Bool,
-            sourceFile: String = "",
-            sourceEndOffset: Int64? = nil,
-            tags: [String] = []
-        ) {
-            self.chunkID = chunkID
-            self.content = content
-            self.contentType = contentType
-            self.sender = sender
-            self.importance = importance
-            self.createdAt = createdAt
-            self.summary = summary
-            self.isTarget = isTarget
-            self.sourceFile = sourceFile
-            self.sourceEndOffset = sourceEndOffset
-            self.tags = tags
+        /// This item with content and tags scrubbed and the findings folded in.
+        /// Idempotent, so it is safe on an item that was scrubbed when queued.
+        func scrubbed() -> PendingStoreItem {
+            var metadata: [String: Any] = [:]
+            if let secretScrubRedactions { metadata["secret_scrub_redactions"] = secretScrubRedactions }
+            if let secretScrubQuarantineCount { metadata["secret_scrub_quarantine_count"] = secretScrubQuarantineCount }
+            let result = SecretScrubber.scrubForStorage(content: content, tags: tags, metadata: metadata)
+            return PendingStoreItem(
+                content: result.content,
+                tags: result.tags,
+                importance: importance,
+                source: source,
+                project: project,
+                queueID: queueID,
+                queuedAt: queuedAt,
+                createdAt: createdAt,
+                chunkID: chunkID,
+                conversationID: conversationID,
+                secretScrubRedactions: result.metadata["secret_scrub_redactions"] as? [String],
+                secretScrubQuarantineCount: result.metadata["secret_scrub_quarantine_count"] as? Int
+            )
         }
-    }
 
-    enum ConversationOrigin: Sendable, Equatable {
-        case sourceJSONL
-        case indexedExcerpt
-    }
-
-    struct ExpandedConversation: Sendable, Equatable, Identifiable {
-        let target: ConversationChunk
-        let entries: [ConversationChunk]
-        let sourceFile: String
-        let storingAgent: String
-        let origin: ConversationOrigin
-
-        var id: String { target.chunkID }
-
-        init(
-            target: ConversationChunk,
-            entries: [ConversationChunk],
-            sourceFile: String = "",
-            storingAgent: String = "",
-            origin: ConversationOrigin = .indexedExcerpt
-        ) {
-            self.target = target
-            self.entries = entries
-            self.sourceFile = sourceFile
-            self.storingAgent = storingAgent
-            self.origin = origin
+        /// The findings as store() metadata, so a replayed row records them too.
+        var scrubMetadata: [String: Any] {
+            var metadata: [String: Any] = [:]
+            if let secretScrubRedactions { metadata["secret_scrub_redactions"] = secretScrubRedactions }
+            if let secretScrubQuarantineCount { metadata["secret_scrub_quarantine_count"] = secretScrubQuarantineCount }
+            return metadata
         }
     }
 
@@ -1466,6 +1504,14 @@ final class BrainDatabase: @unchecked Sendable {
         metadata: [String: Any] = [:]
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
+        // Scrub before anything is derived from the text: the row, its FTS copies
+        // (filled by triggers from this row), preview_text, and content_hash, so
+        // dedup keys on the scrubbed text. Every caller goes through here: MCP,
+        // pending-queue replay, storeAsync and digest.
+        let scrubbed = SecretScrubber.scrubForStorage(content: content, tags: tags, metadata: metadata)
+        let content = scrubbed.content
+        let tags = scrubbed.tags
+        let metadata = scrubbed.metadata
         let chunkID = chunkID ?? Self.makeChunkID()
         let createdAt = createdAt ?? Self.timestamp()
         let contentHash = Self.bodySHA256(content)
@@ -1723,6 +1769,8 @@ final class BrainDatabase: @unchecked Sendable {
         let queuedAt = Self.timestamp()
         let createdAt = createdAt ?? queuedAt
         let chunkID = chunkID ?? Self.makeChunkID()
+        // Scrub before encoding: the queue file must never hold a raw secret, even
+        // while the item waits for a busy DB.
         let item = PendingStoreItem(
             content: content,
             tags: tags,
@@ -1734,10 +1782,12 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID
-        )
+        ).scrubbed()
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
-        try appendPendingStoreLine(line, to: path)
+        if let existing = try appendPendingStoreLine(line, item: item, to: path) {
+            return existing
+        }
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
@@ -1766,15 +1816,21 @@ final class BrainDatabase: @unchecked Sendable {
                 var remaining: [Data] = []
 
                 for (lineIndex, line) in lines.enumerated() {
-                    let item: PendingStoreItem
+                    let decodedItem: PendingStoreItem
                     do {
-                        item = try decoder.decode(PendingStoreItem.self, from: line)
+                        decodedItem = try decoder.decode(PendingStoreItem.self, from: line)
                     } catch {
                         remaining.append(line)
                         continue
                     }
 
-                    let queueID = Self.pendingStoreQueueID(for: item, lineIndex: lineIndex)
+                    // The queue ID of a legacy line is derived from its content, so it
+                    // is computed from the line as written (a line already partly
+                    // replayed must keep its identity). Everything after uses the
+                    // scrubbed item, including the rewritten replay line, so a legacy
+                    // raw secret leaves the queue file too.
+                    let queueID = Self.pendingStoreQueueID(for: decodedItem, lineIndex: lineIndex)
+                    let item = decodedItem.scrubbed()
                     let chunkID = item.chunkID ?? Self.makeChunkID()
                     let replayLine = Self.pendingStoreReplayLine(for: item, queueID: queueID, chunkID: chunkID) ?? line
                     if excludedChunkIDs.contains(chunkID) {
@@ -1804,7 +1860,8 @@ final class BrainDatabase: @unchecked Sendable {
                             conversationID: item.conversationID,
                             refreshStatistics: false,
                             retries: retries,
-                            busyTimeoutMillis: busyTimeoutMillis
+                            busyTimeoutMillis: busyTimeoutMillis,
+                            metadata: item.scrubMetadata
                         )
                         flushed.append(
                             FlushedPendingStore(
@@ -1830,114 +1887,6 @@ final class BrainDatabase: @unchecked Sendable {
             NSLog("[BrainBar] Failed to lock pending stores queue for flush: %@", String(describing: error))
             return []
         }
-    }
-
-    func searchCandidates(
-        query: String,
-        limit: Int,
-        project: String? = nil,
-        source: String? = nil,
-        tag: String? = nil,
-        importanceMin: Double? = nil,
-        subscriberID: String? = nil,
-        unreadOnly: Bool = false
-    ) throws -> [SearchQueryCandidate] {
-        guard let db else { throw DBError.notOpen }
-        let sanitized = sanitizeFTS5Query(query)
-
-        var subscribedTags: [String] = []
-        var ackFloor: Int64 = 0
-        if unreadOnly, let subscriberID, let record = try subscription(agentID: subscriberID) {
-            subscribedTags = record.tags
-            ackFloor = record.lastAckedSeq
-        }
-
-        let sourceFilter = normalizedSourceFilter(source)
-        var conditions = [
-            "chunks_fts MATCH ?",
-            try searchableChunkWhereClause(alias: "c"),
-        ]
-        if project != nil { conditions.append("(c.project = ? OR c.project IS NULL)") }
-        if sourceFilter != nil { conditions.append("c.source = ?") }
-        if let explicitTag = tag {
-            conditions.append("c.tags LIKE ?")
-            subscribedTags = [explicitTag]
-        } else if unreadOnly, !subscribedTags.isEmpty {
-            let tagTerms = Array(repeating: "c.tags LIKE ?", count: subscribedTags.count).joined(separator: " OR ")
-            conditions.append("(\(tagTerms))")
-        }
-        if importanceMin != nil { conditions.append("c.importance >= ?") }
-        if unreadOnly { conditions.append("c.rowid > ?") }
-
-        let orderByClause = unreadOnly ? "c.rowid ASC" : "f.rank"
-        let sql = """
-            SELECT c.rowid, c.id, c.preview_text, f.rank, c.created_at, c.project, c.importance
-            FROM chunks_fts f
-            JOIN chunks c ON c.id = f.chunk_id
-            WHERE \(conditions.joined(separator: " AND "))
-            ORDER BY \(orderByClause)
-            LIMIT ?
-        """
-
-        var stmt: OpaquePointer?
-        let rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
-        guard rc == SQLITE_OK else { throw DBError.prepare(rc) }
-        defer { sqlite3_finalize(stmt) }
-
-        var paramIdx: Int32 = 1
-        bindText(sanitized, to: stmt, index: paramIdx)
-        paramIdx += 1
-        if let project {
-            bindText(project, to: stmt, index: paramIdx)
-            paramIdx += 1
-        }
-        if let sourceFilter {
-            bindText(sourceFilter, to: stmt, index: paramIdx)
-            paramIdx += 1
-        }
-        if let explicitTag = tag {
-            bindText("%\"\(explicitTag)\"%", to: stmt, index: paramIdx)
-            paramIdx += 1
-        } else if unreadOnly, !subscribedTags.isEmpty {
-            for subscribedTag in subscribedTags {
-                bindText("%\"\(subscribedTag)\"%", to: stmt, index: paramIdx)
-                paramIdx += 1
-            }
-        }
-        if let importanceMin {
-            sqlite3_bind_double(stmt, paramIdx, importanceMin)
-            paramIdx += 1
-        }
-        if unreadOnly {
-            sqlite3_bind_int64(stmt, paramIdx, ackFloor)
-            paramIdx += 1
-        }
-        sqlite3_bind_int(stmt, paramIdx, Int32(limit))
-
-        var results: [SearchQueryCandidate] = []
-        var maxRowID: Int64 = 0
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let rowID = sqlite3_column_int64(stmt, 0)
-            maxRowID = max(maxRowID, rowID)
-            let rawRank = sqlite3_column_double(stmt, 3)
-            let score = max(0, -rawRank)
-            results.append(
-                SearchQueryCandidate(
-                    id: columnText(stmt, 1) ?? "",
-                    previewText: columnText(stmt, 2) ?? "",
-                    lexicalScore: score,
-                    date: columnText(stmt, 4) ?? "",
-                    project: columnText(stmt, 5) ?? "",
-                    importance: Int(sqlite3_column_int(stmt, 6))
-                )
-            )
-        }
-
-        if unreadOnly, let subscriberID, maxRowID > 0 {
-            try markDelivered(agentID: subscriberID, seq: maxRowID)
-        }
-
-        return results
     }
 
     func upsertSubscription(agentID: String, tags: [String], incrementGeneration: Bool = false) throws -> SubscriberRecord {
@@ -2174,6 +2123,14 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
+#if DEBUG
+    /// Lets private-fixture tests audit SQLite reads on the actual dashboard connection.
+    func withSQLiteHandleForTesting<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        guard let db else { throw DBError.notOpen }
+        return try body(db)
+    }
+#endif
+
     func dashboardStats(
         activityWindowMinutes: Int = 30,
         bucketCount: Int = 12,
@@ -2205,12 +2162,13 @@ final class BrainDatabase: @unchecked Sendable {
                 )
             }
 
-            let counts = try dashboardCounts()
+            let chunkCount = try scalarInt("SELECT COUNT(*) FROM chunks")
             let signalCoverage: SignalCoverageSnapshot?
             if includeSignalCoverage {
                 let counts = try dashboardSignalCoverageCounts()
                 signalCoverage = SignalCoverageSnapshot(
                     eligibleChunkCount: counts.eligibleChunkCount,
+                    ftsEligibleChunkCount: counts.ftsEligibleChunkCount,
                     vectorIndexedChunkCount: counts.vectorIndexedChunkCount,
                     ftsIndexedChunkCount: counts.ftsIndexedChunkCount,
                     trigramIndexedChunkCount: counts.trigramIndexedChunkCount
@@ -2218,12 +2176,7 @@ final class BrainDatabase: @unchecked Sendable {
             } else {
                 signalCoverage = nil
             }
-            let lastEvents = try dashboardLastEvents(now: now)
-            let chunkCount = counts.chunkCount
-            let enrichedChunkCount = counts.enrichedChunkCount
-            let pendingEnrichmentCount = counts.pendingEnrichmentCount
-            let enrichmentPercent = chunkCount == 0 ? 0 : (Double(enrichedChunkCount) / Double(chunkCount)) * 100
-            let enrichmentRatePerMinute = try recentEnrichmentRatePerMinute(windowMinutes: liveWindowMinutes, now: now)
+            let lastWriteAt = try dashboardLastWriteAt(now: now)
             let recentActivityBuckets = try recentActivityBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
@@ -2245,35 +2198,31 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: 1,
                 now: now
             )
-            let recentEnrichmentBuckets = try recentEnrichmentBuckets(
-                activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount,
-                now: now
-            )
             let recentWriteFiveMinuteCount = try recentActivityCount(windowSeconds: 300, now: now)
-            let recentEnrichmentFiveMinuteCount = try recentEnrichmentCount(windowSeconds: 300, now: now)
+            let brainStoreWrites = brainStoreWriteCount(now: now)
 
             return DashboardStats(
                 chunkCount: chunkCount,
-                enrichedChunkCount: enrichedChunkCount,
-                failedEnrichmentCount: counts.failedEnrichmentCount,
-                skippedEnrichmentCount: counts.skippedEnrichmentCount,
-                pendingEnrichmentCount: pendingEnrichmentCount,
-                enrichmentPercent: enrichmentPercent,
-                enrichmentRatePerMinute: enrichmentRatePerMinute,
+                enrichedChunkCount: 0,
+                failedEnrichmentCount: 0,
+                skippedEnrichmentCount: 0,
+                pendingEnrichmentCount: 0,
+                enrichmentPercent: 0,
+                enrichmentRatePerMinute: 0,
                 databaseSizeBytes: databaseSizeBytes(),
                 recentActivityBuckets: recentActivityBuckets,
                 recentAgentWriteBuckets: recentAgentWriteBuckets,
                 recentWatcherWriteBuckets: recentWatcherIngest.buckets,
-                recentEnrichmentBuckets: recentEnrichmentBuckets,
+                recentEnrichmentBuckets: Array(repeating: 0, count: bucketCount),
                 recentWriteFiveMinuteCount: recentWriteFiveMinuteCount,
-                recentEnrichmentFiveMinuteCount: recentEnrichmentFiveMinuteCount,
+                recentEnrichmentFiveMinuteCount: 0,
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 liveWindowMinutes: liveWindowMinutes,
-                lastWriteAt: lastEvents.lastWriteAt,
-                lastEnrichedAt: lastEvents.lastEnrichedAt,
+                lastWriteAt: lastWriteAt,
+                lastEnrichedAt: nil,
                 signalEligibleChunkCount: signalCoverage?.eligibleChunkCount ?? 0,
+                ftsEligibleChunkCount: signalCoverage?.ftsEligibleChunkCount ?? 0,
                 vectorIndexedChunkCount: signalCoverage?.vectorIndexedChunkCount ?? 0,
                 ftsIndexedChunkCount: signalCoverage?.ftsIndexedChunkCount ?? 0,
                 trigramIndexedChunkCount: signalCoverage?.trigramIndexedChunkCount ?? 0,
@@ -2284,7 +2233,8 @@ final class BrainDatabase: @unchecked Sendable {
                 watcherHealth: watcherHealth,
                 replayDebtBreakdown: replayDebtBreakdown,
                 watcherRecentDistinctChunkCount: recentWatcherTruth.total,
-                watcherFlowReadability: recentWatcherTruth.readability
+                watcherFlowReadability: recentWatcherTruth.readability,
+                brainStoreWrites: brainStoreWrites
             )
         }
     }
@@ -2294,6 +2244,7 @@ final class BrainDatabase: @unchecked Sendable {
             let counts = try dashboardSignalCoverageCounts()
             return SignalCoverageSnapshot(
                 eligibleChunkCount: counts.eligibleChunkCount,
+                ftsEligibleChunkCount: counts.ftsEligibleChunkCount,
                 vectorIndexedChunkCount: counts.vectorIndexedChunkCount,
                 ftsIndexedChunkCount: counts.ftsIndexedChunkCount,
                 trigramIndexedChunkCount: counts.trigramIndexedChunkCount
@@ -2341,61 +2292,20 @@ final class BrainDatabase: @unchecked Sendable {
                 bucketCount: bucketCount,
                 now: now
             )
-            let enrichmentBuckets = try recentEnrichmentBuckets(
-                activityWindowMinutes: activityWindowMinutes,
-                bucketCount: bucketCount,
-                now: now
-            )
-
             return PipelineWindowBuckets(
                 activityWindowMinutes: activityWindowMinutes,
                 bucketCount: bucketCount,
                 allWriteBuckets: allWriteBuckets,
                 agentWriteBuckets: agentWriteBuckets,
                 watcherWriteBuckets: watcherIngest.buckets,
-                enrichmentBuckets: enrichmentBuckets,
+                enrichmentBuckets: Array(repeating: 0, count: bucketCount),
                 watcherFlowReadability: watcherIngest.readability
             )
         }
     }
 
-    private func watcherHealthSnapshot() -> DashboardStats.WatcherHealth? {
-        let envPath = ProcessInfo.processInfo.environment["BRAINLAYER_WATCHER_HEALTH_PATH"]
-        let healthPath = envPath ?? URL(fileURLWithPath: path)
-            .deletingLastPathComponent()
-            .appendingPathComponent("watcher-health.json")
-            .path
-        guard let data = FileManager.default.contents(atPath: healthPath),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        return DashboardStats.WatcherHealth(
-            alerting: payload["alerting"] as? Bool ?? false,
-            filesTracked: payload["files_tracked"] as? Int ?? 0,
-            maxOffsetLagBytes: payload["max_offset_lag_bytes"] as? Int ?? 0,
-            activeEntriesPerMinute: payload["active_jsonl_entries_per_minute"] as? Double ?? 0,
-            realtimeInsertsPerMinute: payload["db_realtime_inserts_per_minute"] as? Double ?? 0,
-            updatedAt: Self.parseWatcherHealthUpdatedAt(payload["updated_at"] as? String)
-        )
-    }
-
-    private static func parseWatcherHealthUpdatedAt(_ rawValue: String?) -> Date? {
-        guard let rawValue else { return nil }
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: trimmed) {
-            return date
-        }
-        if let date = ISO8601DateFormatter().date(from: trimmed) {
-            return date
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
-        return formatter.date(from: trimmed)
+    private func watcherHealthSnapshot() -> WatcherHealthFileRead {
+        WatcherHealthReader.read(url: WatcherHealthReader.resolvedURL())
     }
 
     func dataVersion() throws -> Int {
@@ -2440,33 +2350,24 @@ final class BrainDatabase: @unchecked Sendable {
         return Int(sqlite3_column_int(stmt, 0))
     }
 
-    private func dashboardCounts() throws -> (
-        chunkCount: Int,
-        enrichedChunkCount: Int,
-        failedEnrichmentCount: Int,
-        skippedEnrichmentCount: Int,
-        pendingEnrichmentCount: Int
-    ) {
-        return (
-            chunkCount: try scalarInt("SELECT COUNT(*) FROM chunks"),
-            enrichedChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'success'"),
-            failedEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE LOWER(TRIM(enrich_status)) = 'failed'"),
-            skippedEnrichmentCount: try scalarInt(
-                "SELECT COUNT(*) FROM chunks WHERE enrich_status IS NOT NULL AND LOWER(TRIM(enrich_status)) NOT IN ('success', 'failed')"
-            ),
-            pendingEnrichmentCount: try scalarInt("SELECT COUNT(*) FROM chunks WHERE enrich_status IS NULL AND enriched_at IS NULL")
-        )
-    }
 
     private func dashboardSignalCoverageCounts() throws -> (
         eligibleChunkCount: Int,
+        ftsEligibleChunkCount: Int,
         vectorIndexedChunkCount: Int,
         ftsIndexedChunkCount: Int,
         trigramIndexedChunkCount: Int
     ) {
-        let searchableWhereClause = try searchableChunkWhereClause(alias: "c")
+        guard let db else { throw DBError.notOpen }
+        let searchableWhereClause = try searchableChunkWhereClause(alias: "c", includeHiddenSources: true)
+        // Keep this route identical to vector_store.py's knowledge FTS triggers.
+        let columns = try tableColumns(name: "chunks", on: db)
+        let knowledgeWhereClause = columns.contains("content_class")
+            ? searchableWhereClause + " AND COALESCE(c.content_class, 'knowledge') NOT IN ('operational', 'test', 'benchmark', 'cold')"
+            : searchableWhereClause
         return (
             eligibleChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks AS c WHERE \(searchableWhereClause)"),
+            ftsEligibleChunkCount: try scalarInt("SELECT COUNT(*) FROM chunks AS c WHERE \(knowledgeWhereClause)"),
             vectorIndexedChunkCount: try joinedCoverageCount(
                 tableName: "chunk_vectors_rowids",
                 idColumn: "id",
@@ -2475,12 +2376,12 @@ final class BrainDatabase: @unchecked Sendable {
             ftsIndexedChunkCount: try joinedCoverageCount(
                 tableName: "chunks_fts",
                 idColumn: "chunk_id",
-                searchableWhereClause: searchableWhereClause
+                searchableWhereClause: knowledgeWhereClause
             ),
             trigramIndexedChunkCount: try joinedCoverageCount(
                 tableName: "chunks_fts_trigram",
                 idColumn: "chunk_id",
-                searchableWhereClause: searchableWhereClause
+                searchableWhereClause: knowledgeWhereClause
             )
         )
     }
@@ -2505,7 +2406,7 @@ final class BrainDatabase: @unchecked Sendable {
         """)
     }
 
-    private func searchableChunkWhereClause(alias: String) throws -> String {
+    private func searchableChunkWhereClause(alias: String, includeHiddenSources: Bool = false) throws -> String {
         guard let db else { throw DBError.notOpen }
         let columns = try tableColumns(name: "chunks", on: db)
         var clauses: [String] = []
@@ -2522,25 +2423,17 @@ final class BrainDatabase: @unchecked Sendable {
         if columns.contains("archived_at") {
             clauses.append("\(alias).archived_at IS NULL")
         }
-        if columns.contains("source_class") {
+        if !includeHiddenSources && columns.contains("source_class") {
             clauses.append("(\(alias).source_class IS NULL OR \(alias).source_class NOT IN ('desktop', 'brain-worker'))")
         }
         return clauses.isEmpty ? "1 = 1" : clauses.joined(separator: " AND ")
     }
 
-    private func dashboardLastEvents(now: Date) throws -> (lastWriteAt: Date?, lastEnrichedAt: Date?) {
-        let recentWindowStart = now.addingTimeInterval(-Self.dashboardLatestEventLookbackSeconds)
-        let lastWriteAt = try latestIndexedTimestampEpoch(
-            column: "created_at",
-            whereClause: nil,
-            since: recentWindowStart
+    private func dashboardLastWriteAt(now: Date) throws -> Date? {
+        try latestIndexedTimestampEpoch(
+            column: "created_at", whereClause: nil,
+            since: now.addingTimeInterval(-Self.dashboardLatestEventLookbackSeconds)
         )
-        let lastEnrichedAt = try latestIndexedTimestampEpoch(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            since: recentWindowStart
-        )
-        return (lastWriteAt: lastWriteAt, lastEnrichedAt: lastEnrichedAt)
     }
 
     private func recentActivityBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
@@ -2612,17 +2505,6 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private func recentEnrichmentBuckets(activityWindowMinutes: Int, bucketCount: Int, now: Date) throws -> [Int] {
-        guard activityWindowMinutes > 0 else { return Array(repeating: 0, count: bucketCount) }
-
-        return try indexedTimestampBuckets(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            activityWindowMinutes: activityWindowMinutes,
-            bucketCount: bucketCount,
-            now: now
-        )
-    }
 
     private func recentActivityCount(windowSeconds: TimeInterval, now: Date) throws -> Int {
         guard windowSeconds > 0 else { return 0 }
@@ -2633,24 +2515,7 @@ final class BrainDatabase: @unchecked Sendable {
         ).count
     }
 
-    private func recentEnrichmentCount(windowSeconds: TimeInterval, now: Date) throws -> Int {
-        guard windowSeconds > 0 else { return 0 }
-        return try indexedTimestampEpochs(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            since: now.addingTimeInterval(-windowSeconds)
-        ).count
-    }
 
-    private func recentEnrichmentRatePerMinute(windowMinutes: Int, now: Date) throws -> Double {
-        guard windowMinutes > 0 else { return 0 }
-        let count = Double(try indexedTimestampEpochs(
-            column: "enriched_at",
-            whereClause: "enriched_at IS NOT NULL AND LOWER(TRIM(enrich_status)) = 'success'",
-            since: now.addingTimeInterval(Double(-windowMinutes * 60))
-        ).count)
-        return count / Double(windowMinutes)
-    }
 
     private func indexedTimestampBuckets(
         column: String,
@@ -2733,8 +2598,34 @@ final class BrainDatabase: @unchecked Sendable {
         whereClause: String?,
         since cutoffDate: Date
     ) throws -> [Int64] {
+        let cutoffEpoch = Int64(cutoffDate.timeIntervalSince1970)
+        return try indexedTimestampValues(column: column, whereClause: whereClause, since: cutoffDate, subsecond: false) {
+            sqlite3_column_int64($0, 0)
+        }.filter { $0 >= cutoffEpoch }
+    }
+
+    /// `indexedTimestampEpochs` at sub-second precision, for a window whose edges are not whole
+    /// seconds. `unixepoch(..., 'subsec')` needs SQLite 3.42; macOS 14, BrainBar's floor, ships 3.43.
+    private func indexedTimestampSeconds(
+        column: String,
+        whereClause: String?,
+        since cutoffDate: Date
+    ) throws -> [Double] {
+        let cutoff = cutoffDate.timeIntervalSince1970
+        return try indexedTimestampValues(column: column, whereClause: whereClause, since: cutoffDate, subsecond: true) {
+            sqlite3_column_double($0, 0)
+        }.filter { $0 >= cutoff }
+    }
+
+    private func indexedTimestampValues<Value>(
+        column: String,
+        whereClause: String?,
+        since cutoffDate: Date,
+        subsecond: Bool,
+        read: (OpaquePointer?) -> Value
+    ) throws -> [Value] {
         guard let db else { throw DBError.notOpen }
-        let epochSQL = Self.normalizedUnixEpochSQL(for: column)
+        let epochSQL = Self.normalizedUnixEpochSQL(for: column, subsecond: subsecond)
         let indexLowerBound = cutoffDate.addingTimeInterval(-Self.dashboardTimestampIndexLookbackPaddingSeconds)
         let cutoffText = Self.dashboardTimestampIndexCutoffFormatter.string(from: indexLowerBound)
         var predicates = ["\(column) IS NOT NULL", "\(column) >= ?"]
@@ -2754,15 +2645,12 @@ final class BrainDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(stmt) }
         bindText(cutoffText, to: stmt, index: 1)
 
-        let cutoffEpoch = Int64(cutoffDate.timeIntervalSince1970)
-        var epochs: [Int64] = []
+        var values: [Value] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { continue }
-            let epoch = sqlite3_column_int64(stmt, 0)
-            guard epoch >= cutoffEpoch else { continue }
-            epochs.append(epoch)
+            values.append(read(stmt))
         }
-        return epochs
+        return values
     }
 
     private func latestIndexedTimestampEpoch(
@@ -2841,14 +2729,15 @@ final class BrainDatabase: @unchecked Sendable {
         return epoch >= cutoffEpoch ? epoch : nil
     }
 
-    private static func normalizedUnixEpochSQL(for column: String) -> String {
-        """
+    private static func normalizedUnixEpochSQL(for column: String, subsecond: Bool = false) -> String {
+        let subsec = subsecond ? ", 'subsec'" : ""
+        return """
         CASE
             WHEN \(column) IS NULL OR TRIM(\(column)) = '' THEN NULL
-            WHEN substr(\(column), -1) = 'Z' THEN unixepoch(\(column))
-            WHEN substr(\(column), -6, 1) IN ('+', '-') THEN unixepoch(\(column))
-            WHEN instr(\(column), 'T') > 0 THEN unixepoch(\(column), 'utc')
-            ELSE unixepoch(\(column))
+            WHEN substr(\(column), -1) = 'Z' THEN unixepoch(\(column)\(subsec))
+            WHEN substr(\(column), -6, 1) IN ('+', '-') THEN unixepoch(\(column)\(subsec))
+            WHEN instr(\(column), 'T') > 0 THEN unixepoch(\(column), 'utc'\(subsec))
+            ELSE unixepoch(\(column)\(subsec))
         END
         """
     }
@@ -4570,7 +4459,11 @@ final class BrainDatabase: @unchecked Sendable {
         (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
     }
 
-    private static func appendPendingStoreLine(_ line: Data, to path: URL) throws {
+    private static func appendPendingStoreLine(
+        _ line: Data,
+        item: PendingStoreItem,
+        to path: URL
+    ) throws -> (queueID: String, queuedAt: String, chunkID: String)? {
         try Self.withPendingStoreProcessLock(for: path) {
             let fd = open(path.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
             guard fd >= 0 else {
@@ -4580,7 +4473,24 @@ final class BrainDatabase: @unchecked Sendable {
             defer { Darwin.close(fd) }
             try Self.enforcePendingStoreFileMode(fd: fd, path: path)
 
-            let existingLineCount = Self.pendingStoreLines(from: Self.readPendingStoreData(at: path) ?? Data()).count
+            let existingLines = Self.pendingStoreLines(from: Self.readPendingStoreData(at: path) ?? Data())
+            // A retry of a deferred store must promise the same eventual row.
+            // Keep this lookup under the cross-process queue lock, before the cap.
+            if let conversationID = item.conversationID, !conversationID.isEmpty {
+                let contentHash = Self.bodySHA256(item.content)
+                let decoder = JSONDecoder()
+                for existingLine in existingLines {
+                    guard let existing = try? decoder.decode(PendingStoreItem.self, from: existingLine),
+                          existing.conversationID == conversationID,
+                          existing.project == item.project,
+                          Self.bodySHA256(existing.content) == contentHash,
+                          let queueID = existing.queueID,
+                          let queuedAt = existing.queuedAt,
+                          let chunkID = existing.chunkID else { continue }
+                    return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
+                }
+            }
+            let existingLineCount = existingLines.count
             let maxLines = Self.pendingStoreMaxLines()
             guard existingLineCount < maxLines else {
                 throw DBError.exec(
@@ -4590,6 +4500,7 @@ final class BrainDatabase: @unchecked Sendable {
             }
 
             try Self.writeAll(line, to: fd, context: "append pending store queue line")
+            return nil
         }
     }
 
@@ -4865,7 +4776,9 @@ final class BrainDatabase: @unchecked Sendable {
             queuedAt: item.queuedAt,
             createdAt: item.createdAt ?? item.queuedAt,
             chunkID: chunkID,
-            conversationID: item.conversationID
+            conversationID: item.conversationID,
+            secretScrubRedactions: item.secretScrubRedactions,
+            secretScrubQuarantineCount: item.secretScrubQuarantineCount
         )
         return try? JSONEncoder().encode(replayItem)
     }
@@ -5167,11 +5080,39 @@ final class BrainDatabase: @unchecked Sendable {
         }
 
         if let tags {
-            let tagsJSON = try encodeJSON(tags)
-            let sql = "UPDATE chunks SET tags = ? WHERE id = ?"
+            // brain_update writes tags at rest too, so they are scrubbed like
+            // store's (#962 review N2), and any findings are unioned into
+            // metadata.secret_scrub_redactions in the same statement.
+            var providers = Set<String>()
+            let scrubbedTags = tags.map { tag -> String in
+                let result = SecretScrubber.scrub(tag)
+                providers.formUnion(result.providers)
+                return result.text
+            }
+            let tagsJSON = try encodeJSON(scrubbedTags)
+            let providersJSON = try encodeJSON(providers.sorted())
+            let sql = providers.isEmpty
+                ? "UPDATE chunks SET tags = ? WHERE id = ?"
+                : """
+                    UPDATE chunks SET tags = ?, metadata = json_set(
+                        COALESCE(metadata, '{}'),
+                        '$.secret_scrub_redactions',
+                        (SELECT json_group_array(value) FROM (
+                            SELECT value FROM json_each(COALESCE(json_extract(metadata, '$.secret_scrub_redactions'), '[]'))
+                            UNION
+                            SELECT value FROM json_each(?)
+                            ORDER BY value
+                        ))
+                    ) WHERE id = ?
+                    """
             try runWriteStatement(on: db, sql: sql, retries: 3) { stmt in
                 bindText(tagsJSON, to: stmt, index: 1)
-                bindText(id, to: stmt, index: 2)
+                if providers.isEmpty {
+                    bindText(id, to: stmt, index: 2)
+                } else {
+                    bindText(providersJSON, to: stmt, index: 2)
+                    bindText(id, to: stmt, index: 3)
+                }
             }
             rowsChanged += Int(sqlite3_changes(db))
         }
@@ -5293,77 +5234,6 @@ final class BrainDatabase: @unchecked Sendable {
             "after_context": afterContext,
             "context": beforeContext + afterContext
         ]
-    }
-
-    func expandedConversation(id: String, before: Int = 3, after: Int = 3) throws -> ExpandedConversation {
-        let payload = try expandChunk(id: id, before: before, after: after)
-        guard let targetPayload = payload["target"] as? [String: Any] else {
-            throw DBError.noResult
-        }
-
-        let target = ConversationChunk(
-            chunkID: targetPayload["chunk_id"] as? String ?? "",
-            content: String(
-                (targetPayload["content"] as? String ?? "").prefix(Self.maximumConversationContentCharacters)
-            ),
-            contentType: targetPayload["content_type"] as? String ?? "",
-            sender: targetPayload["sender"] as? String ?? "",
-            importance: targetPayload["importance"] as? Double ?? 0,
-            createdAt: targetPayload["created_at"] as? String ?? "",
-            summary: targetPayload["summary"] as? String ?? "",
-            isTarget: true,
-            sourceFile: targetPayload["source_file"] as? String ?? "",
-            sourceEndOffset: targetPayload["source_end_offset"] as? Int64,
-            tags: Self.conversationTags(targetPayload["tags"])
-        )
-
-        let beforeContext = ((payload["before_context"] as? [[String: Any]]) ?? []).map { item in
-            ConversationChunk(
-                chunkID: item["chunk_id"] as? String ?? "",
-                content: item["content"] as? String ?? "",
-                contentType: item["content_type"] as? String ?? "",
-                sender: item["sender"] as? String ?? "",
-                importance: item["importance"] as? Double ?? 0,
-                createdAt: item["created_at"] as? String ?? "",
-                summary: item["summary"] as? String ?? "",
-                isTarget: false
-            )
-        }
-        let afterContext = ((payload["after_context"] as? [[String: Any]]) ?? []).map { item in
-            ConversationChunk(
-                chunkID: item["chunk_id"] as? String ?? "",
-                content: item["content"] as? String ?? "",
-                contentType: item["content_type"] as? String ?? "",
-                sender: item["sender"] as? String ?? "",
-                importance: item["importance"] as? Double ?? 0,
-                createdAt: item["created_at"] as? String ?? "",
-                summary: item["summary"] as? String ?? "",
-                isTarget: false
-            )
-        }
-
-        #if BRAINBAR_UI
-        if let sourceConversation = SourceConversationReader.reconstruct(target: target) {
-            return sourceConversation
-        }
-        #endif
-
-        return ExpandedConversation(
-            target: target,
-            entries: beforeContext + [target] + afterContext,
-            sourceFile: target.sourceFile,
-            origin: .indexedExcerpt
-        )
-    }
-
-    private static func conversationTags(_ value: Any?) -> [String] {
-        if let tags = value as? [String] { return tags }
-        guard let text = value as? String,
-              let data = text.data(using: .utf8),
-              let tags = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        return tags
     }
 
     // MARK: - brain_entity: insert + lookup entities
@@ -5585,108 +5455,6 @@ final class BrainDatabase: @unchecked Sendable {
     /// Expose the raw db pointer for EntityCache loading.
     var dbHandle: OpaquePointer? { db }
 
-    // MARK: - Knowledge Graph bulk queries
-
-    struct KGEntityRow: Equatable, Sendable {
-        let id: String
-        let name: String
-        let entityType: String
-        let description: String?
-        let importance: Double
-        let linkedChunkCount: Int
-
-        init(
-            id: String,
-            name: String,
-            entityType: String,
-            description: String?,
-            importance: Double,
-            linkedChunkCount: Int = 0
-        ) {
-            self.id = id
-            self.name = name
-            self.entityType = entityType
-            self.description = description
-            self.importance = importance
-            self.linkedChunkCount = linkedChunkCount
-        }
-    }
-
-    private struct KGEntityAliasSeed {
-        let id: String
-        let name: String
-        let entityType: String
-    }
-
-    struct KGRelationRow: Equatable, Sendable {
-        let id: String
-        let sourceId: String
-        let targetId: String
-        let relationType: String
-        let validUntil: Date?
-        let expiredAt: Date?
-
-        init(
-            id: String,
-            sourceId: String,
-            targetId: String,
-            relationType: String,
-            validUntil: Date? = nil,
-            expiredAt: Date? = nil
-        ) {
-            self.id = id
-            self.sourceId = sourceId
-            self.targetId = targetId
-            self.relationType = relationType
-            self.validUntil = validUntil
-            self.expiredAt = expiredAt
-        }
-    }
-
-    struct KGChunkRow: Equatable, Sendable {
-        let chunkID: String
-        let snippet: String
-        let importance: Int
-        let relevance: Double
-    }
-
-    struct ChunkCursor: Equatable, Sendable {
-        let relevance: Double
-        let createdAt: String
-        let chunkID: String
-    }
-
-    struct ChunkPage: Equatable, Sendable {
-        let rows: [KGChunkRow]
-        let nextCursor: ChunkCursor?
-    }
-
-    struct SourceFileCursor: Equatable, Sendable {
-        let topRelevance: Double
-        let chunkCount: Int
-        let sourceFile: String
-    }
-
-    struct SourceFileRow: Equatable, Sendable, Identifiable {
-        let sourceFile: String
-        let chunkCount: Int
-        let topRelevance: Double
-
-        var id: String { sourceFile }
-    }
-
-    struct SourceFilePage: Equatable, Sendable {
-        let rows: [SourceFileRow]
-        let nextCursor: SourceFileCursor?
-    }
-
-    struct EntitySidebarSnapshot: Equatable, Sendable {
-        let chunkTotal: Int
-        let fileTotal: Int
-        let chunkPage: ChunkPage
-        let filePage: SourceFilePage
-    }
-
     struct EnrichmentStatsSummary: Equatable, Sendable {
         let totalChunks: Int
         let enriched: Int
@@ -5698,89 +5466,6 @@ final class BrainDatabase: @unchecked Sendable {
             guard totalChunks > 0 else { return "0.0%" }
             return String(format: "%.1f%%", (Double(enriched) / Double(totalChunks)) * 100.0)
         }
-    }
-
-    func fetchKGEntities(limit: Int = 500) throws -> [KGEntityRow] {
-        guard let db else { throw DBError.notOpen }
-        // Only return entities that participate in at least one semantic relation.
-        // Without this, the graph is mostly disconnected noise.
-        let sql = """
-            SELECT e.id, e.name, e.entity_type, e.description,
-                   COALESCE(e.importance, CAST(json_extract(e.metadata, '$.importance') AS REAL), 5.0) AS importance
-            FROM kg_entities e
-            WHERE EXISTS (
-                SELECT 1 FROM kg_relations r
-                WHERE r.relation_type != 'co_occurs_with'
-                AND (r.source_id = e.id OR r.target_id = e.id)
-            )
-            ORDER BY importance DESC
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
-
-        var seeds: [KGEntityAliasSeed] = []
-        var descriptions: [String: String?] = [:]
-        var importances: [String: Double] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let id = columnText(stmt, 0) ?? ""
-            let name = columnText(stmt, 1) ?? ""
-            let entityType = columnText(stmt, 2) ?? ""
-            seeds.append(KGEntityAliasSeed(id: id, name: name, entityType: entityType))
-            descriptions[id] = columnText(stmt, 3)
-            importances[id] = sqlite3_column_double(stmt, 4)
-        }
-
-        let linkedChunkCounts = try fetchLinkedChunkCounts(for: seeds)
-        let rows = seeds.map { seed in
-            KGEntityRow(
-                id: seed.id,
-                name: seed.name,
-                entityType: seed.entityType,
-                description: descriptions[seed.id] ?? nil,
-                importance: importances[seed.id] ?? 5.0,
-                linkedChunkCount: linkedChunkCounts[seed.id, default: 0]
-            )
-        }
-        return rows
-    }
-
-    func fetchKGRelations(limit: Int = 5_000) throws -> [KGRelationRow] {
-        guard let db else { throw DBError.notOpen }
-        let expirationSelects = try kgRelationExpirationSelects(alias: "kg_relations")
-        // Exclude co_occurs_with — these are auto-generated from text proximity
-        // and produce noisy, often incorrect edges in the graph view.
-        let sql = """
-            SELECT id, source_id, target_id, relation_type,
-                   \(expirationSelects.validUntil), \(expirationSelects.expiredAt)
-            FROM kg_relations
-            WHERE relation_type != 'co_occurs_with'
-            ORDER BY id
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int64(stmt, 1, Int64(max(0, limit)))
-
-        var rows: [KGRelationRow] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append(KGRelationRow(
-                id: columnText(stmt, 0) ?? "",
-                sourceId: columnText(stmt, 1) ?? "",
-                targetId: columnText(stmt, 2) ?? "",
-                relationType: columnText(stmt, 3) ?? "",
-                validUntil: KGTemporalDate.parse(columnText(stmt, 4)),
-                expiredAt: KGTemporalDate.parse(columnText(stmt, 5))
-            ))
-        }
-        return rows
     }
 
     private func kgRelationExpirationSelects(alias: String) throws -> (validUntil: String, expiredAt: String) {
@@ -5803,360 +5488,6 @@ final class BrainDatabase: @unchecked Sendable {
             bindText(chunkId, to: stmt, index: 2)
             sqlite3_bind_double(stmt, 3, relevance)
         }
-    }
-
-    func fetchEntityChunks(entityId: String, limit: Int = 20) throws -> [KGChunkRow] {
-        try fetchEntityChunksPage(entityId: entityId, after: nil, limit: limit).rows
-    }
-
-    func fetchEntityChunkCount(entityId: String) throws -> Int {
-        let entityIds = try entityAliasGroupIDs(entityId: entityId)
-        let sql = """
-            SELECT COUNT(DISTINCT ec.chunk_id)
-            FROM kg_entity_chunks ec
-            JOIN chunks c ON c.id = ec.chunk_id
-            WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
-        """
-        return try fetchCount(sql: sql, entityIds: entityIds)
-    }
-
-    func fetchEntitySourceFileCount(entityId: String) throws -> Int {
-        guard let db else { throw DBError.notOpen }
-        let entityIds = try entityAliasGroupIDs(entityId: entityId)
-        let sql = """
-            SELECT COUNT(DISTINCT c.source_file)
-            FROM kg_entity_chunks ec
-            JOIN chunks c ON c.id = ec.chunk_id
-            WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
-              AND NULLIF(c.source_file, '') IS NOT NULL
-        """
-        return try fetchCount(sql: sql, entityIds: entityIds, db: db)
-    }
-
-    func fetchEntityChunksPage(entityId: String, after: ChunkCursor?, limit: Int) throws -> ChunkPage {
-        guard let db else { throw DBError.notOpen }
-        let pageLimit = max(0, limit)
-        guard pageLimit > 0 else { return ChunkPage(rows: [], nextCursor: nil) }
-        let entityIds = try entityAliasGroupIDs(entityId: entityId)
-
-        let cursorPredicate: String
-        if after == nil {
-            cursorPredicate = ""
-        } else {
-            cursorPredicate = """
-                WHERE (
-                    relevance < ?
-                    OR (relevance = ? AND created_at < ?)
-                    OR (relevance = ? AND created_at = ? AND chunk_id < ?)
-                )
-            """
-        }
-        let sql = """
-            SELECT chunk_id, snippet, importance, relevance, created_at
-            FROM (
-                SELECT c.id AS chunk_id,
-                       COALESCE(NULLIF(c.summary, ''), substr(c.content, 1, 200)) AS snippet,
-                       c.importance AS importance,
-                       MAX(ec.relevance) AS relevance,
-                       COALESCE(c.created_at, '') AS created_at
-                FROM kg_entity_chunks ec
-                JOIN chunks c ON c.id = ec.chunk_id
-                WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
-                GROUP BY c.id
-            )
-            \(cursorPredicate)
-            ORDER BY relevance DESC, created_at DESC, chunk_id DESC
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        var bindIndex = bindEntityIDs(entityIds, to: stmt, startingAt: 1)
-        if let after {
-            sqlite3_bind_double(stmt, bindIndex, after.relevance)
-            bindIndex += 1
-            sqlite3_bind_double(stmt, bindIndex, after.relevance)
-            bindIndex += 1
-            bindText(after.createdAt, to: stmt, index: bindIndex)
-            bindIndex += 1
-            sqlite3_bind_double(stmt, bindIndex, after.relevance)
-            bindIndex += 1
-            bindText(after.createdAt, to: stmt, index: bindIndex)
-            bindIndex += 1
-            bindText(after.chunkID, to: stmt, index: bindIndex)
-            bindIndex += 1
-        }
-        sqlite3_bind_int(stmt, bindIndex, Int32(pageLimit + 1))
-
-        var rows: [KGChunkRow] = []
-        var cursors: [ChunkCursor] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append(KGChunkRow(
-                chunkID: columnText(stmt, 0) ?? "",
-                snippet: columnText(stmt, 1) ?? "",
-                importance: Int(sqlite3_column_int(stmt, 2)),
-                relevance: sqlite3_column_double(stmt, 3)
-            ))
-            cursors.append(ChunkCursor(
-                relevance: sqlite3_column_double(stmt, 3),
-                createdAt: columnText(stmt, 4) ?? "",
-                chunkID: columnText(stmt, 0) ?? ""
-            ))
-        }
-
-        let hasMore = rows.count > pageLimit
-        if hasMore {
-            rows.removeLast()
-            cursors.removeLast()
-        }
-        return ChunkPage(rows: rows, nextCursor: hasMore ? cursors.last : nil)
-    }
-
-    func fetchEntitySourceFiles(entityId: String, limit: Int, after: SourceFileCursor?) throws -> SourceFilePage {
-        guard let db else { throw DBError.notOpen }
-        let pageLimit = max(0, limit)
-        guard pageLimit > 0 else { return SourceFilePage(rows: [], nextCursor: nil) }
-        let entityIds = try entityAliasGroupIDs(entityId: entityId)
-
-        let cursorPredicate: String
-        if after == nil {
-            cursorPredicate = ""
-        } else {
-            cursorPredicate = """
-                WHERE (
-                    top_relevance < ?
-                    OR (top_relevance = ? AND chunk_count < ?)
-                    OR (top_relevance = ? AND chunk_count = ? AND source_file > ?)
-                )
-            """
-        }
-        let sql = """
-            SELECT source_file, chunk_count, top_relevance
-            FROM (
-                SELECT c.source_file AS source_file,
-                       COUNT(DISTINCT c.id) AS chunk_count,
-                       MAX(ec.relevance) AS top_relevance
-                FROM kg_entity_chunks ec
-                JOIN chunks c ON c.id = ec.chunk_id
-                WHERE ec.entity_id IN (\(placeholders(count: entityIds.count)))
-                  AND NULLIF(c.source_file, '') IS NOT NULL
-                GROUP BY c.source_file
-            )
-            \(cursorPredicate)
-            ORDER BY top_relevance DESC, chunk_count DESC, source_file ASC
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        var bindIndex = bindEntityIDs(entityIds, to: stmt, startingAt: 1)
-        if let after {
-            sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
-            bindIndex += 1
-            sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
-            bindIndex += 1
-            sqlite3_bind_int(stmt, bindIndex, Int32(after.chunkCount))
-            bindIndex += 1
-            sqlite3_bind_double(stmt, bindIndex, after.topRelevance)
-            bindIndex += 1
-            sqlite3_bind_int(stmt, bindIndex, Int32(after.chunkCount))
-            bindIndex += 1
-            bindText(after.sourceFile, to: stmt, index: bindIndex)
-            bindIndex += 1
-        }
-        sqlite3_bind_int(stmt, bindIndex, Int32(pageLimit + 1))
-
-        var rows: [SourceFileRow] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            rows.append(SourceFileRow(
-                sourceFile: columnText(stmt, 0) ?? "",
-                chunkCount: Int(sqlite3_column_int(stmt, 1)),
-                topRelevance: sqlite3_column_double(stmt, 2)
-            ))
-        }
-
-        let hasMore = rows.count > pageLimit
-        if hasMore {
-            rows.removeLast()
-        }
-        let cursor = rows.last.map {
-            SourceFileCursor(topRelevance: $0.topRelevance, chunkCount: $0.chunkCount, sourceFile: $0.sourceFile)
-        }
-        return SourceFilePage(rows: rows, nextCursor: hasMore ? cursor : nil)
-    }
-
-    func fetchEntitySidebarSnapshot(
-        entityId: String,
-        chunkLimit: Int,
-        fileLimit: Int,
-        shouldCancel: () -> Bool = { false }
-    ) throws -> EntitySidebarSnapshot {
-        try withReadTransaction(shouldCancel: shouldCancel) {
-            try EntitySidebarSnapshot(
-                chunkTotal: fetchEntityChunkCount(entityId: entityId),
-                fileTotal: fetchEntitySourceFileCount(entityId: entityId),
-                chunkPage: fetchEntityChunksPage(entityId: entityId, after: nil, limit: chunkLimit),
-                filePage: fetchEntitySourceFiles(entityId: entityId, limit: fileLimit, after: nil)
-            )
-        }
-    }
-
-    private func fetchCount(sql: String, entityId: String, db providedDB: OpaquePointer? = nil) throws -> Int {
-        try fetchCount(sql: sql, entityIds: [entityId], db: providedDB)
-    }
-
-    private func fetchCount(sql: String, entityIds: [String], db providedDB: OpaquePointer? = nil) throws -> Int {
-        guard let db = providedDB ?? self.db else { throw DBError.notOpen }
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        _ = bindEntityIDs(entityIds, to: stmt, startingAt: 1)
-        let stepRC = sqlite3_step(stmt)
-        guard stepRC == SQLITE_ROW else {
-            throw DBError.step(stepRC)
-        }
-        return Int(sqlite3_column_int(stmt, 0))
-    }
-
-    private func entityAliasGroupIDs(entityId: String) throws -> [String] {
-        guard let db else { throw DBError.notOpen }
-        let entitySQL = "SELECT name, entity_type FROM kg_entities WHERE id = ?"
-        var entityStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, entitySQL, -1, &entityStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(entityStmt) }
-        bindText(entityId, to: entityStmt, index: 1)
-        guard sqlite3_step(entityStmt) == SQLITE_ROW else {
-            return [entityId]
-        }
-        var orderedIds = [entityId]
-        var seen = Set(orderedIds)
-        func append(_ id: String) {
-            guard !id.isEmpty, !seen.contains(id) else { return }
-            seen.insert(id)
-            orderedIds.append(id)
-        }
-
-        let aliasEntitySQL = """
-            SELECT DISTINCT aliasEntity.id
-            FROM kg_entity_aliases a
-            JOIN kg_entities canonical ON canonical.id = a.entity_id
-            JOIN kg_entities aliasEntity ON lower(aliasEntity.name) = lower(a.alias)
-            WHERE a.entity_id IN (\(placeholders(count: orderedIds.count)))
-              AND aliasEntity.entity_type = canonical.entity_type
-            ORDER BY aliasEntity.id
-        """
-        var aliasStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, aliasEntitySQL, -1, &aliasStmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(aliasStmt) }
-        _ = bindEntityIDs(orderedIds, to: aliasStmt, startingAt: 1)
-        while sqlite3_step(aliasStmt) == SQLITE_ROW {
-            append(columnText(aliasStmt, 0) ?? "")
-        }
-
-        return orderedIds
-    }
-
-    private func placeholders(count: Int) -> String {
-        Array(repeating: "?", count: max(1, count)).joined(separator: ", ")
-    }
-
-    private func fetchLinkedChunkCounts(for entities: [KGEntityAliasSeed]) throws -> [String: Int] {
-        guard let db else { throw DBError.notOpen }
-        guard !entities.isEmpty else { return [:] }
-
-        let visibleIds = entities.map(\.id)
-        var groupMembers = Dictionary(uniqueKeysWithValues: entities.map { ($0.id, [$0.id]) })
-        let canonicalIds = visibleIds
-        let aliasMembers = try aliasEntityIDsByCanonicalID(canonicalIds: canonicalIds, db: db)
-        for entity in entities {
-            if let aliases = aliasMembers[entity.id] {
-                groupMembers[entity.id, default: [entity.id]].append(contentsOf: aliases)
-            }
-        }
-
-        for (groupId, members) in groupMembers {
-            var seen: Set<String> = []
-            groupMembers[groupId] = members.filter { seen.insert($0).inserted }
-        }
-        return try fetchDistinctChunkCounts(groupMembers: groupMembers, db: db)
-    }
-
-    private func aliasEntityIDsByCanonicalID(canonicalIds: [String], db: OpaquePointer) throws -> [String: [String]] {
-        guard !canonicalIds.isEmpty else { return [:] }
-        let sql = """
-            SELECT a.entity_id, aliasEntity.id
-            FROM kg_entity_aliases a
-            JOIN kg_entities canonical ON canonical.id = a.entity_id
-            JOIN kg_entities aliasEntity ON lower(aliasEntity.name) = lower(a.alias)
-            WHERE a.entity_id IN (\(placeholders(count: canonicalIds.count)))
-              AND aliasEntity.entity_type = canonical.entity_type
-            ORDER BY a.entity_id, aliasEntity.id
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        _ = bindEntityIDs(canonicalIds, to: stmt, startingAt: 1)
-        var aliases: [String: [String]] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let canonicalId = columnText(stmt, 0) ?? ""
-            let aliasId = columnText(stmt, 1) ?? ""
-            guard !canonicalId.isEmpty, !aliasId.isEmpty else { continue }
-            aliases[canonicalId, default: []].append(aliasId)
-        }
-        return aliases
-    }
-
-    private func fetchDistinctChunkCounts(groupMembers: [String: [String]], db: OpaquePointer) throws -> [String: Int] {
-        let pairs = groupMembers.flatMap { groupId, entityIds in entityIds.map { (groupId, $0) } }
-        guard !pairs.isEmpty else { return [:] }
-        let values = Array(repeating: "(?, ?)", count: pairs.count).joined(separator: ", ")
-        let sql = """
-            WITH group_members(group_id, entity_id) AS (VALUES \(values))
-            SELECT gm.group_id, COUNT(DISTINCT ec.chunk_id)
-            FROM group_members gm
-            JOIN kg_entity_chunks ec ON ec.entity_id = gm.entity_id
-            JOIN chunks c ON c.id = ec.chunk_id
-            GROUP BY gm.group_id
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-        var bindIndex: Int32 = 1
-        for (groupId, entityId) in pairs {
-            bindText(groupId, to: stmt, index: bindIndex)
-            bindIndex += 1
-            bindText(entityId, to: stmt, index: bindIndex)
-            bindIndex += 1
-        }
-        var counts: [String: Int] = [:]
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            counts[columnText(stmt, 0) ?? ""] = Int(sqlite3_column_int(stmt, 1))
-        }
-        return counts
-    }
-
-    @discardableResult
-    private func bindEntityIDs(_ entityIds: [String], to stmt: OpaquePointer?, startingAt index: Int32) -> Int32 {
-        var bindIndex = index
-        for entityId in entityIds {
-            bindText(entityId, to: stmt, index: bindIndex)
-            bindIndex += 1
-        }
-        return bindIndex
     }
 
     func getChunk(id: String) throws -> [String: Any]? {
@@ -6341,106 +5672,6 @@ final class BrainDatabase: @unchecked Sendable {
                   AND enriched_epoch >= unixepoch('now', '-24 hours')
             """)
         )
-    }
-
-    func enrichChunks(
-        mode: String,
-        limit: Int,
-        sinceHours: Int,
-        phase _: String,
-        chunkIDs: [String]?
-    ) throws -> [String: Any] {
-        guard let db else { throw DBError.notOpen }
-        if let chunkIDs, chunkIDs.isEmpty {
-            return [
-                "mode": mode,
-                "attempted": 0,
-                "enriched": 0,
-                "skipped": 0,
-                "failed": 0,
-            ]
-        }
-
-        var conditions = [
-            "superseded_by IS NULL",
-            "aggregated_into IS NULL",
-            "archived_at IS NULL"
-        ]
-        if chunkIDs == nil {
-            conditions.append("enriched_at IS NULL")
-            conditions.append("enrich_status IS NULL")
-            conditions.append("char_count >= 50")
-        }
-        if mode == "realtime", chunkIDs == nil {
-            conditions.append("created_at >= datetime('now', ?)")
-        }
-        if let chunkIDs, !chunkIDs.isEmpty {
-            let placeholders = Array(repeating: "?", count: chunkIDs.count).joined(separator: ", ")
-            conditions.append("id IN (\(placeholders))")
-        }
-
-        let sql = """
-            SELECT id, content, summary
-            FROM chunks
-            WHERE \(conditions.joined(separator: " AND "))
-            ORDER BY created_at DESC
-            LIMIT ?
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw DBError.prepare(sqlite3_errcode(db))
-        }
-        defer { sqlite3_finalize(stmt) }
-
-        var bindIndex: Int32 = 1
-        if mode == "realtime", chunkIDs == nil {
-            bindText("-\(sinceHours) hours", to: stmt, index: bindIndex)
-            bindIndex += 1
-        }
-        if let chunkIDs, !chunkIDs.isEmpty {
-            for chunkID in chunkIDs {
-                bindText(chunkID, to: stmt, index: bindIndex)
-                bindIndex += 1
-            }
-        }
-        sqlite3_bind_int(stmt, bindIndex, Int32(limit))
-
-        var targets: [(id: String, content: String)] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            targets.append((columnText(stmt, 0) ?? "", columnText(stmt, 1) ?? ""))
-        }
-
-        var enriched = 0
-        var failed = 0
-        for target in targets {
-            let summary = Self.previewText(summary: nil, content: target.content)
-            do {
-                try executeUpdate(
-                    "UPDATE chunks SET summary = ?, enriched_at = ?, enrich_status = 'success' WHERE id = ?"
-                ) { stmt in
-                    bindText(summary, to: stmt, index: 1)
-                    bindText(Self.timestamp(), to: stmt, index: 2)
-                    bindText(target.id, to: stmt, index: 3)
-                }
-                enriched += 1
-            } catch {
-                failed += 1
-                NSLog(
-                    "[BrainBar] Enrichment summary backfill failed for chunk %@: %@",
-                    target.id,
-                    String(describing: error)
-                )
-            }
-        }
-        refreshSearchStatisticsBestEffort()
-
-        return [
-            "mode": mode,
-            "attempted": targets.count,
-            "enriched": enriched,
-            "skipped": max(0, targets.count - enriched - failed),
-            "failed": failed,
-        ]
     }
 
     // MARK: - brain_recall
@@ -7016,6 +6247,20 @@ final class BrainDatabase: @unchecked Sendable {
 
     func digest(content: String, project: String? = nil, title: String? = nil) throws -> [String: Any] {
         guard db != nil else { throw DBError.notOpen }
+        // Scrub first (#962 review N1): entity mentions, URLs and code refs are
+        // all taken from the text that will be stored, so each candidate's
+        // start_utf16 really indexes the stored chunk. store() re-scrubs
+        // (idempotent) and would find nothing left to record, so the findings
+        // ride into its metadata from here.
+        let contentScrub = SecretScrubber.scrub(content)
+        let titleScrub = title.map { SecretScrubber.scrub($0) }
+        let content = contentScrub.text
+        let title = titleScrub?.text
+        let digestScrubMetadata = SecretScrubber.mergeScrubMetadata(
+            [:],
+            providers: Set(contentScrub.providers + (titleScrub?.providers ?? [])),
+            quarantineCount: contentScrub.quarantineCount + (titleScrub?.quarantineCount ?? 0)
+        )
 
         // Rule-based entity extraction
         let mentions = try Self.digestEntityMentions(in: content)
@@ -7064,9 +6309,10 @@ final class BrainDatabase: @unchecked Sendable {
             }
             entities = orderedEntityIDs.compactMap { resolutionsByID[$0]?.canonicalName }
             let digestSummary = "Digest: \(entities.count) entities, \(entityCandidates.count) entity candidates, \(urls.count) URLs, \(codeIds.count) code refs"
-            let candidateMetadata: [String: Any] = entityCandidates.isEmpty
-                ? [:]
-                : ["digest_entity_candidates": entityCandidates]
+            var candidateMetadata = digestScrubMetadata
+            if !entityCandidates.isEmpty {
+                candidateMetadata["digest_entity_candidates"] = entityCandidates
+            }
             let stored = try store(
                 content: titledContent,
                 tags: ["digest"] + entities.prefix(5).map { $0 },

@@ -56,7 +56,7 @@ class Store:
 
 
 def test_ensure_provenance_class_column_adds_nullable_text(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     assert "provenance_class" not in {row["name"] for row in con.execute("PRAGMA table_info(chunks)")}
 
@@ -68,7 +68,7 @@ def test_ensure_provenance_class_column_adds_nullable_text(con):
 
 
 def test_enrichment_update_payload_derives_provenance_class():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     payload = controller._enrichment_update_payload(
         {
@@ -84,7 +84,7 @@ def test_enrichment_update_payload_derives_provenance_class():
 
 
 def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_classification():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -148,7 +148,7 @@ def test_get_chunk_readonly_hydrates_scoped_prev_assistant_for_endorsement_class
 
 
 def test_get_chunk_readonly_uses_position_for_same_timestamp_previous_assistant():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -230,7 +230,7 @@ def test_get_chunk_readonly_uses_position_for_same_timestamp_previous_assistant(
 
 
 def test_get_chunk_readonly_does_not_scope_prev_assistant_by_source_file_alone():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -292,7 +292,7 @@ def test_get_chunk_readonly_does_not_scope_prev_assistant_by_source_file_alone()
 
 
 def test_get_chunk_readonly_does_not_use_global_prev_assistant_without_scope():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -351,7 +351,7 @@ def test_get_chunk_readonly_does_not_use_global_prev_assistant_without_scope():
 
 
 def test_get_chunk_readonly_fallback_includes_prev_assistant_key():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     class StoreWithoutReadCursor:
         def get_chunk(self, chunk_id):
@@ -370,7 +370,7 @@ def test_get_chunk_readonly_fallback_includes_prev_assistant_key():
 
 
 def test_get_chunk_readonly_scopes_prev_assistant_to_same_conversation():
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -447,7 +447,7 @@ def test_get_chunk_readonly_scopes_prev_assistant_to_same_conversation():
 
 
 def test_direct_apply_enrichment_persists_provenance_class(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute(
         "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -471,7 +471,7 @@ def test_direct_apply_enrichment_persists_provenance_class(con):
 
 
 def test_direct_apply_enrichment_does_not_promote_manual_agent_note(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
     con.execute(
@@ -497,7 +497,7 @@ def test_direct_apply_enrichment_does_not_promote_manual_agent_note(con):
 
 
 def test_direct_apply_enrichment_preserves_brainlayer_store_authority(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
     con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
@@ -536,7 +536,7 @@ def test_direct_apply_enrichment_preserves_brainlayer_store_authority(con):
 
 
 def test_direct_apply_enrichment_preserves_queued_brain_store_authority(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
     con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
@@ -575,7 +575,7 @@ def test_direct_apply_enrichment_preserves_queued_brain_store_authority(con):
 
 
 def test_direct_apply_enrichment_preserves_explicit_user_authority(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute("ALTER TABLE chunks ADD COLUMN source TEXT")
     con.execute(
@@ -601,7 +601,7 @@ def test_direct_apply_enrichment_preserves_explicit_user_authority(con):
 
 
 def test_apply_enrichment_enqueues_mentioned_entities_for_provenance_sweep(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute(
         "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -630,7 +630,7 @@ def test_apply_enrichment_enqueues_mentioned_entities_for_provenance_sweep(con):
 
 
 def test_apply_enrichment_rolls_back_chunk_updates_when_provenance_enqueue_fails(con, monkeypatch):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute(
         "INSERT INTO chunks (id, content, content_type, sender, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -663,7 +663,7 @@ def test_apply_enrichment_rolls_back_chunk_updates_when_provenance_enqueue_fails
 
 
 def test_previous_assistant_text_orders_mixed_iso_timestamps_by_time(con):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     con.execute("ALTER TABLE chunks ADD COLUMN source_file TEXT")
     con.execute("ALTER TABLE chunks ADD COLUMN project TEXT")
@@ -719,7 +719,7 @@ def test_previous_assistant_text_orders_mixed_iso_timestamps_by_time(con):
 
 
 def test_apply_enrichment_auto_supersede_flag_defaults_off(con, monkeypatch):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     monkeypatch.delenv("BRAINLAYER_AUTO_SUPERSEDE", raising=False)
     monkeypatch.setattr(
@@ -748,10 +748,10 @@ def test_apply_enrichment_auto_supersede_flag_defaults_off(con, monkeypatch):
 
 
 def test_apply_enrichment_auto_supersede_flag_on_runs_dry_run_only(con, monkeypatch, caplog):
-    from brainlayer import enrichment_controller as controller
+    from brainlayer import enrichment_replay as controller
 
     monkeypatch.setenv("BRAINLAYER_AUTO_SUPERSEDE", "1")
-    caplog.set_level(logging.INFO, logger="brainlayer.enrichment_controller")
+    caplog.set_level(logging.INFO, logger="brainlayer.enrichment_replay")
     con.execute("INSERT INTO kg_entities (id, name) VALUES ('e-provider', 'provider router')")
     con.execute("ALTER TABLE chunks ADD COLUMN provenance_class TEXT")
     con.executemany(
@@ -2076,7 +2076,7 @@ def test_deferred_mcp_store_note_without_provenance_class_is_user_anchored(con):
 
 
 def test_deferred_mcp_store_enrichment_derives_direct_provenance():
-    from brainlayer.enrichment_controller import _derive_chunk_provenance_class
+    from brainlayer.enrichment_replay import _derive_chunk_provenance_class
 
     assert (
         _derive_chunk_provenance_class(
@@ -2105,7 +2105,7 @@ def test_entity_lookup_prefers_exact_id_before_exact_name_collision(con):
 
 
 def test_derive_chunk_provenance_class_tolerates_null_content():
-    from brainlayer.enrichment_controller import _derive_chunk_provenance_class
+    from brainlayer.enrichment_replay import _derive_chunk_provenance_class
 
     assert (
         _derive_chunk_provenance_class(

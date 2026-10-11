@@ -397,14 +397,14 @@ def test_caller_supplied_content_hash_never_wins():
 def test_only_one_content_hash_implementation_exists():
     """A second implementation is how four schemes got into the column.
 
-    Byte-identical duplicates count: `enrichment_controller` had its own
+    Byte-identical duplicates count: `enrichment_replay` had its own
     `_content_hash` feeding four `UPDATE chunks SET content_hash` sites, and
     `store.py` computed an UNSTRIPPED sha256. Both now import the contract.
     """
-    from brainlayer import enrichment_controller
+    from brainlayer import enrichment_replay
     from brainlayer.chunk_write import canonical_content_hash
 
-    assert enrichment_controller._content_hash is canonical_content_hash
+    assert enrichment_replay._content_hash is canonical_content_hash
 
     offenders = []
     definition = re.compile(r"^def _?content_hash\(", re.M)
@@ -424,13 +424,13 @@ def test_update_paths_write_the_canonical_hash():
     import sqlite3
 
     from brainlayer.chunk_write import canonical_content_hash
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     content = "  enrichment rewrote this row\n\n"
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, content TEXT, content_hash TEXT)")
     conn.execute("INSERT INTO chunks VALUES ('u1', ?, 'stale-16char0000')", (content,))
-    # the exact statement shape used at enrichment_controller UPDATE sites
+    # the exact statement shape used at enrichment_replay UPDATE sites
     conn.execute("UPDATE chunks SET content_hash = ? WHERE id = ?", (_content_hash(content), "u1"))
     stored = conn.execute("SELECT content_hash FROM chunks WHERE id = 'u1'").fetchone()[0]
     conn.close()

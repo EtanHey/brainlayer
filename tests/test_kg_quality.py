@@ -287,11 +287,11 @@ class TestFactFieldPropagation:
     def test_extracted_relation_has_fact_field(self):
         """ExtractedRelation should support a fact attribute."""
         rel = ExtractedRelation(
-            source_text="Yuval Nir",
+            source_text="Person Delta",
             target_text="Etan Heyman",
             relation_type="client_of",
             confidence=0.8,
-            properties={"fact": "Yuval Nir is a client of Etan Heyman"},
+            properties={"fact": "Person Delta is a client of Etan Heyman"},
         )
         # fact should be accessible (either as attribute or via properties)
         fact = getattr(rel, "fact", None) or rel.properties.get("fact")
@@ -306,23 +306,25 @@ class TestFactFieldPropagation:
         store = VectorStore(tmp_path / "test.db")
 
         # Pre-create entities so resolution finds them
-        store.upsert_entity("person-yuval", "person", "Yuval Nir")
+        store.upsert_entity("person-delta", "person", "Person Delta")
         store.upsert_entity("person-etan", "person", "Etan Heyman")
 
         result = ExtractionResult(
             entities=[
-                ExtractedEntity(text="Yuval Nir", entity_type="person", start=0, end=9, confidence=0.9, source="seed"),
+                ExtractedEntity(
+                    text="Person Delta", entity_type="person", start=0, end=9, confidence=0.9, source="seed"
+                ),
                 ExtractedEntity(
                     text="Etan Heyman", entity_type="person", start=15, end=26, confidence=0.9, source="seed"
                 ),
             ],
             relations=[
                 ExtractedRelation(
-                    source_text="Yuval Nir",
+                    source_text="Person Delta",
                     target_text="Etan Heyman",
                     relation_type="client_of",
                     confidence=0.8,
-                    properties={"fact": "Yuval Nir is a client of Etan Heyman"},
+                    properties={"fact": "Person Delta is a client of Etan Heyman"},
                 ),
             ],
             chunk_id="test-chunk",
@@ -345,20 +347,20 @@ class TestFactFieldPropagation:
         llm_response = json.dumps(
             {
                 "entities": [
-                    {"text": "Yuval Nir", "type": "person"},
+                    {"text": "Person Delta", "type": "person"},
                     {"text": "Etan Heyman", "type": "person"},
                 ],
                 "relations": [
                     {
-                        "source": "Yuval Nir",
+                        "source": "Person Delta",
                         "target": "Etan Heyman",
                         "type": "client_of",
-                        "fact": "Yuval Nir is a coaching client of Etan Heyman",
+                        "fact": "Person Delta is a coaching client of Etan Heyman",
                     }
                 ],
             }
         )
-        source_text = "Yuval Nir is a coaching client of Etan Heyman since 2024."
+        source_text = "Person Delta is a coaching client of Etan Heyman since 2024."
         _, relations = parse_llm_ner_response(llm_response, source_text)
         assert len(relations) == 1
         fact = relations[0].properties.get("fact")

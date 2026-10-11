@@ -1,5 +1,9 @@
 # BrainLayer Data Locations
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](enrichment.md).
+
 > Single source of truth for where all data lives, where it moved from, and the archive strategy.
 
 ## Active Data
@@ -71,6 +75,14 @@ BrainLayer resolves the database path in this order (see `src/brainlayer/paths.p
   }
 }
 ```
+
+## Natural-state transcript backup contract
+
+Each `claude-jsonl-YYYY-MM-DD.tar.gz` bundle stores every selected transcript as a regular raw file
+under `source-{root-index}/<source-relative-path>` outside the BrainLayer database, and verification
+must stream-compare every tar member byte-for-byte with the source before the bundle counts as a
+natural-state copy; an exact match or a strict prefix of a source that only grew after bundling is
+valid, while any divergence within the archived bytes fails the entire bundle before upload.
 
 ## Backups (Manual)
 

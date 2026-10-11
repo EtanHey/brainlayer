@@ -54,11 +54,21 @@ final class BrainBarWindowStateTests: XCTestCase {
         XCTAssertEqual(BrainBarWindowFrameAutosave.dashboardPanelDefaultsKey, "NSWindow Frame BrainBarPanel")
     }
 
-    func testBrainBarTabsCoverDashboardInjectionsAndGraph() {
-        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .injections, .graph])
+    func testBrainBarKeepsDashboardAndSettingsSurfaces() {
+        XCTAssertEqual(BrainBarTab.allCases, [.dashboard, .settings])
         XCTAssertEqual(BrainBarTab.dashboard.title, "Dashboard")
-        XCTAssertEqual(BrainBarTab.injections.title, "Injections")
-        XCTAssertEqual(BrainBarTab.graph.title, "Graph")
+        XCTAssertEqual(BrainBarTab.settings.title, "Settings")
+    }
+
+    func testRetiredSearchURLDoesNotRoute() {
+        XCTAssertNil(BrainBarURLAction.parse(url: URL(string: "brainbar://search")!))
+        XCTAssertEqual(BrainBarURLAction.parse(url: URL(string: "brainbar://toggle")!), .toggle)
+        XCTAssertEqual(BrainBarAppMenuCommands.manualCommandTitles, ["Settings…"])
+    }
+
+    @MainActor
+    func testLiveWindowDefaultsToTheOnePageDashboard() {
+        XCTAssertEqual(BrainBarWindowRootView.defaultTab, .dashboard)
     }
 
     func testLivePresentationShowsRateBadgeWhenEnrichmentIsActive() {
@@ -108,6 +118,15 @@ final class BrainBarWindowStateTests: XCTestCase {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
+    }
+
+    private func brainBarSourceFile(
+        _ relativePath: String,
+        testFilePath: StaticString = #filePath
+    ) throws -> String {
+        let testsURL = URL(fileURLWithPath: "\(testFilePath)")
+        let packageRoot = testsURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: packageRoot.appendingPathComponent(relativePath), encoding: .utf8)
     }
 }
 
@@ -306,51 +325,6 @@ final class BrainBarWindowCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(preferred, candidates[1])
-    }
-
-    @MainActor
-    func testRuntimeTracksRequestedInlineQuickAction() {
-        let runtime = BrainBarRuntime()
-
-        runtime.presentQuickAction(.search)
-        XCTAssertEqual(runtime.requestedQuickAction, .search)
-
-        runtime.presentQuickAction(.capture)
-        XCTAssertEqual(runtime.requestedQuickAction, .capture)
-
-        runtime.clearQuickActionRequest()
-        XCTAssertNil(runtime.requestedQuickAction)
-    }
-
-    @MainActor
-    func testShowSearchPanelRoutesThroughSearchRequestedCallback() {
-        let runtime = BrainBarRuntime()
-        var searchRequests = 0
-        runtime.onSearchRequested = { searchRequests += 1 }
-
-        runtime.showSearchPanel()
-        runtime.showSearchPanel()
-
-        XCTAssertEqual(
-            searchRequests,
-            2,
-            "Runtime.showSearchPanel must fire onSearchRequested so AppDelegate can route to the integrated command bar in the unified window."
-        )
-    }
-
-    @MainActor
-    func testShowQuickCapturePanelRoutesThroughQuickCaptureRequestedCallback() {
-        let runtime = BrainBarRuntime()
-        var captureRequests = 0
-        runtime.onQuickCaptureRequested = { captureRequests += 1 }
-
-        runtime.showQuickCapturePanel()
-
-        XCTAssertEqual(
-            captureRequests,
-            1,
-            "Runtime.showQuickCapturePanel must fire onQuickCaptureRequested so AppDelegate can route to the integrated command bar in the unified window."
-        )
     }
 }
 

@@ -17,13 +17,13 @@ Pinned shared surfaces:
 
 ## 2. BrainBar MCP Router Over `/tmp/brainbar.sock`
 
-BrainBar is the MCP surface of record. Its router keeps 17 canonical definitions and dispatch handlers in `brain-bar/Sources/BrainBar/MCPRouter.swift`.
+BrainBar is the MCP surface of record. Its router keeps 16 canonical definitions and dispatch handlers in `brain-bar/Sources/BrainBar/MCPRouter.swift`.
 
 Canonical BrainBar tools:
 
-`brain_search`, `brain_store`, `brain_get_person`, `brain_recall`, `brain_entity`, `brain_digest`, `brain_update`, `brain_expand`, `brain_tags`, `brain_supersede`, `brain_archive`, `brain_enrich`, `brain_subscribe`, `brain_unsubscribe`, `brain_ack`, `brain_maintenance_rebuild_trigram`, `brain_backup_vacuum_into`.
+`brain_search`, `brain_store`, `brain_get_person`, `brain_recall`, `brain_entity`, `brain_digest`, `brain_update`, `brain_expand`, `brain_tags`, `brain_supersede`, `brain_archive`, `brain_subscribe`, `brain_unsubscribe`, `brain_ack`, `brain_maintenance_rebuild_trigram`, `brain_backup_vacuum_into`.
 
-Python `src/brainlayer/mcp/` remains the secondary transport with 13 canonical definitions built by `_full_tool_definitions()` in `src/brainlayer/mcp/__init__.py`.
+Python `src/brainlayer/mcp/` remains a library-only surface with 12 canonical definitions built by `_full_tool_definitions()` in `src/brainlayer/mcp/__init__.py`.
 
 Differences:
 

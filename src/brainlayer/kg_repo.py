@@ -705,7 +705,7 @@ class KGMixin:
         correction_judge: Any | None = None,
         adjudicate_corrections: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Rebuild persisted facts for an entity and return active facts after adjudication."""
+        """Rebuild facts locally; adjudicate only with an explicitly supplied judge."""
         facts = self.aggregate_entity_facts(entity_id, include_audit=include_audit)
         if getattr(self, "_readonly", False):
             return facts
@@ -753,14 +753,6 @@ class KGMixin:
         effective_correction_judge = correction_judge
         if not adjudicate_corrections:
             effective_correction_judge = None
-        elif effective_correction_judge is None:
-            try:
-                from .correction_judge import get_correction_judge
-
-                effective_correction_judge = get_correction_judge(store=self)
-            except Exception:
-                logger.warning("Correction judge factory failed for entity fact refresh", exc_info=True)
-                effective_correction_judge = None
 
         for fact in facts:
             fact_text = fact["fact_text"]

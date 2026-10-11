@@ -18,39 +18,28 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testRuntimeStartsWithDatabaseAndInjectionStoreNil() {
+    func testRuntimeStartsWithDatabaseAndCollectorNil() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         XCTAssertNil(runtime.database)
-        XCTAssertNil(runtime.injectionStore)
         XCTAssertNil(runtime.collector)
     }
 
-    func testWireRuntimePopulatesDatabaseAndLazilyLoadsInjectionStore() {
+    func testWireRuntimePopulatesDatabaseWithoutOpeningAnExtraWriter() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil
         )
         defer { collector.stop() }
 
         BrainBarAppSupport.wireRuntime(runtime, dbPath: tempDBPath, collector: collector)
-        defer { runtime.injectionStore?.stop() }
-
         XCTAssertNotNil(
             runtime.database,
             "Regression guard: BrainBarApp must not pass nil database to runtime.install — "
-            + "the UI gates 'Warming memory…' / QuickCaptureViewModel on database != nil. "
+            + "the UI gates 'Warming memory…' on database != nil. "
             + "See PR #312 (FastAPI daemon removal) — UI process must open SQLite directly."
-        )
-        XCTAssertNil(
-            runtime.injectionStore,
-            "Dashboard startup should not eagerly open InjectionStore; it owns an extra writable SQLite handle."
-        )
-        runtime.ensureInjectionStore()
-        XCTAssertNotNil(
-            runtime.injectionStore,
-            "Regression guard: BrainBarApp must provide a lazy InjectionStore factory so the Injections tab can load on demand."
         )
         XCTAssertNotNil(runtime.collector)
     }
@@ -69,13 +58,12 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
         let collector = BrainBarAppSupport.makeStatsCollector(
             dbPath: tempDBPath,
             targetPID: ProcessInfo.processInfo.processIdentifier,
+            agentActivityMonitor: .synthetic,
             brainBusEvents: nil
         )
         defer { collector.stop() }
 
         BrainBarAppSupport.wireRuntime(runtime, dbPath: tempDBPath, collector: collector)
-        defer { runtime.injectionStore?.stop() }
-
         XCTAssertNotNil(runtime.database)
         XCTAssertTrue(
             runtime.database?.isOpen == true,

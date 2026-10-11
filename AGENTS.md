@@ -60,13 +60,13 @@ BrainLayer is the memory layer for the entire ecosystem. If it breaks, every gol
 - Canonical DB: `~/.local/share/brainlayer/brainlayer.db`
 
 ## MCP Tools
-Served by BrainBar (`MCPRouter.toolDefinitions`), 17 total. A session boots into the **core
+Served by BrainBar (`MCPRouter.toolDefinitions`), 16 total. A session boots into the **core
 palette** — `brain_search`, `brain_store`, `brain_recall`, `brain_expand`, plus `expand_palette`.
 Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 
 - Core: `brain_search`, `brain_store`, `brain_recall`, `brain_expand`
 - Gated: `brain_entity`, `brain_get_person`, `brain_tags`, `brain_digest`, `brain_update`,
-  `brain_enrich`, `brain_supersede`, `brain_archive`, `brain_subscribe`, `brain_unsubscribe`,
+  `brain_supersede`, `brain_archive`, `brain_subscribe`, `brain_unsubscribe`,
   `brain_ack`, `brain_backup_vacuum_into`, `brain_maintenance_rebuild_trigram`
 - `brain_backup_vacuum_into` is callable regardless of profile (owner-only socket is the trust
   boundary), but stays out of the advertised core inventory.
@@ -81,14 +81,19 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 ## Tests
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
-- **Suite hygiene, enforced not just written down: no test loads an embedding model, and no test
-  opens the canonical DB.** `tests/conftest.py` arms both guards for every unmarked test —
+- **Suite hygiene is enforced for unmarked tests.** `tests/conftest.py` guards embedding model
+  loads, canonical DB opens, and production BrainBar socket connects —
   `BRAINLAYER_FORBID_EMBEDDING_MODEL=1` (checked at every model-load site, and inherited by
   subprocesses) and a refusal on `sqlite3.connect`/`apsw.Connection` against
-  `~/.local/share/brainlayer`. The only escape is a declared marker:
+  `~/.local/share/brainlayer`. It also redirects BrainBar socket resolution to a nonexistent
+  path and refuses connects to `/tmp/brainbar.sock` in-process and in Python subprocesses that
+  inherit PYTHONPATH and site initialization. The five Python BrainBar connector sites also check
+  `BRAINLAYER_FORBID_BRAINBAR_SOCKET`, including when a child replaces PYTHONPATH but keeps the
+  guard flag. A clean environment or non-Python socket client does not inherit that guard.
+  The only escape is a declared marker:
   `@pytest.mark.embedding_model` for a test that really needs a real model (deselected by
   `scripts/run_tests.sh`, still run in CI, which warms the HF cache on purpose), or
-  `integration`/`live` for a deliberate production-DB check.
+  `integration`/`live` for a deliberate production-DB or BrainBar socket check.
 - **The guard's one contract:** in `tests/`, reach an embedding model through
   `brainlayer.embeddings` or a module attribute — never `from sentence_transformers import X`. A
   direct alias binds the real class at import time, before any fixture, and reaches neither the
@@ -108,12 +113,12 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
   python; a `ModuleNotFoundError` there blocks the deploy exactly as an invalid signature does.
 
 ## PR Workflow
-- Request `@codex review`.
+- Review = Codex↔Claude pair + CodeRabbit (+ at most one bot); never write the Codex bot's at-mention token.
 - Request a lead-routed Claude pair review through the active collab lane.
 - Do not route mandatory reviews to Bugbot or Greptile.
 
 ## Known Issues
-- DB locking during enrichment.
+- Historical enrichment writer contention is retired; keep SQLite write/lock safety.
 - WAL can grow to 4.7GB.
 
 <!-- IDENTITY: brainlayer, owner=EtanHey, purpose=the fleet's memory — see the letter at the top of this file -->
@@ -145,6 +150,9 @@ not a copy here. Two contracts an agent must know:
 - Source data: JSONL in `~/.claude/projects/`
 
 ## Checkouts and worktrees — never work at the repo root
+
+- An old editable-install console script can shadow the keg CLI on PATH and run root code.
+  `brainlayer doctor` detects this from the keg; dev runs explicitly skip the check.
 
 - **`~/Gits/brainlayer` is a real checkout kept at `origin/main`**, and ~22 worktrees hang off it.
   It was repaired on 2026-09-06 (`core.bare` true→false, HEAD `5bd8d818`→`da325b8d`) after its
@@ -201,11 +209,11 @@ pip install -e ".[dev]"
 brainlayer index
 brainlayer setup
 brainlayer search "how did I implement authentication"
-brainlayer enrich
 ```
 - Lint/format: `ruff check src/ tests/ && ruff format src/ tests/`
-- Pre-push: `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full
-  runs are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
+- Pre-push: suites are queued via golems' heavy-suite lock; `GOLEMS_HEAVY_FORCE=1` is the human
+  override. `.githooks/pre-push` runs `scripts/run_tests.sh` with `BRAINLAYER_PREPUSH=1`; full runs
+  are deduped by git tree hash in `.git/brainlayer-prepush-cache`.
 - A **tag** push has no branch to diff against, so the hook reads the pushed refs off its stdin and
   scopes the run to `<previous release tag>..<tag>` via `BRAINLAYER_CHANGED_FILES_RANGE`, naming the
   tag in `BRAINLAYER_PREPUSH_TAG`. The predecessor must be a **full release**: resolved with
@@ -230,12 +238,18 @@ brainlayer enrich
 
 ## Pipeline Overview
 - Extract -> Classify -> Chunk -> Embed -> Index
-- Post-processing: Enrichment, Brain Graph, Obsidian export
+- Post-processing: local Brain Graph and Obsidian export; historical enrichment metadata remains readable
 - Storage: `~/.local/share/brainlayer/brainlayer.db` (canonical path; measured 2026-09-06 at
   16.5 GB / 817,238 chunks — it grows, so re-measure rather than quoting this figure back)
 - DB path resolved by `paths.py:get_db_path()` — env var override or canonical path
 - All scripts and CLI use `paths.py` for DB path resolution
 - Concurrency: retry on `SQLITE_BUSY`; each worker uses its own connection
+
+## Observability surface
+- The Python producer writes `observability.json` beside the resolved DB; `BRAINLAYER_OBSERVABILITY_PATH` overrides that path.
+- The frozen contract is `tests/fixtures/observability/observability-schema.v1.json` (`schema_version: 1`).
+- `stores`, `emitters`, `author_unknown`, and `backups` fail closed: every section carries `state`, `reason`, and `inputs[]`; measured sections use an empty reason, while `unmeasurable` sections require a non-silent one and no numeric output.
+- Run the producer with `brainlayer observability --write`; check fixture drift with `python3 scripts/check_observability_golden_inputs.py --split dev`.
 
 ## P1 Pipeline Contracts
 - BL-10 source denylist is implemented in `src/brainlayer/ingest_denylist.py`. By default, provider
@@ -266,21 +280,22 @@ brainlayer enrich
   workflow agent's own role. Both names stay in `MEMORY_READER_ATTRIBUTIONS` so the ruling holds the
   moment a harness ever labels them; until then only `brain-worker` actually fires. Matching on task
   text is not a substitute and is forbidden — a lead session *discussing* session-miner is ordinary memory.
-- ⚠️ **`BRAINLAYER_INGEST_DENYLIST` REPLACES the class rule; it does not add to it.**
-  `is_denylisted` skips the whole attribution branch whenever the variable is present at all
-  (`BRAINLAYER_INGEST_DENYLIST_ENV not in os.environ and ...`). So *any* override — even a
-  project-scoped one naming a single repo — turns OFF brain-worker/session-miner/weave exclusion,
-  and those transcripts start ingesting. **Verified by execution 2026-09-05:** with the deployed
-  `matchmat`-shaped override set, a `brain-worker` transcript returns `is_denylisted == False`.
-  A quiet `setup` therefore means "no over-exclusion", never "the class rule is intact".
+- **`BRAINLAYER_INGEST_DENYLIST` adds path exclusions to the class rule.** Empty and
+  deployment-scoped overrides preserve memory-reader attribution exclusion and the default
+  fail-closed policy for unknown Claude subagents. Narrowing a Codex blanket must retain
+  unrelated project exclusions; a configured path may still exclude otherwise ordinary sessions.
 - **`brainlayer setup` reads the env FILE it resolved, not just the process environment.** The
   blanket lived in `~/.config/brainlayer/brainlayer.env`, which is not in a fresh shell's environ,
   so a check against `os.environ` alone would have stayed silent on the very defect it exists to
   catch. `env_file_denylist_patterns()` parses the resolved file (including `--env-file`), and
-  `setup` reports each source separately: that the override replaces the class rule, and then any
+  `setup` reports each source separately: that the override preserves the class rule, and then any
   pattern broader than it. Deployment-scoped patterns naming one project or repo are not reported as
   overreach. Etan rules on that env file; agents do not edit it.
 - Go-forward secret scrubbing runs in `src/brainlayer/pipeline/secret_scrub.py` from `src/brainlayer/watcher_bridge.py` before chunk persistence. Provider-prefixed and labeled high-entropy secrets are redacted; unlabeled high-entropy tokens are recorded in quarantine metadata.
+- **LLM enrichment producers are retired.** Existing parsed metadata, local replay, and output
+  scrubbing remain compatibility contracts. Keep fail-closed credential/output scrubbing and
+  the public local PII `Sanitizer`; do not add a model sender or route around retirement.
+  History: [enrichment retirement](docs/enrichment.md).
 - MCP search uses a fixed-size readonly WAL `VectorStore` pool in `src/brainlayer/mcp/_shared.py`. `BRAINLAYER_READ_POOL_SIZE` defaults to 8, or 4 on detected Apple M1; M1 machines can keep the lower override explicitly. Checkout beyond the fixed pool blocks up to `BRAINLAYER_READ_BUSY_TIMEOUT_MS`, and startup rejects `pool_size * BRAINLAYER_READ_CACHE_KB` above about 768MB.
 
 <!-- ARCHITECTURE: classification preserves ai_code/stack_trace/user_message verbatim; skips noise; AST-aware chunking via tree-sitter; never split stack traces -->
@@ -289,19 +304,21 @@ brainlayer enrich
 - Skip/summarize: `noise` (skip), `build_log` (summarize), `dir_listing` (structure only)
 - Chunking: AST-aware (tree-sitter); never split stack traces; mask large tool output
 
-<!-- ARCHITECTURE: primary enrichment backend=Groq (cloud); fallback=Gemini via enrichment_controller.py; override via BRAINLAYER_ENRICH_BACKEND env var -->
-## Enrichment
-- Primary backend: **Groq** (cloud, configured in launchd plist)
-- Fallback: Gemini via `enrichment_controller.py`, Ollama as offline last-resort
-- Override with `BRAINLAYER_ENRICH_BACKEND=ollama|mlx|groq`
-- Rate configurable via `BRAINLAYER_ENRICH_RATE` env var (default 5.0 req/s = 300 RPM; see `enrichment_controller.py:RATE_LIMITS`)
-- Adds 15 metadata fields (summary, key_facts, tags, importance, intent, primary_symbols, resolved_queries, epistemic_level, version_scope, debt_impact, external_deps, entities, sentiment_label, sentiment_score, sentiment_signals); session enrichment captures decisions/corrections
+<!-- ARCHITECTURE: LLM enrichment retired; historical metadata and local KG retained -->
+## Enrichment (retired)
+- LLM chunk/session enrichment and provider activation are retired.
+- Existing metadata and session analysis remain readable. Local indexing, search, digest, KG,
+  offline prompt emission/collection, and checkpoint replay remain available.
+- History: [enrichment retirement](docs/enrichment.md).
+- **Release gate:** retain `GOOGLE_API_KEY`, `BRAINLAYER_REQUIRE_GOOGLE_API_KEY`, and env-run's
+  exit-78 compatibility gate until the release re-renders installed hotlane plists. Preserve
+  its documentation in [Configuration](docs/configuration.md). Do not resume retired jobs.
 
-<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 17 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
+<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 16 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
 ## Interfaces
 - **There is no HTTP API.** The FastAPI daemon and its `/health`, `/stats`, `/search`, `/brain/graph`,
   `/backlog/items` routes were removed. Anything still calling them is calling a surface that is gone.
-- MCP tools: 17, defined in `brain-bar/Sources/BrainBar/MCPRouter.swift` — see **MCP Tools** above for
+- MCP tools: 16, defined in `brain-bar/Sources/BrainBar/MCPRouter.swift` — see **MCP Tools** above for
   the core/gated split. Legacy `brainlayer_*` names are still handled by the Python library handlers
   under `src/brainlayer/mcp/`, but BrainBar does not serve them.
 - `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors there; the
@@ -393,6 +410,9 @@ brainlayer enrich
 
 <!-- PATHS: DB=~/.local/share/brainlayer/brainlayer.db | offsets=~/.local/share/brainlayer/offsets.json | logs=~/Library/Logs/brainlayer/watch.{out,err}.log | socket=/tmp/brainlayer.sock | lock=/tmp/brainlayer-enrichment.lock -->
 ## Data & Locks
+- Backups use the BrainLayer-owned `~/.config/brainlayer/drive-tokens.json` (0600); the Google Drive MCP token is a one-time copy source only.
+- Run `brainlayer backup auth` to authorize in the browser; BrainBar uses `brainlayer backup auth --status --json` and `brainlayer backup auth --json`.
+- `BRAINLAYER_DRIVE_TOKEN_PATH` and `BRAINLAYER_DRIVE_CLIENT_PATH` override the token and read-only OAuth client paths; never delete a token after refresh failure.
 - Backup log: real runs append JSONL to `~/.local/share/brainlayer/logs/backup-daily.log` with
   `backup_log_provenance=real`; pytest sets `BRAINLAYER_BACKUP_LOG_PATH` and
   `BRAINLAYER_BACKUP_LOG_PROVENANCE=pytest` so tests cannot refresh the production heartbeat log.
@@ -402,12 +422,12 @@ brainlayer enrich
   (moved from `~/.local/share/brainlayer/logs/watch.{log,err}` by `3dca26a2`, 2026-05-18;
   the old files are frozen at that date and are NOT a health signal)
 - Socket: `/tmp/brainlayer.sock`
-- Enrichment lock: `/tmp/brainlayer-enrichment.lock`
+- Historical enrichment lock: `/tmp/brainlayer-enrichment.lock` (legacy cleanup/safety only)
 - Session dedup: `/tmp/brainlayer_session_*.json`
 
-<!-- ANTI-PATTERNS: never run bulk ops while enrichment is writing; never delete from chunks while FTS trigger active on large datasets; always stop workers + checkpoint WAL first -->
+<!-- ANTI-PATTERNS: quiesce writers before bulk ops; preserve legacy enrichment stop checks; checkpoint WAL first -->
 ## Bulk DB Operations (SAFETY)
-1. **Stop enrichment workers first** — never run bulk ops while enrichment is writing (causes WAL bloat + potential freeze)
+1. **Quiesce all writers first** — preserve checks for older installed enrichment jobs, but never resume the retired service. Concurrent bulk writes can cause WAL bloat or freezes.
 2. **Checkpoint WAL** before and after: `PRAGMA wal_checkpoint(FULL)`
 3. **Batch deletes** in 5-10K chunks, checkpoint every 3 batches
 

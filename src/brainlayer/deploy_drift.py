@@ -16,7 +16,6 @@ from .paths import get_db_path
 
 DEFAULT_DEPLOY_DRIFT_LABELS = (
     "com.mcplayer.brainlayer-proxy",
-    "com.brainlayer.enrichment",
     "com.brainlayer.drain",
     "com.brainlayer.watch",
 )
@@ -35,7 +34,6 @@ DEPLOY_DRIFT_IGNORED_PREFIXES = (
 )
 
 BRAINLAYER_LABEL_BY_SERVICE = {
-    "enrichment": "com.brainlayer.enrichment",
     "drain": "com.brainlayer.drain",
     "watch": "com.brainlayer.watch",
 }

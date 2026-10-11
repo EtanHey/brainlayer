@@ -5,7 +5,7 @@ Default workflow for the overnight run:
   1. --emit-prompts DIR writes self-contained prompt files for Cursor workers.
   2. --collect DIR validates worker verdict JSONs and emits merged reports.
 
-The direct LLM path is optional fallback only: --judge groq.
+Direct cloud judging is retired; use the local prompt/collection workflows.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from brainlayer.kg_judge import (  # noqa: E402
     collect_worker_verdicts,
     emit_prompt_files,
-    judge_clusters_with_backend,
     load_flag_batch_clusters,
     write_verdict_outputs,
 )
@@ -39,12 +38,11 @@ def main() -> None:
     parser.add_argument(
         "--collect", type=Path, default=None, help="Collect worker verdict JSON/JSONL files from this dir"
     )
-    parser.add_argument("--judge", choices=["groq"], default=None, help="Optional direct LLM fallback backend")
     args = parser.parse_args()
 
-    modes = sum(value is not None for value in (args.emit_prompts, args.collect, args.judge))
+    modes = sum(value is not None for value in (args.emit_prompts, args.collect))
     if modes != 1:
-        raise SystemExit("Choose exactly one mode: --emit-prompts DIR, --collect DIR, or --judge groq")
+        raise SystemExit("Choose exactly one mode: --emit-prompts DIR or --collect DIR")
 
     if args.collect is not None:
         clusters = (
@@ -58,20 +56,13 @@ def main() -> None:
         return
 
     if args.flag_batch is None:
-        raise SystemExit("--flag-batch is required for --emit-prompts and --judge")
+        raise SystemExit("--flag-batch is required for --emit-prompts")
 
     clusters = load_flag_batch_clusters(args.flag_batch, categories=args.categories, limit=args.limit)
     if args.emit_prompts is not None:
         written = emit_prompt_files(clusters, args.emit_prompts, db_path=args.db, gits_root=args.gits_root)
         print(f"EMITTED {len(written)} prompts to {args.emit_prompts}")
         return
-
-    if args.judge is not None:
-        verdicts = judge_clusters_with_backend(clusters, backend=args.judge, db_path=args.db, gits_root=args.gits_root)
-        out_path = write_verdict_outputs(
-            verdicts, out_json=args.out, markdown_path=args.markdown, mode=f"judge:{args.judge}"
-        )
-        print(f"WROTE {len(verdicts)} verdicts to {out_path}")
 
 
 if __name__ == "__main__":

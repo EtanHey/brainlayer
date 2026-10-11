@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from brainlayer import maintenance
+from brainlayer.scrub_at_rest import LIVE_SERVICES
 
 
 def _write_sentinel(path: Path, *labels: str) -> None:
@@ -40,13 +41,13 @@ def test_paused_service_is_not_resumed(tmp_path, monkeypatch, sentinel):
     assert failures == [], "skipping a paused service is not a resume failure"
 
 
-def test_no_sentinel_resumes_everything(tmp_path, monkeypatch, sentinel):
+def test_no_sentinel_resumes_only_active_services(tmp_path, monkeypatch, sentinel):
     resumed: list[str] = []
     monkeypatch.setattr(maintenance, "_resume_service", lambda root, svc: resumed.append(svc))
 
     maintenance._resume_services(tmp_path, ("watch", "enrichment", "drain"))
 
-    assert resumed == ["watch", "enrichment", "drain"], "no sentinel means resume all"
+    assert resumed == ["watch", "drain"], "retired services never resume"
 
 
 def test_keep_down_accepts_service_names_and_launchd_labels(tmp_path, monkeypatch, sentinel):
@@ -65,3 +66,28 @@ def test_keep_down_accepts_service_names_and_launchd_labels(tmp_path, monkeypatc
 
     assert resumed == ["index", "drain"]
     assert failures == []
+
+
+@pytest.mark.parametrize("service", LIVE_SERVICES)
+def test_pause_check_uses_launchd_label_for_every_live_service(service, sentinel, monkeypatch):
+    label = maintenance._launchd_label(service)
+    _write_sentinel(sentinel, label)
+    checked_labels = []
+    pause_applies = maintenance.pause_applies_to_label
+
+    def record_pause_check(payload, checked_label):
+        checked_labels.append(checked_label)
+        return pause_applies(payload, checked_label)
+
+    monkeypatch.setattr(maintenance, "pause_applies_to_label", record_pause_check)
+
+    assert maintenance._service_is_deliberately_paused(service)
+    assert checked_labels == [label]
+
+
+@pytest.mark.parametrize("service", ["enrich", "enrichment"])
+def test_retired_services_stay_down_even_when_loaded_before(tmp_path, monkeypatch, sentinel, service):
+    resumed = []
+    monkeypatch.setattr(maintenance, "_resume_service", lambda root, name: resumed.append(name))
+    assert maintenance._resume_services(tmp_path, (service, "watch"), {service: True, "watch": True}) == []
+    assert resumed == ["watch"]

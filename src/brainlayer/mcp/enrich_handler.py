@@ -1,82 +1,16 @@
-"""brain_enrich MCP handler — unified enrichment through a single tool."""
-
-import asyncio
-import logging
+"""Retired enrichment handler compatibility and historical statistics."""
 
 from mcp.types import CallToolResult, TextContent
 
-from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
-from ._format import format_digest_result
-from ._shared import _error_result, _get_vector_store
-
-logger = logging.getLogger(__name__)
+from ._shared import _error_result
 
 
 async def _brain_enrich(
-    mode: str = "realtime",
-    limit: int = 25,
-    since_hours: int = DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
-    phase: str = "run",
-    chunk_ids: list[str] | None = None,
-    stats: bool = False,
+    *_legacy_args: object,
+    **_legacy_options: object,
 ) -> CallToolResult:
-    """Handle brain_enrich tool call.
-
-    Modes:
-        realtime — Gemini 2.5 Flash-Lite, single-chunk, <600ms target
-        batch   — Gemini Batch API, backlog processing
-    """
-    if mode not in ("realtime", "batch"):
-        return _error_result(f"Unknown mode: {mode}. Use realtime or batch.")
-
-    try:
-        store = _get_vector_store()
-
-        if stats:
-            return await _enrich_stats(store)
-
-        loop = asyncio.get_running_loop()
-
-        if mode == "realtime":
-            from ..enrichment_controller import enrich_realtime
-
-            result = await loop.run_in_executor(
-                None,
-                lambda: enrich_realtime(
-                    store=store,
-                    limit=limit,
-                    since_hours=since_hours,
-                    chunk_ids=chunk_ids,
-                ),
-            )
-        elif mode == "batch":
-            from ..enrichment_controller import enrich_batch
-
-            result = await loop.run_in_executor(
-                None,
-                lambda: enrich_batch(
-                    store=store,
-                    phase=phase,
-                    limit=limit,
-                ),
-            )
-
-        output = {
-            "mode": result.mode,
-            "attempted": result.attempted,
-            "enriched": result.enriched,
-            "skipped": result.skipped,
-            "failed": result.failed,
-        }
-        if result.errors:
-            output["errors"] = result.errors[:10]  # Cap error list
-
-        formatted = format_digest_result(output)
-        return CallToolResult(content=[TextContent(type="text", text=formatted)])
-
-    except Exception as e:
-        logger.error("brain_enrich failed: %s", e)
-        return _error_result(f"brain_enrich error: {e}")
+    """Accept legacy options solely to return a transport-free retirement error."""
+    return _error_result("Enrichment has been retired. Local store, embeddings and search remain available.")
 
 
 async def _enrich_stats(store) -> CallToolResult:

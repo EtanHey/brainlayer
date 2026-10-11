@@ -178,9 +178,10 @@ def assert_modules(modules: list[str], cwd: str) -> bool:
     keg_python = os.environ.get("BRAINLAYER_KEG_PYTHON", DEFAULT_KEG_PYTHON)
     print()
     print(f"## installed-keg module asserts ({keg_python})")
+    isolated_env = {"PATH": os.environ.get("PATH", os.defpath)}
     all_ok = True
     for module in modules:
-        result = _run([keg_python, "-c", f"import {module}"], cwd)
+        result = _run([keg_python, "-I", "-c", f"import {module}"], cwd, env=isolated_env)
         if result.returncode == 0:
             print(f"import {module} | OK")
             continue

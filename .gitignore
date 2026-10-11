@@ -76,12 +76,18 @@ claude.scratchpad.md
 # Local eval outputs (tracked baselines remain tracked)
 tests/eval_results/
 
+# Personal KG exports and raw artifact dumps stay local.
+eval_results/kg-*.json
+artifacts/**/*.jsonl
+
 # Raw enriched eval rows contain PERSONAL chunk content — NEVER commit (privacy).
 # Aggregate metrics go in results/ instead; raw rows archived to Brain Drive.
 eval_results/*.jsonl
 
 # Generated local eval/graph outputs
 eval_results/
+results/
+artifacts/
 graphify-out/
 *.bak-*
 *.json.lock

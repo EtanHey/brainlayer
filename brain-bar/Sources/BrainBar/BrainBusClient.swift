@@ -55,8 +55,9 @@ private final class BrainBusClientRun: @unchecked Sendable {
             autoreleasepool {
                 if let fd = try? connect() {
                     setCurrentFD(fd)
-                    sendWatchCommand(fd: fd)
-                    readEvents(fd: fd)
+                    if sendWatchCommand(fd: fd) {
+                        readEvents(fd: fd)
+                    }
                     close(fd)
                     setCurrentFD(-1)
                 }
@@ -91,6 +92,8 @@ private final class BrainBusClientRun: @unchecked Sendable {
     private func connect() throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw BrainBusClientError.socket(errno) }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -120,16 +123,28 @@ private final class BrainBusClientRun: @unchecked Sendable {
         return fd
     }
 
-    private func sendWatchCommand(fd: Int32) {
+    private func sendWatchCommand(fd: Int32) -> Bool {
         let request: [String: Any] = [
             "jsonrpc": "2.0",
             "id": 1,
             "method": "watch-brain-bus",
         ]
-        guard var data = try? JSONSerialization.data(withJSONObject: request) else { return }
+        guard var data = try? JSONSerialization.data(withJSONObject: request) else { return false }
         data.append(0x0A)
-        data.withUnsafeBytes { ptr in
-            _ = write(fd, ptr.baseAddress!, data.count)
+        return data.withUnsafeBytes { ptr in
+            var sent = 0
+            while sent < data.count {
+                let written = write(fd, ptr.baseAddress!.advanced(by: sent), data.count - sent)
+                if written > 0 {
+                    sent += written
+                    continue
+                }
+                if written < 0 && errno == EINTR { continue }
+                let errorClass = written == 0 ? "closed-handle" : errno == EPIPE ? "EPIPE" : "socket-write"
+                NSLog("[BrainBar] BrainBus watch command write failed (%@)", errorClass)
+                return false
+            }
+            return true
         }
     }
 

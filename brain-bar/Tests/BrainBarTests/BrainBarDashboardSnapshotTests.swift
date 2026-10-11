@@ -32,30 +32,201 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         case `default`
         case wide
 
-        // Heights are intentionally generous: the dashboard is a ScrollView, so a
-        // too-short frame clips the lower cards (queue rail, agent presence,
-        // diagnostics) while a too-tall frame only adds dark background below the
-        // content. Narrower widths stack everything vertically and run tallest.
+        // Match the actual dashboard window height. The resting one-page layout
+        // must stay useful without relying on an artificially tall proof frame.
         var size: NSSize {
             switch self {
-            case .compact: NSSize(width: 760, height: 1_900)
-            case .default: NSSize(width: 960, height: 1_820)
-            case .wide: NSSize(width: 1_280, height: 1_500)
+            case .compact: NSSize(width: 760, height: 640)
+            case .default: NSSize(width: 960, height: 640)
+            case .wide: NSSize(width: 1_280, height: 640)
             }
         }
     }
 
+    func testIngestChartsUseOneMarkerOnLatestCompleteBucket() {
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "empty", values: [], lastBucketIsPartial: true)
+                .visiblePointMarkers(for: .primary, compact: false),
+            []
+        )
+        XCTAssertEqual(
+            SparklineChartPresentation(label: "single", values: [0], lastBucketIsPartial: true)
+                .visiblePointMarkers(for: .primary, compact: false),
+            []
+        )
+
+        for values in [[7, 3], [0, 0], [3, 5, 2, 0]] {
+            let presentation = SparklineChartPresentation(
+                label: "Ingest",
+                values: values,
+                lastBucketIsPartial: true
+            )
+            let markerIndices = presentation.visiblePointMarkers(for: .primary, compact: false).map(\.bucket)
+            XCTAssertEqual(markerIndices.count, 1)
+            XCTAssertEqual(markerIndices[0], values.count - 2)
+            XCTAssertNotEqual(markerIndices[0], values.indices.last)
+            XCTAssertEqual(presentation.completePoints(for: .primary).map(\.bucket), Array(values.indices.dropLast()))
+            XCTAssertEqual(presentation.partialSegmentPoints(for: .primary).map(\.bucket), Array(values.indices.suffix(2)))
+        }
+    }
+
+    func testOnePageCompositionContract() throws {
+        XCTAssertEqual(
+            BrainBarOnePageComposition.visibleSectionIDs,
+            ["status", "backups", "memory", "ingest", "details"]
+        )
+        XCTAssertEqual(BrainBarOnePageComposition.primaryTileCount, 2)
+        XCTAssertFalse(BrainBarOnePageComposition.primaryTilesHaveEqualHeight)
+        XCTAssertFalse(BrainBarOnePageComposition.detailsExpandedByDefault)
+
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        // The Google Drive banner sits between the status strip and the tiles, and only renders
+        // when Drive access needs a click (missing, invalid or expiring).
+        XCTAssertTrue(source.contains(
+            "statusStrip\n                        if let driveAuth {\n                            BrainBarDriveAuthBanner(model: driveAuth)\n                        }\n"
+                + "                        summaryTiles(layout: layout)\n                        ingestBand(layout: layout)"
+        ))
+        XCTAssertFalse(source.contains("ObservabilityDashboardView("), "The old lower observability grid must not return.")
+        XCTAssertFalse(source.contains("Runtime & Details"), "Technical summaries must stay hidden while Details is collapsed.")
+    }
+
+    @MainActor
+    func testOnePageIngestAreaRendersThreeIndependentlyScaledSmallMultiples() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "private func ingestBand"))
+        let end = try XCTUnwrap(source.range(of: "private func summaryTile", range: start.upperBound..<source.endIndex))
+        let ingestBand = String(source[start.lowerBound..<end.lowerBound])
+
+        XCTAssertTrue(ingestBand.contains("BrainBarSharedTimeframeSelector"))
+        XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.allCommits"))
+        XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.agentStores"))
+        XCTAssertTrue(ingestBand.contains("ingestSeriesChart(.jsonlWatcher"))
+        XCTAssertTrue(ingestBand.contains("BrainBarHeroSparkline("))
+        XCTAssertTrue(ingestBand.contains("lastBucketIsPartial: true"))
+        XCTAssertTrue(ingestBand.contains("showsRestingAxes: true"))
+        XCTAssertFalse(source.contains("private struct BrainBarIngestBarChart"))
+
+        let summary = DashboardFlowSummary.derive(
+            daemon: nil,
+            stats: BrainBarDashboardFixture.stats,
+            now: BrainBarDashboardFixture.fetchedAt
+        )
+        let seriesValues = [PipelineSeries.allCommits, .agentStores, .jsonlWatcher].map {
+            summary.lane(for: $0).values
+        }
+        let maxima = [PipelineSeries.allCommits, .agentStores, .jsonlWatcher].map {
+            SparklineChartPresentation(
+                label: summary.lane(for: $0).sparklineLabel,
+                values: summary.lane(for: $0).values,
+                activityWindowMinutes: summary.lane(for: $0).activityWindowMinutes,
+                latestBucketName: summary.lane(for: $0).latestBucketName,
+                fetchedAt: BrainBarDashboardFixture.fetchedAt
+            ).maxValue
+        }
+        XCTAssertEqual(maxima.count, 3)
+        XCTAssertNotEqual(seriesValues[0], seriesValues[1])
+        XCTAssertNotEqual(seriesValues[0], seriesValues[2])
+        XCTAssertNotEqual(seriesValues[1], seriesValues[2])
+        XCTAssertTrue(zip(seriesValues[1], seriesValues[0]).allSatisfy { $0.0 <= $0.1 })
+        XCTAssertTrue(zip(seriesValues[1], seriesValues[0]).contains { $0.0 < $0.1 })
+        XCTAssertNotEqual(maxima[0], maxima[1], "Each small multiple must derive its own y-scale.")
+        XCTAssertNotEqual(maxima[0], maxima[2], "Each small multiple must derive its own y-scale.")
+        XCTAssertNotEqual(maxima[1], maxima[2], "Each small multiple must derive its own y-scale.")
+    }
+
+    func testIngestBandChartSizesNeverTriggerSilentCompactRendering() {
+        XCTAssertEqual(BrainBarIngestBandLayout.plotHeight, 96)
+        for width: CGFloat in [760, 960, 1_280] {
+            let sizes = BrainBarIngestBandLayout.chartSizes(containerWidth: width)
+            XCTAssertEqual(sizes.count, 3)
+            XCTAssertTrue(sizes.allSatisfy { $0.height == 96 })
+            XCTAssertTrue(
+                sizes.allSatisfy { !SparklineRenderer.isCompact(size: $0) },
+                "Dashboard width \(width) must preserve axes and labels for every ingest chart."
+            )
+        }
+    }
+
+    func testSignalCoverageUsesOneStableDisclosureControl() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "private struct BrainBarSignalCoveragePanel"))
+        let end = try XCTUnwrap(source.range(of: "private struct BrainBarSignalCoverageRow", range: start.upperBound..<source.endIndex))
+        let panel = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertEqual(panel.components(separatedBy: "brainbar.dashboard.signal-coverage-disclosure").count - 1, 1)
+        XCTAssertFalse(panel.contains("disclosureChevron"))
+        XCTAssertTrue(panel.contains("BrainBarDisclosureRow("))
+        XCTAssertTrue(panel.contains("chevronPlacement: .trailing"))
+
+        let rowStart = try XCTUnwrap(source.range(of: "private struct BrainBarDisclosureRow"))
+        let rowEnd = try XCTUnwrap(source.range(of: "private struct BrainBarDisclosureContentLayout", range: rowStart.upperBound..<source.endIndex))
+        let row = String(source[rowStart.lowerBound..<rowEnd.lowerBound])
+        XCTAssertTrue(row.contains("Image(systemName: \"chevron.right\")"))
+        XCTAssertTrue(row.contains("rotationEffect(.degrees(isExpanded ? 90 : 0))"))
+        XCTAssertTrue(row.contains(".focusEffectDisabled()"))
+    }
+
+    func testDashboardHasNoFocusableNonControlContainer() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(source.range(of: "struct BrainBarDashboardView"))
+        let end = try XCTUnwrap(source.range(of: "enum BrainBarDisclosureActivationSource", range: start.upperBound..<source.endIndex))
+        let dashboard = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(dashboard.contains(".accessibilityIdentifier(\"brainbar.dashboard.scroll\")\n                .focusable()"))
+    }
+
+    func testDashboardTypeNeverDropsBelowNinePoints() throws {
+        let source = try String(
+            contentsOf: packageRoot().appendingPathComponent("Sources/BrainBar/BrainBarWindowRootView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertNil(
+            source.range(of: #"\.font\(\.system\(size:\s*[0-8](?:\.[0-9]+)?[,)]"#, options: .regularExpression),
+            "BrainBar dashboard text and symbols must respect the 9 pt legibility floor."
+        )
+    }
+
     @MainActor
     func testDashboardRendersAtAllBreakpoints() throws {
-        try XCTSkipIf(
-            shouldSkipDisplayDependentRenderInCI,
-            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        let indexedInLiveWindow = BrainBarDashboardFixture.stats.recentActivityBuckets.reduce(0, +)
+        let observability = try BrainBarOnePageTestFixture.dashboardResult(indexedToday: indexedInLiveWindow)
+        guard case let .readable(document) = observability else {
+            return XCTFail("dashboard observability fixture must be readable")
+        }
+        XCTAssertGreaterThanOrEqual(
+            document.stores.inWindow?.byHour?.reduce(0) { $0 + $1.count } ?? -1,
+            indexedInLiveWindow
         )
 
         for breakpoint in Breakpoint.allCases {
             let collector = BrainBarDashboardFixture.makeCollector()
-            let view = BrainBarDashboardPreview.make(collector: collector)
-            let (png, bitmap) = try renderPNG(view, size: breakpoint.size)
+            let panelState = BrainBarDashboardPanelState()
+            let view = BrainBarDashboardPreview.make(
+                collector: collector,
+                observabilityResult: observability,
+                now: BrainBarOnePageTestFixture.now,
+                panelState: panelState
+            )
+            var size = breakpoint.size
+            if breakpoint == .default {
+                let host = NSHostingController(rootView: view)
+                host.view.frame = NSRect(origin: .zero, size: size)
+                host.view.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+                size.height = panelState.dashboardHeight
+                XCTAssertLessThan(size.height, 640)
+            }
+            let (png, bitmap) = try renderPNG(view, size: size)
 
             let url = try writePNG(png, name: "dashboard-\(breakpoint.rawValue)")
             XCTAssertGreaterThan(png.count, 5_000, "dashboard-\(breakpoint.rawValue) PNG looks empty")
@@ -63,9 +234,115 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
                 distinctSampledColorCount(in: bitmap), 16,
                 "dashboard-\(breakpoint.rawValue) render is too flat — likely blank/clipped"
             )
+            XCTAssertLessThan(
+                warmBrownPixelShare(in: bitmap),
+                0.12,
+                "dashboard-\(breakpoint.rawValue) regressed to the old brown-card layout"
+            )
+            if breakpoint == .default { XCTAssertTrue(bottomBandContainsForeground(in: bitmap)) }
             // Surface the path in the test log so an agent knows what to Read.
             print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
         }
+    }
+
+    @MainActor
+    func testAllGoodStateRendersWithVerifiedBackups() throws {
+        let result = try BrainBarOnePageTestFixture.dashboardResult(
+            indexedToday: BrainBarDashboardFixture.stats.recentActivityBuckets.reduce(0, +)
+        )
+        let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: BrainBarOnePageTestFixture.now)
+        let view = BrainBarDashboardPreview.make(
+            collector: collector,
+            observabilityResult: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let (png, bitmap) = try renderPNG(view, size: Breakpoint.default.size)
+        let url = try writePNG(png, name: "dashboard-all-good")
+
+        let flow = DashboardFlowSummary.derive(
+            daemon: collector.daemon,
+            stats: collector.stats,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let hero = BrainBarHeroPresentation.derive(
+            flow: flow,
+            stats: collector.stats,
+            backupTruth: BrainBarHeroBackupTruth.derive(
+                from: result,
+                now: BrainBarOnePageTestFixture.now,
+                cadence: .known(300)
+            ),
+            locale: BrainBarDashboardPreview.goldenLocale
+        )
+        let presentation = BrainBarOnePagePresentation.derive(
+            snapshotFreshness: collector.snapshotFreshnessState,
+            hero: hero,
+            observability: result,
+            stats: collector.stats,
+            agentActivity: collector.agentActivity,
+            now: BrainBarOnePageTestFixture.now,
+            calendar: BrainBarDashboardPreview.goldenCalendar,
+            locale: BrainBarDashboardPreview.goldenLocale
+        )
+
+        XCTAssertEqual(presentation.status.headline, "All good")
+        XCTAssertNil(presentation.status.reason)
+        XCTAssertEqual(presentation.backupLines.map(\.tone), [.green, .green])
+        XCTAssertGreaterThan(png.count, 5_000, "all-good PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "all-good render is too flat")
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
+    func testDashboardQuietFleetRendersMeasuredQuietState() throws {
+        let collector = BrainBarDashboardFixture.makeCollector(agentActivity: .empty)
+        let result = try BrainBarOnePageTestFixture.dashboardResult(
+            indexedToday: collector.stats.recentActivityBuckets.reduce(0, +)
+        )
+        let view = BrainBarDashboardPreview.make(
+            collector: collector,
+            observabilityResult: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let (png, bitmap) = try renderPNG(view, size: Breakpoint.default.size)
+        let url = try writePNG(png, name: "dashboard-quiet")
+
+        XCTAssertTrue(collector.agentActivity.isMeasured)
+        XCTAssertEqual(collector.agentActivity.totalActiveAgents, 0)
+        XCTAssertGreaterThan(png.count, 5_000, "quiet-state PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "quiet-state render is too flat")
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    @MainActor
+    func testDashboardStaleObservabilityRendersUnavailableCounts() throws {
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let result = try BrainBarOnePageTestFixture.staleResult()
+        let view = BrainBarDashboardPreview.make(
+            collector: collector,
+            observabilityResult: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        let (png, bitmap) = try renderPNG(view, size: Breakpoint.default.size)
+        let url = try writePNG(png, name: "dashboard-observability-stale")
+
+        let presentation = try makeOnePagePresentation(
+            collector: collector,
+            result: result,
+            now: BrainBarOnePageTestFixture.now
+        )
+        XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+        XCTAssertNil(presentation.indexedToday)
+        XCTAssertEqual(
+            presentation.indexedTodayUnavailableText,
+            "not measured yet today"
+        )
+        XCTAssertEqual(presentation.agentWritesText, "brain_store calls by agents, last 24 h", "#965: agent writes are live, not from the stale document")
+        XCTAssertTrue(presentation.backupLines[0].text.hasSuffix("18:50"))
+        XCTAssertTrue(presentation.backupLines[1].text.hasSuffix("19:50"))
+        XCTAssertGreaterThan(png.count, 5_000, "stale-observability PNG looks empty")
+        XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 16, "stale-observability render is too flat")
+        print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
     }
 
     @MainActor
@@ -81,10 +358,6 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             .appendingPathComponent(".config/brainlayer/brainlayer.env", isDirectory: false)
         var config = BrainLayerConfig.defaultConfig
         config.googleAPIKey = .onePasswordReference("op://Private/Google AI/Gemini API key")
-        config.enrichmentEnabled = true
-        config.enrichmentMode = .remote
-        config.enrichmentProvider = .gemini
-        config.enrichmentBackend = "gemini"
         config.launchdJobs[.drain]?.enabled = true
         config.launchdJobs[.hotlane]?.enabled = false
 
@@ -95,12 +368,10 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         let viewModel = BrainBarSettingsViewModel(
             store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [
-                .enrichment: .loaded,
                 .hotlane: .unloaded,
                 .drain: .running,
             ]),
             initialLaunchdStates: [
-                .enrichment: .loaded,
                 .hotlane: .unloaded,
                 .drain: .running,
             ],
@@ -151,7 +422,9 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             (.watcherOffline, "dashboard-watcher-offline"),
             (.watcherUnknown, "dashboard-watcher-unknown"),
             (.watcherRunningNoRecentFlow, "dashboard-watcher-running-no-recent-flow"),
-            (.watcherStalledWithPendingWork, "dashboard-watcher-stalled-pending-work"),
+            (.watcherIdleWithReplayDebt, "dashboard-watcher-idle-with-replay-debt"),
+            (.watcherDegraded, "dashboard-watcher-degraded"),
+            (.watcherHealthMissing, "dashboard-watcher-health-missing"),
         ]
 
         for (state, name) in states {
@@ -222,7 +495,8 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             latestBucketName: "latest ingest bucket",
             fetchedAt: BrainBarDashboardFixture.fetchedAt,
             metricDisclosure: disclosure,
-            accessibilitySummary: accessibilitySummary
+            accessibilitySummary: accessibilitySummary,
+            lastBucketIsPartial: true
         )
         XCTAssertTrue(presentation.accessibilityValue.contains(accessibilitySummary))
         let tooltipView = SparklineChart(
@@ -283,29 +557,130 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     }
 
     @MainActor
-    func testDashboardReplayDebtDisclosureRendersExpanded() throws {
+    func testDashboardDetailsDisclosureRendersExpandedInteractionState() throws {
         try XCTSkipIf(
             shouldSkipDisplayDependentRenderInCI,
             "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
         )
 
-        let view = BrainBarPipelinePanelPreview.make(
-            stats: BrainBarDashboardFixture.partialReplayDebtStats,
-            containerSize: CGSize(width: 1_120, height: 1_420),
-            fetchedAt: BrainBarDashboardFixture.fetchedAt,
-            signalCoverageExpanded: false,
-            replayDebtExpanded: true
+        let panelState = BrainBarDashboardPanelState()
+        var interaction = BrainBarDisclosureInteractionState()
+        panelState.detailsExpanded = interaction.activate(isExpanded: false, source: .pointer)
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(.partialReplayDebt),
+            panelState: panelState
         )
-        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 1_120, height: 1_700))
-        let url = try writePNG(png, name: "dashboard-replay-debt-expanded")
+        let (png, bitmap) = try renderPNG(view, size: NSSize(width: 960, height: 1_200))
+        let url = try writePNG(png, name: "dashboard-details-expanded-state")
 
-        XCTAssertGreaterThan(png.count, 5_000, "expanded replay-debt PNG looks empty")
+        XCTAssertTrue(panelState.detailsExpanded, "The modeled pointer interaction must expand Details.")
+        XCTAssertFalse(interaction.showsKeyboardFocusRing, "Modeled pointer activation must not leave a focus ring.")
+        XCTAssertGreaterThan(png.count, 5_000, "expanded Details PNG looks empty")
         XCTAssertGreaterThan(
             distinctSampledColorCount(in: bitmap),
             16,
-            "expanded replay-debt render is too flat"
+            "expanded Details render is too flat"
         )
         print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+    }
+
+    /// #971: the Runtime card's Agents row is a session count with the per-CLI
+    /// breakdown, and the card carries the one-line counting definition.
+    @MainActor
+    func testRuntimeAgentsRowRendersSessionBreakdownAtEveryBreakpoint() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let activity = AgentActivitySnapshot(presences: [
+            AgentPresence(family: .claude, count: 11),
+            AgentPresence(family: .codex, count: 2),
+            AgentPresence(family: .cursor, count: 1),
+            AgentPresence(family: .gemini, count: 1),
+        ])
+        XCTAssertEqual(activity.runtimeRowText, "15 sessions · 11 Claude · 2 Codex · 1 Gemini · 1 Cursor")
+        let collector = BrainBarDashboardFixture.makeCollector(.live, agentActivity: activity)
+        for width: CGFloat in [760, 960, 1_280] {
+            let panelState = BrainBarDashboardPanelState()
+            panelState.detailsExpanded = true
+            let view = BrainBarDashboardPreview.make(
+                collector: collector,
+                now: BrainBarDashboardFixture.fetchedAt,
+                panelState: panelState
+            )
+            // Tall enough that the compact layout's stacked cards and the Runtime
+            // footnote are inside the frame.
+            let (png, _) = try renderPNG(view, size: NSSize(width: width, height: 1_320))
+            let url = try writePNG(png, name: "dashboard-runtime-agent-sessions-\(Int(width))")
+            XCTAssertGreaterThan(png.count, 5_000, "agent sessions @ \(width) render looks empty")
+            print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+        }
+    }
+
+    /// #972: the Runtime card's Daemon / Last seen rows in each daemon state, at the
+    /// three breakpoints — running (post-restart PID), really down, and first sample.
+    @MainActor
+    func testRuntimeDaemonRowsRenderEachStateAtEveryBreakpoint() throws {
+        try XCTSkipIf(
+            shouldSkipDisplayDependentRenderInCI,
+            "Dashboard PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
+        )
+
+        let base = BrainBarDashboardFixture.makeCollector(.live)
+        let lastAnswer = BrainBarDashboardFixture.fetchedAt.addingTimeInterval(-12 * 60)
+        let states: [(name: String, daemon: DaemonHealthSnapshot?, reason: DaemonUnavailability?, answer: Date?)] = [
+            ("running", BrainBarDashboardFixture.daemon, nil, BrainBarDashboardFixture.fetchedAt),
+            ("down", nil, .down("BrainBarDaemon not running (last PID 4242 exited)"), lastAnswer),
+            ("unknown", nil, .unknown("process table unreadable"), lastAnswer),
+            ("checking", nil, nil, nil),
+        ]
+        for state in states {
+            let collector = StatsCollector.fixture(
+                stats: base.stats,
+                daemon: state.daemon,
+                daemonUnavailability: state.reason,
+                lastDaemonAnswerAt: state.answer,
+                agentActivity: base.agentActivity,
+                state: PipelineState.derive(daemon: state.daemon, stats: base.stats),
+                lastDataFetchedAt: base.lastDataFetchedAt
+            )
+            for width: CGFloat in [760, 960, 1_280] {
+                let panelState = BrainBarDashboardPanelState()
+                panelState.detailsExpanded = true
+                let view = BrainBarDashboardPreview.make(
+                    collector: collector,
+                    now: BrainBarDashboardFixture.fetchedAt,
+                    panelState: panelState
+                )
+                let (png, _) = try renderPNG(view, size: NSSize(width: width, height: 1_200))
+                let url = try writePNG(png, name: "dashboard-runtime-daemon-\(state.name)-\(Int(width))")
+                XCTAssertGreaterThan(png.count, 5_000, "\(state.name) @ \(width) render looks empty")
+                print("[brainbar-render] wrote \(url.path) (\(png.count) bytes)")
+            }
+        }
+    }
+
+    @MainActor
+    func testDashboardDisclosureKeyboardFocusRingActuallyDraws() throws {
+        let size = NSSize(width: 320, height: 64)
+        let (keyboardPNG, keyboardBitmap) = try renderPNG(
+            BrainBarDisclosureRowPreview.make(focusSource: .keyboard),
+            size: size
+        )
+        let (pointerPNG, pointerBitmap) = try renderPNG(
+            BrainBarDisclosureRowPreview.make(focusSource: .pointer),
+            size: size
+        )
+        let url = try writePNG(keyboardPNG, name: "dashboard-disclosure-keyboard-focus-ring")
+
+        XCTAssertNotEqual(keyboardPNG, pointerPNG, "Keyboard focus must change the rendered disclosure pixels.")
+        XCTAssertGreaterThan(
+            differingPixelCount(keyboardBitmap, pointerBitmap),
+            200,
+            "The actual disclosure component must draw a visible keyboard focus ring."
+        )
+        print("[brainbar-render] wrote \(url.path) (\(keyboardPNG.count) bytes)")
     }
 
     @MainActor
@@ -367,6 +742,32 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
     // MARK: - Render helpers
 
     @MainActor
+    private func makeOnePagePresentation(
+        collector: StatsCollector,
+        result: ObservabilityReadResult,
+        now: Date
+    ) throws -> BrainBarOnePagePresentation {
+        let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now)
+        let hero = BrainBarHeroPresentation.derive(
+            flow: flow,
+            stats: collector.stats,
+            backupTruth: BrainBarHeroBackupTruth.derive(from: result, now: now, cadence: .known(300)),
+            locale: BrainBarDashboardPreview.goldenLocale
+        )
+        return BrainBarOnePagePresentation.derive(
+            snapshotFreshness: collector.snapshotFreshnessState,
+            hero: hero,
+            observability: result,
+            stats: collector.stats,
+            agentActivity: collector.agentActivity,
+            now: now,
+            calendar: BrainBarDashboardPreview.goldenCalendar,
+            locale: BrainBarDashboardPreview.goldenLocale,
+            observabilityCadence: .known(300)
+        )
+    }
+
+    @MainActor
     private func renderPNG(_ view: some View, size: NSSize) throws -> (Data, NSBitmapImageRep) {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: size)
@@ -408,6 +809,13 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             .appendingPathComponent("docs.local/brainbar-render", isDirectory: true)
     }
 
+    private func packageRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
     private func distinctSampledColorCount(in bitmap: NSBitmapImageRep) -> Int {
         guard let data = bitmap.bitmapData else { return 0 }
         let bytesPerPixel = max(bitmap.bitsPerPixel / 8, 1)
@@ -423,6 +831,53 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             }
         }
         return colors.count
+    }
+
+    private func warmBrownPixelShare(in bitmap: NSBitmapImageRep) -> Double {
+        var warm = 0
+        var sampled = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                sampled += 1
+                if color.redComponent > 0.16,
+                   color.redComponent > color.blueComponent * 1.35,
+                   color.greenComponent > color.blueComponent * 1.10,
+                   color.redComponent > color.greenComponent * 1.12 {
+                    warm += 1
+                }
+            }
+        }
+        return sampled == 0 ? 1 : Double(warm) / Double(sampled)
+    }
+
+    private func bottomBandContainsForeground(in bitmap: NSBitmapImageRep) -> Bool {
+        let bandHeight = max(Int(Double(bitmap.pixelsHigh) * 0.15), 1)
+        return (0 ..< bandHeight).contains { y in
+            (1 ..< bitmap.pixelsWide).contains { x in
+                guard let a = bitmap.colorAt(x: x - 1, y: y), let b = bitmap.colorAt(x: x, y: y) else { return false }
+                return abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent) > 0.12
+            }
+        }
+    }
+
+    private func differingPixelCount(_ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep) -> Int {
+        guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else { return .max }
+        var count = 0
+        for y in 0 ..< lhs.pixelsHigh {
+            for x in 0 ..< lhs.pixelsWide {
+                guard let a = lhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      let b = rhs.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                else { continue }
+                let delta = abs(a.redComponent - b.redComponent)
+                    + abs(a.greenComponent - b.greenComponent)
+                    + abs(a.blueComponent - b.blueComponent)
+                    + abs(a.alphaComponent - b.alphaComponent)
+                if delta > 0.05 { count += 1 }
+            }
+        }
+        return count
     }
 
     private enum RenderError: Error {

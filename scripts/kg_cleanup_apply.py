@@ -8,8 +8,8 @@ Applies the APPROVED dry-run scope:
     (tier-1 + tier-2), skipping members whose state changed since dry-run
 
 Usage:
-    python3 scripts/kg_cleanup_apply.py --scope eval_results/kg-phase1-dryrun-2026-06-05.json \
-        --run-id kg-phase1-2026-06-05 [--rollback]
+    python3 scripts/kg_cleanup_apply.py --scope <approval-scope.json> \
+        --run-id <run-id> [--rollback]
 """
 
 import argparse

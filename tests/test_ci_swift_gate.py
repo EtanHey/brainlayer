@@ -178,3 +178,13 @@ def test_swift_job_uses_macos_15_runner_for_newer_xcode():
 
     assert job.get("runs-on") == "macos-15"
     assert job.get("name") == "swift (macos-15)"
+
+
+def test_swift_required_gate_has_a_bounded_job_timeout():
+    workflow = _load_workflow()
+    swift_job = _find_swift_job(workflow)
+    assert swift_job is not None
+
+    _job_id, job = swift_job
+
+    assert job.get("timeout-minutes") == 10

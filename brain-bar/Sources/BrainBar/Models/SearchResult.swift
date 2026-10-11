@@ -23,27 +23,6 @@ struct SearchResult: Equatable, Identifiable {
         return chunkID
     }
 
-    var compactMetadata: String {
-        var parts: [String] = []
-        if !project.isEmpty {
-            parts.append(project)
-        }
-        let trimmedDate = String(date.prefix(10))
-        if !trimmedDate.isEmpty {
-            parts.append(trimmedDate)
-        }
-        if let importance {
-            parts.append("imp \(importance)")
-        }
-        parts.append("score \(String(format: "%.2f", score))")
-        return parts.joined(separator: " • ")
-    }
-
-    var tagSummary: String? {
-        guard !tags.isEmpty else { return nil }
-        return tags.joined(separator: ", ")
-    }
-
     /// Relevance tier derived from BM25 score.
     var relevanceTier: String {
         if score >= 15 { return "●●●" }

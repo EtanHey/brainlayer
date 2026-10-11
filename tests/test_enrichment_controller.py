@@ -1,23 +1,13 @@
-"""Tests for the unified Gemini enrichment controller.
-
-Covers realtime/batch routing, content-hash dedup, retry logic, rate limiting,
-telemetry, MCP handler, stats, error handling, idempotency, LaunchAgent plists,
-and CLI integration.
-
-Target: 35+ tests per A-R2 acceptance criteria.
-"""
+"""Historical enrichment replay, audit metadata, and retired interface contracts."""
 
 import json
-import plistlib
 import sqlite3
-import sys
-import threading
-import types
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+# ── Existing realtime tests ──────────────────────────────────────────────────
 
 
 def _candidate(chunk_id: str = "c1", content: str = "x" * 120) -> dict:
@@ -28,53 +18,6 @@ def _candidate(chunk_id: str = "c1", content: str = "x" * 120) -> dict:
         "content_type": "assistant_text",
         "source": "claude_code",
     }
-
-
-def _fake_gemini_client(response_text='{"summary":"sum","tags":["python"]}'):
-    """Create a fake Gemini client that returns the given response text."""
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):
-                return SimpleNamespace(text=response_text)
-
-        def __init__(self):
-            self.models = self._Models()
-
-    return FakeClient()
-
-
-@pytest.fixture(autouse=True)
-def _isolate_enrich_cost_counter(monkeypatch, tmp_path):
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path / "enrich-cost"))
-
-
-def _patch_realtime_deps(monkeypatch, controller, store, response_text=None):
-    """Common monkeypatching for realtime enrichment tests."""
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-    monkeypatch.setattr(
-        controller,
-        "_get_gemini_client",
-        lambda: _fake_gemini_client(response_text or '{"summary":"sum","tags":["python"]}'),
-    )
-
-
-# ── Existing realtime tests ──────────────────────────────────────────────────
-
-
-def test_enrich_realtime_calls_get_enrichment_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    result = controller.enrich_realtime(store, limit=7, since_hours=12)
-
-    store.get_enrichment_candidates.assert_called_once_with(limit=7, since_hours=12, chunk_ids=None)
-    assert result.mode == "realtime"
 
 
 def test_enrichment_provenance_columns_are_audit_queryable_but_not_normal_search_payload(tmp_path):
@@ -119,597 +62,11 @@ def test_enrichment_provenance_columns_are_audit_queryable_but_not_normal_search
         store.close()
 
 
-def test_enrich_realtime_uses_legacy_direct_writes_when_disabled(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1", "x" * 120)]
-    _patch_realtime_deps(monkeypatch, controller, store)
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-    monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
-    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *_args, **_kwargs: False)
-
-    enqueued = []
-    from brainlayer import queue_io
-
-    monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
-    monkeypatch.setattr(controller, "_apply_enrichment", lambda *_args, **_kwargs: None)
-
-    result = controller.enrich_realtime(store, limit=1, since_hours=24)
-
-    assert result.enriched == 1
-    assert enqueued == []
-
-
-def test_enrich_realtime_enqueues_enrichment_writes_when_enabled(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1", "x" * 120)]
-    _patch_realtime_deps(monkeypatch, controller, store)
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-    monkeypatch.delenv("BRAINLAYER_ARBITRATED", raising=False)
-    monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
-    monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *_args, **_kwargs: False)
-
-    enqueued = []
-    from brainlayer import queue_io
-
-    monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
-
-    result = controller.enrich_realtime(store, limit=1, since_hours=24)
-
-    assert result.enriched == 1
-    assert len(enqueued) == 1
-    assert enqueued[0]["chunk_id"] == "c1"
-    assert enqueued[0]["enrichment_model"] == controller.GEMINI_REALTIME_MODEL
-    assert enqueued[0]["enrichment_backend"] == controller._current_enrichment_backend()
-    store.update_enrichment.assert_not_called()
-
-
-def test_enrich_supervisor_opens_readonly_store_when_writes_are_queued(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-    opened = []
-
-    class FakeStore:
-        def __init__(self, db_path, readonly=False):
-            opened.append((db_path, readonly))
-
-        def close(self):
-            pass
-
-    controller.run_enrich_supervisor(
-        tmp_path / "supervisor.db",
-        max_cycles=1,
-        vector_store_cls=FakeStore,
-        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
-            mode="realtime",
-            attempted=0,
-            enriched=0,
-            skipped=0,
-            failed=0,
-            errors=[],
-        ),
-    )
-
-    assert opened == [(tmp_path / "supervisor.db", True)]
-
-
-def test_enrich_supervisor_releases_store_between_cycles_when_writes_are_queued(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-    opened = []
-    closed = []
-
-    class FakeStore:
-        def __init__(self, db_path, readonly=False):
-            self.index = len(opened)
-            opened.append((db_path, readonly))
-
-        def close(self):
-            closed.append(self.index)
-
-    controller.run_enrich_supervisor(
-        tmp_path / "supervisor.db",
-        max_cycles=2,
-        idle_poll_seconds=0,
-        sleep_fn=lambda _seconds: None,
-        vector_store_cls=FakeStore,
-        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
-            mode="realtime",
-            attempted=0,
-            enriched=0,
-            skipped=0,
-            failed=0,
-            errors=[],
-        ),
-    )
-
-    assert opened == [(tmp_path / "supervisor.db", True), (tmp_path / "supervisor.db", True)]
-    assert closed == [0, 1]
-
-
-def test_enrich_supervisor_yields_writer_so_drain_can_advance_between_cycles(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-
-    db_path = tmp_path / "supervisor-drain.db"
-
-    class WriterHoldingStore:
-        active_writers = 0
-
-        def __init__(self, db_path, readonly=False):
-            WriterHoldingStore.active_writers += 1
-
-        def close(self):
-            WriterHoldingStore.active_writers -= 1
-
-    drain_heartbeats = []
-
-    def drain_during_supervisor_sleep(_seconds):
-        drain_heartbeats.append(0 if WriterHoldingStore.active_writers else 1)
-
-    controller.run_enrich_supervisor(
-        db_path,
-        max_cycles=2,
-        idle_poll_seconds=0.001,
-        sleep_fn=drain_during_supervisor_sleep,
-        vector_store_cls=WriterHoldingStore,
-        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
-            mode="realtime",
-            attempted=0,
-            enriched=0,
-            skipped=0,
-            failed=0,
-            errors=[],
-        ),
-    )
-
-    assert drain_heartbeats == [1]
-
-
-def test_enrich_supervisor_yields_without_opening_store_when_durable_queue_has_backlog(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    queue_dir = tmp_path / "queue"
-    queue_dir.mkdir()
-    (queue_dir / "watcher-1.jsonl").write_text('{"kind":"watcher_chunk"}\n', encoding="utf-8")
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
-
-    opened = []
-    sleeps = []
-
-    class FakeStore:
-        def __init__(self, db_path, readonly=False):
-            opened.append((db_path, readonly))
-
-        def close(self):
-            pass
-
-    result = controller.run_enrich_supervisor(
-        tmp_path / "supervisor.db",
-        max_cycles=2,
-        idle_poll_seconds=0.25,
-        sleep_fn=lambda seconds: sleeps.append(seconds),
-        vector_store_cls=FakeStore,
-        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
-            mode="realtime",
-            attempted=1,
-            enriched=1,
-            skipped=0,
-            failed=0,
-            errors=[],
-        ),
-    )
-
-    assert result.cycles == 2
-    assert opened == []
-    assert sleeps == [0.25]
-
-
-def test_enrich_supervisor_checkpoints_wal_after_each_cycle(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-    db_path = tmp_path / "supervisor.db"
-    checkpoints = []
-
-    class FakeStore:
-        def __init__(self, db_path, readonly=False):
-            pass
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(
-        controller,
-        "_checkpoint_enrich_supervisor_wal",
-        lambda checkpoint_db_path: checkpoints.append(checkpoint_db_path),
-        raising=False,
-    )
-
-    controller.run_enrich_supervisor(
-        db_path,
-        max_cycles=2,
-        idle_poll_seconds=0,
-        sleep_fn=lambda _seconds: None,
-        vector_store_cls=FakeStore,
-        enrich_fn=lambda _store, **_kwargs: controller.EnrichmentResult(
-            mode="realtime",
-            attempted=0,
-            enriched=0,
-            skipped=0,
-            failed=0,
-            errors=[],
-        ),
-    )
-
-    assert checkpoints == [db_path, db_path]
-
-
-def test_enrich_realtime_runs_with_readonly_store_while_writer_is_open(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-    from brainlayer.vector_store import VectorStore
-
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-    db_path = tmp_path / "parallel.db"
-    writer_store = VectorStore(db_path)
-    try:
-        writer_store.conn.cursor().execute(
-            """
-            INSERT INTO chunks (
-                id, content, metadata, source_file, project, content_type,
-                value_type, char_count, source, created_at, enriched_at, enrich_status
-            ) VALUES (
-                'parallel-c1',
-                'BrainLayer enrichment should keep running while the single writer is busy with normal writes.',
-                '{}',
-                'test',
-                'brainlayer',
-                'assistant_text',
-                'high',
-                90,
-                'claude_code',
-                '2026-06-15T00:00:00+00:00',
-                NULL,
-                NULL
-            )
-            """
-        )
-        readonly_store = VectorStore(db_path, readonly=True)
-        try:
-            _patch_realtime_deps(monkeypatch, controller, readonly_store)
-            monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(tmp_path / "queue"))
-            monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
-            monkeypatch.setattr(controller, "_emit_enrichment_start", lambda *_args, **_kwargs: False)
-            monkeypatch.setattr(controller, "_emit_enrichment_complete", lambda *_args, **_kwargs: False)
-
-            enqueued = []
-            from brainlayer import queue_io
-
-            monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
-
-            result = controller.enrich_realtime(readonly_store, limit=1, since_hours=None)
-
-            assert result.enriched == 1
-            assert enqueued[0]["chunk_id"] == "parallel-c1"
-            assert (
-                writer_store.conn.cursor()
-                .execute("SELECT enriched_at FROM chunks WHERE id = 'parallel-c1'")
-                .fetchone()[0]
-                is None
-            )
-        finally:
-            readonly_store.close()
-    finally:
-        writer_store.close()
-
-
-def test_enrich_realtime_calls_build_external_prompt_for_every_chunk(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "_retry_with_backoff", lambda fn, **kwargs: '{"summary":"sum","tags":["python"]}')
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: MagicMock())
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    controller.enrich_realtime(store, limit=2, since_hours=24)
-
-    assert controller.build_external_prompt.call_count == 2
-
-
-def test_enrich_realtime_sets_thinking_budget_zero_in_gemini_config(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    captured = {}
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):
-                captured.update(kwargs)
-                return SimpleNamespace(text='{"summary":"sum","tags":["python"]}')
-
-        def __init__(self):
-            self.models = self._Models()
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
-
-    controller.enrich_realtime(store)
-
-    assert captured["config"]["thinking_config"]["thinking_budget"] == 0
-
-
-def test_enrich_realtime_passes_flex_service_tier_in_gemini_config(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.delenv("BRAINLAYER_GEMINI_SERVICE_TIER", raising=False)
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    captured = {}
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):
-                captured.update(kwargs)
-                return SimpleNamespace(text='{"summary":"sum","tags":["python"]}')
-
-        def __init__(self):
-            self.models = self._Models()
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
-
-    controller.enrich_realtime(store)
-
-    assert captured["config"]["http_options"]["extra_body"]["serviceTier"] == "flex"
-
-
-def test_gemini_sdk_transmits_flex_service_tier_in_request_body(monkeypatch):
-    httpx = pytest.importorskip("httpx")
-    genai = pytest.importorskip("google.genai")
-
-    from brainlayer import enrichment_controller as controller
-
-    captured = {}
-
-    def handler(request):
-        captured["method"] = request.method
-        captured["url"] = str(request.url)
-        captured["body"] = json.loads(request.content.decode("utf-8"))
-        return httpx.Response(
-            200,
-            headers={"content-type": "application/json"},
-            json={
-                "candidates": [
-                    {
-                        "content": {"role": "model", "parts": [{"text": '{"summary":"ok","tags":[]}'}]},
-                        "finishReason": "STOP",
-                    }
-                ],
-                "usageMetadata": {
-                    "promptTokenCount": 1,
-                    "candidatesTokenCount": 1,
-                    "totalTokenCount": 2,
-                },
-            },
-        )
-
-    httpx_client = httpx.Client(transport=httpx.MockTransport(handler))
-    client = genai.Client(api_key="test-key-no-spend", http_options={"httpx_client": httpx_client})
-
-    response = client.models.generate_content(
-        model=controller.GEMINI_REALTIME_MODEL,
-        contents="wire capture no spend",
-        config={
-            "response_mime_type": "application/json",
-            "thinking_config": {"thinking_budget": 0},
-            "http_options": controller._build_gemini_http_options(timeout_ms=30_000),
-        },
-    )
-
-    assert captured["method"] == "POST"
-    assert captured["url"].endswith("/v1beta/models/gemini-2.5-flash-lite:generateContent")
-    assert captured["body"]["serviceTier"] == "flex"
-    assert response.text == '{"summary":"ok","tags":[]}'
-
-
-def test_enrich_realtime_calls_parse_enrichment_on_response(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    parse_mock = MagicMock(return_value={"summary": "sum", "tags": ["python"]})
-    monkeypatch.setattr(controller, "parse_enrichment", parse_mock)
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):  # noqa: ARG002
-                return SimpleNamespace(text='{"summary":"sum","tags":["python"]}')
-
-        def __init__(self):
-            self.models = self._Models()
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
-
-    controller.enrich_realtime(store)
-
-    parse_mock.assert_called_once_with('{"summary":"sum","tags":["python"]}')
-
-
-def test_enrich_realtime_writes_via_update_enrichment_only(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):  # noqa: ARG002
-                return SimpleNamespace(text='{"summary":"sum","tags":["python"]}')
-
-        def __init__(self):
-            self.models = self._Models()
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
-
-    controller.enrich_realtime(store)
-
-    store.update_enrichment.assert_called_once()
-
-
-def test_enrich_realtime_is_idempotent_on_rerun(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.side_effect = [[_candidate()], []]
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "0")
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):  # noqa: ARG002
-                return SimpleNamespace(text='{"summary":"sum","tags":["python"]}')
-
-        def __init__(self):
-            self.models = self._Models()
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
-
-    first = controller.enrich_realtime(store)
-    second = controller.enrich_realtime(store)
-
-    assert first.enriched == 1
-    assert second.enriched == 0
-    assert store.update_enrichment.call_count == 1
-
-
-def test_retry_with_backoff_retries_12_times_on_429(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    sleeps = []
-    monkeypatch.setattr(controller, "_sleep", sleeps.append)
-    monkeypatch.setattr(controller.random, "uniform", lambda a, b: 0.0)
-
-    attempts = {"count": 0}
-
-    def flaky():
-        attempts["count"] += 1
-        raise RuntimeError("429 RESOURCE_EXHAUSTED")
-
-    with pytest.raises(RuntimeError):
-        controller._retry_with_backoff(flaky, max_retries=12)
-
-    assert attempts["count"] == 13
-    assert len(sleeps) == 12
-
-
-def test_retry_with_backoff_short_circuits_monthly_spend_cap_429(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    sleeps = []
-    monkeypatch.setattr(controller, "_sleep", sleeps.append)
-
-    attempts = {"count": 0}
-
-    def capped():
-        attempts["count"] += 1
-        raise RuntimeError("429 RESOURCE_EXHAUSTED: request blocked because the monthly spending cap was reached")
-
-    with pytest.raises(RuntimeError):
-        controller._retry_with_backoff(capped, max_retries=12)
-
-    assert attempts["count"] == 1
-    assert sleeps == []
-
-
-def test_retry_with_backoff_respects_max_delay_cap(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    sleeps = []
-    monkeypatch.setattr(controller, "_sleep", sleeps.append)
-    monkeypatch.setattr(controller.random, "uniform", lambda a, b: b)
-
-    attempts = {"count": 0}
-
-    def flaky_then_success():
-        attempts["count"] += 1
-        if attempts["count"] < 4:
-            raise RuntimeError("429 RESOURCE_EXHAUSTED")
-        return "ok"
-
-    result = controller._retry_with_backoff(flaky_then_success, max_retries=5, base_delay=10, max_delay=15)
-
-    assert result == "ok"
-    assert max(sleeps) <= 15
-
-
-def test_enrich_local_is_disabled():
-    from brainlayer import enrichment_controller as controller
-
-    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
-        controller.enrich_local(MagicMock(), limit=1)
-
-
-def test_enrich_batch_returns_early_for_no_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    # _get_gemini_client should never be reached when there are no candidates
-    monkeypatch.setattr(
-        controller, "_get_gemini_client", lambda: (_ for _ in ()).throw(AssertionError("should not be called"))
-    )
-
-    result = controller.enrich_batch(store, limit=100)
-
-    store.get_enrichment_candidates.assert_called_once_with(limit=100, chunk_ids=None)
-    assert result.mode == "batch"
-    assert result.enriched == 0
-
-
 # ── Content-hash dedup tests ─────────────────────────────────────────────────
 
 
 def test_content_hash_deterministic():
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     h1 = _content_hash("hello world")
     h2 = _content_hash("hello world")
@@ -718,7 +75,7 @@ def test_content_hash_deterministic():
 
 
 def test_content_hash_strips_whitespace():
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     h1 = _content_hash("  hello world  ")
     h2 = _content_hash("hello world")
@@ -726,7 +83,7 @@ def test_content_hash_strips_whitespace():
 
 
 def test_content_hash_differs_for_different_content():
-    from brainlayer.enrichment_controller import _content_hash
+    from brainlayer.enrichment_replay import _content_hash
 
     h1 = _content_hash("hello")
     h2 = _content_hash("world")
@@ -734,7 +91,7 @@ def test_content_hash_differs_for_different_content():
 
 
 def test_is_duplicate_returns_false_when_column_missing():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     store._read_cursor.side_effect = Exception("no such column: content_hash")
@@ -742,7 +99,7 @@ def test_is_duplicate_returns_false_when_column_missing():
 
 
 def test_is_duplicate_returns_true_when_hash_exists_enriched():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     cursor = MagicMock()
@@ -752,7 +109,7 @@ def test_is_duplicate_returns_true_when_hash_exists_enriched():
 
 
 def test_is_duplicate_returns_false_when_summary_cleared():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     cursor = MagicMock()
@@ -766,7 +123,7 @@ def test_is_duplicate_returns_false_when_summary_cleared():
 
 
 def test_is_duplicate_returns_false_when_hash_not_found():
-    from brainlayer.enrichment_controller import _is_duplicate_content
+    from brainlayer.enrichment_replay import _is_duplicate_content
 
     store = MagicMock()
     cursor = MagicMock()
@@ -776,7 +133,7 @@ def test_is_duplicate_returns_false_when_hash_not_found():
 
 
 def test_ensure_content_hash_column_creates_if_missing():
-    from brainlayer.enrichment_controller import _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _ensure_content_hash_column
 
     store = MagicMock()
     cursor = MagicMock()
@@ -786,7 +143,7 @@ def test_ensure_content_hash_column_creates_if_missing():
 
 
 def test_ensure_content_hash_column_noop_if_exists():
-    from brainlayer.enrichment_controller import _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _ensure_content_hash_column
 
     store = MagicMock()
     cursor = MagicMock()
@@ -795,7 +152,7 @@ def test_ensure_content_hash_column_noop_if_exists():
 
 
 def test_ensure_content_hash_column_drops_legacy_unique_index(tmp_path):
-    from brainlayer.enrichment_controller import _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _ensure_content_hash_column
 
     db_path = tmp_path / "legacy-content-hash.db"
     conn = sqlite3.connect(db_path)
@@ -814,7 +171,7 @@ def test_ensure_content_hash_column_drops_legacy_unique_index(tmp_path):
 
 
 def test_backfill_content_hashes_processes_null_rows():
-    from brainlayer.enrichment_controller import _backfill_content_hashes
+    from brainlayer.enrichment_replay import _backfill_content_hashes
 
     store = MagicMock()
     cursor = MagicMock()
@@ -826,7 +183,7 @@ def test_backfill_content_hashes_processes_null_rows():
 
 
 def test_backfill_content_hashes_skips_empty_content():
-    from brainlayer.enrichment_controller import _backfill_content_hashes
+    from brainlayer.enrichment_replay import _backfill_content_hashes
 
     store = MagicMock()
     cursor = MagicMock()
@@ -838,7 +195,7 @@ def test_backfill_content_hashes_skips_empty_content():
 
 
 def test_backfill_content_hashes_handles_legacy_unique_index(tmp_path):
-    from brainlayer.enrichment_controller import _backfill_content_hashes, _content_hash, _ensure_content_hash_column
+    from brainlayer.enrichment_replay import _backfill_content_hashes, _content_hash, _ensure_content_hash_column
 
     db_path = tmp_path / "legacy-backfill.db"
     conn = sqlite3.connect(db_path)
@@ -863,437 +220,26 @@ def test_backfill_content_hashes_handles_legacy_unique_index(tmp_path):
     assert rows == [("c1", expected_hash), ("c2", expected_hash)]
 
 
-def test_realtime_skips_duplicate_content(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1", "dup"), _candidate("c2", "unique")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-    monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
-
-    result = controller.enrich_realtime(store, limit=2)
-    assert result.skipped == 1
-    assert result.enriched == 1
-
-
-def test_realtime_persists_duplicate_skip_status(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1", "dup"), _candidate("c2", "unique")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-    monkeypatch.setenv("BRAINLAYER_ENRICHMENT_QUEUE_WRITES", "1")
-    monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
-
-    enqueued = []
-    from brainlayer import queue_io
-
-    monkeypatch.setattr(queue_io, "enqueue_enrichment_updates", lambda updates: enqueued.extend(updates))
-
-    result = controller.enrich_realtime(store, limit=2)
-
-    assert result.skipped == 1
-    assert result.enriched == 1
-    duplicate_update = next(update for update in enqueued if update["chunk_id"] == "c1")
-    assert duplicate_update["enrichment"]["enrich_status"] == "duplicate"
-
-
-def test_local_enrichment_stays_disabled_even_with_duplicates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setattr(controller, "_is_duplicate_content", lambda s, c: c == "dup")
-
-    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
-        controller.enrich_local(MagicMock(), limit=2)
-
-
 # ── EnrichmentResult dataclass tests ─────────────────────────────────────────
-
-
-def test_enrichment_result_defaults():
-    from brainlayer.enrichment_controller import EnrichmentResult
-
-    r = EnrichmentResult(mode="test", attempted=0, enriched=0, skipped=0, failed=0)
-    assert r.errors == []
-    assert r.mode == "test"
-
-
-def test_enrichment_result_with_errors():
-    from brainlayer.enrichment_controller import EnrichmentResult
-
-    r = EnrichmentResult(mode="realtime", attempted=3, enriched=1, skipped=0, failed=2, errors=["e1", "e2"])
-    assert len(r.errors) == 2
-    assert r.failed == 2
 
 
 # ── Gemini config tests ──────────────────────────────────────────────────────
 
 
-def test_build_gemini_config_has_json_mime_type():
-    from brainlayer.enrichment_controller import _build_gemini_config
-
-    config = _build_gemini_config()
-    assert config["response_mime_type"] == "application/json"
-
-
-def test_build_gemini_config_disables_thinking():
-    from brainlayer.enrichment_controller import _build_gemini_config
-
-    config = _build_gemini_config()
-    assert config["thinking_config"]["thinking_budget"] == 0
-
-
-def test_build_gemini_config_allows_service_tier_override(monkeypatch):
-    from brainlayer.enrichment_controller import _build_gemini_config
-
-    monkeypatch.setenv("BRAINLAYER_GEMINI_SERVICE_TIER", "standard")
-
-    config = _build_gemini_config()
-
-    assert config["http_options"]["extra_body"]["serviceTier"] == "standard"
-
-
-def test_build_gemini_config_validates_against_sdk(monkeypatch):
-    genai = pytest.importorskip("google.genai")
-
-    from brainlayer.enrichment_controller import _build_gemini_config
-
-    monkeypatch.setenv("BRAINLAYER_GEMINI_SERVICE_TIER", "flex")
-
-    config = _build_gemini_config()
-    validated = genai.types.GenerateContentConfig.model_validate(config)
-
-    assert validated.http_options.extra_body["serviceTier"] == "flex"
-
-
-def test_gemini_client_requires_api_key(monkeypatch):
-    from brainlayer.enrichment_controller import _get_gemini_client
-
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="not set|not installed"):
-        _get_gemini_client()
-
-
-def test_gemini_sdk_retries_disabled(monkeypatch):
-    from brainlayer.enrichment_controller import _get_gemini_client
-
-    client_ctor = MagicMock(return_value=object())
-    fake_google = types.ModuleType("google")
-    fake_google.genai = SimpleNamespace(Client=client_ctor)
-
-    monkeypatch.setitem(sys.modules, "google", fake_google)
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
-    monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_CLOUD_REGION", raising=False)
-
-    _get_gemini_client()
-
-    _, kwargs = client_ctor.call_args
-    assert kwargs["http_options"]["retry_options"] == {"attempts": 1}
-
-
-def test_store_lifecycle_waits_for_cleanup_before_new_operations():
-    from brainlayer import enrichment_controller as controller
-
-    store = SimpleNamespace(db_path="/tmp/pr-a3-lifecycle.db")
-    key = controller._store_queue_key(store)
-    stop_started = threading.Event()
-    release_stop = threading.Event()
-    begin_finished = threading.Event()
-
-    old_queue = MagicMock()
-
-    def blocking_stop(timeout=1.0):  # noqa: ARG001
-        stop_started.set()
-        release_stop.wait(timeout=2)
-
-    old_queue.stop.side_effect = blocking_stop
-
-    with controller._WRITE_QUEUE_LOCK:
-        controller._WRITE_QUEUE_REGISTRY[key] = old_queue
-    with controller._STORE_OPERATION_CONDITION:
-        controller._STORE_OPERATION_COUNTS[key] = 1
-        controller._STORE_CLOSING.discard(key)
-
-    def cleanup():
-        controller._end_store_operation(store)
-
-    def begin_new_operation():
-        controller._begin_store_operation(store)
-        begin_finished.set()
-
-    cleanup_thread = threading.Thread(target=cleanup)
-    cleanup_thread.start()
-    assert stop_started.wait(timeout=1)
-
-    begin_thread = threading.Thread(target=begin_new_operation)
-    begin_thread.start()
-    assert not begin_finished.wait(timeout=0.05)
-
-    release_stop.set()
-    cleanup_thread.join(timeout=1)
-    begin_thread.join(timeout=1)
-
-    assert begin_finished.is_set()
-    with controller._STORE_OPERATION_CONDITION:
-        assert controller._STORE_OPERATION_COUNTS[key] == 1
-        assert key not in controller._STORE_CLOSING
-
-    controller._end_store_operation(store)
-
-
-def test_rate_limiter_survives_store_cleanup():
-    from brainlayer import enrichment_controller as controller
-
-    store = SimpleNamespace(db_path="/tmp/pr-a3-rate-limiter.db")
-    registry_key = controller._store_queue_key(store)
-    limiter_key = (registry_key, 5.0, 10)
-
-    with controller._RATE_LIMITER_LOCK:
-        controller._RATE_LIMITER_REGISTRY.pop(limiter_key, None)
-
-    try:
-        controller._begin_store_operation(store)
-        limiter = controller._get_store_rate_limiter(store, rate_per_second=5.0, burst=10)
-        controller._end_store_operation(store)
-
-        controller._begin_store_operation(store)
-        same_limiter = controller._get_store_rate_limiter(store, rate_per_second=5.0, burst=10)
-        controller._end_store_operation(store)
-
-        assert same_limiter is limiter
-    finally:
-        with controller._RATE_LIMITER_LOCK:
-            controller._RATE_LIMITER_REGISTRY.pop(limiter_key, None)
-
-
 # ── Rate limiting tests ──────────────────────────────────────────────────────
-
-
-def test_rate_limits_defaults():
-    from brainlayer.enrichment_controller import RATE_LIMITS
-
-    assert RATE_LIMITS["realtime"] > 0
-    assert RATE_LIMITS["batch"] == 0  # No limit for batch (async)
-
-
-def test_realtime_rate_limit_acquires_token_per_chunk(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2"), _candidate("c3")]
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "s", "tags": []}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client())
-
-    acquires = []
-
-    class FakeLimiter:
-        def acquire(self, n=1):
-            acquires.append(n)
-
-    monkeypatch.setattr(controller, "_get_store_rate_limiter", lambda *args, **kwargs: FakeLimiter())
-
-    controller.enrich_realtime(store, limit=3, rate_per_second=2.0)
-
-    assert acquires == [1, 1, 1]
-
-
-def test_batch_rate_limit_uses_batch_setting(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-
-    observed = {}
-
-    class FakeLimiter:
-        def acquire(self, n=1):
-            observed.setdefault("acquires", []).append(n)
-
-    monkeypatch.setitem(controller.RATE_LIMITS, "batch", 1.25)
-
-    def fake_get_store_rate_limiter(*args, **kwargs):
-        observed["rate"] = kwargs["rate_per_second"]
-        return FakeLimiter()
-
-    monkeypatch.setattr(controller, "_get_store_rate_limiter", fake_get_store_rate_limiter)
-
-    controller.enrich_batch(store, limit=1)
-
-    assert observed["rate"] == 1.25
-    assert observed["acquires"] == [1]
-
-
-def test_realtime_rate_zero_disables_limiter(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-    real_get_store_rate_limiter = controller._get_store_rate_limiter
-    observed = {}
-
-    def observed_get_store_rate_limiter(*args, **kwargs):
-        observed["rate"] = kwargs["rate_per_second"]
-        observed["limiter"] = real_get_store_rate_limiter(*args, **kwargs)
-        return observed["limiter"]
-
-    monkeypatch.setattr(controller, "_get_store_rate_limiter", observed_get_store_rate_limiter)
-
-    controller.enrich_realtime(store, limit=2, rate_per_second=0)
-    assert observed == {"rate": 0, "limiter": None}
 
 
 # ── Retry logic tests ────────────────────────────────────────────────────────
 
 
-def test_retry_succeeds_on_first_try(monkeypatch):
-    from brainlayer.enrichment_controller import _retry_with_backoff
-
-    monkeypatch.setattr("brainlayer.enrichment_controller._sleep", lambda _: None)
-    monkeypatch.setattr("brainlayer.enrichment_controller.random.uniform", lambda a, b: 0.0)
-
-    result = _retry_with_backoff(lambda: "ok", max_retries=3)
-    assert result == "ok"
-
-
-def test_retry_succeeds_after_transient_failure(monkeypatch):
-    from brainlayer.enrichment_controller import _retry_with_backoff
-
-    monkeypatch.setattr("brainlayer.enrichment_controller._sleep", lambda _: None)
-    monkeypatch.setattr("brainlayer.enrichment_controller.random.uniform", lambda a, b: 0.0)
-
-    attempts = {"n": 0}
-
-    def flaky():
-        attempts["n"] += 1
-        if attempts["n"] < 3:
-            raise RuntimeError("transient")
-        return "recovered"
-
-    result = _retry_with_backoff(flaky, max_retries=5)
-    assert result == "recovered"
-    assert attempts["n"] == 3
-
-
-def test_retry_only_catches_specified_errors(monkeypatch):
-    from brainlayer.enrichment_controller import _retry_with_backoff
-
-    monkeypatch.setattr("brainlayer.enrichment_controller._sleep", lambda _: None)
-    monkeypatch.setattr("brainlayer.enrichment_controller.random.uniform", lambda a, b: 0.0)
-
-    with pytest.raises(ValueError):
-        _retry_with_backoff(
-            lambda: (_ for _ in ()).throw(ValueError("not retryable")),
-            max_retries=3,
-            retryable_errors=(RuntimeError,),
-        )
-
-
-def test_enrich_realtime_stops_new_calls_when_daily_cap_crosses(monkeypatch, tmp_path):
-    from brainlayer import enrichment_controller as controller
-
-    monkeypatch.setenv("BRAINLAYER_ENRICH_COST_DIR", str(tmp_path))
-    monkeypatch.setenv("BRAINLAYER_ENRICH_DAILY_USD_CAP", "0.01")
-    monkeypatch.setattr(controller, "ENRICH_CONCURRENCY", 1)
-    monkeypatch.setattr(controller, "_ensure_enrichment_columns", lambda *args, **kwargs: None)
-    monkeypatch.setattr(controller, "_submit_write", lambda _store, _name, callback, **_kwargs: callback())
-    monkeypatch.setattr(controller, "_is_duplicate_content", lambda _store, _content: False)
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value={"summary": "sum", "tags": ["python"]}))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-
-    calls = {"count": 0}
-
-    class FakeClient:
-        class _Models:
-            def generate_content(self, **kwargs):  # noqa: ARG002
-                calls["count"] += 1
-                return SimpleNamespace(
-                    text='{"summary":"sum","tags":["python"]}',
-                    usage_metadata=SimpleNamespace(
-                        prompt_token_count=1_000_000,
-                        candidates_token_count=0,
-                        total_token_count=1_000_000,
-                    ),
-                )
-
-        def __init__(self):
-            self.models = self._Models()
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: FakeClient())
-
-    result = controller.enrich_realtime(store, limit=2, rate_per_second=0, max_retries=0)
-
-    counter = json.loads((tmp_path / "enrich-daily-cost.json").read_text())
-    assert calls["count"] == 1
-    assert counter["spent_usd"] == pytest.approx(0.05)
-    assert result.enriched == 1
-    assert any("ENRICH_DAILY_CAP_REACHED" in error for error in result.errors)
-
-
 # ── Error handling tests ──────────────────────────────────────────────────────
-
-
-def test_realtime_counts_failed_on_invalid_enrichment(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(return_value=("prompt", SimpleNamespace())))
-    monkeypatch.setattr(controller, "parse_enrichment", MagicMock(return_value=None))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client("garbage"))
-
-    result = controller.enrich_realtime(store, limit=1)
-    assert result.failed == 1
-    assert result.enriched == 0
-    assert "invalid_enrichment" in result.errors[0]
-
-
-def test_realtime_counts_failed_on_exception(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-    monkeypatch.setattr(controller, "build_external_prompt", MagicMock(side_effect=RuntimeError("boom")))
-    monkeypatch.setattr(controller, "Sanitizer", SimpleNamespace(from_env=lambda: SimpleNamespace()))
-    monkeypatch.setattr(controller, "_sleep", lambda _: None)
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: _fake_gemini_client())
-
-    result = controller.enrich_realtime(store, limit=1)
-    assert result.failed == 1
-    assert "boom" in result.errors[0]
-
-
-def test_local_counts_failed_on_exception():
-    from brainlayer import enrichment_controller as controller
-
-    with pytest.raises(RuntimeError, match="Local enrichment has been removed"):
-        controller.enrich_local(MagicMock(), limit=1)
-
-
-def test_local_preserves_legacy_signature():
-    import inspect
-
-    from brainlayer import enrichment_controller as controller
-
-    assert list(inspect.signature(controller.enrich_local).parameters) == ["store", "limit", "parallel", "backend"]
 
 
 # ── Meta-research filter tests ───────────────────────────────────────────────
 
 
 def test_meta_research_filter_detects_common_patterns():
-    from brainlayer.enrichment_controller import is_meta_research
+    from brainlayer.enrichment_replay import is_meta_research
 
     samples = [
         "brain_search(query='crypto trading bot')",
@@ -1310,13 +256,13 @@ def test_meta_research_filter_detects_common_patterns():
 
 
 def test_meta_research_filter_preserves_real_content():
-    from brainlayer.enrichment_controller import is_meta_research
+    from brainlayer.enrichment_replay import is_meta_research
 
     samples = [
         "We decided to keep the enrichment controller in a single file until the batch path is stabilized.",
         "def build_index(query: str) -> list[str]:\n    return [query.strip()]",
         "Ofir said the strategy should defer position sizing until volatility normalizes.",
-        "Conversation note: Etan wants the daemon restart deferred until after the migration lands.",
+        "Conversation note: Noa wants the daemon restart deferred until after the migration lands.",
     ]
 
     assert all(not is_meta_research(sample) for sample in samples)
@@ -1326,7 +272,7 @@ def test_meta_research_filter_preserves_real_content():
 
 
 def test_apply_enrichment_calls_update_enrichment_with_all_fields():
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
 
     store = MagicMock()
     chunk = _candidate("c1")
@@ -1381,7 +327,7 @@ def test_apply_enrichment_calls_update_enrichment_with_all_fields():
 
 
 def test_apply_enrichment_sets_content_hash():
-    from brainlayer.enrichment_controller import _apply_enrichment, _content_hash
+    from brainlayer.enrichment_replay import _apply_enrichment, _content_hash
 
     store = MagicMock()
     cursor = MagicMock()
@@ -1402,7 +348,7 @@ def test_apply_enrichment_sets_content_hash():
 
 
 def test_apply_enrichment_persists_raw_entities():
-    from brainlayer.enrichment_controller import _apply_enrichment
+    from brainlayer.enrichment_replay import _apply_enrichment
 
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE chunks (id TEXT PRIMARY KEY, raw_entities_json TEXT, content_hash TEXT)")
@@ -1422,13 +368,15 @@ def test_apply_enrichment_persists_raw_entities():
     assert row == (json.dumps(entities),)
 
 
-def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
-    from brainlayer.enrichment_controller import _apply_enrichment
+def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path, monkeypatch):
+    from brainlayer import kg_promotion
+    from brainlayer.enrichment_replay import _apply_enrichment
     from brainlayer.vector_store import VectorStore
 
+    monkeypatch.setattr(kg_promotion, "_KNOWN_GIVEN_NAME_ALIASES", {"alex": {"אלכס"}})
     store = VectorStore(tmp_path / "apply-promotion.db")
     try:
-        tag = "michal-hershkovits-identification"
+        tag = "alex-sample-identification"
         cursor = store.conn.cursor()
         cursor.execute(
             """INSERT INTO chunks (
@@ -1438,9 +386,9 @@ def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
                       ?, 'test', ?, ?)""",
             (
                 "existing",
-                "Michal Hershkovits coached Etan.",
-                len("Michal Hershkovits coached Etan."),
-                json.dumps([{"name": "Michal Hershkovits", "type": "person", "relation": "coach"}]),
+                "Alex Sample coached Noa.",
+                len("Alex Sample coached Noa."),
+                json.dumps([{"name": "Alex Sample", "type": "person", "relation": "coach"}]),
                 json.dumps([tag]),
             ),
         )
@@ -1451,19 +399,19 @@ def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
                 char_count, source, tags
             ) VALUES (?, ?, '{}', 'test.jsonl', 'brainlayer', 'assistant_text',
                       ?, 'test', ?)""",
-            ("new", "היי מיכל", len("היי מיכל"), json.dumps([tag])),
+            ("new", "היי אלכס", len("היי אלכס"), json.dumps([tag])),
         )
         cursor.execute("INSERT OR IGNORE INTO chunk_tags (chunk_id, tag) VALUES (?, ?)", ("new", tag))
 
         _apply_enrichment(
             store,
-            _candidate("new", "היי מיכל"),
-            {"summary": "s", "entities": [{"name": "מיכל", "type": "person", "relation": "recipient"}]},
+            _candidate("new", "היי אלכס"),
+            {"summary": "s", "entities": [{"name": "אלכס", "type": "person", "relation": "recipient"}]},
         )
 
-        entity = store.resolve_entity("Michal Hershkovits")
+        entity = store.resolve_entity("Alex Sample")
         assert entity is not None
-        hebrew_entity = store.resolve_entity("מיכל")
+        hebrew_entity = store.resolve_entity("אלכס")
         assert hebrew_entity is not None
         assert hebrew_entity["id"] == entity["id"]
     finally:
@@ -1471,78 +419,6 @@ def test_apply_enrichment_triggers_raw_entity_promotion(tmp_path):
 
 
 # ── Telemetry tests ──────────────────────────────────────────────────────────
-
-
-def test_emit_enrichment_start_fires(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    controller._emit_enrichment_start("realtime", 25)
-    assert len(events) == 1
-    assert events[0]["_type"] == "start"
-    assert events[0]["mode"] == "realtime"
-
-
-def test_emit_enrichment_start_swallows_oserror_and_logs_debug(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    events = []
-    debug_logs = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-    monkeypatch.setattr(controller.os, "write", lambda *_args: (_ for _ in ()).throw(OSError("pipe closed")))
-    monkeypatch.setattr(controller.logger, "debug", lambda msg, *args: debug_logs.append(msg % args if args else msg))
-
-    controller._emit_enrichment_start("realtime", 25)
-
-    assert len(events) == 1
-    assert events[0]["_type"] == "start"
-    assert any("ENRICHMENT_RUNTIME_LOADED" in entry for entry in debug_logs)
-
-
-def test_emit_enrichment_complete_fires(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-    from brainlayer.enrichment_controller import EnrichmentResult
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    result = EnrichmentResult(mode="local", attempted=10, enriched=8, skipped=1, failed=1)
-    controller._emit_enrichment_complete(result, 1500.0)
-
-    assert len(events) == 1
-    assert events[0]["_type"] == "complete"
-    assert events[0]["enriched"] == 8
-    assert events[0]["duration_ms"] == 1500.0
-
-
-def test_emit_enrichment_error_truncates_long_errors(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    long_error = "x" * 500
-    controller._emit_enrichment_error("realtime", "chunk123", long_error)
-
-    assert len(events[0]["error"]) == 300
-
-
-def test_realtime_emits_start_and_complete_events(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    events = []
-    monkeypatch.setattr(controller, "_emit_enrichment_event", lambda e: events.append(e) or True)
-
-    controller.enrich_realtime(store, limit=5)
-
-    types = [e["_type"] for e in events]
-    assert "start" in types
-    assert "complete" in types
 
 
 # ── Telemetry module tests ───────────────────────────────────────────────────
@@ -1582,31 +458,28 @@ def test_telemetry_enrichment_helpers_exist():
 
 
 @pytest.mark.asyncio
-async def test_brain_enrich_handler_returns_error_for_unknown_mode(monkeypatch):
+@pytest.mark.parametrize("mode", ["unknown", "realtime", "batch"])
+async def test_brain_enrich_handler_is_retired_before_database_access(monkeypatch, mode):
     from brainlayer.mcp.enrich_handler import _brain_enrich
 
-    result = await _brain_enrich(mode="unknown")
+    forbidden_db = MagicMock(side_effect=AssertionError("retired handler opened DB"))
+    monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", forbidden_db, raising=False)
+    result = await _brain_enrich(mode=mode, phase="submit", chunk_ids=["synthetic"])
     assert result.is_error is True
-    assert "Unknown mode" in result.content[0].text
+    assert "Enrichment has been retired" in result.content[0].text
+    forbidden_db.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_brain_enrich_handler_stats_mode(monkeypatch):
+async def test_brain_enrich_handler_stats_is_retired_without_reading_metadata(monkeypatch):
     from brainlayer.mcp.enrich_handler import _brain_enrich
 
-    store = MagicMock()
-    cursor = MagicMock()
-    cursor.execute.return_value.fetchone.return_value = (100,)
-    store._read_cursor.return_value = cursor
-
-    monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", lambda: store)
-
+    forbidden_db = MagicMock(side_effect=AssertionError("retired stats opened DB"))
+    monkeypatch.setattr("brainlayer.mcp.enrich_handler._get_vector_store", forbidden_db, raising=False)
     result = await _brain_enrich(stats=True)
-    assert result.is_error is not True
-    text = result.content[0].text
-    # _enrich_stats returns formatted text with box-drawing chars, not JSON
-    assert "Total:" in text
-    assert "Enriched:" in text
+    assert result.is_error is True
+    assert "Enrichment has been retired" in result.content[0].text
+    forbidden_db.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1634,139 +507,22 @@ async def test_enrich_stats_returns_correct_structure():
 # ── Batch mode tests ─────────────────────────────────────────────────────────
 
 
-def test_enrich_batch_processes_candidates_with_gemini(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate("c1"), _candidate("c2")]
-    _patch_realtime_deps(monkeypatch, controller, store)
-
-    result = controller.enrich_batch(store, limit=10)
-
-    assert result.mode == "batch"
-    assert result.attempted == 2
-    assert result.enriched == 2
-
-
-def test_enrich_batch_graceful_when_no_gemini_key(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = [_candidate()]
-
-    monkeypatch.setattr(controller, "_get_gemini_client", lambda: (_ for _ in ()).throw(RuntimeError("no key")))
-
-    result = controller.enrich_batch(store, limit=5)
-
-    assert result.mode == "batch"
-    assert result.enriched == 0
-    assert any("No Gemini client" in e for e in result.errors)
-
-
 # ── Realtime chunk_ids filter test ────────────────────────────────────────────
-
-
-def test_realtime_passes_chunk_ids_to_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    controller.enrich_realtime(store, chunk_ids=["a", "b"])
-
-    store.get_enrichment_candidates.assert_called_once_with(limit=500, since_hours=8760, chunk_ids=["a", "b"])
 
 
 # ── LaunchAgent plist validation ──────────────────────────────────────────────
 
 
-def test_enrichment_plist_has_correct_label():
-    import xml.etree.ElementTree as ET
-    from pathlib import Path
-
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    tree = ET.parse(plist_path)
-    root = tree.getroot()
-    d = root.find("dict")
-
-    # Find the string element right after the Label key
-    elements = list(d)
-    for i, el in enumerate(elements):
-        if el.tag == "key" and el.text == "Label":
-            assert elements[i + 1].text == "com.brainlayer.enrichment"
-            break
-
-
-def test_enrichment_plist_uses_realtime_mode():
-    from pathlib import Path
-
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    content = plist_path.read_text()
-    assert "realtime" in content
-
-
-def _load_enrichment_plist():
-    from pathlib import Path
-
-    plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    return plistlib.loads(plist_path.read_bytes())
-
-
-def test_enrichment_plist_uses_continuous_keepalive_shape():
-    plist = _load_enrichment_plist()
-
-    assert plist["KeepAlive"] is True
-    assert "StartInterval" not in plist
-
-
-def test_enrichment_plist_invokes_cli_enrich_entrypoint():
-    plist = _load_enrichment_plist()
-
-    args = plist["ProgramArguments"]
-    assert args == ["__BRAINLAYER_ENV_RUN__", "__BRAINLAYER_BIN__", "enrich", "--mode", "realtime", "--supervisor"]
-    assert "while true" not in " ".join(args)
-    assert "--limit" not in args
-    assert "--since-hours" not in args
-
-
-def test_enrichment_plist_matches_validated_flex_realtime_profile():
-    plist = _load_enrichment_plist()
-    env = plist["EnvironmentVariables"]
-    env_template = (Path(__file__).parent.parent / "scripts" / "launchd" / "brainlayer.env.example").read_text()
-
-    assert plist["Nice"] == 10
-    assert plist["StandardOutPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.out.log"
-    assert plist["StandardErrorPath"] == "__HOME__/Library/Logs/brainlayer/enrichment.err.log"
-    assert env["BRAINLAYER_ENV_FILE"] == "__BRAINLAYER_ENV_FILE__"
-    assert env["BRAINLAYER_REQUIRE_GOOGLE_API_KEY"] == "1"
-    assert "GOOGLE_API_KEY" not in env
-    assert "BRAINLAYER_ENRICH_RATE=15" in env_template
-    assert "BRAINLAYER_ENRICH_CONCURRENCY=4" in env_template
-    assert "BRAINLAYER_MAX_COMMIT_BATCH=25" in env_template
-    assert "BRAINLAYER_GEMINI_SERVICE_TIER=flex" in env_template
-
-
-def test_launchd_installer_supports_enrichment_load_and_unload():
-    from pathlib import Path
+def test_launchd_installer_supports_explicit_load_and_unload():
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert 'LAUNCH_DIR="$HOME/Library/LaunchAgents"' in install_script
     assert "load)" in install_script
     assert "unload)" in install_script
-    assert "com.brainlayer.enrichment" in install_script
     assert "install_plist decay" in install_script
 
 
-def test_launchd_installer_enrich_alias_removes_legacy_plist():
-    from pathlib import Path
-
-    install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
-    assert "enrich)" in install_script
-    assert "remove_plist enrich 2>/dev/null || true" in install_script
-
-
 def test_launchd_installer_uses_standard_env_file_instead_of_embedding_google_key():
-    from pathlib import Path
 
     install_script = (Path(__file__).parent.parent / "scripts" / "launchd" / "install.sh").read_text()
     assert ".zshrc" not in install_script
@@ -1778,32 +534,10 @@ def test_launchd_installer_uses_standard_env_file_instead_of_embedding_google_ke
 # ── Gemini model constant test ────────────────────────────────────────────────
 
 
-def test_gemini_realtime_model_default():
-    from brainlayer.enrichment_controller import GEMINI_REALTIME_MODEL
-
-    assert "flash-lite" in GEMINI_REALTIME_MODEL
-    assert "2.5" in GEMINI_REALTIME_MODEL
-
-
 # ── Empty candidates handling ─────────────────────────────────────────────────
 
 
-def test_realtime_returns_zero_counts_for_no_candidates(monkeypatch):
-    from brainlayer import enrichment_controller as controller
-
-    store = MagicMock()
-    store.get_enrichment_candidates.return_value = []
-
-    result = controller.enrich_realtime(store)
-
-    assert result.attempted == 0
-    assert result.enriched == 0
-    assert result.skipped == 0
-    assert result.failed == 0
-
-
 def test_decay_plist_invokes_cli_decay_entrypoint():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.decay.plist"
     content = plist_path.read_text()
@@ -1813,7 +547,6 @@ def test_decay_plist_invokes_cli_decay_entrypoint():
 
 
 def test_wal_checkpoint_plist_invokes_cli_checkpoint_entrypoint():
-    from pathlib import Path
 
     plist_path = Path(__file__).parent.parent / "scripts" / "launchd" / "com.brainlayer.wal-checkpoint.plist"
     content = plist_path.read_text()

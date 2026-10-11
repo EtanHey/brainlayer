@@ -143,24 +143,58 @@ final class BrainBarServer: @unchecked Sendable {
     private static let readOnlyBusyTimeoutMillis: Int32 = 250
     static let hybridSearchBudgetSeconds: TimeInterval = 0.8
     static let hybridHelperSocketIOTimeoutSeconds: TimeInterval = 120
-    private let debugLogPath = "/tmp/brainbar-debug.log"
+    /// Where this server's lifecycle and trace lines go besides unified logging.
+    /// `.none` (tests, the UI target) writes no file at all; the daemon passes
+    /// `.daemon()`. Neither file ever carries a request or response payload.
+    struct Diagnostics {
+        /// Flag-gated connection/framing trace (`BRAINBAR_DEBUG_LOG=1`).
+        let debugLog: BrainBarLogFile?
+        /// Always-on lifecycle trail: server starts.
+        let lifecycleLog: BrainBarLogFile?
+        /// The debug log path, tightened to 0600 at start even when the flag is
+        /// off, because older builds left it 0644 with request bytes in it.
+        let staleDebugLog: BrainBarLogFile?
 
-    private func debugLog(_ msg: String) {
-        let ts = ISO8601DateFormatter().string(from: Date())
-        let line = "[\(ts)] \(msg)\n"
-        if let fh = FileHandle(forWritingAtPath: debugLogPath) {
-            fh.seekToEndOfFile()
-            fh.write(Data(line.utf8))
-            fh.closeFile()
-        } else {
-            FileManager.default.createFile(atPath: debugLogPath, contents: Data(line.utf8))
+        static let none = Diagnostics(debugLog: nil, lifecycleLog: nil, staleDebugLog: nil)
+
+        static func daemon(
+            environment: [String: String] = ProcessInfo.processInfo.environment,
+            debugLogPath: String = BrainBarLog.debugLogPath,
+            lifecycleLogPath: String = BrainBarLog.lifecycleLogPath
+        ) -> Diagnostics {
+            Diagnostics(
+                debugLog: BrainBarLog.debugLogFile(environment: environment, path: debugLogPath),
+                lifecycleLog: BrainBarLog.lifecycleLogFile(path: lifecycleLogPath),
+                staleDebugLog: BrainBarLogFile(path: debugLogPath, maxBytes: BrainBarLog.debugLogMaxBytes)
+            )
         }
     }
 
-    private func debugLogData(_ label: String, _ data: Data) {
-        let hex = data.prefix(256).map { String(format: "%02x", $0) }.joined(separator: " ")
-        let text = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
-        debugLog("\(label) (\(data.count) bytes)\n  HEX: \(hex)\n  TEXT: \(text)")
+    private static let logger = BrainBarLog.logger("server")
+    private let diagnostics: Diagnostics
+
+    /// Appends to the debug log only when the flag is set. Callers pass fds,
+    /// counts, framing states and `loggableMethod` names, never message content.
+    private func trace(_ message: @autoclosure () -> String) {
+        diagnostics.debugLog?.append(message())
+    }
+
+    private static let loggableMethods: Set<String> = [
+        "initialize",
+        "notifications/initialized",
+        "notifications/cancelled",
+        "tools/list",
+        "tools/call",
+        "resources/list",
+        "prompts/list",
+        "ping",
+    ]
+
+    /// A JSON-RPC method is client-chosen text, so only known protocol method
+    /// names are ever logged.
+    static func loggableMethod(_ request: [String: Any]) -> String {
+        guard let method = request["method"] as? String else { return "<no method>" }
+        return loggableMethods.contains(method) ? method : "<other>"
     }
 
     struct ClientState {
@@ -190,7 +224,8 @@ final class BrainBarServer: @unchecked Sendable {
         hybridSearchClient: HybridSearchClientProtocol? = nil,
         enableHybridSearchHelper: Bool = true,
         databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy(),
-        instanceLockPath: String? = nil
+        instanceLockPath: String? = nil,
+        diagnostics: Diagnostics = .none
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
@@ -199,6 +234,7 @@ final class BrainBarServer: @unchecked Sendable {
         self.enableHybridSearchHelper = enableHybridSearchHelper
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
         self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
+        self.diagnostics = diagnostics
         queue.setSpecific(key: Self.queueKey, value: queueID)
     }
 
@@ -236,6 +272,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func startOnQueue() {
+        // First, before any early return: a stale debug log from an older build
+        // is 0644 and holds request bytes, whether or not this start succeeds.
+        diagnostics.staleDebugLog?.tightenExisting()
         do {
             instanceLock = try BrainBarInstanceLock.acquire(lockPath: instanceLockPath)
         } catch BrainBarInstanceLock.AcquireError.alreadyRunning {
@@ -271,7 +310,29 @@ final class BrainBarServer: @unchecked Sendable {
         router = MCPRouter(
             hybridSearchClient: hybridClient,
             hybridSearchBudget: Self.hybridSearchBudgetSeconds,
-            dbPath: dbPath
+            dbPath: dbPath,
+            onPendingStoresFlushed: { [weak self] flushedStores in
+                self?.queue.async { [weak self] in
+                    guard let self else { return }
+                    var publishedRows = Set<Int64>()
+                    for flushed in flushedStores {
+                        guard publishedRows.insert(flushed.storedChunk.rowID).inserted else { continue }
+                        self.publishStoredChunk(
+                            stored: StoreResultPayload(
+                                chunkID: flushed.storedChunk.chunkID,
+                                rowID: flushed.storedChunk.rowID,
+                                content: nil,
+                                tags: nil,
+                                importance: nil
+                            ),
+                            content: flushed.content,
+                            tags: flushed.tags,
+                            importance: flushed.importance
+                        )
+                    }
+                }
+            },
+            receiptStore: BrainBarOperationReceipts(url: BrainBarOperationReceipts.fileURL(dbPath: dbPath))
         )
 
         // 2. Bind socket BEFORE database init.
@@ -338,7 +399,9 @@ final class BrainBarServer: @unchecked Sendable {
         listenSource = source
 
         NSLog("[BrainBar] Server listening on %@", socketPath)
-        debugLog("SERVER STARTED — listening on \(socketPath)")
+        Self.logger.notice("SERVER STARTED pid=\(getpid(), privacy: .public) socket=\(self.socketPath, privacy: .private)")
+        diagnostics.lifecycleLog?.append("SERVER STARTED — listening on \(socketPath) pid=\(getpid())")
+        trace("SERVER STARTED — listening on \(socketPath)")
 
         if let ownedHybridClient {
             hybridSearchHelperClient = ownedHybridClient
@@ -455,7 +518,9 @@ final class BrainBarServer: @unchecked Sendable {
         _ = fcntl(clientFD, F_SETFL, flags | O_NONBLOCK)
 
         var nosigpipe: Int32 = 1
-        setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+        if setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+            NSLog("[BrainBar] SO_NOSIGPIPE unavailable on accepted fd %d (errno %d)", clientFD, errno)
+        }
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: queue)
         readSource.setEventHandler { [weak self] in
@@ -474,7 +539,8 @@ final class BrainBarServer: @unchecked Sendable {
         )
         onClientAccepted?(clientFD)
         NSLog("[BrainBar] Client connected (fd: %d)", clientFD)
-        debugLog("CLIENT CONNECTED fd=\(clientFD) (total clients: \(clients.count))")
+        Self.logger.debug("client connected fd=\(clientFD, privacy: .public) clients=\(self.clients.count, privacy: .public)")
+        trace("CLIENT CONNECTED fd=\(clientFD) (total clients: \(clients.count))")
     }
 
     private func readFromClient(fd: Int32) {
@@ -491,7 +557,7 @@ final class BrainBarServer: @unchecked Sendable {
 
         guard var state = clients[fd] else { return }
         let incoming = Data(buf[0..<n])
-        debugLogData("RECV fd=\(fd)", incoming)
+        trace("RECV fd=\(fd) (\(incoming.count) bytes)")
         state.framing.append(incoming)
 
         let messages = state.framing.extractMessages()
@@ -500,26 +566,25 @@ final class BrainBarServer: @unchecked Sendable {
             state.usesContentLengthFraming = state.framing.lastExtractUsedContentLength
         }
         clients[fd] = state
-        debugLog("EXTRACTED \(messages.count) messages from fd=\(fd) (framing=\(state.usesContentLengthFraming ? "content-length" : "newline-json"), buffer remaining: \(state.framing.bufferCount) bytes)")
+        trace("EXTRACTED \(messages.count) messages from fd=\(fd) (framing=\(state.usesContentLengthFraming ? "content-length" : "newline-json"), buffer remaining: \(state.framing.bufferCount) bytes)")
         for msg in messages {
-            let method = msg["method"] as? String ?? "<no method>"
-            let id = msg["id"]
-            debugLog("  MSG fd=\(fd): method=\(method) id=\(String(describing: id))")
+            let method = Self.loggableMethod(msg)
+            trace("  MSG fd=\(fd): method=\(method)")
             if parseToolCall(msg)?.name == "brain_backup_vacuum_into" {
                 handleBackupToolCallAsync(
                     fd: fd,
                     request: msg,
                     useContentLength: state.usesContentLengthFraming
                 )
-                debugLog("  DEFERRED response for method=\(method) to backup queue")
+                trace("  DEFERRED response for method=\(method) to backup queue")
                 continue
             }
             let response = handleMessage(fd: fd, request: msg)
             if !response.isEmpty {
                 sendResponse(fd: fd, response: response, useContentLength: state.usesContentLengthFraming)
-                debugLog("  SENT response for method=\(method)")
+                trace("  SENT response for method=\(method)")
             } else {
-                debugLog("  NO RESPONSE for method=\(method) (notification)")
+                trace("  NO RESPONSE for method=\(method) (notification)")
             }
             // sendResponse may have called disconnectClient — stop processing
             if clients[fd] == nil { return }
@@ -535,6 +600,13 @@ final class BrainBarServer: @unchecked Sendable {
     private func handleMessage(fd: Int32, request: [String: Any]) -> [String: Any] {
         let paletteSession = clients[fd]?.paletteSession
         if let toolCall = parseToolCall(request) {
+            if backupToolCallInProgress, toolCall.name == "brain_store" {
+                return router.handle(
+                    request,
+                    session: paletteSession,
+                    deferStoreForBackup: true
+                )
+            }
             if backupToolCallInProgress, !canHandleDuringBackup(toolCall.name) {
                 return [
                     "jsonrpc": "2.0",
@@ -568,9 +640,6 @@ final class BrainBarServer: @unchecked Sendable {
                 let response = router.handle(request, session: paletteSession)
                 if toolCall.name == "brain_store", !isToolError(response) {
                     publishStoredChunks(response: response, arguments: toolCall.arguments)
-                }
-                if toolCall.name == "brain_enrich", !isToolError(response) {
-                    brainBus.publish(.enrichStatus("running"))
                 }
                 return response
             }
@@ -618,6 +687,7 @@ final class BrainBarServer: @unchecked Sendable {
         }
         guard let paletteSession = clients[fd]?.paletteSession else { return }
 
+        router.backupSnapshotStarted()
         backupToolCallInProgress = true
         let requestBox = SendableBox(request)
         backupToolQueue.async { [weak self] in
@@ -628,13 +698,15 @@ final class BrainBarServer: @unchecked Sendable {
             self.queue.async { [weak self] in
                 guard let self else { return }
                 self.backupToolCallInProgress = false
+                self.router.backupSnapshotFinished()
+                self.router.scheduleDrainAfterBackup()
                 self.flushDeferredSubscriberDisconnects()
                 guard self.clients[fd]?.paletteSession === paletteSession else {
                     self.onDeferredBackupResponseDropped?(self.clients[fd] != nil)
                     return
                 }
                 self.sendResponse(fd: fd, response: responseBox.value, useContentLength: useContentLength)
-                self.debugLog("  SENT async response for brain_backup_vacuum_into")
+                self.trace("  SENT async response for brain_backup_vacuum_into")
             }
         }
     }

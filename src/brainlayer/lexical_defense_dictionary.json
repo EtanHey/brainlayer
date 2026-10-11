@@ -8,9 +8,17 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 100,
-      "aliases": ["brainlayer"],
-      "split_forms": ["brain layer"],
-      "sources": ["wispr_dictionary", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "brainlayer"
+      ],
+      "split_forms": [
+        "brain layer"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "VoiceLayer",
@@ -18,9 +26,19 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 100,
-      "aliases": ["voicelayer"],
-      "split_forms": ["voice layer", "voice slate"],
-      "sources": ["wispr_dictionary", "wispr_replacement", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "voicelayer"
+      ],
+      "split_forms": [
+        "voice layer",
+        "voice slate"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "wispr_replacement",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "BrainBar",
@@ -28,9 +46,17 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 95,
-      "aliases": ["brainbar"],
-      "split_forms": ["brain bar"],
-      "sources": ["wispr_dictionary", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "brainbar"
+      ],
+      "split_forms": [
+        "brain bar"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "VoiceBar",
@@ -38,9 +64,16 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 95,
-      "aliases": ["voicebar"],
-      "split_forms": ["voice bar"],
-      "sources": ["wispr_dictionary", "manual_seed"]
+      "aliases": [
+        "voicebar"
+      ],
+      "split_forms": [
+        "voice bar"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "repoGolem",
@@ -48,9 +81,19 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 92,
-      "aliases": ["repogolem"],
-      "split_forms": ["repo golem", "repo golden"],
-      "sources": ["wispr_dictionary", "wispr_replacement", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "repogolem"
+      ],
+      "split_forms": [
+        "repo golem",
+        "repo golden"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "wispr_replacement",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "orcClaude",
@@ -58,9 +101,19 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 92,
-      "aliases": ["orcclaude"],
-      "split_forms": ["orc claude", "orc-cloud"],
-      "sources": ["wispr_dictionary", "wispr_replacement", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "orcclaude"
+      ],
+      "split_forms": [
+        "orc claude",
+        "orc-cloud"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "wispr_replacement",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "cmux",
@@ -68,9 +121,15 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 90,
-      "aliases": ["Cmux"],
+      "aliases": [
+        "Cmux"
+      ],
       "split_forms": [],
-      "sources": ["wispr_dictionary", "brainlayer_kg", "manual_seed"]
+      "sources": [
+        "wispr_dictionary",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "CmuxLayer",
@@ -78,9 +137,17 @@
       "script": "latin",
       "protect_from_split": true,
       "swift_override_priority": 89,
-      "aliases": ["cmuxlayer"],
-      "split_forms": ["cmux layer"],
-      "sources": ["wispr_dictionary", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "cmuxlayer"
+      ],
+      "split_forms": [
+        "cmux layer"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "brainlayerCodex",
@@ -89,8 +156,13 @@
       "protect_from_split": true,
       "swift_override_priority": 88,
       "aliases": [],
-      "split_forms": ["brain layer codex"],
-      "sources": ["manual_seed", "user_prompt"]
+      "split_forms": [
+        "brain layer codex"
+      ],
+      "sources": [
+        "manual_seed",
+        "user_prompt"
+      ]
     },
     {
       "canonical": "voicelayerCodex",
@@ -99,8 +171,15 @@
       "protect_from_split": true,
       "swift_override_priority": 88,
       "aliases": [],
-      "split_forms": ["voice layer codex", "voice layer codex-s."],
-      "sources": ["wispr_replacement", "manual_seed", "user_prompt"]
+      "split_forms": [
+        "voice layer codex",
+        "voice layer codex-s."
+      ],
+      "sources": [
+        "wispr_replacement",
+        "manual_seed",
+        "user_prompt"
+      ]
     },
     {
       "canonical": "skillCreatorClaude",
@@ -109,8 +188,13 @@
       "protect_from_split": true,
       "swift_override_priority": 84,
       "aliases": [],
-      "split_forms": ["skill creator claude"],
-      "sources": ["wispr_dictionary", "manual_seed"]
+      "split_forms": [
+        "skill creator claude"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "brain_search",
@@ -119,8 +203,13 @@
       "protect_from_split": true,
       "swift_override_priority": 82,
       "aliases": [],
-      "split_forms": ["brain search"],
-      "sources": ["wispr_dictionary", "manual_seed"]
+      "split_forms": [
+        "brain search"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "brain_store",
@@ -129,8 +218,13 @@
       "protect_from_split": true,
       "swift_override_priority": 82,
       "aliases": [],
-      "split_forms": ["brain store"],
-      "sources": ["wispr_dictionary", "manual_seed"]
+      "split_forms": [
+        "brain store"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "brain_entity",
@@ -139,8 +233,13 @@
       "protect_from_split": true,
       "swift_override_priority": 82,
       "aliases": [],
-      "split_forms": ["brain entity"],
-      "sources": ["wispr_dictionary", "manual_seed"]
+      "split_forms": [
+        "brain entity"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "golems.toml",
@@ -149,8 +248,14 @@
       "protect_from_split": true,
       "swift_override_priority": 80,
       "aliases": [],
-      "split_forms": ["golems tomo"],
-      "sources": ["wispr_dictionary", "wispr_replacement", "manual_seed"]
+      "split_forms": [
+        "golems tomo"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "wispr_replacement",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "CLAUDE.md",
@@ -160,7 +265,10 @@
       "swift_override_priority": 80,
       "aliases": [],
       "split_forms": [],
-      "sources": ["wispr_dictionary", "manual_seed"]
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "Wispr Flow",
@@ -170,17 +278,10 @@
       "swift_override_priority": 78,
       "aliases": [],
       "split_forms": [],
-      "sources": ["wispr_dictionary", "manual_seed"]
-    },
-    {
-      "canonical": "Etan Heyman",
-      "category": "english_name",
-      "script": "latin",
-      "protect_from_split": true,
-      "swift_override_priority": 96,
-      "aliases": ["Etan", "Heyman", "etanheyman", "Etan Joseph Heyman"],
-      "split_forms": ["etan heyman"],
-      "sources": ["wispr_dictionary", "brainlayer_kg", "manual_seed"]
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "etanheyman.com",
@@ -189,48 +290,13 @@
       "protect_from_split": true,
       "swift_override_priority": 76,
       "aliases": [],
-      "split_forms": ["etan heyman dot com"],
-      "sources": ["wispr_dictionary", "manual_seed"]
-    },
-    {
-      "canonical": "etan@heyman.net",
-      "category": "domain_entity",
-      "script": "latin",
-      "protect_from_split": true,
-      "swift_override_priority": 76,
-      "aliases": [],
-      "split_forms": ["etan heyman net"],
-      "sources": ["wispr_dictionary", "manual_seed"]
-    },
-    {
-      "canonical": "Hershkovits",
-      "category": "english_name",
-      "script": "latin",
-      "protect_from_split": true,
-      "swift_override_priority": 94,
-      "aliases": ["Hershkovitz"],
-      "split_forms": [],
-      "sources": ["manual_seed", "user_prompt"]
-    },
-    {
-      "canonical": "איתן היימן",
-      "category": "hebrew_name",
-      "script": "hebrew",
-      "protect_from_split": true,
-      "swift_override_priority": 98,
-      "aliases": [],
-      "split_forms": [],
-      "sources": ["brainlayer_kg", "manual_seed"]
-    },
-    {
-      "canonical": "איתן ג'וסף היימן",
-      "category": "hebrew_name",
-      "script": "hebrew",
-      "protect_from_split": true,
-      "swift_override_priority": 97,
-      "aliases": [],
-      "split_forms": [],
-      "sources": ["brainlayer_kg", "manual_seed"]
+      "split_forms": [
+        "etan heyman dot com"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "manual_seed"
+      ]
     },
     {
       "canonical": "מהיום",
@@ -238,9 +304,18 @@
       "script": "hebrew",
       "protect_from_split": true,
       "swift_override_priority": 86,
-      "aliases": ["MeHayom", "Mehayom"],
-      "split_forms": ["me hayom"],
-      "sources": ["wispr_dictionary", "brainlayer_kg", "manual_seed"]
+      "aliases": [
+        "MeHayom",
+        "Mehayom"
+      ],
+      "split_forms": [
+        "me hayom"
+      ],
+      "sources": [
+        "wispr_dictionary",
+        "brainlayer_kg",
+        "manual_seed"
+      ]
     }
   ]
 }

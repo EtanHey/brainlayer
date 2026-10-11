@@ -5,17 +5,15 @@ final class BrainBarRuntime: ObservableObject {
     let launchMode: BrainBarLaunchMode
     let hotkeyStatus = HotkeyRouteStatus()
     let windowCoordinator: BrainBarWindowCoordinator
+    /// Google Drive access for backups. It has no runner until AppDelegate installs the live one,
+    /// so tests and previews never run the CLI.
+    let driveAuth = BrainBarDriveAuthModel(runner: nil)
 
     @Published private(set) var collector: StatsCollector?
-    @Published private(set) var injectionStore: InjectionStore?
     @Published private(set) var database: BrainDatabase?
-    @Published private(set) var requestedQuickAction: BrainBarQuickAction?
-
-    private var injectionStoreFactory: (() -> InjectionStore?)?
+    private(set) var databasePath: String?
 
     var onToggleRequested: (() -> Void)?
-    var onSearchRequested: (() -> Void)?
-    var onQuickCaptureRequested: (() -> Void)?
 
     init(
         launchMode: BrainBarLaunchMode = BrainBarLaunchMode.resolve(),
@@ -27,38 +25,16 @@ final class BrainBarRuntime: ObservableObject {
 
     func install(
         collector: StatsCollector,
-        injectionStore: InjectionStore?,
         database: BrainDatabase?,
-        injectionStoreFactory: (() -> InjectionStore?)? = nil
+        databasePath: String? = nil
     ) {
         self.collector = collector
-        self.injectionStore = injectionStore
         self.database = database
-        self.injectionStoreFactory = injectionStoreFactory
-    }
-
-    func ensureInjectionStore() {
-        guard injectionStore == nil else { return }
-        injectionStore = injectionStoreFactory?()
+        self.databasePath = databasePath
     }
 
     func handleToggleRequest() {
         onToggleRequested?()
     }
 
-    func showSearchPanel() {
-        onSearchRequested?()
-    }
-
-    func showQuickCapturePanel() {
-        onQuickCaptureRequested?()
-    }
-
-    func presentQuickAction(_ action: BrainBarQuickAction) {
-        requestedQuickAction = action
-    }
-
-    func clearQuickActionRequest() {
-        requestedQuickAction = nil
-    }
 }

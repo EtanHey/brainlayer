@@ -26,8 +26,10 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
-            ]
+            ],
+            plugins: [.plugin(name: "BrainBarBuildIdentityPlugin")]
         ),
+        .plugin(name: "BrainBarBuildIdentityPlugin", capability: .buildTool()),
         .executableTarget(
             name: "BrainBarDaemon",
             dependencies: [
@@ -53,6 +55,10 @@ let package = Package(
             path: "Tests/BrainBarTests",
             exclude: [
                 "RENDER_VERIFICATION.md",
+                "Scripts",
+            ],
+            resources: [
+                .copy("Fixtures"),
             ]
         ),
         .testTarget(

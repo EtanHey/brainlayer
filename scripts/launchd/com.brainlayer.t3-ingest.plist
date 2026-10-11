@@ -9,6 +9,7 @@
 		<string>com.brainlayer.brainbar</string>
 	</array>
 	<key>ProgramArguments</key>
+	<!-- install.sh appends explicit projection/db/health selection from the private env file. -->
 	<array>
 		<string>__BRAINLAYER_ENV_RUN__</string>
 		<string>__BRAINLAYER_BIN__</string>

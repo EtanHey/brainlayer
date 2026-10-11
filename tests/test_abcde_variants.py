@@ -12,7 +12,7 @@ from brainlayer.eval.abcde_variants import (
     VARIANT_IDS,
     load_abcde_variants,
 )
-from brainlayer.pipeline.enrichment import ENRICHMENT_PROMPT
+from brainlayer.pipeline.enrichment_prompts import ENRICHMENT_PROMPT
 from scripts.generate_abcde_variants import (
     SHELF_SECTION,
     assert_freeze_integrity,
@@ -149,3 +149,18 @@ def test_llm_proposed_variants_are_divergent_runtime_schema_prompts() -> None:
             "sentiment_signals",
         ):
             assert field in prompt
+
+
+def test_offline_variant_filter_preserves_registry_order_and_rejects_unknown():
+    from brainlayer.eval.abcde_variants import select_variants
+
+    assert [variant.id for variant in select_variants("E,A,C")] == ["A", "C", "E"]
+    assert [variant.id for variant in select_variants("")] == ["A", "B", "C", "D", "E"]
+    with pytest.raises(SystemExit, match="Unknown variant"):
+        select_variants("Z")
+
+
+def test_offline_generator_reads_the_retained_legacy_template():
+    from scripts.generate_abcde_variants import PRODUCTION_PROMPT_PATH, extract_python_string_constant
+
+    assert extract_python_string_constant(PRODUCTION_PROMPT_PATH, "ENRICHMENT_PROMPT") == ENRICHMENT_PROMPT

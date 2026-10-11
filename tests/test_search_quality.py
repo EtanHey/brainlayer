@@ -443,19 +443,19 @@ class TestEntityAwareRouting:
         cursor.execute(
             """INSERT INTO kg_entities (id, entity_type, name, metadata, created_at)
                VALUES (?, ?, ?, '{}', datetime('now'))""",
-            ("ent-1", "person", "Avi Simon"),
+            ("ent-1", "person", "Rina Vale"),
         )
         # Also populate FTS
         cursor.execute(
             "INSERT INTO kg_entities_fts (name, metadata, entity_id) VALUES (?, '{}', ?)",
-            ("Avi Simon", "ent-1"),
+            ("Rina Vale", "ent-1"),
         )
 
         from brainlayer.mcp.search_handler import _detect_entities
 
-        entities = _detect_entities("What does Avi Simon prefer for meetings?", store)
+        entities = _detect_entities("What does Rina Vale prefer for meetings?", store)
         assert len(entities) >= 1
-        assert any(e["name"].lower() == "avi simon" for e in entities)
+        assert any(e["name"].lower() == "rina vale" for e in entities)
 
     def test_entity_detection_returns_empty_for_no_match(self, store):
         """When no entity names match, return empty list."""
@@ -471,17 +471,17 @@ class TestEntityAwareRouting:
         cursor.execute(
             """INSERT INTO kg_entities (id, entity_type, name, metadata, created_at)
                VALUES (?, ?, ?, '{}', datetime('now'))""",
-            ("ent-route-1", "person", "Michal Cohen"),
+            ("ent-route-1", "person", "Alex Cohen"),
         )
         cursor.execute(
             "INSERT INTO kg_entities_fts (name, metadata, entity_id) VALUES (?, '{}', ?)",
-            ("Michal Cohen", "ent-route-1"),
+            ("Alex Cohen", "ent-route-1"),
         )
         # Insert a chunk linked to this entity
         _insert_chunk(
             store,
             "ent-chunk-1",
-            content="Michal Cohen prefers morning meetings before 10am",
+            content="Alex Cohen prefers morning meetings before 10am",
             importance=7.0,
             created_at="2026-03-01T00:00:00",
         )
@@ -492,10 +492,10 @@ class TestEntityAwareRouting:
 
         # kg_hybrid_search should return chunks + facts for the entity
         results = store.kg_hybrid_search(
-            query_embedding=mock_embed("Michal Cohen meetings"),
-            query_text="Michal Cohen meetings",
+            query_embedding=mock_embed("Alex Cohen meetings"),
+            query_text="Alex Cohen meetings",
             n_results=5,
-            entity_name="Michal Cohen",
+            entity_name="Alex Cohen",
         )
         assert "chunks" in results
         assert "facts" in results

@@ -129,7 +129,8 @@ search_handler._brain_search = fake_brain_search
                 "num_results": 3,
                 "max_results": 9,
                 "detail": "compact",
-                "_profile_query_id": "contract-profile-id",
+                # The generated shape; any other value is dropped as client-chosen text (#993 B1).
+                "_profile_query_id": "q-c0ffee00c0de",
             },
         }
 

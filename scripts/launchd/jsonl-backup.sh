@@ -3,12 +3,9 @@ set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
 export PYTHONUNBUFFERED=1
-: "${BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=1800}"
+: "${BRAINLAYER_BACKUP_TIMEOUT_SECONDS:=7200}"
 export BRAINLAYER_BACKUP_TIMEOUT_SECONDS
-BRAINLAYER_DIR="${BRAINLAYER_DIR:-__BRAINLAYER_DIR_VALUE__}"
-case "$BRAINLAYER_DIR" in
-    __BRAINLAYER_DIR_*) BRAINLAYER_DIR="$HOME/Gits/brainlayer" ;;
-esac
-export PYTHONPATH="$BRAINLAYER_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+: "${BRAINLAYER_PYTHON:?installer must render the prefix-aware keg interpreter}"
+unset PYTHONPATH
 
-exec "${BRAINLAYER_PYTHON:-python3}" -m brainlayer.jsonl_backup
+exec "$BRAINLAYER_PYTHON" -m brainlayer.jsonl_backup

@@ -94,7 +94,7 @@ def test_build_correction_tags_suppresses_non_user_payloads(prompt: str):
         ("Please fix the formatting", "style"),
         ("Please change the styling", "style"),
         ("Some context.\nNo, that's wrong - use the launcher", "factual"),
-        ("No, [Entity: Avi Simon -- person] is wrong; Avi works at Lightricks.", "factual"),
+        ("No, [Entity: Rina Vale -- person] is wrong; Rina works at Lightricks.", "factual"),
         ("No, the <task-notification> watcher is wrong; do not store those chunks.", "factual"),
         ("Some context\nNo, the <task-notification> watcher is wrong; do not store those chunks.", "factual"),
         ('No, "commandMode": "task-notification" is wrong; keep user corrections.', "factual"),

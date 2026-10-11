@@ -1,9 +1,51 @@
 import json
+import sqlite3
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
 from brainlayer.kg_session_finish import _default_run_id, finish_session
 from tests.test_kg_session_harvest import SESSION_BATCH
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_implicit_judge_refuses_before_harvest_or_writes(tmp_path, monkeypatch, dry_run):
+    home = tmp_path / "home"
+    home.mkdir()
+    db = home / "brainlayer.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE history (content TEXT)")
+        conn.execute("INSERT INTO history VALUES ('synthetic retained history')")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("BRAINLAYER_DB", str(db))
+    batch = _write_json(home / "batch.json", SESSION_BATCH)
+    decisions = _write_json(home / "decisions.json", _session_decisions())
+    for suffix in ("answers", "clean", "review-queue", "passes"):
+        (home / f"decisions.{suffix}.json").write_text('{"retained": true}')
+    before = {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()}
+    import brainlayer.kg_session_finish as finish
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("implicit judge reached harvest or apply")
+
+    monkeypatch.setattr(finish, "harvest_main", forbidden)
+    monkeypatch.setattr(finish, "harvest_session", forbidden)
+    monkeypatch.setattr(finish, "_apply_passes", forbidden)
+    with pytest.raises(RuntimeError, match="Default KG judging is retired"):
+        finish_session(batch, decisions, dry_run=dry_run)
+    assert {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()} == before
+
+
+def test_default_cli_refuses_without_creating_sidecars(tmp_path):
+    from brainlayer.kg_session_finish import main
+
+    batch = _write_json(tmp_path / "batch.json", SESSION_BATCH)
+    decisions = _write_json(tmp_path / "decisions.json", _session_decisions())
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    with pytest.raises(RuntimeError, match="Default KG judging is retired"):
+        main(["--batch", str(batch), "--decisions", str(decisions)])
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
 
 
 def _write_json(path: Path, payload: dict) -> Path:

@@ -1,5 +1,9 @@
 # Reembed Unvectored Backlog Implementation Plan
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Clear the cold semantic backlog by embedding every active chunk that has no vector, regardless of source.

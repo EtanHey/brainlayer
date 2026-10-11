@@ -617,7 +617,8 @@ def test_installer_documents_every_fleet_watchdog_action() -> None:
         assert f"|{action}|" in installer
     # `all` installs it and `remove` tears it down.
     assert "if ! install_fleet_watchdog; then" in installer
-    assert "remove_fleet_watchdog 2>/dev/null || true" in installer
+    assert "remove_fleet_watchdog" in installer
+    assert "remove_fleet_watchdog 2>/dev/null || true" not in installer
 
 
 # A `launchctl` faithful enough to prove the quiesce actually holds: `disable` and
@@ -642,7 +643,8 @@ case "$1" in
         exit 0
         ;;
     print)
-        if grep -Fq "${2##*/}.plist" "$FAKE_LAUNCHCTL_LOG"; then
+        last_action="$(grep -F "${2##*/}.plist" "$FAKE_LAUNCHCTL_LOG" | tail -1)"
+        if [ "${last_action%% *}" = "bootstrap" ]; then
             exit 0
         fi
         exit 113

@@ -15,7 +15,7 @@ def _spacy_available() -> bool:
         return False
 
 
-from brainlayer.pipeline.enrichment import build_external_prompt
+from brainlayer.pipeline.enrichment_prompts import build_external_prompt
 from brainlayer.pipeline.sanitize import (
     SanitizeConfig,
     Sanitizer,

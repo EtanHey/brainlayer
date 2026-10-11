@@ -2,27 +2,33 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
+import logging
 import os
 import re
 import shlex
 import socket
 import sqlite3
 import subprocess
-import sys
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .drain_liveness import (
     DEFAULT_DRAIN_LIVENESS_STALE_SECONDS,
-    ENRICH_DAILY_COST_COUNTER_FILENAME,
+    PROGRESS_STALLED_CODE,
+    PROGRESS_UNKNOWN_CODE,
     STALLED_CODE,
     check_drain_liveness,
 )
+from .job_lifecycle_health import _escalations as job_escalations
+from .job_lifecycle_health import installed_opt_path, scan_job_lifecycle
 from .launchd_primitive import (
     LaunchdLabelDisabledError,
     LaunchdVerificationError,
@@ -30,8 +36,15 @@ from .launchd_primitive import (
     is_launchd_label_loaded,
     launchd_target,
 )
-from .paths import get_db_path
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
+from .paths import get_db_path, resolve_t3_health_path
+from .pause import (
+    DEFAULT_PAUSE_SENTINEL_PATH,
+    pause_applies_to_label,
+    pause_sentinel_state,
+    queue_contains_only_enrichment,
+)
+from .retired_services import LEGACY_ENRICHMENT_HOLD_LABEL, RETIRED_ENRICHMENT_LABELS
+from .socket_hygiene import refuse_production_brainbar_socket
 from .watcher import default_watch_roots
 
 DEFAULT_SOCKET_PATH = Path("/tmp/brainbar.sock")
@@ -42,12 +55,15 @@ DEFAULT_BRAINBAR_DAEMON_LABEL = "com.brainlayer.brainbar-daemon"
 DEFAULT_WATCH_LABEL = "com.brainlayer.watch"
 DEFAULT_DRAIN_LABEL = "com.brainlayer.drain"
 DEFAULT_HEALTH_CHECK_LABEL = "com.brainlayer.health-check"
-DEFAULT_ENRICHMENT_LABEL = "com.brainlayer.enrichment"
+DEFAULT_OBSERVABILITY_LABEL = "com.brainlayer.observability"
 DEFAULT_INDEX_LABEL = "com.brainlayer.index"
 DEFAULT_BACKLOG_BATCH = 4
 DEFAULT_HEAL_MIN_CONSECUTIVE_FAILURES = 2
 DEFAULT_HEAL_CIRCUIT_BREAKER_LIMIT = 3
 DEFAULT_MAX_DURATION_SECONDS = 45.0
+DEFAULT_JSONL_BACKUP_LOG_PATH = Path("~/.local/share/brainlayer/logs/jsonl-backup.log").expanduser()
+DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS = 36 * 60 * 60
+DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS = 2
 HEAL_MIN_CONSECUTIVE_FAILURES_ENV = "BRAINLAYER_HEAL_MIN_CONSECUTIVE_FAILURES"
 
 MISSING_EMBEDDINGS_SQL = """
@@ -63,19 +79,6 @@ MISSING_EMBEDDINGS_SQL = """
       AND c.archived_at IS NULL
       AND c.superseded_by IS NULL
       AND c.aggregated_into IS NULL
-"""
-
-ENRICHMENT_BACKLOG_SQL = """
-    SELECT COUNT(*)
-    FROM chunks
-    WHERE enriched_at IS NULL
-      AND enrich_status IS NULL
-      AND COALESCE(char_count, length(content), 0) >= 50
-      AND content IS NOT NULL
-      AND content != ''
-      AND archived_at IS NULL
-      AND superseded_by IS NULL
-      AND aggregated_into IS NULL
 """
 
 
@@ -105,6 +108,10 @@ class HealthIssue:
 class HealthCheckConfig:
     db_path: Path = field(default_factory=get_db_path)
     state_path: Path = field(default_factory=lambda: DEFAULT_STATE_PATH)
+    job_alert_path: Path | None = None
+    badge_state_path: Path | None = None
+    job_opt_path: Path | None = field(default_factory=installed_opt_path)
+    job_plist_dir: Path = field(default_factory=lambda: Path("~/Library/LaunchAgents").expanduser())
     socket_path: Path = DEFAULT_SOCKET_PATH
     canary_query: str = DEFAULT_CANARY_QUERY
     hotlane_label: str = DEFAULT_HOTLANE_LABEL
@@ -112,7 +119,7 @@ class HealthCheckConfig:
     watch_label: str = DEFAULT_WATCH_LABEL
     drain_label: str = DEFAULT_DRAIN_LABEL
     health_check_label: str = DEFAULT_HEALTH_CHECK_LABEL
-    enrichment_label: str = DEFAULT_ENRICHMENT_LABEL
+    observability_label: str = DEFAULT_OBSERVABILITY_LABEL
     index_label: str = DEFAULT_INDEX_LABEL
     watch_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.watch.plist").expanduser()
@@ -123,9 +130,6 @@ class HealthCheckConfig:
     health_check_plist_path: Path = field(
         default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist").expanduser()
     )
-    enrichment_plist_path: Path = field(
-        default_factory=lambda: Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist").expanduser()
-    )
     offsets_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/offsets.json").expanduser())
     watcher_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/watcher-health.json").expanduser()
@@ -133,7 +137,26 @@ class HealthCheckConfig:
     drain_health_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/drain-health.json").expanduser()
     )
-    t3_health_path: Path = field(default_factory=lambda: Path("~/.local/share/brainlayer/t3-health.json").expanduser())
+    t3_health_path: Path | None = None
+    jsonl_backup_log_path: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(DEFAULT_JSONL_BACKUP_LOG_PATH))
+        ).expanduser()
+    )
+    jsonl_backup_max_age_seconds: int = field(
+        default_factory=lambda: _env_int(
+            "BRAINLAYER_JSONL_BACKUP_MAX_AGE_SECONDS",
+            DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS,
+            minimum=60 * 60,
+        )
+    )
+    jsonl_backup_absence_alert_nights: int = field(
+        default_factory=lambda: _env_int(
+            "BRAINLAYER_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS",
+            DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
+            minimum=2,
+        )
+    )
     queue_dir: Path = field(default_factory=lambda: Path("~/.brainlayer/queue").expanduser())
     pending_stores_path: Path = field(
         default_factory=lambda: Path("~/.local/share/brainlayer/pending-stores.jsonl").expanduser()
@@ -160,6 +183,9 @@ class HealthCheckConfig:
         )
     )
 
+    def __post_init__(self) -> None:
+        self.t3_health_path = resolve_t3_health_path(self.db_path, self.t3_health_path)
+
 
 @dataclass
 class HotlaneProcess:
@@ -176,6 +202,18 @@ class LockHolder:
     held_ticks: int = 0
 
 
+@dataclass(frozen=True)
+class JsonlBackupHealth:
+    state: str
+    status: str | None = None
+    attempted_at: str | None = None
+    age_seconds: float | None = None
+    consecutive_nights_without_attempt: int | None = None
+    verified: bool | None = None
+    archive: str | None = None
+    detail: str | None = None
+
+
 @dataclass
 class HealthCheckResult:
     checked_at: str
@@ -189,11 +227,13 @@ class HealthCheckResult:
     stalled_ticks: int = 0
     lock_holder: LockHolder | None = None
     canary_ok: bool = False
+    canary_status: str | None = None
     canary_result_count: int | None = None
     duration_seconds: float = 0.0
     slow_check: bool = False
     slow_check_stage: str | None = None
     t3_health: dict[str, Any] | None = None
+    jsonl_backup: JsonlBackupHealth | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -241,16 +281,22 @@ def _launchd_target(label: str) -> str:
 
 
 def _launchd_label_loaded(label: str, command_runner: CommandRunner) -> bool | None:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return None
     return is_launchd_label_loaded(label, command_runner=command_runner)
 
 
 def _kickstart(label: str, command_runner: CommandRunner) -> str:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return f"retired:{label}"
     target = _launchd_target(label)
     command_runner(["launchctl", "kickstart", "-k", target])
     return f"kickstart:{label}"
 
 
 def _launchd_process_state(label: str, command_runner: CommandRunner) -> tuple[int, str] | None:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return None
     launchd_result = command_runner(["launchctl", "print", _launchd_target(label)])
     if _command_returncode(launchd_result) != 0:
         return None
@@ -273,6 +319,8 @@ def _state_is_uninterruptible(process_state: str) -> bool:
 
 
 def _bootstrap_if_absent(label: str, plist_path: Path, command_runner: CommandRunner) -> str:
+    if label in RETIRED_ENRICHMENT_LABELS:
+        return f"retired:{label}"
     loaded = _launchd_label_loaded(label, command_runner)
     if loaded is True:
         return f"loaded:{label}"
@@ -296,36 +344,40 @@ def _emit_heal_event(event: dict[str, Any]) -> None:
         pass
 
 
-# A desktop notification is a side effect on a REAL person's screen, so it is guarded the same
-# way a 2.5 GB model load is: an env check at the site, because that is the only guard that
-# survives a process boundary. tests/conftest.py arms it for every test. Without it, running
-# tests/test_stability_health_check.py fired real macOS popups built from fixture data -- fake
-# pids and pytest tmp db_paths -- into the developer's Notification Center, indistinguishable
-# from a production alert.
-FORBID_DESKTOP_NOTIFICATION_ENV = "BRAINLAYER_FORBID_DESKTOP_NOTIFICATION"
+logger = logging.getLogger(__name__)
+_HEALTH_EVENT_LOGGER: ContextVar[logging.Logger | None] = ContextVar("brainlayer_health_event_logger", default=None)
 
 
-def desktop_notifications_forbidden() -> bool:
-    return os.environ.get(FORBID_DESKTOP_NOTIFICATION_ENV) == "1"
+class UTCISOFormatter(logging.Formatter):
+    """Format log record creation times as ISO-8601 UTC with milliseconds."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        del datefmt
+        return datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
 
 
-def _push_notification(title: str, message: str) -> None:
-    if desktop_notifications_forbidden():
-        return
+@contextmanager
+def health_event_logging(stream: Any) -> Iterator[None]:
+    """Route this invocation's health events to a UTC-formatted stream."""
+    event_logger = logging.Logger(logger.name, level=logging.INFO)
+    event_logger.filters = list(logger.filters)
+    event_logger.disabled = logger.disabled
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(UTCISOFormatter("%(asctime)s %(levelname)s %(message)s"))
+    event_logger.addHandler(handler)
+    event_logger.propagate = False
+    token = _HEALTH_EVENT_LOGGER.set(event_logger)
     try:
-        subprocess.run(
-            [
-                "osascript",
-                "-e",
-                f'display notification "{message[:180]}" with title "{title[:80]}"',
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=2,
-        )
-    except Exception:
-        pass
+        yield
+    finally:
+        _HEALTH_EVENT_LOGGER.reset(token)
+        event_logger.removeHandler(handler)
+        handler.close()
+
+
+def _log_health_event(condition: str, message: str, *, timestamp: str) -> None:
+    event_logger = _HEALTH_EVENT_LOGGER.get() or logger
+    event_logger.info("health event timestamp=%s condition=%s message=%s", timestamp, condition, message)
 
 
 def _parse_backlog_batch(command: str) -> int:
@@ -447,12 +499,11 @@ def _same_lock_holder_ticks(state: dict[str, Any], lock_holder: LockHolder | Non
 def _known_lock_holder_labels(config: HealthCheckConfig) -> tuple[str, ...]:
     labels = [
         config.index_label,
-        config.enrichment_label,
         config.watch_label,
         config.drain_label,
         config.hotlane_label,
     ]
-    return tuple(dict.fromkeys(label for label in labels if label))
+    return tuple(dict.fromkeys(label for label in labels if label and label not in RETIRED_ENRICHMENT_LABELS))
 
 
 def _launchd_print_mentions_pid(stdout: str, pid: int) -> bool:
@@ -470,7 +521,6 @@ def _command_implies_lock_holder_label(command: str, config: HealthCheckConfig) 
         parts = command.split()
     commands = {
         "index": config.index_label,
-        "enrich": config.enrichment_label,
         "watch": config.watch_label,
         "drain": config.drain_label,
     }
@@ -541,28 +591,18 @@ def count_missing_embeddings(
     )
 
 
-def _enrichment_backlog(
-    db_path: Path,
-    *,
-    deadline_at: float | None = None,
-    monotonic_fn: Callable[[], float] = time.monotonic,
-) -> int:
-    return _read_only_count(
-        db_path,
-        ENRICHMENT_BACKLOG_SQL,
-        stage="enrichment_backlog",
-        deadline_at=deadline_at,
-        monotonic_fn=monotonic_fn,
-    )
-
-
 def _load_state(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.expanduser().read_text(encoding="utf-8"))
+        state = json.loads(path.expanduser().read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("health-check state is not an object")
+        if "job_lifecycle" in state and not isinstance(state["job_lifecycle"], dict):
+            raise ValueError("health-check job_lifecycle state is not an object")
+        return state
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, ValueError) as exc:
+        return {"state_corrupt": f"health-check state unavailable or corrupt: {exc}", "_state_corrupt_now": True}
 
 
 def _write_state(path: Path, payload: dict[str, Any]) -> None:
@@ -586,6 +626,7 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
     payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout_seconds)
+        refuse_production_brainbar_socket(socket_path.expanduser())
         client.connect(str(socket_path.expanduser()))
         client.sendall(payload)
         data = b""
@@ -599,12 +640,25 @@ def send_brainbar_search_canary(socket_path: Path, query: str, timeout_seconds: 
     return json.loads(data.decode("utf-8"))
 
 
-def _canary_text(response: dict[str, Any]) -> tuple[bool, str]:
+def _canary_text(response: Any) -> tuple[bool, str]:
+    if not isinstance(response, dict):
+        return False, "BrainBar response is not a JSON object"
     if response.get("error"):
         return False, str(response["error"])
-    result = response.get("result") or {}
-    content = result.get("content") or []
-    text = "\n".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return False, "BrainBar response missing a result object"
+    content = result.get("content")
+    if not isinstance(content, list):
+        return False, "BrainBar result missing a content array"
+    if not content:
+        return False, "BrainBar result returned an empty content array"
+    if any(not isinstance(item, dict) or item.get("type") != "text" for item in content):
+        return False, "BrainBar result contains malformed content"
+    text_items = [item.get("text") for item in content]
+    if any(not isinstance(item, str) for item in text_items):
+        return False, "BrainBar result contains malformed text content"
+    text = "\n".join(text_items)
     if result.get("isError"):
         return False, text or "BrainBar returned isError=true"
     return True, text
@@ -685,9 +739,11 @@ def _apply_heals(
         "drain_unloaded",
         "health_check_unloaded",
         "hotlane_unloaded",
-        "enrichment_unloaded",
+        "observability_unloaded",
     }
     for issue_code, (label, plist_path) in issue_labels.items():
+        if label in RETIRED_ENRICHMENT_LABELS:
+            continue
         key = _heal_key(label, issue_code)
         consecutive_failures = heal_failures.get(key, 0)
         details = issue_details.get(issue_code, {})
@@ -717,10 +773,7 @@ def _apply_heals(
                     if details
                     else f"{label} {issue_code} failed repeatedly"
                 )
-                _push_notification(
-                    "BrainLayer heal escalation",
-                    message,
-                )
+                _log_health_event(f"heal:{issue_code}", message, timestamp=result.checked_at)
             continue
         if consecutive_failures >= threshold:
             if issue_code in bootstrap_issue_codes:
@@ -749,11 +802,6 @@ def _apply_heals(
                 tripped.discard(key)
                 heal_failures.pop(key, None)
             if action not in result.actions:
-                print(
-                    f"heal action label={label} issue={issue_code} "
-                    f"consecutive_failures={consecutive_failures} action={action}",
-                    file=sys.stderr,
-                )
                 result.actions.append(action)
                 _emit_heal_event(
                     {
@@ -765,9 +813,12 @@ def _apply_heals(
                         **details,
                     }
                 )
-                _push_notification(
-                    "BrainLayer heal action",
-                    _heal_notification_message(action, issue_code, details),
+                _log_health_event(
+                    f"heal:{issue_code}",
+                    f"heal action label={label} issue={issue_code} "
+                    f"consecutive_failures={consecutive_failures} action={action}; "
+                    f"{_heal_notification_message(action, issue_code, details)}",
+                    timestamp=result.checked_at,
                 )
     return heal_failures, tripped
 
@@ -785,6 +836,129 @@ def _load_json(path: Path) -> dict[str, Any]:
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _jsonl_backup_attempt_time(payload: dict[str, Any]) -> datetime | None:
+    raw_attempted_at = payload.get("attempted_at")
+    if isinstance(raw_attempted_at, str) and raw_attempted_at:
+        try:
+            attempted_at = datetime.fromisoformat(raw_attempted_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if attempted_at.tzinfo is None:
+            return None
+        return attempted_at.astimezone(UTC)
+
+    artifact = payload.get("archive")
+    pattern = r"claude-jsonl-(\d{4}-\d{2}-\d{2})\.tar\.gz$"
+    if not isinstance(artifact, str):
+        artifact = payload.get("snapshot")
+        pattern = r"(?:^|/)(\d{4}-\d{2}-\d{2})\.db\.gz$"
+    if not isinstance(artifact, str):
+        return None
+    legacy_date = re.search(pattern, artifact)
+    if legacy_date is None:
+        return None
+    try:
+        # Legacy artifact names carry only the date, while launchd schedules
+        # 05:00 in the producer machine's local timezone. Interpret that date at
+        # the local scheduled hour; every new receipt has an exact attempted_at.
+        scheduled_local = datetime.fromisoformat(f"{legacy_date.group(1)}T05:00:00")
+        return scheduled_local.astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def inspect_jsonl_backup_health(
+    log_path: Path,
+    *,
+    now: datetime,
+    max_age_seconds: int,
+    absence_alert_nights: int = DEFAULT_JSONL_BACKUP_ABSENCE_ALERT_NIGHTS,
+) -> tuple[JsonlBackupHealth, HealthIssue | None]:
+    """Classify the latest durable backup attempt from an independent process."""
+    resolved = log_path.expanduser()
+    try:
+        lines = [line for line in resolved.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except FileNotFoundError:
+        status = JsonlBackupHealth(state="missing", detail=f"attempt log does not exist: {resolved}")
+        return status, HealthIssue("jsonl_backup_attempt_missing", "critical", status.detail)
+    except OSError as exc:
+        status = JsonlBackupHealth(state="invalid", detail=f"attempt log unreadable: {resolved}: {exc}")
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+
+    if not lines:
+        status = JsonlBackupHealth(state="missing", detail=f"attempt log is empty: {resolved}")
+        return status, HealthIssue("jsonl_backup_attempt_missing", "critical", status.detail)
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        status = JsonlBackupHealth(state="invalid", detail=f"latest attempt receipt is malformed JSON: {exc}")
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+    if not isinstance(payload, dict):
+        status = JsonlBackupHealth(state="invalid", detail="latest attempt receipt is not a JSON object")
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+
+    attempted_at = _jsonl_backup_attempt_time(payload)
+    raw_status = payload.get("status")
+    backup_status = raw_status if isinstance(raw_status, str) else None
+    verified = payload.get("verified") if isinstance(payload.get("verified"), bool) else None
+    archive = payload.get("archive") if isinstance(payload.get("archive"), str) else None
+    if attempted_at is None:
+        status = JsonlBackupHealth(
+            state="invalid",
+            status=backup_status,
+            verified=verified,
+            archive=archive,
+            detail="latest attempt receipt has no valid timezone-aware attempted_at or legacy archive date",
+        )
+        return status, HealthIssue("jsonl_backup_attempt_invalid", "critical", status.detail)
+
+    normalized_now = now.astimezone(UTC) if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    age_seconds = max(0.0, (normalized_now - attempted_at).total_seconds())
+    consecutive_nights_without_attempt = int(age_seconds // (24 * 60 * 60))
+    common = {
+        "status": backup_status,
+        "attempted_at": attempted_at.isoformat(),
+        "age_seconds": age_seconds,
+        "consecutive_nights_without_attempt": consecutive_nights_without_attempt,
+        "verified": verified,
+        "archive": archive,
+    }
+    # 2026-09-09 incident: only 2026-06-14 lacked a durable attempt receipt.
+    # The 22 July bundles were uploaded and verified before retention later
+    # pruned them, so this alarm measures receipt absence, never survivor loss.
+    if consecutive_nights_without_attempt >= max(2, absence_alert_nights):
+        threshold_nights = max(2, absence_alert_nights)
+        detail = (
+            "no durable JSONL backup attempt receipt for multiple nights: "
+            f"attempted_at={attempted_at.isoformat()} "
+            f"consecutive_nights={consecutive_nights_without_attempt} "
+            f"threshold_nights={threshold_nights} status={backup_status}"
+        )
+        status = JsonlBackupHealth(state="stale", detail=detail, **common)
+        return status, HealthIssue("jsonl_backup_attempt_absent_multiple_nights", "critical", detail)
+    if age_seconds > max_age_seconds:
+        detail = (
+            f"latest JSONL backup attempt is stale: attempted_at={attempted_at.isoformat()} "
+            f"age_seconds={age_seconds:.0f} threshold_seconds={max_age_seconds} status={backup_status}"
+        )
+        status = JsonlBackupHealth(state="stale", detail=detail, **common)
+        return status, HealthIssue("jsonl_backup_attempt_stale", "critical", detail)
+
+    if backup_status == "no-op" and verified is True:
+        return JsonlBackupHealth(
+            state="no_op", detail=str(payload.get("message") or "legitimate no-op"), **common
+        ), None
+    if backup_status == "created" and verified is True:
+        return JsonlBackupHealth(state="verified_bundle", **common), None
+    if backup_status == "uploaded" and verified is True and payload.get("uploaded") is True:
+        return JsonlBackupHealth(state="verified_bundle", **common), None
+
+    error = payload.get("error") or payload.get("verification_error") or "unverified terminal result"
+    detail = f"latest JSONL backup attempt failed: status={backup_status} error={error}"
+    status = JsonlBackupHealth(state="failed", detail=detail, **common)
+    return status, HealthIssue("jsonl_backup_attempt_failed", "critical", detail)
 
 
 def _t3_health_issue(payload: dict[str, Any]) -> HealthIssue | None:
@@ -877,41 +1051,37 @@ def _queue_stats(queue_dir: Path, now: datetime) -> tuple[int, int, float | None
     return count, total_bytes, oldest
 
 
-def _paused_enrichment_queue_explanation(
+def _legacy_queue_hold_explanation(
     queue_dir: Path,
     expected_count: int,
     *,
     pause_payload: dict[str, Any],
     pause_active: bool,
+    queue_is_entirely_enrichment: bool | None = None,
 ) -> str | None:
-    """Explain a queue that the active pause makes completely undrainable.
+    """Explain a historical queue held by an existing maintenance sentinel.
 
     Match the drain's payload predicate, not its filename-based priority lane.
     Require the second scan to match the measured count so a racing or unreadable
-    file cannot make a mixed backlog look safely paused.
+    file cannot make a mixed backlog look safely held.
     """
-    if expected_count <= 0 or not pause_active or not pause_applies_to_label(pause_payload, DEFAULT_ENRICHMENT_LABEL):
+    if (
+        expected_count <= 0
+        or not pause_active
+        or not pause_applies_to_label(pause_payload, LEGACY_ENRICHMENT_HOLD_LABEL)
+    ):
         return None
-    try:
-        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
-    except OSError:
-        return None
-    if len(paths) != expected_count or not all(_queue_file_is_paused_enrichment(path) for path in paths):
+    if queue_is_entirely_enrichment is None:
+        queue_is_entirely_enrichment = _queue_is_entirely_enrichment(queue_dir, expected_count)
+    if not queue_is_entirely_enrichment:
         return None
     paused_at = pause_payload.get("paused_at")
     since = str(paused_at)[:10] if isinstance(paused_at, str) and len(paused_at) >= 10 else "an unknown date"
-    return f"enrichment lane paused since {since}; drain restart would be a no-op"
+    return f"historical metadata updates held by maintenance sentinel since {since}; drain restart would be a no-op"
 
 
-def _queue_file_is_paused_enrichment(path: Path) -> bool:
-    """Return true only when every drain-visible event is an enrichment update."""
-    try:
-        events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    except (OSError, json.JSONDecodeError):
-        return False
-    return bool(events) and all(
-        isinstance(event, dict) and event.get("kind") == "enrichment_update" for event in events
-    )
+def _queue_is_entirely_enrichment(queue_dir: Path, expected_count: int) -> bool:
+    return queue_contains_only_enrichment(queue_dir, expected_count)
 
 
 def _queue_heal_summary(
@@ -981,6 +1151,7 @@ def _report_queue_backlog(
     previous_failures: dict[str, int],
     heal_failures: dict[str, int],
     heal_tripped: set[str],
+    now: datetime,
 ) -> dict[str, Any] | None:
     backlog_issue_active = queue_count >= config.queue_auto_heal_count
     if not backlog_issue_active and not queue_should_page:
@@ -1007,9 +1178,10 @@ def _report_queue_backlog(
         "pause_explanation": pause_explanation,
     }
     if pause_explanation is None or state.get("queue_backlog_notice") != signature:
-        _push_notification(
-            "BrainLayer queue backlog",
+        _log_health_event(
+            "queue_backlog",
             f"queue_count={queue_count} queue_bytes={queue_bytes} {heal_summary}",
+            timestamp=now.isoformat(),
         )
     return signature
 
@@ -1036,8 +1208,6 @@ def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
         return config.drain_plist_path
     if label == config.health_check_label:
         return config.health_check_plist_path
-    if label == config.enrichment_label:
-        return config.enrichment_plist_path
     if label == config.index_label:
         return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
     if label == config.hotlane_label:
@@ -1048,6 +1218,43 @@ def _plist_for_label(config: HealthCheckConfig, label: str) -> Path:
 
 
 def run_health_check(
+    config: HealthCheckConfig,
+    *,
+    ps_output_fn: Callable[[], str | None] = _default_ps_output,
+    socket_request_fn: SocketRequestFn = send_brainbar_search_canary,
+    command_runner: CommandRunner = _default_command_runner,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> HealthCheckResult:
+    lock_path = Path(f"{config.state_path.expanduser()}.lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = lock_path.open("a+")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            lock.close()
+            raise
+    except OSError as exc:
+        return HealthCheckResult(
+            checked_at=now_fn().isoformat(),
+            ok=False,
+            issues=[HealthIssue("health_check_busy", "critical", f"health-check state lock unavailable: {exc}")],
+        )
+    try:
+        return _run_health_check_locked(
+            config,
+            ps_output_fn=ps_output_fn,
+            socket_request_fn=socket_request_fn,
+            command_runner=command_runner,
+            now_fn=now_fn,
+            monotonic_fn=monotonic_fn,
+        )
+    finally:
+        lock.close()
+
+
+def _run_health_check_locked(
     config: HealthCheckConfig,
     *,
     ps_output_fn: Callable[[], str | None] = _default_ps_output,
@@ -1077,24 +1284,85 @@ def run_health_check(
             }
         )
 
+    if state.get("_state_corrupt_now"):
+        add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
+
+    from .job_alerts import active_alerts
+
+    if config.heal:
+        from .maintenance import MaintenanceAbort, recover_fleet_watchdog_hold
+
+        try:
+            recover_fleet_watchdog_hold(
+                path=config.pause_sentinel_path.with_name("fleet-watchdog-hold.json"),
+                command_runner=command_runner,
+                alert_path=config.job_alert_path,
+            )
+        except Exception as exc:
+            config = replace(config, heal=False)  # Monitor without reviving writers during an owned hold.
+            if (
+                not isinstance(exc, MaintenanceAbort)
+                or exc.detail != "hold-active:com.etanhey.brainlayer-fleet-watchdog"
+            ):
+                add_issue("watchdog_hold_recovery_failed", "critical", "fleet-watchdog hold recovery failed")
+
+    for job, reason in active_alerts(config.job_alert_path).items():
+        add_issue(f"job_alert_{job}", "critical", reason)
+
+    def publish_badge_state() -> None:
+        if config.badge_state_path is None:
+            return
+        from .badge_state import build_badge_state_document, write_badge_state
+
+        try:
+            write_badge_state(config.badge_state_path, build_badge_state_document(result))
+        except (OSError, ValueError) as exc:
+            add_issue("badge_state_write_failed", "critical", f"badge state write failed: {exc}")
+            try:
+                config.badge_state_path.expanduser().unlink(missing_ok=True)
+            except OSError as invalidate_exc:
+                add_issue(
+                    "badge_state_invalidation_failed",
+                    "critical",
+                    f"failed badge state could not be invalidated: {invalidate_exc}",
+                )
+
     def finish_slow(stage: str, message: str) -> HealthCheckResult:
         result.slow_check = True
         result.slow_check_stage = stage
         result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
         add_issue("slow_check", "critical", message)
+        if state.get("state_corrupt") and not state.get("_state_corrupt_now"):
+            add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
+        prior_jobs = state.get("job_lifecycle", {})
+        if not isinstance(prior_jobs, dict):
+            prior_jobs = {}
+        for message in job_escalations(prior_jobs):
+            add_issue("job_failure", "critical", message)
         state_payload: dict[str, Any] = dict(state)
+        state_payload.pop("_state_corrupt_now", None)
         state_payload["ts"] = now.isoformat()
         state_payload["slow_check"] = True
         state_payload["slow_check_stage"] = stage
         state_payload["duration_seconds"] = result.duration_seconds
         _write_state(config.state_path, state_payload)
         result.ok = False
+        publish_badge_state()
         return result
 
     def deadline_reached(stage: str) -> HealthCheckResult | None:
         if monotonic_fn() < deadline_at:
             return None
         return finish_slow(stage, f"health-check exceeded {config.max_duration_seconds:.0f}s during {stage}")
+
+    result.jsonl_backup, jsonl_backup_issue = inspect_jsonl_backup_health(
+        config.jsonl_backup_log_path,
+        now=now,
+        max_age_seconds=config.jsonl_backup_max_age_seconds,
+        absence_alert_nights=config.jsonl_backup_absence_alert_nights,
+    )
+    if jsonl_backup_issue is not None:
+        add_issue(jsonl_backup_issue.code, jsonl_backup_issue.severity, jsonl_backup_issue.message)
 
     pause_payload, pause_active, pause_stale = _pause_sentinel_state(config, now)
 
@@ -1190,28 +1458,27 @@ def run_health_check(
     try:
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
         canary_success, text = _canary_text(response)
-        result.canary_result_count = _canary_count(text) if canary_success else 0
-        result.canary_ok = canary_success and (result.canary_result_count or 0) > 0
-        if not result.canary_ok:
-            code = "brain_search_canary_failed" if not canary_success else "brain_search_canary_empty"
+        if canary_success:
+            result.canary_result_count = _canary_count(text)
+            result.canary_ok = True
+            # This is request liveness, not recall quality: a well-formed empty search
+            # proves the request path worked without claiming the corpus should match.
+            result.canary_status = "results" if (result.canary_result_count or 0) > 0 else "empty"
+        else:
+            result.canary_ok = False
+            result.canary_status = "retrieval_failed"
             add_issue(
-                code,
+                "brain_search_canary_failed",
                 "critical",
-                f"BrainBar brain_search canary returned no usable results: {text[:240]}",
+                f"BrainBar brain_search canary retrieval failed: {text[:240]}",
             )
-            # Only a canary that did not COME BACK is evidence about the daemon. An empty
-            # result set means the socket answered -- which proves the daemon is alive and
-            # serving -- and that the index simply holds nothing for this query. Restarting
-            # a healthy daemon cannot add content to an index: on the M1 that remedy ran 97
-            # consecutive times without once changing the answer. Report the gap, never heal
-            # the daemon for it.
-            if not canary_success:
-                heal_issue_labels[code] = (
-                    config.brainbar_daemon_label,
-                    _plist_for_label(config, config.brainbar_daemon_label),
-                )
+            heal_issue_labels["brain_search_canary_failed"] = (
+                config.brainbar_daemon_label,
+                _plist_for_label(config, config.brainbar_daemon_label),
+            )
     except Exception as exc:
         result.canary_ok = False
+        result.canary_status = "transport_failed"
         add_issue("brain_search_canary_failed", "critical", f"BrainBar brain_search canary failed: {exc}")
         heal_issue_labels["brain_search_canary_failed"] = (
             config.brainbar_daemon_label,
@@ -1225,7 +1492,7 @@ def run_health_check(
             config.watch_label,
             config.drain_label,
             config.health_check_label,
-            config.enrichment_label,
+            config.observability_label,
         ):
             if label and not (pause_active and pause_applies_to_label(pause_payload, label)):
                 action = _bootstrap_if_absent(label, _plist_for_label(config, label), command_runner)
@@ -1237,14 +1504,19 @@ def run_health_check(
         (config.watch_label, "watch_unloaded", "watch launchd label is not loaded"),
         (config.drain_label, "drain_unloaded", "drain launchd label is not loaded"),
         (config.health_check_label, "health_check_unloaded", "health-check launchd label is not loaded"),
-        (config.enrichment_label, "enrichment_unloaded", "enrichment launchd label is not loaded"),
+        (config.observability_label, "observability_unloaded", "observability launchd label is not loaded"),
     ):
         if not label:
+            continue
+        if label in RETIRED_ENRICHMENT_LABELS:
+            add_issue("retired_service_config", "critical", f"retired launchd label configured: {label}")
             continue
         loaded = _launchd_label_loaded(label, command_runner)
         if issue_code == "drain_unloaded":
             drain_loaded = loaded
         if loaded is False:
+            if pause_active and pause_applies_to_label(pause_payload, label):
+                continue
             add_issue(issue_code, "critical", message)
             heal_issue_labels[issue_code] = (label, _plist_for_label(config, label))
     if slow_result := deadline_reached("launchd_status"):
@@ -1254,7 +1526,7 @@ def run_health_check(
         add_issue(
             "pause_sentinel_stale", "critical", "pause sentinel is expired; launchd resume may have been forgotten"
         )
-        _push_notification("BrainLayer pause expired", "pause.sentinel is stale")
+        _log_health_event("pause_expired", "pause.sentinel is stale", timestamp=now.isoformat())
         if config.heal:
             try:
                 config.pause_sentinel_path.expanduser().unlink()
@@ -1263,18 +1535,23 @@ def run_health_check(
                 result.actions.append("resume_failed:stale-pause-sentinel")
 
     queue_count, queue_bytes, queue_oldest_age = _queue_stats(config.queue_dir, now)
-    queue_pause_explanation = _paused_enrichment_queue_explanation(
-        config.queue_dir,
-        queue_count,
-        pause_payload=pause_payload,
-        pause_active=pause_active,
-    )
-    queue_heal_blocking_reason = queue_pause_explanation
     queue_should_page = queue_count > 0 and (
         queue_count >= config.queue_page_count
         or queue_bytes >= config.queue_page_bytes
         or (queue_oldest_age is not None and queue_oldest_age >= config.queue_page_oldest_seconds)
     )
+    queue_is_entirely_enrichment = (pause_active or queue_should_page) and _queue_is_entirely_enrichment(
+        config.queue_dir,
+        queue_count,
+    )
+    queue_pause_explanation = _legacy_queue_hold_explanation(
+        config.queue_dir,
+        queue_count,
+        pause_payload=pause_payload,
+        pause_active=pause_active,
+        queue_is_entirely_enrichment=queue_is_entirely_enrichment,
+    )
+    queue_heal_blocking_reason = queue_pause_explanation
     try:
         pending_stores_count = _pending_stores_count(config.pending_stores_path)
     except OSError as exc:
@@ -1338,48 +1615,28 @@ def run_health_check(
     drain_total = drain_health.get("drained_total")
     previous_drain_total = state.get("drain_drained_total")
     drain_starved = _drain_health_has_sqlite_busy_signal(drain_health)
-    try:
-        enrichment_backlog = _enrichment_backlog(
-            config.db_path,
-            deadline_at=deadline_at,
-            monotonic_fn=monotonic_fn,
-        )
-    except HealthCheckDeadlineExceeded as exc:
-        return finish_slow("enrichment_backlog", str(exc))
-    except sqlite3.OperationalError as exc:
-        if "interrupted" in str(exc).lower():
-            return finish_slow("enrichment_backlog", "health-check deadline interrupted enrichment_backlog")
-        enrichment_backlog = 0
-        add_issue(
-            "enrichment_backlog_count_failed",
-            "critical",
-            f"could not count enrichment backlog: {exc}",
-        )
-    except Exception as exc:
-        enrichment_backlog = 0
-        add_issue(
-            "enrichment_backlog_count_failed",
-            "critical",
-            f"could not count enrichment backlog: {exc}",
-        )
-    if slow_result := deadline_reached("enrichment_backlog"):
-        return slow_result
     drain_liveness_issue = check_drain_liveness(
         drain_label=config.drain_label,
         drain_loaded=drain_loaded,
         queue_count=queue_count + pending_stores_count,
-        enrichment_backlog=enrichment_backlog,
         drain_health=drain_health,
         now=now,
         stale_seconds=config.drain_liveness_stale_seconds,
-        enrich_cost_counter_path=config.db_path.expanduser().parent / ENRICH_DAILY_COST_COUNTER_FILENAME,
     )
-    if drain_liveness_issue is not None:
-        severity = "critical" if drain_liveness_issue.code == STALLED_CODE else drain_liveness_issue.severity
+    if drain_liveness_issue is not None and not (
+        drain_liveness_issue.code == PROGRESS_STALLED_CODE and queue_pause_explanation
+    ):
+        drain_stalled_codes = {STALLED_CODE, PROGRESS_STALLED_CODE, PROGRESS_UNKNOWN_CODE}
+        severity = "critical" if drain_liveness_issue.code in drain_stalled_codes else drain_liveness_issue.severity
         add_issue(drain_liveness_issue.code, severity, drain_liveness_issue.message)
-        if drain_liveness_issue.code == STALLED_CODE:
+        if drain_liveness_issue.code in drain_stalled_codes:
             drain_starved = True
-    if queue_count > 0 and isinstance(drain_total, int) and drain_total == previous_drain_total:
+    if (
+        queue_count > 0
+        and queue_pause_explanation is None
+        and isinstance(drain_total, int)
+        and drain_total == previous_drain_total
+    ):
         add_issue(
             "drain_no_progress",
             "critical",
@@ -1420,7 +1677,11 @@ def run_health_check(
                     **holder_details,
                 }
             )
-            _push_notification("BrainLayer lock-holder wedge", _holder_message(holder))
+            _log_health_event(
+                "heal:lock_holder_wedge",
+                _holder_message(holder),
+                timestamp=now.isoformat(),
+            )
             holder_label = _known_lock_holder_label(holder, config, command_runner)
             if holder_label:
                 heal_issue_labels["lock_holder_wedge"] = (
@@ -1446,6 +1707,37 @@ def run_health_check(
         config=config,
         command_runner=command_runner,
     )
+    job_tick = None
+    if config.job_opt_path is not None:
+        previous_jobs = state.get("job_lifecycle", {})
+        if not isinstance(previous_jobs, dict):
+            previous_jobs = {}
+        paused_labels = (
+            {label for label in pause_payload.get("labels", []) if isinstance(label, str)}
+            if pause_active and isinstance(pause_payload, dict)
+            else set()
+        )
+        job_tick = scan_job_lifecycle(
+            config.job_plist_dir,
+            config.job_opt_path,
+            previous_jobs,
+            now_epoch=int(now.timestamp()),
+            command_runner=command_runner,
+            uid=os.getuid(),
+            paused_labels=paused_labels,
+            heal=config.heal,
+        )
+        if job_tick.scan_error:
+            add_issue("job_scan_failed", "critical", job_tick.scan_error)
+            if state.get("state_corrupt") and not state.get("_state_corrupt_now"):
+                add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
+        result.actions.extend(job_tick.actions)
+        for message in job_tick.escalations:
+            add_issue("job_failure", "critical", message)
+            label = message.split(":", 1)[0]
+            prior = previous_jobs.get(label, {})
+            if not isinstance(prior, dict) or not prior.get("failed_heals"):
+                _log_health_event("job_failure", message, timestamp=result.checked_at)
     queue_notice_signature = _report_queue_backlog(
         config=config,
         result=result,
@@ -1458,9 +1750,15 @@ def run_health_check(
         previous_failures=previous_heal_failures,
         heal_failures=heal_failures,
         heal_tripped=heal_tripped,
+        now=now,
     )
     state_payload: dict[str, Any] = dict(state)
+    state_payload.pop("_state_corrupt_now", None)
+    if not state.get("_state_corrupt_now") and (job_tick is None or not job_tick.scan_error):
+        state_payload.pop("state_corrupt", None)
     state_payload["heal_failures"] = heal_failures
+    if job_tick is not None:
+        state_payload["job_lifecycle"] = job_tick.state
     state_payload["heal_tripped"] = sorted(heal_tripped) if result.issues else []
     _record_queue_notice(state_payload, queue_notice_signature)
     state_payload["ts"] = now.isoformat()
@@ -1481,6 +1779,11 @@ def run_health_check(
         state_payload["lock_holder_held_ticks"] = 0
     if pause_payload:
         state_payload["pause_sentinel"] = pause_payload
+    state_payload["canary_status"] = result.canary_status
+    if result.canary_result_count is not None:
+        state_payload["canary_result_count"] = result.canary_result_count
+    else:
+        state_payload.pop("canary_result_count", None)
     result.duration_seconds = max(0.0, monotonic_fn() - started_monotonic)
     result.slow_check = result.duration_seconds >= config.max_duration_seconds
     state_payload["duration_seconds"] = result.duration_seconds
@@ -1496,5 +1799,7 @@ def run_health_check(
     else:
         state_payload.pop("slow_check_stage", None)
     _write_state(config.state_path, state_payload)
+    result.ok = not result.issues
+    publish_badge_state()
     result.ok = not result.issues
     return result

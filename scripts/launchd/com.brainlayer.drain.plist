@@ -35,7 +35,7 @@
 	<key>StandardOutPath</key>
 	<string>__HOME__/Library/Logs/brainlayer/drain.out.log</string>
 	<key>StandardErrorPath</key>
-	<string>__HOME__/Library/Logs/brainlayer/drain.err.log</string>
+	<string>__HOME__/Library/Logs/brainlayer/drain.bootstrap.err.log</string>
 	<key>KeepAlive</key>
 	<true/>
 	<key>RunAtLoad</key>

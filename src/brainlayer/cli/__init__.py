@@ -34,6 +34,7 @@ from rich.table import Table
 from .. import __version__
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
+from ..retired_services import RETIRED_ENRICHMENT_LABELS
 
 app = typer.Typer(
     name="brainlayer",
@@ -48,6 +49,50 @@ provenance_app = typer.Typer(help="Resolve provenance conflicts and pending conf
 app.add_typer(provenance_app, name="provenance")
 sandbox_app = typer.Typer(help="Manage isolated sandbox BrainLayer databases")
 app.add_typer(sandbox_app, name="sandbox")
+jobs_app = typer.Typer(help="Inspect and restart installed BrainLayer LaunchAgents")
+app.add_typer(jobs_app, name="jobs")
+backup_app = typer.Typer(help="Manage BrainLayer backup authorization")
+app.add_typer(backup_app, name="backup")
+
+
+@backup_app.command("auth")
+def backup_auth_command(
+    status: bool = typer.Option(False, "--status", help="Check authorization without changing the token."),
+    json_output: bool = typer.Option(False, "--json", help="Print one JSON result for BrainBar."),
+) -> None:
+    """Authorize the BrainLayer-owned Google Drive token in the system browser."""
+    from .. import drive_credentials
+
+    result = drive_credentials.credential_status() if status else drive_credentials.authorize()
+    if json_output:
+        typer.echo(json.dumps(result, sort_keys=True))
+    else:
+        typer.echo(result["reason"])
+    if not status and result["status"] != "ok":
+        raise typer.Exit(1)
+
+
+@jobs_app.command("restart")
+def jobs_restart_command(
+    all_jobs: bool = typer.Option(False, "--all", help="Select loaded BrainLayer jobs."),
+    verify: bool = typer.Option(False, "--verify", help="Verify every running job maps the current keg."),
+) -> None:
+    """Restart loaded resident jobs after a Homebrew upgrade; emit a JSON receipt."""
+    from ..jobs import installed_opt_path, restart_loaded_jobs
+
+    if not all_jobs or not verify:
+        raise typer.BadParameter("jobs restart requires --all --verify")
+    try:
+        report = restart_loaded_jobs(
+            Path.home() / "Library" / "LaunchAgents",
+            installed_opt_path(),
+            uid=os.getuid(),
+        )
+    except (OSError, ValueError) as exc:
+        report = {"ok": False, "errors": {"restart": str(exc)}}
+    typer.echo(json.dumps(report, sort_keys=True))
+    if not report["ok"]:
+        raise typer.Exit(1)
 
 
 def _version_callback(value: bool) -> None:
@@ -74,6 +119,19 @@ def _index_max_runtime_s() -> float:
     if not math.isfinite(value) or value <= 0:
         return _DEFAULT_INDEX_MAX_RUNTIME_S
     return value
+
+
+@app.command("observability")
+def observability_command(
+    write: bool = typer.Option(False, "--write", help="Write observability.json beside the resolved database."),
+    stdout: bool = typer.Option(False, "--stdout", help="Print the observability document instead of writing it."),
+) -> None:
+    """Produce the versioned BrainLayer observability document."""
+    if write and stdout:
+        raise typer.BadParameter("choose either --write or --stdout")
+    from ..observability_surface import write_document
+
+    write_document(stdout=stdout)
 
 
 @app.command("writer-telemetry")
@@ -115,7 +173,6 @@ def _plist_for_launchd_label(
     drain: Path,
     health_check: Path,
     hotlane: Path | None = None,
-    enrichment: Path | None = None,
 ) -> Path:
     if label == "com.brainlayer.watch":
         return watch.expanduser()
@@ -125,20 +182,27 @@ def _plist_for_launchd_label(
         return health_check.expanduser()
     if label == "com.brainlayer.hotlane-brainbar" and hotlane is not None:
         return hotlane.expanduser()
-    if label == "com.brainlayer.enrichment" and enrichment is not None:
-        return enrichment.expanduser()
     return Path(f"~/Library/LaunchAgents/{label}.plist").expanduser()
+
+
+def _reject_retired_labels(labels: list[str]) -> None:
+    retired = sorted(set(labels) & RETIRED_ENRICHMENT_LABELS)
+    if retired:
+        typer.echo(f"enrichment services are retired: {','.join(retired)}", err=True)
+        raise typer.Exit(1)
 
 
 def _bootstrap_label(label: str, plist_path: Path) -> None:
     from ..launchd_primitive import install_and_verify_launchagent
 
+    _reject_retired_labels([label])
     install_and_verify_launchagent(label, plist_path, command_runner=_run_launchctl)
 
 
 def _bootstrap_labels_or_exit(label_plist_pairs: list[tuple[str, Path]], *, action: str) -> None:
     from ..launchd_primitive import LaunchdVerificationError
 
+    _reject_retired_labels([label for label, _path in label_plist_pairs])
     failures: list[LaunchdVerificationError] = []
     for label, plist_path in label_plist_pairs:
         if not label:
@@ -191,7 +255,7 @@ def sandbox_stop_command(
 
 
 def _default_pause_labels() -> list[str]:
-    return ["com.brainlayer.enrichment"]
+    return []
 
 
 @app.command("pause")
@@ -206,6 +270,10 @@ def pause_command(
 ) -> None:
     """Record an intentional pause and bootout BrainLayer launchd labels."""
     selected_labels = labels or _default_pause_labels()
+    if not selected_labels:
+        typer.echo("pause requires an explicit active service --label", err=True)
+        raise typer.Exit(1)
+    _reject_retired_labels(selected_labels)
     now = datetime.now(UTC)
     resolved = pause_sentinel_path.expanduser()
     resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -249,10 +317,6 @@ def resume_command(
         Path("~/Library/LaunchAgents/com.brainlayer.hotlane-brainbar.plist"),
         "--hotlane-plist-path",
     ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-    ),
 ) -> None:
     """Remove an intentional pause and bootstrap recorded launchd labels."""
     resolved = pause_sentinel_path.expanduser()
@@ -272,7 +336,6 @@ def resume_command(
                     drain=drain_plist_path,
                     health_check=health_check_plist_path,
                     hotlane=hotlane_plist_path,
-                    enrichment=enrichment_plist_path,
                 ),
             )
             for label in selected_labels
@@ -292,7 +355,6 @@ def reconcile_launchd_command(
     drain_label: str = typer.Option("com.brainlayer.drain", "--drain-label"),
     health_check_label: str = typer.Option("com.brainlayer.health-check", "--health-check-label"),
     hotlane_label: str = typer.Option("com.brainlayer.hotlane-brainbar", "--hotlane-label"),
-    enrichment_label: str = typer.Option("com.brainlayer.enrichment", "--enrichment-label"),
     watch_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
         "--watch-plist-path",
@@ -309,10 +371,6 @@ def reconcile_launchd_command(
         Path("~/Library/LaunchAgents/com.brainlayer.hotlane-brainbar.plist"),
         "--hotlane-plist-path",
     ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-    ),
 ) -> None:
     """Bootstrap BrainLayer launchd labels if absent."""
     _bootstrap_labels_or_exit(
@@ -320,7 +378,6 @@ def reconcile_launchd_command(
             (watch_label, watch_plist_path),
             (drain_label, drain_plist_path),
             (hotlane_label, hotlane_plist_path),
-            (enrichment_label, enrichment_plist_path),
             (health_check_label, health_check_plist_path),
         ],
         action="reconcile",
@@ -331,7 +388,6 @@ def reconcile_launchd_command(
 def _default_deploy_labels() -> list[str]:
     return [
         "com.mcplayer.brainlayer-proxy",
-        "com.brainlayer.enrichment",
         "com.brainlayer.drain",
         "com.brainlayer.watch",
     ]
@@ -341,14 +397,11 @@ def _deploy_plist_for_label(
     label: str,
     *,
     proxy: Path,
-    enrichment: Path,
     drain: Path,
     watch: Path,
 ) -> Path:
     if label == "com.mcplayer.brainlayer-proxy":
         return proxy.expanduser()
-    if label == "com.brainlayer.enrichment":
-        return enrichment.expanduser()
     if label == "com.brainlayer.drain":
         return drain.expanduser()
     if label == "com.brainlayer.watch":
@@ -359,6 +412,7 @@ def _deploy_plist_for_label(
 def _kickstart_label_or_raise(label: str) -> None:
     from ..launchd_primitive import LaunchdCommandError, verify_launchd_label_loaded
 
+    _reject_retired_labels([label])
     command = ["launchctl", "kickstart", "-k", _launchd_target(label)]
     result = _run_launchctl(command)
     returncode = _launchctl_returncode(result)
@@ -420,10 +474,6 @@ def deploy_command(
         Path("~/Library/LaunchAgents/com.mcplayer.brainlayer-proxy.plist"),
         "--proxy-plist-path",
     ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-    ),
     drain_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.drain.plist"),
         "--drain-plist-path",
@@ -438,6 +488,7 @@ def deploy_command(
     from ..launchd_primitive import LaunchdVerificationError
 
     selected_labels = labels or _default_deploy_labels()
+    _reject_retired_labels(selected_labels)
     resolved_provenance_dir = (provenance_dir or default_deploy_provenance_dir()).expanduser()
     brainbar_changed = _brainbar_changed_for_deploy(resolved_provenance_dir)
     failures: list[LaunchdVerificationError | DeployProvenanceError] = []
@@ -446,7 +497,6 @@ def deploy_command(
         plist_path = _deploy_plist_for_label(
             label,
             proxy=proxy_plist_path,
-            enrichment=enrichment_plist_path,
             drain=drain_plist_path,
             watch=watch_plist_path,
         )
@@ -533,12 +583,9 @@ def _report_ingest_denylist_overrides(resolved_env_file: Path) -> None:
 
     readers = ", ".join(sorted(MEMORY_READER_ATTRIBUTIONS))
     for source, patterns in override_sources:
-        # Quiet-on-overreach is NOT a clean bill of health: any override at all takes the place of
-        # the attribution class rule, so memory-reading workers stop being excluded by class.
         rprint(
-            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and REPLACES the ingest"
-            f" class rule[/] — while it is set, {readers} transcripts are no longer excluded by"
-            " their attribution, only by these patterns."
+            f"[yellow]{BRAINLAYER_INGEST_DENYLIST_ENV} is set in {source} and adds path exclusions"
+            f" to the ingest class rule[/] — {readers} transcripts remain excluded by their attribution."
         )
         overreaching = env_denylist_overreach(patterns=patterns)
         if not overreaching:
@@ -908,9 +955,6 @@ def health_check_command(
     health_check_label: str = typer.Option(
         "com.brainlayer.health-check", "--health-check-label", help="health-check launchd label."
     ),
-    enrichment_label: str = typer.Option(
-        "com.brainlayer.enrichment", "--enrichment-label", help="enrichment launchd label."
-    ),
     watch_plist_path: Path = typer.Option(
         Path("~/Library/LaunchAgents/com.brainlayer.watch.plist"),
         "--watch-plist-path",
@@ -925,11 +969,6 @@ def health_check_command(
         Path("~/Library/LaunchAgents/com.brainlayer.health-check.plist"),
         "--health-check-plist-path",
         help="health-check LaunchAgent plist path.",
-    ),
-    enrichment_plist_path: Path = typer.Option(
-        Path("~/Library/LaunchAgents/com.brainlayer.enrichment.plist"),
-        "--enrichment-plist-path",
-        help="enrichment LaunchAgent plist path.",
     ),
     source_jsonl_globs: list[str] | None = typer.Option(
         None,
@@ -946,8 +985,8 @@ def health_check_command(
         "--drain-health-path",
         help="Drain health JSON path.",
     ),
-    t3_health_path: Path = typer.Option(
-        Path("~/.local/share/brainlayer/t3-health.json"),
+    t3_health_path: Optional[Path] = typer.Option(
+        None,
         "--t3-health-path",
         help="T3 ingestion health JSON path.",
     ),
@@ -962,39 +1001,52 @@ def health_check_command(
         "--watcher-health-path",
         help="Watcher health JSON path.",
     ),
+    badge_state_path: Optional[Path] = typer.Option(
+        None,
+        "--badge-state-path",
+        envvar="BRAINLAYER_BADGE_STATE_PATH",
+        help="BrainBar badge state path; defaults beside the resolved database.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Run the lightweight BrainLayer stability health-check."""
-    from ..health_check import HealthCheckConfig, run_health_check
+    from ..badge_state import badge_state_path as resolve_badge_state_path
+    from ..health_check import HealthCheckConfig, health_event_logging, run_health_check
 
-    result = run_health_check(
-        HealthCheckConfig(
-            db_path=db or get_db_path(),
-            state_path=state_path.expanduser(),
-            socket_path=socket_path.expanduser(),
-            canary_query=canary_query,
-            watch_label=watch_label,
-            drain_label=drain_label,
-            health_check_label=health_check_label,
-            enrichment_label=enrichment_label,
-            watch_plist_path=watch_plist_path.expanduser(),
-            drain_plist_path=drain_plist_path.expanduser(),
-            health_check_plist_path=health_check_plist_path.expanduser(),
-            enrichment_plist_path=enrichment_plist_path.expanduser(),
-            source_jsonl_globs=source_jsonl_globs
-            if source_jsonl_globs is not None
-            else HealthCheckConfig().source_jsonl_globs,
-            pause_sentinel_path=pause_sentinel_path.expanduser(),
-            drain_health_path=drain_health_path.expanduser(),
-            t3_health_path=t3_health_path.expanduser(),
-            queue_dir=queue_dir.expanduser(),
-            offsets_path=offsets_path.expanduser(),
-            watcher_health_path=watcher_health_path.expanduser(),
-            heal=heal,
-            socket_timeout_seconds=socket_timeout_seconds,
-            max_stalled_ticks=max_stalled_ticks,
+    resolved_db_path = db or get_db_path()
+
+    with health_event_logging(sys.stderr):
+        result = run_health_check(
+            HealthCheckConfig(
+                db_path=resolved_db_path,
+                state_path=state_path.expanduser(),
+                badge_state_path=(
+                    badge_state_path.expanduser()
+                    if badge_state_path is not None
+                    else resolve_badge_state_path(resolved_db_path)
+                ),
+                socket_path=socket_path.expanduser(),
+                canary_query=canary_query,
+                watch_label=watch_label,
+                drain_label=drain_label,
+                health_check_label=health_check_label,
+                watch_plist_path=watch_plist_path.expanduser(),
+                drain_plist_path=drain_plist_path.expanduser(),
+                health_check_plist_path=health_check_plist_path.expanduser(),
+                source_jsonl_globs=source_jsonl_globs
+                if source_jsonl_globs is not None
+                else HealthCheckConfig().source_jsonl_globs,
+                pause_sentinel_path=pause_sentinel_path.expanduser(),
+                drain_health_path=drain_health_path.expanduser(),
+                t3_health_path=t3_health_path,
+                queue_dir=queue_dir.expanduser(),
+                offsets_path=offsets_path.expanduser(),
+                watcher_health_path=watcher_health_path.expanduser(),
+                heal=heal,
+                socket_timeout_seconds=socket_timeout_seconds,
+                max_stalled_ticks=max_stalled_ticks,
+            )
         )
-    )
     payload = result.to_dict()
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
@@ -1209,6 +1261,8 @@ def doctor_command(
             f"[bold]{status}[/] chunks={result.chunk_count} "
             f"recent_unvectored={result.recent_unvectored_chunks} queue={result.queue_count}"
         )
+        if result.cli_path_shadow and result.cli_path_shadow["state"] == "skipped":
+            rprint(f"CLI PATH check skipped: {result.cli_path_shadow['reason']}")
         for issue in result.issues:
             color = "red" if issue.severity == "fatal" else "yellow"
             rprint(f"[{color}]{issue.severity.upper()}[/] {issue.code}: {issue.message}")
@@ -2038,7 +2092,7 @@ def digest(
                 result = digest_content(
                     content=text,
                     store=store,
-                    embed_fn=model.embed,
+                    embed_fn=lambda passage: model.embed_texts([passage])[0],
                     title=title,
                     project=project,
                     participants=participant_list,
@@ -2304,13 +2358,15 @@ def analyze_evolution(
 
     Loads messages from WhatsApp, Claude, Instagram, and Gemini,
     batches them by time period, analyzes each batch with LLM,
-    and generates evolution analysis with weighted master guide.
+    and generates evolution analysis with weighted master guide. The Ollama
+    endpoint must be loopback; proxies and redirects are refused.
     """
     try:
-        from ..pipeline.longitudinal_analyzer import run_full_analysis
+        from ..pipeline.longitudinal_analyzer import loopback_ollama_url, run_full_analysis
         from ..pipeline.time_batcher import create_time_batches, format_batches_summary
         from ..pipeline.unified_timeline import UnifiedTimeline
 
+        loopback_ollama_url()
         rprint("[bold blue]זיכרון[/] - Longitudinal Style Analysis\n")
 
         # Create unified timeline
@@ -2520,190 +2576,38 @@ def consolidate(
     raise typer.Exit(result.returncode)
 
 
-@app.command("enrich")
+@app.command("enrich", hidden=True)
 def enrich(
-    mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
-    limit: Optional[int] = typer.Option(
+    _mode: str = typer.Option("realtime", "--mode", help="Enrichment mode: realtime or batch"),
+    _limit: Optional[int] = typer.Option(
         None,
         "--limit",
         "-n",
         help="Realtime: max chunks to process. Batch submit/run: optional sample size; defaults to all.",
     ),
-    since_hours: Optional[int] = typer.Option(
+    _since_hours: Optional[int] = typer.Option(
         None,
         "--since-hours",
         help=(
             f"Realtime mode: only enrich chunks from the last N hours. Default: {DEFAULT_REALTIME_ENRICH_SINCE_HOURS}h"
         ),
     ),
-    phase: str = typer.Option(
+    _phase: str = typer.Option(
         "run",
         "--phase",
         help="Batch mode phase: submit, poll, import, run, status, drain-submit, drain-poll, drain-import, drain-run",
     ),
-    model: str = typer.Option(
+    _model: str = typer.Option(
         "models/gemini-2.5-flash-lite",
         "--model",
         help="Batch mode Gemini model override",
     ),
-    stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
-    supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
+    _stats_only: bool = typer.Option(False, "--stats", help="Show progress and exit"),
+    _supervisor: bool = typer.Option(False, "--supervisor", help="Run realtime enrichment as a long-lived supervisor"),
 ) -> None:
-    """Enrich chunks via Gemini-backed realtime or batch modes."""
-    try:
-        from .. import cloud_backfill
-        from ..enrichment_controller import (
-            DEFAULT_ENRICH_SUPERVISOR_LIMIT,
-            DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
-            enrich_realtime,
-            run_enrich_supervisor,
-        )
-        from ..parent_death import install_parent_death_watcher
-        from ..vector_store import VectorStore
-
-        install_parent_death_watcher()
-
-        if mode not in ("realtime", "batch"):
-            raise typer.BadParameter(f"Invalid mode: {mode}")
-
-        db_path = get_db_path()
-
-        if stats_only:
-            if mode == "batch":
-                cloud_backfill.show_status(db_path)
-            else:
-                store = VectorStore(db_path)
-                try:
-                    s = store.get_enrichment_stats()
-                    console.print(f"[bold]Total:[/] {s['total_chunks']}")
-                    console.print(f"[bold]Enriched:[/] {s['enriched']} ({s['percent']}%)")
-                    console.print(f"[bold]Remaining:[/] {s['remaining']}")
-                    if s["by_intent"]:
-                        console.print(f"[bold]Intent distribution:[/] {s['by_intent']}")
-                finally:
-                    store.close()
-            return
-
-        if mode == "realtime":
-            if supervisor:
-                import signal
-                import threading
-
-                try:
-                    from ..deploy_drift import record_launch_from_environment
-
-                    record_launch_from_environment()
-                except Exception:
-                    logging.getLogger(__name__).debug("Failed to record enrichment launch provenance", exc_info=True)
-
-                stop_event = threading.Event()
-
-                def handle_signal(signum, frame):
-                    rprint("\n[bold yellow]Stopping enrich supervisor...[/]")
-                    stop_event.set()
-
-                previous_sigterm = signal.getsignal(signal.SIGTERM)
-                previous_sigint = signal.getsignal(signal.SIGINT)
-                signal.signal(signal.SIGTERM, handle_signal)
-                signal.signal(signal.SIGINT, handle_signal)
-                try:
-                    result = run_enrich_supervisor(
-                        db_path,
-                        limit=limit or DEFAULT_ENRICH_SUPERVISOR_LIMIT,
-                        since_hours=since_hours if since_hours is not None else DEFAULT_ENRICH_SUPERVISOR_SINCE_HOURS,
-                        stop_event=stop_event,
-                    )
-                finally:
-                    signal.signal(signal.SIGTERM, previous_sigterm)
-                    signal.signal(signal.SIGINT, previous_sigint)
-                console.print(
-                    f"[bold green]Done![/] mode={result.mode} cycles={result.cycles} "
-                    f"attempted={result.attempted} enriched={result.enriched} "
-                    f"skipped={result.skipped} failed={result.failed}"
-                )
-                raise typer.Exit(result.exit_code)
-
-            store = VectorStore(db_path)
-            try:
-                result = enrich_realtime(
-                    store,
-                    limit=limit or 25,
-                    since_hours=since_hours if since_hours is not None else DEFAULT_REALTIME_ENRICH_SINCE_HOURS,
-                )
-                console.print(
-                    f"[bold green]Done![/] mode={result.mode} attempted={result.attempted} "
-                    f"enriched={result.enriched} skipped={result.skipped} failed={result.failed}"
-                )
-            finally:
-                store.close()
-            return
-
-        if phase == "submit":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=True,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=submit sample={limit or 0} model={model}")
-            return
-        if phase == "drain-submit":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=True,
-                drain_backlog=True,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=drain-submit sample={limit or 0} model={model}")
-            return
-        if phase == "run":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=False,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=run sample={limit or 0} model={model}")
-            return
-        if phase == "drain-run":
-            cloud_backfill.run_full_backfill(
-                db_path,
-                model=model,
-                sample=limit or 0,
-                submit_only=False,
-                drain_backlog=True,
-            )
-            console.print(f"[bold green]Done![/] mode=batch phase=drain-run sample={limit or 0} model={model}")
-            return
-        if phase in {"poll", "import"}:
-            summary = cloud_backfill.process_pending_jobs_once(db_path)
-            console.print(
-                "[bold green]Done![/] "
-                f"mode=batch phase={phase} checked={summary['checked']} "
-                f"imported_jobs={summary['imported_jobs']} pending={summary['still_pending']} "
-                f"success={summary['success']} failed={summary['failed']} skipped={summary['skipped']}"
-            )
-            return
-        if phase in {"drain-poll", "drain-import"}:
-            summary = cloud_backfill.process_pending_jobs_once(db_path, import_mode=cloud_backfill.IMPORT_MODE_DRAIN)
-            console.print(
-                "[bold green]Done![/] "
-                f"mode=batch phase={phase} checked={summary['checked']} "
-                f"imported_jobs={summary['imported_jobs']} pending={summary['still_pending']} "
-                f"success={summary['success']} failed={summary['failed']} skipped={summary['skipped']}"
-            )
-            return
-        if phase == "status":
-            cloud_backfill.show_status(db_path)
-            return
-
-        raise typer.BadParameter(f"Invalid batch phase: {phase}")
-    except typer.Exit:
-        raise
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+    """Compatibility error for retired enrichment commands."""
+    rprint("[bold red]Enrichment has been retired.[/] Local indexing, embeddings and search remain available.")
+    raise typer.Exit(1)
 
 
 @app.command("decay")
@@ -2747,6 +2651,7 @@ def wal_checkpoint(
     quiet: bool = typer.Option(False, "--quiet", help="Silent unless error"),
 ) -> None:
     """Run a SQLite WAL checkpoint through the BrainLayer CLI."""
+    from ..job_alerts import report as report_job_alert
     from ..wal_checkpoint import run_wal_checkpoint
 
     normalized_mode = mode.upper()
@@ -2758,12 +2663,14 @@ def wal_checkpoint(
             run_wal_checkpoint(normalized_mode, retry_busy=True) if retry_busy else run_wal_checkpoint(normalized_mode)
         )
     except FileNotFoundError as e:
+        report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint failed; check the job log")
         if json_output:
             console.print_json(data={"error": str(e)})
         elif not quiet:
             rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
     except Exception as e:
+        report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint failed; check the job log")
         if json_output:
             console.print_json(data={"error": str(e)})
         elif not quiet:
@@ -2781,113 +2688,88 @@ def wal_checkpoint(
         )
 
     if result["busy"]:
+        report_job_alert("wal-checkpoint", "BrainLayer WAL checkpoint was busy; check the job log")
         raise typer.Exit(1)
+    report_job_alert("wal-checkpoint", None)
+
+
+@app.command("scrub-at-rest")
+def scrub_at_rest_command(
+    db_path: Path = typer.Option(..., "--db", help="Explicit database path; live apply requires guarded opt-in."),
+    providers: str = typer.Option(
+        "google_oauth",
+        "--providers",
+        help="Provider mode: google_oauth, context7, or exa_labeled (EXA key labels only).",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count matches without writing."),
+    batch_size: int = typer.Option(100, "--batch-size", min=1, max=1000),
+    allow_live_db: bool = typer.Option(
+        False, "--allow-live-db", help="Apply with maintenance safety gates and writer quiescence."
+    ),
+    expect_rows: int | None = typer.Option(
+        None, "--expect-rows", min=0, help="Required guarded apply total from the preceding dry run."
+    ),
+    wait_for_backup_seconds: int = typer.Option(
+        0,
+        "--wait-for-backup-seconds",
+        min=0,
+        help="Wait for a verified backup before guarded apply; dry runs ignore this option.",
+    ),
+) -> None:
+    """Redact provider credentials on a copy or a guarded runtime DB; print counts only."""
+    from ..scrub_at_rest import scrub_at_rest
+
+    try:
+        result = scrub_at_rest(
+            db_path,
+            providers=providers,
+            dry_run=dry_run,
+            batch_size=batch_size,
+            allow_live_db=allow_live_db,
+            expect_rows=expect_rows,
+            wait_for_backup_seconds=wait_for_backup_seconds,
+        )
+    except Exception as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "error": "at-rest scrub refused or failed",
+                    "error_type": type(exc).__name__,
+                    "reason": getattr(exc, "reason", "scrub-failed"),
+                    "detail": getattr(exc, "detail", None),
+                }
+            )
+        )
+        raise typer.Exit(1) from None
+    typer.echo(json.dumps(result, sort_keys=True))
 
 
 @app.command("repair-fts")
 def repair_fts(
-    db_path: Path = typer.Argument(..., help="Explicit offline database copy to repair."),
+    db_path: Path | None = typer.Argument(None, help="Offline database copy; omitted means read-only FTS count check."),
 ) -> None:
-    """Rebuild FTS maintenance tables on an offline copy only."""
-    from ..runtime_store import OfflineMigrator
+    """Check live FTS counts read-only, or rebuild an explicit offline copy."""
+    from ..job_alerts import report as report_job_alert
+    from ..runtime_store import OfflineMigrator, check_fts_counts
 
     try:
-        store = OfflineMigrator(db_path)
-        try:
-            result = store.repair_fts(rebuild_trigram=True)
-        finally:
-            store.close()
-    except PermissionError as exc:
-        rprint(f"[bold red]Repair refused:[/] {exc}")
-        raise typer.Exit(1) from exc
-    console.print_json(data=result)
-
-
-@app.command("enrich-sessions")
-def enrich_sessions(
-    project: str = typer.Option(None, "--project", "-p", help="Only enrich sessions from this project"),
-    since: str = typer.Option(None, "--since", "-s", help="Only sessions after this date (ISO 8601)"),
-    max_sessions: int = typer.Option(0, "--max", "-m", help="Max sessions to process (0=unlimited)"),
-    stats_only: bool = typer.Option(False, "--stats", help="Show enrichment stats and exit"),
-) -> None:
-    """Enrich sessions with LLM-generated analysis (summary, decisions, corrections, learnings)."""
-    try:
-        from ..paths import DEFAULT_DB_PATH
-        from ..pipeline.enrichment import ENRICH_BACKEND, call_llm
-        from ..pipeline.session_enrichment import (
-            enrich_session,
-            list_sessions_for_enrichment,
-        )
-        from ..vector_store import VectorStore
-
-        store = VectorStore(DEFAULT_DB_PATH)
-
-        if stats_only:
+        if db_path is None:
+            result = check_fts_counts(get_db_path())
+        else:
+            store = OfflineMigrator(db_path)
             try:
-                stats = store.get_session_enrichment_stats()
-                console.print(f"[bold]Enriched sessions:[/] {stats['total_enriched_sessions']}")
-                if stats["by_outcome"]:
-                    console.print(f"[bold]By outcome:[/] {stats['by_outcome']}")
-                if stats["by_intent"]:
-                    console.print(f"[bold]By intent:[/] {stats['by_intent']}")
-                if stats["avg_quality_score"]:
-                    console.print(f"[bold]Avg quality:[/] {stats['avg_quality_score']}/10")
+                result = store.repair_fts(rebuild_trigram=True)
             finally:
                 store.close()
-            return
-
-        sessions = list_sessions_for_enrichment(store, project=project, since=since)
-        if max_sessions > 0:
-            sessions = sessions[:max_sessions]
-
-        if not sessions:
-            console.print("[yellow]No sessions to enrich.[/]")
-            store.close()
-            return
-
-        console.print(f"[bold]Found {len(sessions)} sessions to enrich[/] (backend: {ENRICH_BACKEND})")
-
-        enriched = 0
-        failed = 0
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Enriching sessions...", total=len(sessions))
-
-            for i, (session_id, proj, chunk_count) in enumerate(sessions):
-                progress.update(task, description=f"Session {session_id[:8]}... ({chunk_count} chunks)")
-
-                try:
-                    result = enrich_session(
-                        store=store,
-                        session_id=session_id,
-                        call_llm_fn=call_llm,
-                        project=proj or project,
-                        model_name=ENRICH_BACKEND,
-                    )
-                    if result:
-                        enriched += 1
-                    else:
-                        failed += 1
-                except Exception as e:
-                    console.print(f"  [red]Error on {session_id[:8]}: {e}[/]")
-                    failed += 1
-
-                progress.advance(task)
-
-        store.close()
-
-        console.print(f"\n[bold green]Done![/] Enriched: {enriched}, Failed: {failed}")
-
-    except Exception as e:
-        rprint(f"[bold red]Error:[/] {e}")
-        raise typer.Exit(1)
+    except PermissionError as exc:
+        report_job_alert("repair-fts", "BrainLayer FTS repair failed; check the job log")
+        rprint(f"[bold red]Repair refused:[/] {exc}")
+        raise typer.Exit(1) from exc
+    except Exception:
+        report_job_alert("repair-fts", "BrainLayer FTS repair failed; check the job log")
+        raise
+    report_job_alert("repair-fts", None)
+    console.print_json(data=result)
 
 
 @app.command("git-overlay")
@@ -3863,23 +3745,6 @@ def index_fast(
             f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total / 60:.1f}[/] minutes"
         )
 
-        # Sync enrichment stats to Supabase (best-effort, only if configured)
-        try:
-            from ..pipeline.enrichment import (
-                DEFAULT_DB_PATH,
-                SUPABASE_SERVICE_KEY,
-                SUPABASE_URL,
-                _sync_stats_to_supabase,
-            )
-
-            if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-                store = ReadonlyStore(DEFAULT_DB_PATH)
-                _sync_stats_to_supabase(store)
-                store.close()
-                rprint("[dim]Synced enrichment stats to Supabase[/]")
-        except Exception as e:
-            rprint(f"[dim]Supabase stats sync skipped: {e}[/]")
-
     except IndexDeadlineExceeded as exc:
         raise _exit_on_index_deadline(
             exc,
@@ -3924,22 +3789,31 @@ def ingest_t3_command(
         help="Read-only T3 state SQLite database.",
     ),
     db: Optional[Path] = typer.Option(None, "--db", help="BrainLayer destination database."),
-    health_path: Path = typer.Option(
-        Path("~/.local/share/brainlayer/t3-health.json"),
+    health_path: Optional[Path] = typer.Option(
+        None,
         "--health-path",
         help="T3 ingestion health JSON path.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Read and plan chunks without writing BrainLayer."),
+    projection_version: int = typer.Option(
+        1,
+        "--projection-version",
+        min=1,
+        max=2,
+        help="Explicit T3 projection contract: 1 (legacy) or 2 (V2). Set --state-db for V2.",
+    ),
 ) -> None:
     """Ingest the live T3 thread projection into BrainLayer."""
     from ..ingest.t3 import ingest_t3
-    from ..paths import get_db_path
+    from ..paths import get_db_path, resolve_t3_health_path
 
+    resolved_db = db.expanduser() if db is not None else get_db_path()
     result = ingest_t3(
         state_db.expanduser(),
-        db_path=(db.expanduser() if db is not None else get_db_path()),
-        health_path=health_path.expanduser(),
+        db_path=resolved_db,
+        health_path=resolve_t3_health_path(resolved_db, health_path),
         dry_run=dry_run,
+        projection_version=projection_version,
     )
     mode = "dry-run " if dry_run else ""
     rprint(

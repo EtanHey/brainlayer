@@ -34,6 +34,31 @@ def pause_applies_to_label(payload: dict[str, Any], label: str) -> bool:
     return label in {str(item) for item in labels}
 
 
+def queue_contains_only_enrichment(queue_dir: Path, expected_count: int) -> bool:
+    """Fail closed on races or malformed files; names alone cannot prove pause safety."""
+    if expected_count <= 0:
+        return False
+    try:
+        paths = [path for path in queue_dir.expanduser().glob("*.jsonl") if path.is_file()]
+        if len(paths) != expected_count:
+            return False
+        for path in paths:
+            saw_event = False
+            with path.open(encoding="utf-8") as queue_file:
+                for line in queue_file:
+                    if not line.strip():
+                        continue
+                    event = json.loads(line)
+                    saw_event = True
+                    if not isinstance(event, dict) or event.get("kind") != "enrichment_update":
+                        return False
+            if not saw_event:
+                return False
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return True
+
+
 def _parse_iso_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None

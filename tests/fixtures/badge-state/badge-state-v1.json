@@ -1,0 +1,1 @@
+{"alerts": {"active": [{"code": "jsonl_backup_attempt_failed", "message": "latest JSONL backup attempt failed verification", "severity": "critical"}], "badge_on": true, "inputs": [], "reason": "", "state": "measured", "suppressed": []}, "generated_at": "2026-09-15T08:00:00Z", "schema_version": 1}

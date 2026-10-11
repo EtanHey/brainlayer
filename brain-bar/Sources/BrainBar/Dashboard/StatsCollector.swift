@@ -177,6 +177,10 @@ final class StatsCollector: ObservableObject {
 
     @Published private(set) var stats: DashboardStats
     @Published private(set) var daemon: DaemonHealthSnapshot?
+    /// Why `daemon` is nil: a confirmed outage or an unmeasured state (#972, #976).
+    @Published private(set) var daemonUnavailability: DaemonUnavailability?
+    /// Last brain-bus frame from the daemon over its socket; drives "Last seen".
+    @Published private(set) var lastDaemonAnswerAt: Date?
     @Published private(set) var agentActivity: AgentActivitySnapshot
     @Published private(set) var state: PipelineState
     @Published private(set) var isRefreshing = false
@@ -202,6 +206,7 @@ final class StatsCollector: ObservableObject {
     private var selectedWindowMinutes: Int?
 
     private let dbPath: String
+    var databasePathForObservability: String { dbPath }
     private let databaseOpenConfiguration: BrainDatabase.OpenConfiguration
     private let daemonMonitor: DaemonHealthMonitor
     private let watcherProcessProbe: any WatcherProcessProbing
@@ -218,6 +223,7 @@ final class StatsCollector: ObservableObject {
     private let freshnessTickerInterval: TimeInterval
     private let nowProvider: () -> Date
     private let brainBusEvents: BrainBusEventSource?
+    private let observeDatabaseChanges: Bool
     private var brainBusTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
     private var freshnessTicker: Task<Void, Never>?
@@ -231,9 +237,14 @@ final class StatsCollector: ObservableObject {
     private var lastSignalCoverageAttemptedAt: Date?
     private var watcherProcessRefreshTask: Task<Void, Never>?
     private var watcherProcessRefreshGeneration = 0
+    private var daemonSampleTask: Task<Void, Never>?
+    private var daemonSampleGeneration = 0
+    private var daemonSamplePending = false
     private var isRunning = false
     private var isStopped = false
     private var lastAgentActivitySampleAt: Date?
+    private var agentActivityTask: Task<Void, Never>?
+    private var agentActivityGeneration = 0
     private var lastNonForcedStatsRefreshAt: Date?
     private var pendingStoreQueueDepthSamples: [(date: Date, depth: Int)] = []
     private var lastHeartbeatLogKey: String?
@@ -245,7 +256,7 @@ final class StatsCollector: ObservableObject {
         watcherProcessProbe: any WatcherProcessProbing = StaticWatcherProcessProbe(
             result: .failure("watcher process probe not configured")
         ),
-        agentActivityMonitor: AgentActivityMonitor = AgentActivityMonitor(),
+        agentActivityMonitor: AgentActivityMonitor,
         agentActivitySampleInterval: TimeInterval = 5,
         statsRefreshCoalesceInterval: TimeInterval = 5,
         liveStatsRefreshDelay: TimeInterval = 0.2,
@@ -253,6 +264,7 @@ final class StatsCollector: ObservableObject {
         freshnessTickerInterval: TimeInterval = 1,
         nowProvider: @escaping () -> Date = Date.init,
         brainBusEvents: BrainBusEventSource? = nil,
+        observeDatabaseChanges: Bool = true,
         dashboardStatsProvider: DashboardStatsProvider? = nil,
         signalCoverageProvider: SignalCoverageProvider? = nil,
         signalCoverageStartDelay: TimeInterval = 2,
@@ -261,6 +273,7 @@ final class StatsCollector: ObservableObject {
         databaseOpenConfiguration: BrainDatabase.OpenConfiguration = BrainDatabase.OpenConfiguration()
     ) {
         self.dbPath = dbPath
+        self.observeDatabaseChanges = observeDatabaseChanges
         self.databaseOpenConfiguration = databaseOpenConfiguration
         self.daemonMonitor = daemonMonitor
         self.watcherProcessProbe = watcherProcessProbe
@@ -315,7 +328,7 @@ final class StatsCollector: ObservableObject {
             signalEligibleChunkCount: 0,
             signalCoverageIsAvailable: false
         )
-        self.agentActivity = .empty
+        self.agentActivity = .unavailable("not sampled yet")
         self.state = .degraded
         self.lastFetchError = nil
         self.snapshotFreshnessState = .loading
@@ -333,7 +346,7 @@ final class StatsCollector: ObservableObject {
         resetRefreshTimingState()
         isStopped = false
         isRunning = true
-        installDarwinObserver()
+        if observeDatabaseChanges { installDarwinObserver() }
         requestRefresh(force: true)
         startAutoRefreshLoop()
         startFreshnessTicker()
@@ -366,6 +379,13 @@ final class StatsCollector: ObservableObject {
         watcherProcessRefreshTask?.cancel()
         watcherProcessRefreshTask = nil
         watcherProcessRefreshGeneration += 1
+        daemonSampleTask?.cancel()
+        daemonSampleTask = nil
+        daemonSampleGeneration += 1
+        daemonSamplePending = false
+        agentActivityTask?.cancel()
+        agentActivityTask = nil
+        agentActivityGeneration += 1
         windowedBucketsTask?.cancel()
         windowedBucketsTask = nil
         windowedBucketsGeneration += 1
@@ -377,7 +397,7 @@ final class StatsCollector: ObservableObject {
         hasPendingStatsRefresh = pendingStatsRefreshTask != nil
         isRefreshing = false
         isManualRefreshInProgress = false
-        if isRunning {
+        if isRunning && observeDatabaseChanges {
             removeDarwinObserver()
         }
         isRunning = false
@@ -446,21 +466,19 @@ final class StatsCollector: ObservableObject {
         trigger: DashboardRefreshTrigger = .auto,
         bypassCoalescing: Bool = false
     ) {
-        let nextDaemon = daemonMonitor.sample()
+        requestDaemonSample()
         let snapshotTime = nowProvider()
         refreshAgentActivity(force: force, now: snapshotTime)
 
         if !force, !bypassCoalescing, let coalescedDelay = coalescedStatsRefreshDelay(now: snapshotTime) {
-            daemon = nextDaemon
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            state = PipelineState.derive(daemon: daemon, stats: stats)
             requestWatcherProcessRefresh()
             schedulePendingStatsRefresh(after: coalescedDelay)
             return
         }
 
         if dashboardRefreshTask != nil, trigger != .manual {
-            daemon = nextDaemon
-            state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+            state = PipelineState.derive(daemon: daemon, stats: stats)
             requestWatcherProcessRefresh()
             if !force {
                 schedulePendingStatsRefresh(after: statsRefreshCoalesceInterval)
@@ -489,15 +507,13 @@ final class StatsCollector: ObservableObject {
         if trigger == .manual {
             isManualRefreshInProgress = true
         }
-        daemon = nextDaemon
-        state = PipelineState.derive(daemon: nextDaemon, stats: stats)
+        state = PipelineState.derive(daemon: daemon, stats: stats)
         logDashboardRefresh(
             timestamp: snapshotTime,
             startUnix: startUnix,
             endUnix: nil,
             rows: startStats.chunkCount,
             writes5m: startStats.recentWriteFiveMinuteCount,
-            enrich5m: startStats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
 
@@ -509,7 +525,6 @@ final class StatsCollector: ObservableObject {
 
             await self?.finishRequestedRefreshIfCurrent(
                 result: result,
-                daemon: nextDaemon,
                 watcherProcess: nextWatcherProcess,
                 snapshotTime: snapshotTime,
                 startUnix: startUnix,
@@ -592,6 +607,35 @@ final class StatsCollector: ObservableObject {
         }
     }
 
+    /// Samples the daemon off the main actor: on a cache miss (every daemon restart)
+    /// the monitor scans the process table, which must never block a frame (#972).
+    /// Requests that arrive while a sample is in flight coalesce into one follow-up.
+    private func requestDaemonSample() {
+        guard daemonSampleTask == nil else {
+            daemonSamplePending = true
+            return
+        }
+        let monitor = daemonMonitor
+        let generation = daemonSampleGeneration
+        daemonSampleTask = Task.detached(priority: .utility) { [weak self] in
+            let reading = monitor.read()
+            await self?.finishDaemonSample(reading, generation: generation)
+        }
+    }
+
+    private func finishDaemonSample(_ reading: DaemonHealthReading, generation: Int) {
+        guard generation == daemonSampleGeneration else { return }
+        daemonSampleTask = nil
+        guard !isStopped else { return }
+        daemon = reading.snapshot?.withLastSeenAt(lastDaemonAnswerAt)
+        daemonUnavailability = reading.unavailability
+        state = PipelineState.derive(daemon: daemon, stats: stats)
+        if daemonSamplePending {
+            daemonSamplePending = false
+            requestDaemonSample()
+        }
+    }
+
     private func requestWatcherProcessRefresh() {
         watcherProcessRefreshTask?.cancel()
         watcherProcessRefreshGeneration += 1
@@ -612,7 +656,6 @@ final class StatsCollector: ObservableObject {
 
     private func finishRequestedRefreshIfCurrent(
         result: Result<DashboardStats, Error>,
-        daemon nextDaemon: DaemonHealthSnapshot?,
         watcherProcess: WatcherProcessProbeResult,
         snapshotTime: Date,
         startUnix: TimeInterval,
@@ -624,7 +667,6 @@ final class StatsCollector: ObservableObject {
         guard !isStopped, generation == dashboardRefreshGeneration else { return }
         finishRequestedRefresh(
             result: result,
-            daemon: nextDaemon,
             watcherProcess: watcherProcess,
             snapshotTime: snapshotTime,
             startUnix: startUnix,
@@ -640,7 +682,6 @@ final class StatsCollector: ObservableObject {
 
     private func finishRequestedRefresh(
         result: Result<DashboardStats, Error>,
-        daemon nextDaemon: DaemonHealthSnapshot?,
         watcherProcess: WatcherProcessProbeResult,
         snapshotTime: Date,
         startUnix: TimeInterval,
@@ -648,7 +689,6 @@ final class StatsCollector: ObservableObject {
         trigger: DashboardRefreshTrigger,
         watcherProcessGeneration: Int
     ) {
-        let finishDaemon = daemonMonitor.sample() ?? nextDaemon
         switch result {
         case .success(let nextStats):
             let hotStats: DashboardStats
@@ -663,8 +703,7 @@ final class StatsCollector: ObservableObject {
                 candidate: watcherProcess,
                 generation: watcherProcessGeneration
             )
-            daemon = finishDaemon
-            state = PipelineState.derive(daemon: finishDaemon, stats: stats)
+            state = PipelineState.derive(daemon: daemon, stats: stats)
             lastDataFetchedAt = nowProvider()
             lastFetchError = nil
             if let selectedWindowMinutes {
@@ -675,14 +714,13 @@ final class StatsCollector: ObservableObject {
             }
             requestSignalCoverageRefresh(force: force)
         case .failure(let error):
-            daemon = finishDaemon
             stats = applyingWatcherProcessResultIfCurrent(
                 to: stats,
                 candidate: watcherProcess,
                 generation: watcherProcessGeneration
             )
             lastFetchError = String(describing: error)
-            state = PipelineState.derive(daemon: finishDaemon, stats: stats)
+            state = PipelineState.derive(daemon: daemon, stats: stats)
         }
 
         isRefreshing = false
@@ -698,7 +736,6 @@ final class StatsCollector: ObservableObject {
             endUnix: nowProvider().timeIntervalSince1970,
             rows: stats.chunkCount,
             writes5m: stats.recentWriteFiveMinuteCount,
-            enrich5m: stats.recentEnrichmentFiveMinuteCount,
             trigger: trigger
         )
     }
@@ -833,12 +870,28 @@ final class StatsCollector: ObservableObject {
         )
     }
 
+    /// Samples agent activity off the main actor: a sample runs `ps`, then `proc_pidpath`
+    /// for each candidate PID (#987). A request while a sample is in flight is dropped;
+    /// that sample is already fresh.
     private func refreshAgentActivity(force: Bool, now: Date) {
         if !force, let lastAgentActivitySampleAt, now.timeIntervalSince(lastAgentActivitySampleAt) < agentActivitySampleInterval {
             return
         }
-        agentActivity = agentActivityMonitor.sample()
+        guard agentActivityTask == nil else { return }
         lastAgentActivitySampleAt = now
+        let monitor = agentActivityMonitor
+        let generation = agentActivityGeneration
+        agentActivityTask = Task.detached(priority: .utility) { [weak self] in
+            let activity = monitor.sample()
+            await self?.finishAgentActivitySample(activity, generation: generation)
+        }
+    }
+
+    private func finishAgentActivitySample(_ activity: AgentActivitySnapshot, generation: Int) {
+        guard generation == agentActivityGeneration else { return }
+        agentActivityTask = nil
+        guard !isStopped else { return }
+        agentActivity = activity
     }
 
     private func resetRefreshTimingState() {
@@ -861,14 +914,19 @@ final class StatsCollector: ObservableObject {
             trigger: "brain_bus",
             timestamp: event.generatedAt
         )
+        // Any brain-bus frame is an answer from the daemon over its socket.
+        lastDaemonAnswerAt = max(lastDaemonAnswerAt ?? event.generatedAt, event.generatedAt)
+        daemon = daemon?.withLastSeenAt(lastDaemonAnswerAt)
 
         switch event.type {
         case .healthTick:
-            daemon = daemonMonitor.sample()
+            requestDaemonSample()
             refreshAgentActivity(force: false, now: Date())
             state = PipelineState.derive(daemon: daemon, stats: stats)
             requestWatcherProcessRefresh()
-        case .queueDepth, .enrichStatus, .lastChunkID, .dbBusy:
+        case .enrichStatus:
+            break // Historical producer events do not trigger UI polling.
+        case .queueDepth, .lastChunkID, .dbBusy:
             scheduleLiveStatsRefresh()
         }
     }
@@ -903,18 +961,16 @@ final class StatsCollector: ObservableObject {
         endUnix: TimeInterval?,
         rows: Int,
         writes5m: Int,
-        enrich5m: Int,
         trigger: DashboardRefreshTrigger
     ) {
         let endText = endUnix.map { String(format: "%.3f", $0) } ?? "ongoing"
         NSLog(
-            "[BrainBar] dashboard refresh: %@ start=%.3f end=%@ rows=%d writes_5m=%d enrich_5m=%d trigger=%@",
+            "[BrainBar] dashboard refresh: %@ start=%.3f end=%@ rows=%d writes_5m=%d trigger=%@",
             ISO8601DateFormatter().string(from: timestamp),
             startUnix,
             endText,
             rows,
             writes5m,
-            enrich5m,
             trigger.rawValue
         )
     }
@@ -962,6 +1018,8 @@ extension StatsCollector {
     static func fixture(
         stats: DashboardStats,
         daemon: DaemonHealthSnapshot?,
+        daemonUnavailability: DaemonUnavailability? = nil,
+        lastDaemonAnswerAt: Date? = nil,
         agentActivity: AgentActivitySnapshot,
         state: PipelineState,
         heartbeat: DashboardHeartbeat = .empty,
@@ -973,10 +1031,13 @@ extension StatsCollector {
         // because start()/requestRefresh() are not called on a fixture.
         let collector = StatsCollector(
             dbPath: "/nonexistent/brainbar-fixture.db",
-            daemonMonitor: DaemonHealthMonitor(targetPID: 0)
+            daemonMonitor: DaemonHealthMonitor(targetPID: 0),
+            agentActivityMonitor: AgentActivityMonitor(snapshotProvider: { nil }, executablePathResolver: { _ in nil })
         )
         collector.stats = stats
         collector.daemon = daemon
+        collector.daemonUnavailability = daemonUnavailability
+        collector.lastDaemonAnswerAt = lastDaemonAnswerAt ?? daemon?.lastSeenAt
         collector.agentActivity = agentActivity
         collector.state = state
         collector.heartbeat = heartbeat

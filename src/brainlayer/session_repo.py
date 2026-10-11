@@ -247,7 +247,26 @@ class SessionMixin:
         enrichment_backend: Optional[str] = None,
         enrichment_version: Optional[str] = None,
     ) -> None:
-        """Update enrichment metadata for a chunk."""
+        """Update enrichment metadata for a chunk.
+
+        Every model-authored field is secret-scrubbed here, at the write, so no
+        caller can persist a token an LLM echoed from its prompt.
+        """
+        from .pipeline.cloud_scrub import scrub_llm_output
+
+        summary = scrub_llm_output(summary)
+        tags = scrub_llm_output(tags)
+        intent = scrub_llm_output(intent)
+        primary_symbols = scrub_llm_output(primary_symbols)
+        resolved_query = scrub_llm_output(resolved_query)
+        key_facts = scrub_llm_output(key_facts)
+        resolved_queries = scrub_llm_output(resolved_queries)
+        epistemic_level = scrub_llm_output(epistemic_level)
+        version_scope = scrub_llm_output(version_scope)
+        debt_impact = scrub_llm_output(debt_impact)
+        external_deps = scrub_llm_output(external_deps)
+        sentiment_label = scrub_llm_output(sentiment_label)
+        sentiment_signals = scrub_llm_output(sentiment_signals)
         cursor = self.conn.cursor()
 
         sets = ["enriched_at = ?", "enrich_status = ?"]
@@ -334,6 +353,9 @@ class SessionMixin:
         enrichment_version: Optional[str] = None,
     ) -> None:
         """Persist preview re-enrichment fields without mutating the live summary."""
+        from .pipeline.cloud_scrub import scrub_llm_output
+
+        summary_v2 = scrub_llm_output(summary_v2)
         cursor = self.conn.cursor()
 
         sets: list[str] = []
@@ -924,11 +946,19 @@ class SessionMixin:
     # --- Session Enrichment ---
 
     def upsert_session_enrichment(self, enrichment: Dict[str, Any]) -> None:
-        """Insert or update a session enrichment record."""
+        """Insert or update a session enrichment record.
+
+        Model-authored fields are secret-scrubbed before the write, dict keys
+        included: the session model writes these dicts free-form. A JSON field
+        given as a string is decoded first, and JSON nested inside any field's
+        strings is normalized (bounded, fail-closed), so a token hidden behind a
+        JSON escape is scrubbed as the value it decodes to.
+        """
+        from .pipeline.cloud_scrub import normalize_json_strings, scrub_llm_output
+
         cursor = self.conn.cursor()
         enrichment = dict(enrichment)
         session_id = enrichment["session_id"]
-
         json_fields = [
             "decisions_made",
             "corrections",
@@ -938,9 +968,30 @@ class SessionMixin:
             "topic_tags",
             "tool_usage_stats",
         ]
-        for field in json_fields:
-            if field in enrichment and not isinstance(enrichment[field], str):
-                enrichment[field] = json.dumps(enrichment[field])
+        for field in (
+            "session_summary",
+            "primary_intent",
+            "outcome",
+            "what_worked",
+            "what_failed",
+            *json_fields,
+        ):
+            if field not in enrichment:
+                continue
+            value = enrichment[field]
+            if field not in json_fields:
+                enrichment[field] = scrub_llm_output(normalize_json_strings(value))
+                continue
+            depth_used = 0
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    enrichment[field] = scrub_llm_output(value)  # not JSON: stored as the text it is
+                    continue
+                depth_used = 1
+            value = normalize_json_strings(value, depth_used=depth_used)
+            enrichment[field] = json.dumps(scrub_llm_output(value))
 
         cursor.execute(
             """

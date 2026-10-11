@@ -1,2 +1,7 @@
 # Mark test fixtures as generated to exclude from language stats
 tests/fixtures/*.json linguist-generated=true
+
+# Keep personal exports opaque in Git diffs as well as out of future commits.
+eval_results/kg-*.json -diff
+artifacts/flex-hybrid-taxonomy-2026-06-16/** -diff
+artifacts/**/*.jsonl -diff

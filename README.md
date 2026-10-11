@@ -5,7 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/brainlayer.svg)](https://pypi.org/project/brainlayer/)
 [![CI](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml/badge.svg)](https://github.com/EtanHey/brainlayer/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-17%20tools-green.svg)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-16%20tools-green.svg)](https://modelcontextprotocol.io)
 [![Tests](https://img.shields.io/badge/tests-4%2C386%20Python%20%2B%20890%20Swift-brightgreen.svg)](#testing)
 [![Website](https://img.shields.io/badge/site-brainlayer.etanheyman.com-d4956a.svg)](https://brainlayer.etanheyman.com)
 
@@ -84,16 +84,16 @@ See [docs/mcp-config.md](docs/mcp-config.md).
 
 </details>
 
-## MCP Tools (17)
+## MCP Tools (16)
 
-The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines 17 tools, and
+The agent-facing MCP server is **BrainBar** on `/tmp/brainbar.sock`. It defines 16 tools, and
 every definition carries [ToolAnnotations](https://modelcontextprotocol.io/specification/2025-03-26/server/tools#annotations)
 so agents know which calls are safe to run without confirmation.
 
 **Sessions boot into a core palette of 5.** By default `tools/list` returns `brain_search`,
 `brain_store`, `brain_recall`, `brain_expand`, and `expand_palette` — with short descriptions, to
 keep the boot payload small. Call `expand_palette` (or set `BRAINLAYER_MCP_PROFILE=full` on the
-server) to get all 17 with their full descriptions. Calling a gated tool before expanding returns
+server) to get all 16 with their full descriptions. Calling a gated tool before expanding returns
 an error that tells you to expand.
 
 | Tool | Type | Core | What it does |
@@ -107,7 +107,6 @@ an error that tells you to expand.
 | `brain_tags` | read | | List tags in use with counts; filter by substring. |
 | `brain_digest` | write | | Digest a large raw block (transcript, doc, article) into a searchable chunk and connect its entities into the KG. |
 | `brain_update` | write | | Change an existing chunk's importance or tags. Does not edit content. |
-| `brain_enrich` | write | | Backfill summaries and enrichment metadata on existing chunks. |
 | `brain_subscribe` | write | | Subscribe an agent to live notifications for given tags. |
 | `brain_unsubscribe` | write | | Remove some or all of an agent's tag subscriptions. |
 | `brain_ack` | write | | Acknowledge that an agent processed messages up to a chunk rowid. |
@@ -149,7 +148,7 @@ served by BrainBar, which is the agent transport — new wiring should use the `
 
 ```mermaid
 graph LR
-    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>17 tools"]
+    A["Claude Code / Cursor / Zed"] -->|MCP| B["BrainLayer<br/>16 tools"]
     B --> C["Hybrid Search<br/>vector + FTS5"]
     C --> D["SQLite + sqlite-vec<br/>single .db file"]
     B --> KG["Knowledge Graph<br/>entities + relations"]
@@ -160,7 +159,7 @@ graph LR
     BB -->|MCP socket protocol| B
 ```
 
-**Everything runs locally.** Cloud enrichment (Gemini/Groq) and Axiom telemetry are optional.
+Memory indexing, search, and the local knowledge graph run on-device. Axiom telemetry and Drive backups remain optional network integrations.
 
 | Layer | Implementation |
 |-------|---------------|
@@ -168,14 +167,13 @@ graph LR
 | **Embeddings** | `bge-large-en-v1.5` (1024 dims, CPU/MPS) |
 | **Search** | Vector similarity + FTS5, merged with Reciprocal Rank Fusion |
 | **Watcher** | Real-time JSONL indexing (~1s), 4-layer content filters, offset-persistent |
-| **Enrichment** | 15 metadata fields per chunk — Groq, Gemini, MLX, or Ollama |
 | **Knowledge Graph** | Entities, relations, co-occurrence extraction, person lookup |
 
 ## Why BrainLayer?
 
 | | BrainLayer | Mem0 | Zep/Graphiti | Letta |
 |---|:---:|:---:|:---:|:---:|
-| **MCP tools** | 17 | 1 | 1 | 0 |
+| **MCP tools** | 16 | 1 | 1 | 0 |
 | **Local-first** | SQLite | Cloud-first | Cloud-only | Docker+PG |
 | **Zero infra** | `pip install` | API key | API key | Docker |
 | **Real-time indexing** | ~1s | No | No | No |
@@ -207,7 +205,8 @@ Background producers run with `BRAINLAYER_ARBITRATED=1` and append writes to `~/
 
 ## Recent Hardening (2026-04-15 → 2026-05-17)
 
-Two-week stability sprint behind the next presentation. Every line below traces to a merged PR.
+Historical two-week stability sprint. Every line below traces to a merged PR.
+Enrichment work listed here is retired; history: [CHANGELOG](CHANGELOG.md).
 
 **Search recall & dedup**
 - FTS recall hardened across Python, Swift BrainBar, and the watcher pipeline ([#263](https://github.com/EtanHey/brainlayer/pull/263)).
@@ -233,7 +232,7 @@ Two-week stability sprint behind the next presentation. Every line below traces 
 - Stale-index regression fixture ([#255](https://github.com/EtanHey/brainlayer/pull/255)) and Deepchecks regression harness ([#259](https://github.com/EtanHey/brainlayer/pull/259)).
 
 **Security**
-- Every Swift `MCPRouter` tool exposed via BrainBar ships `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)) — 11 tools at the time, 17 today.
+- Every Swift `MCPRouter` tool exposed via BrainBar ships `ToolAnnotations` (cyberMaster H1) ([#253](https://github.com/EtanHey/brainlayer/pull/253)) — 11 tools at the time, 16 today.
 
 **Reliability sprint (2026-05-02)** — [PR #251](https://github.com/EtanHey/brainlayer/pull/251), merged
 - Restores the resizable dashboard panel via a floating `NSPanel` (`BrainBarDashboardPanelController`) instead of MenuBarExtra(.window).
@@ -270,28 +269,22 @@ Claude Desktop, WhatsApp, and Markdown have extractors in `src/brainlayer/pipeli
 (`extract_claude_desktop.py`, `extract_whatsapp.py`, `extract_markdown.py`) but no CLI subcommand
 wired to them yet.
 
-## Enrichment
+## Enrichment (retired)
 
-Each chunk gets 15 structured metadata fields from a local or cloud LLM
-(`summary`, `key_facts`, `tags`, `importance`, `intent`, `primary_symbols`, `resolved_queries`,
-`epistemic_level`, `version_scope`, `debt_impact`, `external_deps`, `entities`, `sentiment_label`,
-`sentiment_score`, `sentiment_signals`). A sample:
+LLM chunk and session enrichment is retired. Existing metadata remains readable;
+indexing, search, offline evaluation, and the local knowledge graph remain available.
+History: [CHANGELOG](CHANGELOG.md); [retirement details](docs/enrichment.md).
 
-| Field | Example |
-|-------|---------|
-| `summary` | "Debugging Telegram bot message drops under load" |
-| `tags` | "telegram, debugging, performance" |
-| `importance` | 8 (architectural decision) vs 2 (directory listing) |
-| `intent` | `debugging`, `designing`, `implementing`, `deciding` |
-| `primary_symbols` | "TelegramBot, handleMessage, grammy" |
-| `epistemic_level` | `hypothesis`, `substantiated`, `validated` |
-
-```bash
-brainlayer enrich                    # Run enrichment on new chunks
-BRAINLAYER_ENRICH_BACKEND=groq brainlayer enrich   # Force Groq
-```
+Installed hotlane jobs may still require the Google credential gate until the release
+re-renders their plists; retain its configuration as described in [Configuration](docs/configuration.md).
 
 ## CLI Reference
+
+### Backups
+
+Run `brainlayer backup auth` once to authorize BrainLayer's Drive backups in your browser.
+The private token lives at `~/.config/brainlayer/drive-tokens.json`; `BRAINLAYER_DRIVE_TOKEN_PATH` overrides it.
+BrainBar uses `brainlayer backup auth --status --json` to check and `brainlayer backup auth --json` to authorize.
 
 ```bash
 brainlayer setup              # Create ~/.config/brainlayer/brainlayer.env
@@ -300,7 +293,6 @@ brainlayer init               # Interactive setup wizard
 brainlayer index              # Batch index conversations
 brainlayer watch              # Real-time watcher (persistent, ~1s)
 brainlayer search "query"     # Semantic + keyword search
-brainlayer enrich             # LLM enrichment on new chunks
 brainlayer stats              # Database statistics
 brainlayer brain-export       # Brain graph JSON for visualization
 brainlayer export-obsidian    # Export to Obsidian vault
@@ -324,10 +316,7 @@ ruff check src/ && ruff format src/     # Lint + format
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BRAINLAYER_DB` | `~/.local/share/brainlayer/brainlayer.db` | Database file path |
-| `BRAINLAYER_ENRICH_BACKEND` | auto-detect | Enrichment backend (`groq`, `gemini`, `mlx`, `ollama`) |
-| `GROQ_API_KEY` | (unset) | Groq API key for cloud enrichment |
 | `AXIOM_TOKEN` | (unset) | Axiom telemetry token (optional) |
-| `BRAINLAYER_ENRICH_RATE` | `5.0` | Requests per second (5.0 = 300 RPM, AI Pro supports 500+) |
 | `BRAINLAYER_SANITIZE_EXTRA_NAMES` | (empty) | Names to redact from indexed content |
 
 See [full configuration reference](https://etanhey.github.io/brainlayer/configuration/) for all options.
@@ -339,7 +328,6 @@ See [full configuration reference](https://etanhey.github.io/brainlayer/configur
 
 ```bash
 pip install "brainlayer[brain]"       # Brain graph visualization + FAISS
-pip install "brainlayer[cloud]"       # Gemini Batch API enrichment
 pip install "brainlayer[youtube]"     # YouTube transcript indexing
 pip install "brainlayer[ast]"         # AST-aware code chunking (tree-sitter)
 pip install "brainlayer[kg]"          # GliNER entity extraction (209M params)

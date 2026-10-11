@@ -1,5 +1,9 @@
 # Spotlight Exclusion Migration Runbook
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 Status: **READY — execute only in an approved writer-stop window.** Never overlap this operation
 with a backup, release, or another write-heavy maintenance job. Exact workstation scheduling and
 operator coordination belong in the restricted maintenance record, not this repository.
@@ -411,7 +415,8 @@ the whole volume.
 
 ### 7. Restart exactly the labels recorded in preflight
 
-After Step 6 reaches either `VERIFIED` or `INCONCLUSIVE`, bootstrap the recorded launchd plist set,
+After Step 6 reaches either `VERIFIED` or `INCONCLUSIVE`, bootstrap the recorded retained launchd plist set,
+excluding retired `com.brainlayer.enrichment` and `com.brainlayer.gemini-loopback` jobs,
 then verify each expected label is loaded and each daemon has a live PID. Do not restore a label
 that was deliberately disabled before the window. Restart is the safe recovery path in both states:
 an inconclusive Spotlight control must not strand the fleet in a stopped state.
@@ -452,7 +457,8 @@ Remove only the exact execution-created marker file, then remove those known emp
 the root with exact, non-recursive `rmdir` operations; stop on any unexpected or nonempty entry.
 Never apply the forward absent/absent rule during rollback.
 
-Verify DB/WAL/SHM and queue counts before bootstrapping only the preflight label set. Never
+Verify DB/WAL/SHM and queue counts before bootstrapping only the retained preflight label set,
+excluding retired enrichment and Gemini loopback jobs. Never
 overwrite or merge paths.
 
 ## Completion record

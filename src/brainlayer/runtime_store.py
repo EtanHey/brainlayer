@@ -402,6 +402,27 @@ class ReadonlyStore(VectorStore):
             raise
 
 
+def check_fts_counts(db_path: Path) -> dict[str, object]:
+    """Compare live FTS row counts with their source classes without changing the DB."""
+    with ReadonlyStore(db_path) as store:
+        cursor = store.conn.cursor()
+        knowledge = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE COALESCE(content_class, 'knowledge') "
+            "NOT IN ('operational', 'test', 'benchmark', 'cold')"
+        ).fetchone()[0]
+        operational = cursor.execute(
+            "SELECT COUNT(*) FROM chunks WHERE COALESCE(content_class, 'knowledge') = 'operational'"
+        ).fetchone()[0]
+        expected = {
+            "chunks_fts": knowledge,
+            "chunks_fts_trigram": knowledge,
+            "chunks_fts_operational": operational,
+            "chunk_fts_rowids": knowledge + operational,
+        }
+        observed = {table: cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in expected}
+    return {"status": "ok" if observed == expected else "drift", "observed": observed, "expected": expected}
+
+
 class WriterRuntimeStore(VectorStore):
     """Existing-database writer with a bounded, schema-only open path."""
 

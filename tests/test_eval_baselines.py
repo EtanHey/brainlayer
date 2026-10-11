@@ -114,11 +114,11 @@ def _passes(docs: list[str], expected_snippets: list[str], top_n: int) -> bool:
 class TestEntityRouting:
     """Entity names in query should surface entity-linked chunks."""
 
-    def test_avi_simon_entity(self, live_store, live_model):
-        """Query about Avi Simon should surface 6PM / MeHayom interaction chunks."""
-        ids, docs = _search(live_store, live_model, "Avi Simon platform invites schedule", n=5)
-        assert _passes(docs, ["avi simon", "6pm", "6PM"], top_n=3), (
-            f"Expected Avi Simon content in top 3, got: {[d[:60] for d in docs[:3]]}"
+    def test_rina_vale_entity(self, live_store, live_model):
+        """Query about Rina Vale should surface 6PM / MeHayom interaction chunks."""
+        ids, docs = _search(live_store, live_model, "Rina Vale platform invites schedule", n=5)
+        assert _passes(docs, ["Rina Vale", "6pm", "6PM"], top_n=3), (
+            f"Expected Rina Vale content in top 3, got: {[d[:60] for d in docs[:3]]}"
         )
 
     def test_fedor_entity(self, live_store, live_model):
@@ -129,10 +129,10 @@ class TestEntityRouting:
         )
 
     def test_yuval_mehayom_entity(self, live_store, live_model):
-        """Query about Yuval (MeHayom client) should surface sprint/payment chunks."""
-        ids, docs = _search(live_store, live_model, "MeHayom Yuval sprint payment", n=5)
-        assert _passes(docs, ["yuval", "Yuval", "mehayom", "MeHayom"], top_n=3), (
-            f"Expected MeHayom/Yuval content in top 3, got: {[d[:60] for d in docs[:3]]}"
+        """Query about Delta (MeHayom client) should surface sprint/payment chunks."""
+        ids, docs = _search(live_store, live_model, "MeHayom Delta sprint payment", n=5)
+        assert _passes(docs, ["delta", "Delta", "mehayom", "MeHayom"], top_n=3), (
+            f"Expected MeHayom/Delta content in top 3, got: {[d[:60] for d in docs[:3]]}"
         )
 
 
@@ -560,7 +560,7 @@ class TestHookLatency:
 
     def test_entity_query_under_500ms(self):
         """Entity detection + FTS should complete under 500ms."""
-        _, elapsed = self._timed_hook_call("What did Avi Simon say about the scheduling platform?")
+        _, elapsed = self._timed_hook_call("What did Rina Vale say about the scheduling platform?")
         assert elapsed < 500, f"Entity hook took {elapsed:.0f}ms (budget: 500ms)"
 
     def test_short_prompt_skipped_fast(self):
@@ -692,9 +692,9 @@ def run_baseline() -> dict:
     # All eval cases: (name, query, expected_snippets, top_n, project, tag)
     eval_cases = [
         # Entity routing
-        ("entity_avi_simon", "Avi Simon platform invites schedule", ["avi simon", "6pm", "6PM"], 3, None, None),
+        ("entity_rina_vale", "Rina Vale platform invites schedule", ["Rina Vale", "6pm", "6PM"], 3, None, None),
         ("entity_fedor", "Fedor iOS build handover GitHub", ["fedor", "Fedor", "iOS", "MeHayom"], 3, None, None),
-        ("entity_yuval_mehayom", "MeHayom Yuval sprint payment", ["yuval", "Yuval", "MeHayom"], 3, None, None),
+        ("entity_yuval_mehayom", "MeHayom Delta sprint payment", ["delta", "Delta", "MeHayom"], 3, None, None),
         # Tag filter
         ("tag_decision", "important decision", ["decision", "DECISION", "chose", "decided"], 3, None, "decision"),
         ("tag_voicelayer_scoped", "architecture decision voicelayer", ["VoiceLayer", "voice"], 3, "voicelayer", None),
@@ -945,16 +945,16 @@ class TestPromptHookEntityInjection:
         )
         return result.stdout
 
-    def test_entity_detected_avi_simon(self):
-        """Hook should detect 'Avi Simon' as a known entity and inject entity label."""
-        output = self._call_hook("What are Avi Simon's meeting preferences?")
+    def test_entity_detected_rina_vale(self):
+        """Hook should detect 'Rina Vale' as a known entity and inject entity label."""
+        output = self._call_hook("What are Rina Vale's meeting preferences?")
         # After Phase A: output should mention entity type or entity header
         assert (
             "[entity:" in output.lower()
-            or "entity: avi simon" in output.lower()
-            or ("avi simon" in output.lower() and "person" in output.lower())
+            or "entity: Rina Vale" in output.lower()
+            or ("Rina Vale" in output.lower() and "person" in output.lower())
         ), (
-            f"Expected entity injection for 'Avi Simon' in hook output. "
+            f"Expected entity injection for 'Rina Vale' in hook output. "
             f"This is the Phase A gap (baseline = FAIL).\n"
             f"Actual output: {output[:300]!r}"
         )
@@ -974,7 +974,7 @@ class TestPromptHookEntityInjection:
 
     def test_hook_injects_entity_before_fts_results(self):
         """When entity detected, entity section should appear first in hook output."""
-        output = self._call_hook("Tell me about Avi Simon and his 6PM project")
+        output = self._call_hook("Tell me about Rina Vale and his 6PM project")
         lines = [l for l in output.strip().split("\n") if l.strip()]
         if not lines:
             pytest.skip("Hook returned no output")
@@ -1016,14 +1016,14 @@ def run_hook_baseline() -> dict:
 
     hook_cases = [
         (
-            "hook_entity_avi_simon",
-            "What are Avi Simon's meeting preferences?",
-            ["[entity:", "entity: avi simon", "person"],
+            "hook_entity_rina_vale",
+            "What are Rina Vale's meeting preferences?",
+            ["[entity:", "entity: Rina Vale", "person"],
         ),
         ("hook_entity_fedor", "What is Fedor working on with GitHub access?", ["[entity:", "entity: fedor", "person"]),
         (
             "hook_entity_first_line",
-            "Tell me about Avi Simon and his 6PM project",
+            "Tell me about Rina Vale and his 6PM project",
             ["[entity"],
         ),  # entity header must be first line
         ("hook_no_entity_generic", "How does authentication work in Python?", None),  # None = expect entity NOT present

@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import brainlayer.notification_policy as notification_policy
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "launchd" / "throughput-watchdog.py"
 PLIST_PATH = REPO_ROOT / "scripts" / "launchd" / "com.brainlayer.throughput-watchdog.plist"
@@ -54,6 +56,24 @@ def _progress(module, chunk_rowid: int, liveness_rowid: int = 0):
     return module.WatcherProgress(
         chunk_rowid=chunk_rowid,
         liveness_rowid=liveness_rowid,
+    )
+
+
+def _stalled_result(module):
+    return module.WatchdogResult(
+        checked_at_epoch=1_000,
+        watcher_highwater_rowid=40,
+        watcher_highwater_delta=0,
+        watcher_liveness_highwater_rowid=0,
+        watcher_liveness_highwater_delta=0,
+        pending_files=1,
+        pending_bytes=20,
+        recent_files=1,
+        untracked_recent_files=0,
+        newest_source_mtime=999.0,
+        scan_errors=0,
+        stalled_ticks=3,
+        action="stalled",
     )
 
 
@@ -108,6 +128,27 @@ def test_first_observation_establishes_a_baseline_without_restart(tmp_path: Path
     assert result.action == "baseline"
     assert result.stalled_ticks == 0
     assert commands == []
+
+
+def test_watchdog_incidents_are_logged_without_delivery(tmp_path: Path, monkeypatch, capsys) -> None:
+    module = _load_module()
+    config = _config(module, tmp_path)
+    marker = tmp_path / "by-design-notifications.json"
+    marker.write_text(
+        '{"conditions":{"watcher_stopped":"planned watcher maintenance"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BRAINLAYER_BY_DESIGN_REASON_FILE", str(marker))
+
+    result = _stalled_result(module)
+    assert module._best_effort_alert(config, result) is True
+    assert module._best_effort_alert(config, replace(result, action="checkpoint_deferral_alert")) is True
+
+    stderr = capsys.readouterr().err
+    assert "condition=watcher_stopped reason=planned watcher maintenance" in stderr
+    assert "condition=checkpoint_deferral_alert" in stderr
+    log_lines = config.log_path.read_text(encoding="utf-8").splitlines()
+    assert len(log_lines) == 2
 
 
 def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_threshold(tmp_path: Path) -> None:
@@ -169,6 +210,34 @@ def test_process_alive_zero_throughput_with_pending_bytes_kickstarts_after_thres
         f"command:launchctl kickstart -k gui/{os.getuid()}/com.example.brainlayer.watch",
         f"command:launchctl print gui/{os.getuid()}/com.example.brainlayer.watch",
     ]
+
+
+def test_missing_policy_symbol_fails_closed_without_blocking_recovery(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delattr(notification_policy, "by_design_reason")
+    module = _load_module()
+    config = _config(module, tmp_path, stall_threshold=1, progress_slo_seconds=60)
+    command_events: list[str] = []
+    command_runner = _successful_recovery_runner(command_events)
+    evidence = module.SourceEvidence(2, 120, 3, 999.0)
+
+    module.run_once(
+        config,
+        now_epoch=1_000,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+    )
+    recovered = module.run_once(
+        config,
+        now_epoch=1_060,
+        progress_reader=lambda _path: _progress(module, 40),
+        source_probe=lambda _config, _now: evidence,
+        command_runner=command_runner,
+    )
+
+    assert module.by_design_reason("watcher_stopped") == "notification policy unavailable"
+    assert recovered.action == "kickstart:com.example.brainlayer.watch"
+    assert any(event.startswith("command:launchctl kickstart -k ") for event in command_events)
 
 
 def test_recovery_does_not_sigkill_a_pid_that_changed_during_validation(tmp_path: Path) -> None:

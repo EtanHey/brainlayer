@@ -23,6 +23,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Mapping, Sequence
+from xml.sax.saxutils import escape
 
 __all__ = [
     "BRAINLAYER_HOOK_SCRIPTS",
@@ -36,6 +37,7 @@ __all__ = [
     "is_system_python",
     "main",
     "render_hook_command",
+    "render_launchd_plist",
     "resolve_hook_python",
     "shebang_of",
 ]
@@ -53,6 +55,8 @@ _FALLBACK_CANDIDATES: tuple[str, ...] = (
     DEFAULT_KEG_PYTHON,
     "/usr/local/opt/brainlayer/libexec/venv/bin/python",
 )
+
+_XML_10_FORBIDDEN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 #: Hook scripts this repo owns. The settings.json lint matches on these basenames so
 #: it never touches a hook belonging to another repo. `tests/test_hook_python.py`
@@ -115,7 +119,10 @@ def _tokens(value: str | None) -> list[str]:
     token = value.strip()
     if token.startswith("#!"):
         token = token[2:].strip()
-    return token.split()
+    try:
+        return shlex.split(token)
+    except ValueError:
+        return []
 
 
 def is_bare_python3(value: str | None) -> bool:
@@ -245,10 +252,16 @@ def resolve_hook_python(
                 "substitute another interpreter for an override that was set on purpose — "
                 f"fix the path or unset {HOOK_PYTHON_ENV} to use the keg."
             )
+        if (
+            not is_pinned_interpreter(shlex.quote(override))
+            or not os.path.isfile(override)
+            or not os.access(override, os.X_OK)
+        ):
+            raise HookPythonUnresolved(f"{HOOK_PYTHON_ENV}={override!r} is not an executable Python interpreter")
         return override
 
     for candidate in candidates:
-        if os.path.exists(candidate):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
         looked_at.append(candidate)
 
@@ -269,6 +282,30 @@ def render_hook_command(
     """Render the `settings.json` command string for one hook script."""
     interpreter = python or resolve_hook_python(env=env)
     return f"{shlex.quote(interpreter) if ' ' in interpreter else interpreter} {script_path}"
+
+
+def render_launchd_plist(
+    template: str,
+    *,
+    python: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Render the prefix-aware keg interpreter into a launchd template.
+
+    Templates stay portable across ARM and Intel Homebrew prefixes. Resolution
+    uses the same fail-closed candidate order and override rules as hook command
+    rendering; a caller-supplied interpreter is accepted only when the existing
+    affirmative pin gate can vouch for it.
+    """
+    interpreter = python or resolve_hook_python(env=env)
+    if (
+        not is_pinned_interpreter(shlex.quote(interpreter))
+        or not os.path.isfile(interpreter)
+        or not os.access(interpreter, os.X_OK)
+        or _XML_10_FORBIDDEN.search(interpreter)
+    ):
+        raise HookPythonUnresolved(f"launchd interpreter is not explicitly pinned: {interpreter!r}")
+    return template.replace("__BRAINLAYER_PYTHON__", escape(interpreter))
 
 
 def _iter_hook_entries(settings: Mapping) -> Iterator[tuple[str, str]]:
@@ -381,7 +418,7 @@ def _why_unpinned(interpreter: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """`python -m brainlayer.hook_python [settings.json]` — lint a settings file.
+    """Lint settings, or print the prefix-aware interpreter for installers.
 
     Exits 0 when every BrainLayer hook names its interpreter, 1 when any is
     PATH-resolved, 2 when the file cannot be read. Hooks owned by other repos are
@@ -389,8 +426,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     import argparse
     import json
+    import sys
 
     parser = argparse.ArgumentParser(prog="brainlayer.hook_python")
+    parser.add_argument(
+        "--print-interpreter",
+        action="store_true",
+        help="print the affirmative prefix-aware interpreter and exit",
+    )
     parser.add_argument(
         "settings",
         nargs="?",
@@ -398,6 +441,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="path to a Claude Code settings.json (default: ~/.claude/settings.json)",
     )
     args = parser.parse_args(argv)
+
+    if args.print_interpreter:
+        try:
+            print(resolve_hook_python())
+        except HookPythonUnresolved as exc:
+            print(f"cannot resolve BrainLayer interpreter: {exc}", file=sys.stderr, flush=True)
+            return 2
+        return 0
 
     try:
         with open(args.settings, encoding="utf-8") as handle:

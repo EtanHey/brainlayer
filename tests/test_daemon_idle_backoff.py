@@ -12,6 +12,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _load_hotlane_module():
     importlib.invalidate_caches()
@@ -97,8 +99,9 @@ def test_work_snaps_cadence_back_to_interval():
     assert sleeps[4] == 1.0, f"work must snap cadence back to interval: {sleeps}"
 
 
-def test_enrichment_attempt_also_counts_as_work():
-    """Enrichment is work too -- it must reset the backoff, not just embedding."""
+@pytest.mark.parametrize("embedded", [0, 1])
+def test_only_local_vector_work_resets_backoff_despite_legacy_diagnostics(embedded):
+    """The retained result shape accepts old diagnostics; they cannot drive scheduling."""
     hotlane = _load_hotlane_module()
     sleeps: list[float] = []
     calls = {"n": 0}
@@ -106,12 +109,15 @@ def test_enrichment_attempt_also_counts_as_work():
     def cycle_fn(**_kwargs):
         calls["n"] += 1
         if calls["n"] == 5:
-            return hotlane.CycleResult(enrich_attempted=1)
+            return hotlane.CycleResult(embedded=embedded, enrich_attempted=1, enriched=1, enrich_failed=1)
         return hotlane.CycleResult()
 
     _run(hotlane, cycle_fn=cycle_fn, cycles=6, sleeps=sleeps)
 
-    assert sleeps[4] == 1.0, f"enrichment work must reset backoff: {sleeps}"
+    assert sleeps[:4] == [1.0, 2.0, 4.0, 5.0]
+    assert sleeps[4:] == ([1.0, 1.0] if embedded else [5.0, 5.0]), (
+        f"only written vectors may reset idle backoff: embedded={embedded}, sleeps={sleeps}"
+    )
 
 
 def test_failing_cycle_is_a_retry_not_an_idle_cycle():

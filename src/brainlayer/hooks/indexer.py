@@ -181,6 +181,10 @@ class RealtimeIndexer:
         next_index = row[0] if row else 0
 
         try:
+            from ..pipeline.secret_scrub import scrub_secrets
+
+            compact_summary = scrub_secrets(compact_summary).text
+            trigger = scrub_secrets(trigger).text
             cursor = self._db.execute(
                 """INSERT INTO chapters (session_id, chapter_index, compact_summary, trigger)
                    VALUES (?, ?, ?, ?)""",

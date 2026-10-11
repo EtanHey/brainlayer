@@ -1,8 +1,10 @@
 """Phase 3: Brain Digest + Brain Entity tests."""
 
 from typing import List
+from unittest.mock import MagicMock
 
 from brainlayer.vector_store import VectorStore
+from tests.retirement_helpers import forbid_enrichment_controller
 
 
 def _dummy_embed(text):  # noqa: ARG001
@@ -70,12 +72,12 @@ def test_digest_content_returns_structured_result(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Etan met with Dor Zohar to discuss the Domica project. They decided to use React Native.",
+        content="Etan met with Person Alpha to discuss the Domica project. They decided to use React Native.",
         store=store,
         embed_fn=dummy_embed,
         title="Meeting notes",
         project="domica",
-        participants=["Etan Heyman", "Dor Zohar"],
+        participants=["Etan Heyman", "Person Alpha"],
     )
 
     assert result["digest_id"] is not None
@@ -117,10 +119,10 @@ def test_digest_content_extracts_entities(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Etan Heyman discussed brainlayer architecture with Dor Zohar at Cantaloupe AI.",
+        content="Etan Heyman discussed brainlayer architecture with Person Alpha at Cantaloupe AI.",
         store=store,
         embed_fn=dummy_embed,
-        participants=["Etan Heyman", "Dor Zohar"],
+        participants=["Etan Heyman", "Person Alpha"],
     )
 
     entity_names = [e["name"] for e in result["entities"]]
@@ -128,28 +130,16 @@ def test_digest_content_extracts_entities(tmp_path):
     assert any("Etan" in n for n in entity_names) or any("Dor" in n for n in entity_names)
 
 
-def test_digest_content_persists_llm_people_entities_for_lookup(tmp_path, monkeypatch):
-    """brain_digest persists LLM-extracted people so brain_entity can find them."""
+def test_brain_digest_retired_ner_persists_seed_people_for_lookup(tmp_path, monkeypatch):
+    """Local participant seeds persist with evidence and no implicit model call."""
     from brainlayer.pipeline.digest import digest_content, entity_lookup
 
-    def fake_extraction(prompt):  # noqa: ARG001
-        return """
-        {
-          "entities": [
-            {"text": "Katya Taershmidt", "type": "person", "description": "Operations lead"},
-            {"text": "Rotem Maimon", "type": "person", "description": "Product strategist"},
-            {"text": "Israel Davidson", "type": "person", "description": "Engineering advisor"}
-          ],
-          "relations": []
-        }
-        """
-
-    monkeypatch.setattr("brainlayer.enrichment_controller.call_gemini_for_extraction", fake_extraction)
+    forbid_enrichment_controller(monkeypatch)
 
     store = VectorStore(tmp_path / "test.db")
     content = (
-        "PEOPLE-ROLES: Katya Taershmidt owns operations, Rotem Maimon handles product strategy, "
-        "and Israel Davidson advises engineering."
+        "PEOPLE-ROLES: Person Alpha owns operations, Person Beta handles product strategy, "
+        "and Person Gamma advises engineering."
     )
 
     result = digest_content(
@@ -157,13 +147,14 @@ def test_digest_content_persists_llm_people_entities_for_lookup(tmp_path, monkey
         store=store,
         embed_fn=_dummy_embed,
         project="kg-regression",
+        participants=["Person Alpha", "Person Beta", "Person Gamma"],
         faceted_enrich_fn=lambda **kw: {"status": "skipped"},
     )
 
     assert result["stats"]["entities_found"] >= 3
-    found = entity_lookup("Katya Taershmidt", store, _dummy_embed, entity_type="person")
+    found = entity_lookup("Person Alpha", store, _dummy_embed, entity_type="person")
     assert found is not None
-    assert found["name"] == "Katya Taershmidt"
+    assert found["name"] == "Person Alpha"
     assert found["evidence"]
 
 
@@ -224,7 +215,7 @@ def test_digest_extracts_action_items(tmp_path):
     dummy_embed = _dummy_embed
 
     result = digest_content(
-        content="Action items: 1. Send the proposal to Avi by Friday. 2. Schedule a follow-up meeting with Dor.",
+        content="Action items: 1. Send the proposal to Rina by Friday. 2. Schedule a follow-up meeting with Dor.",
         store=store,
         embed_fn=dummy_embed,
     )
@@ -234,39 +225,25 @@ def test_digest_extracts_action_items(tmp_path):
     assert isinstance(result["questions"], list)
 
 
-def test_digest_content_applies_faceted_enrichment_and_marks_chunk_enriched(tmp_path):
-    """digest_content writes faceted Gemini tags into the chunk enrichment fields."""
+def test_brain_digest_retired_callback_keeps_new_enrichment_fields_empty(tmp_path):
+    """Digest compatibility callbacks cannot generate model metadata anymore."""
     from brainlayer.pipeline.digest import digest_content
 
     store = VectorStore(tmp_path / "test.db")
 
-    def fake_faceted_enrich(*, content, project, title, participants):  # noqa: ARG001
-        return {
-            "topics": ["brainlayer-search-quality", "entity-memory-scope"],
-            "activity": "act:designing",
-            "domains": ["dom:mcp", "dom:python"],
-            "confidence": 0.91,
-            "provider": "gemini",
-            "model": "gemini-2.5-flash-lite",
-        }
+    fake_faceted_enrich = MagicMock(side_effect=AssertionError("retired callback was invoked"))
 
     result = digest_content(
-        content="We decided BrainLayer digest should add faceted enrichment through Gemini.",
+        content="We decided BrainLayer digest should preserve local extraction.",
         store=store,
         embed_fn=_dummy_embed,
         project="brainlayer",
         faceted_enrich_fn=fake_faceted_enrich,
     )
 
-    assert result["tags"] == [
-        "brainlayer-search-quality",
-        "entity-memory-scope",
-        "act:designing",
-        "dom:mcp",
-        "dom:python",
-    ]
-    assert result["enrichment"]["status"] == "enriched"
-    assert result["enrichment"]["confidence"] == 0.91
+    assert result["tags"] == []
+    assert result["enrichment"]["status"] == "retired"
+    fake_faceted_enrich.assert_not_called()
 
     cursor = store.conn.cursor()
     row = list(
@@ -276,11 +253,7 @@ def test_digest_content_applies_faceted_enrichment_and_marks_chunk_enriched(tmp_
         )
     )[0]
 
-    assert row[0] is not None
-    assert "act:designing" in row[0]
-    assert row[1] == "designing"
-    assert row[2] == result["summary"]
-    assert row[3] is not None
+    assert row == (None, None, None, None)
 
 
 # --- Task 3: brain_digest MCP tool schema ---
@@ -297,7 +270,7 @@ def test_brain_digest_tool_exists():
 
 
 def test_brain_digest_schema_has_required_fields():
-    """brain_digest tool exposes digest fields and mode-based enrich controls."""
+    """brain_digest tool exposes digest fields and local mode controls."""
     from brainlayer.mcp import _full_tool_definitions
 
     tools = _full_tool_definitions()
@@ -307,7 +280,8 @@ def test_brain_digest_schema_has_required_fields():
     assert "title" in props
     assert "participants" in props
     assert "mode" in props
-    assert "limit" in props
+    assert props["mode"]["enum"] == ["digest", "connect"]
+    assert "limit" not in props
 
 
 def test_brain_digest_description_teaches_routing():
@@ -324,7 +298,7 @@ def test_brain_digest_description_teaches_routing():
     assert "knowledge graph" in desc
     assert "digest" in desc
     assert "connect" in desc
-    assert "enrich" in desc
+    assert "enrich" not in desc
 
 
 # --- Task 4: brain_entity MCP tool ---
@@ -763,12 +737,12 @@ def test_full_digest_pipeline(tmp_path):
 
     # Digest some content
     result = digest_content(
-        content="Etan Heyman and Dor Zohar discussed the Domica project at Cantaloupe AI headquarters.",
+        content="Etan Heyman and Person Alpha discussed the Domica project at Cantaloupe AI headquarters.",
         store=store,
         embed_fn=dummy_embed,
         title="Team meeting",
         project="domica",
-        participants=["Etan Heyman", "Dor Zohar"],
+        participants=["Etan Heyman", "Person Alpha"],
     )
 
     assert result["stats"]["entities_found"] >= 2

@@ -40,7 +40,7 @@ def populated_kg(store, mock_embedding):
     chunks = [
         {
             "id": "chunk-1",
-            "content": "Etan discussed the brainlayer architecture with Yuval at Cantaloupe",
+            "content": "Etan discussed the brainlayer architecture with Delta at Cantaloupe",
             "metadata": {},
             "source_file": "test.jsonl",
             "project": "brainlayer",
@@ -74,7 +74,7 @@ def populated_kg(store, mock_embedding):
 
     # Create KG entities
     store.upsert_entity("person-etan", "person", "Etan Heyman", canonical_name="etan_heyman", description="Developer")
-    store.upsert_entity("person-yuval", "person", "Yuval Cohen", canonical_name="yuval_cohen")
+    store.upsert_entity("person-delta", "person", "Delta Cohen", canonical_name="yuval_cohen")
     store.upsert_entity("org-cantaloupe", "organization", "Cantaloupe", canonical_name="cantaloupe")
     store.upsert_entity("project-brainlayer", "project", "brainlayer", canonical_name="brainlayer")
     store.upsert_entity("meeting-standup", "meeting", "Weekly Standup", canonical_name="weekly_standup")
@@ -100,11 +100,11 @@ def populated_kg(store, mock_embedding):
         fact="Etan attended the weekly standup",
         source_chunk_id="chunk-2",
     )
-    store.add_relation("rel-4", "person-yuval", "org-cantaloupe", "works_at", fact="Yuval works at Cantaloupe")
+    store.add_relation("rel-4", "person-delta", "org-cantaloupe", "works_at", fact="Delta works at Cantaloupe")
 
     # Link entities to chunks
     store.link_entity_chunk("person-etan", "chunk-1", relevance=0.95, mention_type="explicit")
-    store.link_entity_chunk("person-yuval", "chunk-1", relevance=0.9, mention_type="explicit")
+    store.link_entity_chunk("person-delta", "chunk-1", relevance=0.9, mention_type="explicit")
     store.link_entity_chunk("org-cantaloupe", "chunk-1", relevance=0.85, mention_type="explicit")
     store.link_entity_chunk("meeting-standup", "chunk-2", relevance=0.9, mention_type="explicit")
 

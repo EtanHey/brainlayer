@@ -1,17 +1,127 @@
 """Shared test fixtures for BrainLayer tests."""
 
-import functools
 import os
+
+# Git exports repository-routing variables to hooks. They override even explicit `git -C` calls,
+# so a pytest fixture that creates a disposable repository can otherwise write into the checkout
+# whose pre-push hook launched the suite. Scrub the whole family before test modules, fixtures, or
+# subprocesses can observe it.
+for _git_env_key in tuple(os.environ):
+    if _git_env_key.startswith("GIT_"):
+        os.environ.pop(_git_env_key, None)
+
+import functools
+import importlib
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 
+_PROTECTED_TEST_HOME = Path.home().resolve()
+_OPERATOR_BRAINBAR_SOCKET_PATH = os.environ.get("BRAINBAR_SOCKET_PATH")
+_OPERATOR_MCP_SOCKET = os.environ.get("BRAINLAYER_MCP_SOCKET")
+
+# Some test modules import brainlayer.config during collection. Import it first while HOME points
+# at an empty directory so its production entrypoint behavior cannot load the developer's env file
+# into the pytest process or its subprocesses. A deliberately forced early plugin import (`-p
+# brainlayer.config`) happens before conftest discovery; in that shape, discard every assignment
+# named by the user env file before reloading the module under the same isolated HOME.
+_brainlayer_config = sys.modules.get("brainlayer.config")
+if _brainlayer_config is not None:
+    try:
+        _user_env_lines = (
+            (_PROTECTED_TEST_HOME / ".config" / "brainlayer" / "brainlayer.env")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+    except (OSError, UnicodeDecodeError):
+        _user_env_lines = []
+    for _line in _user_env_lines:
+        _assignment = _brainlayer_config._split_env_assignment(_line)
+        if _assignment is not None:
+            os.environ.pop(_assignment[0], None)
+
+_original_home = os.environ.get("HOME")
+with tempfile.TemporaryDirectory(prefix="brainlayer-pytest-import-home-") as _import_home:
+    os.environ["HOME"] = _import_home
+    if _brainlayer_config is None:
+        importlib.import_module("brainlayer.config")
+    else:
+        importlib.reload(_brainlayer_config)
+if _original_home is None:
+    os.environ.pop("HOME", None)
+else:
+    os.environ["HOME"] = _original_home
+
 import pytest
 
-_PROTECTED_TEST_HOME = Path.home().resolve()
+
+@pytest.fixture(autouse=True)
+def isolated_doctor_install_prefix(request, monkeypatch):
+    """Doctor fixtures never infer their running install from the test launcher."""
+    if request.node.path.name in {"test_doctor.py", "test_doctor_cli_path.py", "test_retire_python_mcp.py"}:
+        monkeypatch.setattr(sys, "prefix", str(request.getfixturevalue("tmp_path") / "doctor-dev-venv"))
+
+
+def _git_probe(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
+    commands = {
+        "core.bare": ("config", "--local", "--get", "core.bare"),
+        "user.*": ("config", "--local", "--null", "--get-regexp", "^user\\."),
+        "origin/main": ("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"),
+    }
+    snapshot: dict[str, str] = {}
+    for label, command in commands.items():
+        result = _git_probe(f"--git-dir={common_dir}", *command)
+        if result.returncode not in (0, 1):
+            pytest.fail(
+                f"shared Git guard could not read {label}: {result.stderr.strip() or f'exit {result.returncode}'}"
+            )
+        snapshot[label] = "<absent>" if label == "origin/main" and result.returncode == 1 else result.stdout
+    return snapshot
+
+
+@pytest.fixture(scope="session", autouse=True)
+def guard_shared_git_state():
+    """Fail the session if any test rewrites checkout-global Git state."""
+    repo_root = Path(__file__).resolve().parents[1]
+    common_result = _git_probe("rev-parse", "--git-common-dir", cwd=repo_root)
+    if common_result.returncode != 0:
+        yield
+        return
+
+    common_dir = Path(common_result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (repo_root / common_dir).resolve()
+    bare_result = _git_probe("rev-parse", "--is-bare-repository", cwd=repo_root)
+    if bare_result.returncode != 0:
+        pytest.fail(f"shared Git guard could not classify checkout: {bare_result.stderr.strip()}")
+    if bare_result.stdout.strip() != "false":
+        pytest.fail(
+            "shared Git guard requires a non-bare checkout at session start; "
+            f"got {bare_result.stdout.strip()!r} for {repo_root}"
+        )
+
+    initial = _shared_git_snapshot(common_dir)
+    yield
+    final = _shared_git_snapshot(common_dir)
+    changed = [label for label in initial if initial[label] != final[label]]
+    if changed:
+        pytest.fail("shared Git state changed during pytest: " + ", ".join(changed))
+
 
 # Deterministic CLI output for assertions: several tests compare CLI messages as plain
 # strings, and ANSI color escapes mid-sentence broke 3 test_installable_build assertions
@@ -66,6 +176,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
     _install_db_open_guards()
+    helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
+    if helper.is_file():
+        spec = importlib.util.spec_from_file_location("_brainlayer_test_socket_hygiene", helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    os.environ["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = "1"
+    missing_socket = f"/tmp/brainlayer-pytest-{uuid.uuid4().hex}.sock"
+    os.environ["BRAINBAR_SOCKET_PATH"] = missing_socket
+    os.environ["BRAINLAYER_MCP_SOCKET"] = missing_socket
+    if helper.is_file():
+        os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (str(helper.parent), os.environ.get("PYTHONPATH"))))
     config.addinivalue_line(
         "markers",
         "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
@@ -102,6 +223,81 @@ def disable_live_gemini_for_unit_tests(monkeypatch, request):
 
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_GENERATIVE_AI_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def forbid_cloud_clients_on_retired_entrypoints(request, monkeypatch):
+    """Fail even when a retired entrypoint swallows a cloud-factory exception.
+
+    Scope this to marked retirement tests and legacy CLI/MCP/store test names.
+    SDK class initialization is patched in place so pre-bound aliases cannot evade
+    the guard. The teardown assertion also catches attempts in joined threads.
+    Unjoined/daemon threads and subprocess children are NOT covered.
+    """
+    retired = request.node.get_closest_marker("retired_enrichment") or (
+        request.node.path.name in {"test_cli_enrich.py", "test_retired_controller_batch.py"}
+        or request.node.name.startswith("test_brain_enrich_handler_")
+        or request.node.name.startswith("test_brain_digest_retired_")
+        or "TestStoreAutoEnrich" in request.node.nodeid
+        or request.node.name.startswith("test_retired_enrich_is_neither_advertised_nor_dispatched")
+    )
+    if not retired:
+        yield
+        return
+
+    request.getfixturevalue("isolate_brainlayer_runtime_paths")
+
+    import socket
+
+    def optional_module(name):
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError:
+            return None
+
+    client = optional_module("google.genai.client")
+    httpx = optional_module("httpx")
+    requests = optional_module("requests")
+    enrichment_controller = optional_module("brainlayer.enrichment_controller")
+    enrichment = optional_module("brainlayer.pipeline.enrichment")
+
+    attempts = []
+
+    def forbidden(name):
+        def fail(*_args, **_kwargs):
+            attempts.append(name)
+            raise AssertionError(f"Forbidden cloud construction/send: {name}")
+
+        return fail
+
+    for module in (client, httpx):
+        if module is not None:
+            for cls in (module.Client, module.AsyncClient):
+                monkeypatch.setattr(cls, "__init__", forbidden(f"{cls.__module__}.{cls.__name__}"))
+    if httpx is not None:
+        for cls in (httpx.Client, httpx.AsyncClient):
+            monkeypatch.setattr(cls, "send", forbidden(f"{cls.__module__}.{cls.__name__}.send"))
+    if requests is not None:
+        monkeypatch.setattr(requests.Session, "request", forbidden("requests.Session.request"))
+        monkeypatch.setattr(requests.Session, "send", forbidden("requests.Session.send"))
+    for module, symbol in ((enrichment_controller, "_get_gemini_client"), (enrichment, "call_llm")):
+        if module is not None and hasattr(module, symbol):
+            monkeypatch.setattr(module, symbol, forbidden(symbol))
+
+    def guarded_connect(method, original):
+        def connect(sock, *args, **kwargs):
+            if sock.family in (socket.AF_INET, socket.AF_INET6):
+                forbidden(f"socket.{method}")(sock, *args, **kwargs)
+            return original(sock, *args, **kwargs)
+
+        return connect
+
+    for method in ("connect", "connect_ex"):
+        monkeypatch.setattr(socket.socket, method, guarded_connect(method, getattr(socket.socket, method)))
+    monkeypatch.setenv("GOOGLE_API_KEY", "synthetic-retirement-key")
+    monkeypatch.setenv("GROQ_API_KEY", "synthetic-retirement-key")
+    yield
+    assert not attempts, f"Cloud construction/send attempted in retirement test: {attempts}"
 
 
 @pytest.fixture(autouse=True)
@@ -170,6 +366,26 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+
+@pytest.fixture(autouse=True)
+def forbid_live_brainbar_socket(monkeypatch, request):
+    """Redirect BrainBar resolution and refuse direct live connects, including child Pythons."""
+    if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
+        monkeypatch.delenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", raising=False)
+        for key, original in (
+            ("BRAINBAR_SOCKET_PATH", _OPERATOR_BRAINBAR_SOCKET_PATH),
+            ("BRAINLAYER_MCP_SOCKET", _OPERATOR_MCP_SOCKET),
+        ):
+            if original is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, original)
+        return
+    missing_socket = f"/tmp/brainlayer-pytest-{uuid.uuid4().hex}.sock"
+    monkeypatch.setenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", "1")
+    monkeypatch.setenv("BRAINBAR_SOCKET_PATH", missing_socket)
+    monkeypatch.setenv("BRAINLAYER_MCP_SOCKET", missing_socket)
 
 
 # --------------------------------------------------------------------------------------------

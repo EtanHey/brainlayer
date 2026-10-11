@@ -314,6 +314,36 @@ def test_missing_keg_python_fails_closed(repo: Path, tmp_path: Path) -> None:
     assert "FAILED" in result.stdout
 
 
+def test_assert_module_ignores_poisoned_pythonpath(repo: Path, tmp_path: Path) -> None:
+    venv = tmp_path / "keg-venv"
+    subprocess.run(["python3", "-m", "venv", str(venv)], check=True)
+    keg_python = venv / "bin" / "python"
+    site_packages = next((venv / "lib").glob("python*/site-packages"))
+    installed = site_packages / "brainlayer"
+    installed.mkdir()
+    (installed / "__init__.py").write_text("")
+    (installed / "keg_only.py").write_text("INSTALLED = True\n")
+
+    poisoned = tmp_path / "poisoned-pythonpath" / "brainlayer"
+    poisoned.mkdir(parents=True)
+    (poisoned / "__init__.py").write_text("")
+
+    result = _run(
+        repo,
+        "v1.1.0",
+        _shas(repo)["c3"],
+        "--assert-module",
+        "brainlayer.keg_only",
+        env={
+            "BRAINLAYER_KEG_PYTHON": str(keg_python),
+            "PYTHONPATH": str(poisoned.parent),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "import brainlayer.keg_only | OK" in result.stdout
+
+
 # --- the wiring (AGENTS.md is where the rule lives, so a quiet drop must fail) ---------------
 
 

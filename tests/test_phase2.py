@@ -10,7 +10,7 @@ Tests cover:
 
 import os
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestBackendAutoDetection:
@@ -18,7 +18,7 @@ class TestBackendAutoDetection:
 
     def test_explicit_env_overrides_detection(self):
         """BRAINLAYER_ENRICH_BACKEND env var overrides auto-detection."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         with patch.dict(os.environ, {"BRAINLAYER_ENRICH_BACKEND": "ollama"}):
             assert _detect_default_backend() == "ollama"
@@ -28,7 +28,7 @@ class TestBackendAutoDetection:
 
     def test_arm64_darwin_defaults_mlx(self):
         """arm64 macOS defaults to MLX."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         env = {k: v for k, v in os.environ.items() if k != "BRAINLAYER_ENRICH_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
@@ -38,7 +38,7 @@ class TestBackendAutoDetection:
 
     def test_x86_defaults_ollama(self):
         """x86_64 defaults to Ollama."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         env = {k: v for k, v in os.environ.items() if k != "BRAINLAYER_ENRICH_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
@@ -47,121 +47,13 @@ class TestBackendAutoDetection:
 
     def test_linux_defaults_ollama(self):
         """Linux defaults to Ollama regardless of arch."""
-        from brainlayer.pipeline.enrichment import _detect_default_backend
+        from brainlayer.pipeline.enrichment_results import _detect_default_backend
 
         env = {k: v for k, v in os.environ.items() if k != "BRAINLAYER_ENRICH_BACKEND"}
         with patch.dict(os.environ, env, clear=True):
             with patch("platform.machine", return_value="arm64"):
                 with patch("platform.system", return_value="Linux"):
                     assert _detect_default_backend() == "ollama"
-
-
-class TestCallLlmBackendOverride:
-    """Test that call_llm respects the backend parameter."""
-
-    @patch("brainlayer.pipeline.enrichment.call_mlx", return_value='{"summary":"test"}')
-    @patch("brainlayer.pipeline.enrichment.call_glm", return_value='{"summary":"test"}')
-    def test_override_to_mlx(self, mock_glm, mock_mlx):
-        """Backend override to MLX calls call_mlx."""
-        from brainlayer.pipeline.enrichment import call_llm
-
-        call_llm("test prompt", backend="mlx")
-        mock_mlx.assert_called_once()
-        mock_glm.assert_not_called()
-
-    @patch("brainlayer.pipeline.enrichment.call_mlx", return_value='{"summary":"test"}')
-    @patch("brainlayer.pipeline.enrichment.call_glm", return_value='{"summary":"test"}')
-    def test_override_to_ollama(self, mock_glm, mock_mlx):
-        """Backend override to Ollama calls call_glm."""
-        from brainlayer.pipeline.enrichment import call_llm
-
-        call_llm("test prompt", backend="ollama")
-        mock_glm.assert_called_once()
-        mock_mlx.assert_not_called()
-
-    @patch("brainlayer.pipeline.enrichment.call_mlx", return_value='{"summary":"test"}')
-    @patch("brainlayer.pipeline.enrichment.call_glm", return_value='{"summary":"test"}')
-    def test_none_uses_module_default(self, mock_glm, mock_mlx):
-        """None backend uses the module-level ENRICH_BACKEND."""
-        from brainlayer.pipeline import enrichment
-        from brainlayer.pipeline.enrichment import call_llm
-
-        original = enrichment.ENRICH_BACKEND
-        try:
-            enrichment.ENRICH_BACKEND = "ollama"
-            call_llm("test prompt", backend=None)
-            mock_glm.assert_called_once()
-        finally:
-            enrichment.ENRICH_BACKEND = original
-
-
-class TestStallDetection:
-    """Test enrichment stall detection and heartbeat logging."""
-
-    @patch("brainlayer.pipeline.enrichment.call_llm")
-    def test_stall_logged_when_slow(self, mock_llm, capsys):
-        """Stall warning is printed when chunk takes too long."""
-        from brainlayer.pipeline import enrichment
-        from brainlayer.pipeline.enrichment import _enrich_one
-
-        # Make call_llm "take" a long time by manipulating time
-        original_timeout = enrichment.STALL_TIMEOUT
-        enrichment.STALL_TIMEOUT = 0  # Any duration triggers stall
-
-        mock_llm.return_value = '{"summary":"test summary","tags":["test"],"importance":5,"intent":"debugging"}'
-
-        mock_store = MagicMock()
-        mock_store.get_context.return_value = {"context": []}
-        mock_store.update_enrichment.return_value = None
-
-        chunk = {
-            "id": "test-chunk-123",
-            "content": "test content",
-            "project": "test",
-            "content_type": "user_message",
-            "conversation_id": None,
-            "position": None,
-            "char_count": 100,
-        }
-
-        try:
-            result = _enrich_one(mock_store, chunk, with_context=False)
-            assert result is True  # Should still succeed
-            captured = capsys.readouterr()
-            assert "STALL" in captured.err
-        finally:
-            enrichment.STALL_TIMEOUT = original_timeout
-
-    @patch("brainlayer.pipeline.enrichment.call_llm")
-    def test_no_stall_when_fast(self, mock_llm, capsys):
-        """No stall warning when chunk processes quickly."""
-        from brainlayer.pipeline import enrichment
-        from brainlayer.pipeline.enrichment import _enrich_one
-
-        original_timeout = enrichment.STALL_TIMEOUT
-        enrichment.STALL_TIMEOUT = 9999  # Very high threshold
-
-        mock_llm.return_value = '{"summary":"test summary","tags":["test"],"importance":5,"intent":"debugging"}'
-
-        mock_store = MagicMock()
-        mock_store.get_context.return_value = {"context": []}
-
-        chunk = {
-            "id": "test-chunk-fast",
-            "content": "test content",
-            "project": "test",
-            "content_type": "user_message",
-            "conversation_id": None,
-            "position": None,
-            "char_count": 50,
-        }
-
-        try:
-            _enrich_one(mock_store, chunk, with_context=False)
-            captured = capsys.readouterr()
-            assert "STALL" not in captured.err
-        finally:
-            enrichment.STALL_TIMEOUT = original_timeout
 
 
 class TestCurrentContextFix:
@@ -242,7 +134,7 @@ class TestParseEnrichment:
     """Test enrichment JSON parsing — existing but good to verify."""
 
     def test_valid_json(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         text = (
             '{"summary":"Test summary here","tags":["tech/testing","project/brainlayer"],'
@@ -256,7 +148,7 @@ class TestParseEnrichment:
         assert result["intent"] == "debugging"
 
     def test_json_with_extra_text(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         text = (
             'Here is the result:\n{"summary":"Found it","tags":["test"],"importance":5,"intent":"implementing"}\nDone.'
@@ -266,21 +158,21 @@ class TestParseEnrichment:
         assert result["summary"] == "Found it"
 
     def test_invalid_json(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         assert parse_enrichment("not json at all") is None
         assert parse_enrichment("") is None
         assert parse_enrichment(None) is None
 
     def test_missing_required_fields(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         # Missing tags — should return None
         text = '{"summary":"test"}'
         assert parse_enrichment(text) is None
 
     def test_extended_fields_optional(self):
-        from brainlayer.pipeline.enrichment import parse_enrichment
+        from brainlayer.pipeline.enrichment_results import parse_enrichment
 
         text = '{"summary":"Testing extended fields work correctly","tags":["python"],"importance":5,"intent":"debugging","primary_symbols":["MyClass"],"resolved_query":"How to fix it?","epistemic_level":"validated","debt_impact":"resolution","external_deps":["fastapi"]}'
         result = parse_enrichment(text)

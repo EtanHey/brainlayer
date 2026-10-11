@@ -3,7 +3,6 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import os
-import plistlib
 import subprocess
 import sys
 import threading
@@ -697,9 +696,8 @@ def test_drain_busy_timeout_30s(tmp_path, monkeypatch):
         conn.close()
 
 
-def test_drain_open_retries_busy_error_before_connection_exists(tmp_path, monkeypatch):
+def test_drain_open_configures_one_connection_without_retry_loop(tmp_path, monkeypatch):
     attempts = 0
-    sleep_calls: list[float] = []
 
     class FakeConnection:
         def __init__(self, path: str):
@@ -732,24 +730,17 @@ def test_drain_open_retries_busy_error_before_connection_exists(tmp_path, monkey
         def loadextension(self, path: str) -> None:
             self.loaded_extensions.append(path)
 
-    def flaky_connection(path: str):
+    def open_connection(path: str):
         nonlocal attempts
         attempts += 1
-        if attempts < 3:
-            raise apsw.BusyError("database is locked")
         return FakeConnection(path)
 
-    monkeypatch.setenv("BRAINLAYER_DRAIN_OPEN_MAX_RETRIES", "4")
-    monkeypatch.setenv("BRAINLAYER_DRAIN_OPEN_RETRY_BASE_DELAY_MS", "25")
-    monkeypatch.setenv("BRAINLAYER_DRAIN_OPEN_RETRY_MAX_DELAY_MS", "100")
-    monkeypatch.setattr(drain.apsw, "Connection", flaky_connection)
+    monkeypatch.setattr(drain.apsw, "Connection", open_connection)
     monkeypatch.setattr(drain.sqlite_vec, "loadable_path", lambda: "sqlite_vec")
-    monkeypatch.setattr(drain, "_sleep", lambda delay: sleep_calls.append(delay))
 
     conn = drain._open_connection(tmp_path / "drain.db")
 
-    assert attempts == 3
-    assert sleep_calls == [0.025, 0.05]
+    assert attempts == 1
     assert conn.busy_timeout_ms >= 30000
     assert conn.loaded_extensions == ["sqlite_vec"]
     assert conn.extension_enabled == [True, False]
@@ -787,10 +778,3 @@ def test_drain_busy_timeout_overflow_env_falls_back_to_30s(tmp_path, monkeypatch
         assert busy_timeout_ms == 30000
     finally:
         conn.close()
-
-
-def test_enrichment_plist_throttle_interval_at_least_60s():
-    plist_path = Path(__file__).resolve().parents[1] / "scripts" / "launchd" / "com.brainlayer.enrichment.plist"
-    plist = plistlib.loads(plist_path.read_bytes())
-
-    assert plist["ThrottleInterval"] >= 60

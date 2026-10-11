@@ -424,7 +424,7 @@ def ensure_brainlayer_env(
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# BrainLayer private config.",
-        "# Add a 1Password-backed key before enabling cloud enrichment with:",
+        "# Older installed jobs still require a 1Password-backed Google key until release:",
         f"# brainlayer setup --google-api-key-op-ref '{DEFAULT_GOOGLE_API_KEY_OP_REF}'",
         "",
     ]

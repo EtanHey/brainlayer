@@ -254,7 +254,6 @@ def test_doctor_run_fails_on_stale_mcp_entrypoint(tmp_path: Path):
             hotlane_label="",
             watch_label="",
             drain_label="",
-            enrichment_label="",
         ),
         ps_output_fn=_hotlane_ps,
         command_runner=_loaded_launchctl,

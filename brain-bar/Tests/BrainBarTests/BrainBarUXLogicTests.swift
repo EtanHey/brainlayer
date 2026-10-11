@@ -4,7 +4,7 @@ import SwiftUI
 @testable import BrainBar
 
 final class BrainBarUXLogicTests: XCTestCase {
-    func testPipelineIndicatorsCanShowIndexingAndEnrichingLiveAtTheSameTime() {
+    func testPipelineIndicatorsKeepRetiredEnrichmentIdleDuringLocalWrites() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -30,10 +30,9 @@ final class BrainBarUXLogicTests: XCTestCase {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(indicators.indexing.status, .live)
-        XCTAssertEqual(indicators.enriching.status, .live)
     }
 
-    func testPipelineIndicatorsShowQueuedEnrichmentWithoutRecentCompletions() {
+    func testPipelineIndicatorsKeepHistoricalMetadataDebtIdle() {
         let stats = DashboardStats(
             chunkCount: 120,
             enrichedChunkCount: 100,
@@ -56,7 +55,31 @@ final class BrainBarUXLogicTests: XCTestCase {
         let indicators = PipelineIndicators.derive(daemon: daemon, stats: stats)
 
         XCTAssertEqual(indicators.indexing.status, .idle)
-        XCTAssertEqual(indicators.enriching.status, .queued)
+    }
+
+    func testPipelineStateIsIdleForPendingBacklogWhenEnrichmentIsOff() {
+        let stats = DashboardStats(
+            chunkCount: 120,
+            enrichedChunkCount: 100,
+            pendingEnrichmentCount: 20,
+            enrichmentPercent: 83.3,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 4_096,
+            recentActivityBuckets: [0, 0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0, 0]
+        )
+        let daemon = DaemonHealthSnapshot(
+            pid: 4242,
+            isResponsive: true,
+            rssBytes: 1_024,
+            uptime: 60,
+            openConnections: 1,
+            lastSeenAt: Date()
+        )
+
+        let state = PipelineState.derive(daemon: daemon, stats: stats)
+
+        XCTAssertEqual(state, .idle)
     }
 
     func testDashboardMetricFormatterUsesChunksPerMinute() {
@@ -160,8 +183,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .live)
-        XCTAssertEqual(summary.queue.status, .stable)
-        XCTAssertEqual(summary.enrichment.status, .live)
+        XCTAssertEqual(summary.queue.status, .empty)
         XCTAssertEqual(summary.windowLabel, "Last 1h")
     }
 
@@ -182,14 +204,7 @@ final class BrainBarUXLogicTests: XCTestCase {
             bucketCount: 4,
             liveWindowMinutes: 1,
             lastWriteAt: now.addingTimeInterval(-15),
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 0,
-                realtimeInsertsPerMinute: 0,
-                updatedAt: now
-            ),
+            watcherHealth: WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now, pollCount: 1, alertReasons: [], maxOffsetLagBytes: 0)),
             watcherProcessProbeResult: .running(pid: 4242)
         )
 
@@ -280,14 +295,7 @@ final class BrainBarUXLogicTests: XCTestCase {
             bucketCount: 4,
             liveWindowMinutes: 1,
             lastWriteAt: now.addingTimeInterval(-15),
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 0,
-                realtimeInsertsPerMinute: 454,
-                updatedAt: now
-            ),
+            watcherHealth: WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now, pollCount: 1, alertReasons: [], maxOffsetLagBytes: 0)),
             watcherProcessProbeResult: .running(pid: 4242)
         )
 
@@ -325,14 +333,7 @@ final class BrainBarUXLogicTests: XCTestCase {
             pendingStoreFlushQueueDepth: 0,
             pendingStoreOldestQueuedAt: now.addingTimeInterval(-120),
             pendingStoreFlushRatePerMinute: 0,
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 0,
-                realtimeInsertsPerMinute: 12,
-                updatedAt: now
-            ),
+            watcherHealth: WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now, pollCount: 1, alertReasons: [], maxOffsetLagBytes: 0)),
             watcherProcessProbeResult: .running(pid: 4242)
         )
 
@@ -458,14 +459,7 @@ final class BrainBarUXLogicTests: XCTestCase {
             recentEnrichmentBuckets: [0, 0, 0, 0],
             activityWindowMinutes: 30,
             bucketCount: 4,
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 8.5,
-                realtimeInsertsPerMinute: 0,
-                updatedAt: now
-            ),
+            watcherHealth: WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now, pollCount: 1, alertReasons: [], maxOffsetLagBytes: 0)),
             watcherProcessProbeResult: .running(pid: 4242)
         )
 
@@ -476,7 +470,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
     }
 
-    func testJsonlWatcherLaneIgnoresStaleHistoricalMarkerWhenLiveEvidenceIsKnown() {
+    func testJsonlWatcherLaneReportsAStaleHeartbeatWithItsReason() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -491,25 +485,26 @@ final class BrainBarUXLogicTests: XCTestCase {
             recentEnrichmentBuckets: [0, 0, 0, 0],
             activityWindowMinutes: 30,
             bucketCount: 4,
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 0,
-                realtimeInsertsPerMinute: 0,
-                updatedAt: now.addingTimeInterval(-601)
-            ),
+            watcherHealth: WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-601), pollCount: 1, alertReasons: [], maxOffsetLagBytes: 0)),
             watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .idle)
-        XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
+        // #966: watcher-health.json is the canonical liveness surface (AGENTS.md). A heartbeat ten
+        // minutes old is several missed ~60-95 s polls, so it is shown as a real problem with its
+        // reason, no longer ignored as a "historical marker".
+        XCTAssertEqual(watcherLane.status, .attention, "the pill follows the one watcher state (#1014 R1 B1)")
+        XCTAssertEqual(watcherLane.evidenceStatus, .idle)
+        XCTAssertEqual(watcherLane.statusText, "NEEDS ATTENTION")
+        XCTAssertTrue(
+            watcherLane.lastEventText.hasPrefix("Watcher heartbeat stopped updating · since 10m ago"),
+            watcherLane.lastEventText
+        )
     }
 
-    func testJsonlWatcherLaneReportsOfflineFromAbsentProcessWithoutHistoricalMarker() {
+    func testJsonlWatcherLaneReportsStoppedFromAbsentProcessWithoutHistoricalMarker() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -530,35 +525,55 @@ final class BrainBarUXLogicTests: XCTestCase {
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .unavailable)
-        XCTAssertEqual(watcherLane.statusText, "OFFLINE")
+        XCTAssertEqual(watcherLane.status, .stopped, "the pill follows the one watcher state (#1014 R1 B1)")
+        XCTAssertEqual(watcherLane.evidenceStatus, .unavailable)
+        XCTAssertEqual(watcherLane.statusText, "STOPPED")
+    }
+
+    func testUnreadableSourceSeriesNeverPresentZeroBucketsAsMeasuredActivity() {
+        let stats = DashboardStats(
+            chunkCount: 0,
+            enrichedChunkCount: 0,
+            pendingEnrichmentCount: 0,
+            enrichmentPercent: 0,
+            enrichmentRatePerMinute: 0,
+            databaseSizeBytes: 0,
+            recentActivityBuckets: [0, 0, 0, 0],
+            recentEnrichmentBuckets: [0, 0, 0, 0],
+            activityWindowMinutes: 30,
+            bucketCount: 4
+        )
+        let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats)
+
+        for series in [PipelineSeries.agentStores, .jsonlWatcher] {
+            let lane = summary.lane(for: series)
+            let presentation = BrainBarIngestSeriesPresentation(lane: lane)
+            let disclosure = BrainBarDashboardChartDisclosure(
+                series: series,
+                lane: lane,
+                timeframe: .live
+            )
+
+            // The chart reads its evidence status; the watcher lane's pill follows its health (#1014 R1 B1).
+            XCTAssertEqual(lane.evidenceStatus, .unavailable)
+            XCTAssertEqual(presentation.metricText, "Unavailable")
+            XCTAssertFalse(presentation.showsSparkline)
+            XCTAssertFalse(disclosure.accessibilitySummary.contains("Count: 0"))
+            XCTAssertEqual(disclosure.tooltipDisclosure, "Evidence unavailable")
+        }
     }
 
     func testWatcherFlowStateMatrixUsesProcessRecentDistinctFlowAndPendingEvidence() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let running = WatcherProcessProbeResult.running(pid: 4242)
-        let historicalMarker = DashboardStats.WatcherHealth(
-            alerting: false,
-            filesTracked: 12,
-            maxOffsetLagBytes: 0,
-            activeEntriesPerMinute: 0,
-            realtimeInsertsPerMinute: 0,
-            updatedAt: now
-        )
-        let alertingHistoricalMarker = DashboardStats.WatcherHealth(
-            alerting: true,
-            filesTracked: 12,
-            maxOffsetLagBytes: 10_000,
-            activeEntriesPerMinute: 0,
-            realtimeInsertsPerMinute: 0,
-            updatedAt: now.addingTimeInterval(-3_600)
-        )
+        let historicalMarker = WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now, pollCount: 1, alertReasons: [], maxOffsetLagBytes: 0))
+        let alertingHistoricalMarker = WatcherHealthFileRead.readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-3_600), pollCount: 1, alertReasons: ["coverage_drop"], maxOffsetLagBytes: 10_000))
 
         func watcherStatusText(
             process: WatcherProcessProbeResult,
             recentDistinctChunks: [Int],
             pendingDepth: Int,
-            historicalHealth: DashboardStats.WatcherHealth?,
+            historicalHealth: WatcherHealthFileRead?,
             recentFlowReadable: Bool = true
         ) -> String {
             let stats = DashboardStats(
@@ -603,7 +618,8 @@ final class BrainBarUXLogicTests: XCTestCase {
                 pendingDepth: 2,
                 historicalHealth: historicalMarker
             ),
-            "STALLED"
+            "RUNNING · NO RECENT FLOW",
+            "#966: replay debt is BrainBar's deferred-store queue, not watcher work"
         )
         XCTAssertEqual(
             watcherStatusText(
@@ -621,7 +637,7 @@ final class BrainBarUXLogicTests: XCTestCase {
                 pendingDepth: 0,
                 historicalHealth: historicalMarker
             ),
-            "OFFLINE"
+            "STOPPED"
         )
         XCTAssertEqual(
             watcherStatusText(
@@ -630,8 +646,8 @@ final class BrainBarUXLogicTests: XCTestCase {
                 pendingDepth: 0,
                 historicalHealth: alertingHistoricalMarker
             ),
-            "FLOWING",
-            "watcher-health.json is historical diagnostic context and cannot override current process+flow truth."
+            "NEEDS ATTENTION",
+            "#966: watcher-health.json is the canonical liveness surface; an hour-old heartbeat is a real problem even while chunks still land."
         )
         XCTAssertEqual(
             watcherStatusText(
@@ -656,7 +672,7 @@ final class BrainBarUXLogicTests: XCTestCase {
         )
     }
 
-    func testJsonlWatcherLaneIgnoresTimestamplessHistoricalMarkerWhenLiveEvidenceIsKnown() {
+    func testJsonlWatcherLaneCallsATimestamplessHealthFileUnknown() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 120,
@@ -671,21 +687,19 @@ final class BrainBarUXLogicTests: XCTestCase {
             recentEnrichmentBuckets: [0, 0, 0, 0],
             activityWindowMinutes: 30,
             bucketCount: 4,
-            watcherHealth: DashboardStats.WatcherHealth(
-                alerting: false,
-                filesTracked: 12,
-                maxOffsetLagBytes: 0,
-                activeEntriesPerMinute: 0,
-                realtimeInsertsPerMinute: 0
-            ),
+            watcherHealth: WatcherHealthFileRead.unreadable(path: "fixture/watcher-health.json", reason: "no parseable updated_at"),
             watcherProcessProbeResult: .running(pid: 4242)
         )
 
         let watcherLane = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
             .lane(for: .jsonlWatcher)
 
-        XCTAssertEqual(watcherLane.status, .idle)
-        XCTAssertEqual(watcherLane.statusText, "RUNNING · NO RECENT FLOW")
+        // A health file without updated_at cannot prove liveness: honest unknown, never running.
+        // The pill says so too (#1014 R1 B1); the flow evidence alone is idle.
+        XCTAssertEqual(watcherLane.status, .unknown)
+        XCTAssertEqual(watcherLane.evidenceStatus, .idle)
+        XCTAssertEqual(watcherLane.statusText, "UNKNOWN")
+        XCTAssertTrue(watcherLane.lastEventText.contains("no parseable updated_at"), watcherLane.lastEventText)
     }
 
     func testDashboardFlowSummaryKeepsRecentEnrichmentDistinctFromLiveNow() {
@@ -717,12 +731,10 @@ final class BrainBarUXLogicTests: XCTestCase {
         let summary = DashboardFlowSummary.derive(daemon: daemon, stats: stats, now: now)
 
         XCTAssertEqual(summary.ingress.status, .idle)
-        XCTAssertEqual(summary.queue.status, .draining)
-        XCTAssertEqual(summary.enrichment.status, .recent)
-        XCTAssertEqual(summary.enrichment.lastEventText, "\(Self.absoluteTime(now.addingTimeInterval(-90))) (1m ago)")
+        XCTAssertEqual(summary.queue.status, .empty)
     }
 
-    func testDashboardFlowSummaryLabelsRightEdgeEnrichmentBurstAsBacklogDrain() {
+    func testDashboardFlowSummaryPreservesHistoricalCompletionBuckets() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let stats = DashboardStats(
             chunkCount: 100_000,
@@ -741,10 +753,7 @@ final class BrainBarUXLogicTests: XCTestCase {
 
         let summary = DashboardFlowSummary.derive(daemon: nil, stats: stats, now: now)
 
-        XCTAssertEqual(summary.enrichment.sparklineLabel, "Successful enrichment completions over Last 1h")
-        XCTAssertEqual(summary.enrichment.latestBucketName, "latest successful-enrichment bucket")
-        XCTAssertEqual(summary.enrichment.statusText, "Backlog drain burst: 2055 enriched in latest 15m")
-        XCTAssertEqual(summary.enrichment.volumeText, "2055 in 1h")
+        let formattedCount = DashboardMetricFormatter.integerString(2_055)
     }
 
     func testDashboardQueueSummaryReportsActiveDrainingForSmallFreshStoreQueue() {

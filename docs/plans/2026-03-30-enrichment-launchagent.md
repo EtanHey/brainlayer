@@ -1,5 +1,9 @@
 # Enrichment LaunchAgent Implementation Plan
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Install a macOS LaunchAgent that runs BrainLayer realtime Gemini enrichment automatically at login/boot with install-time API key resolution, low priority, stable logging, and simple start/stop commands.

@@ -246,12 +246,12 @@ class TestMCPToolCount:
     """Verify MCP server has correct tool count."""
 
     def test_tool_count(self):
-        """Full MCP profile has 13 tools including explicit checkpoint resume."""
+        """Full MCP profile has 12 tools including explicit checkpoint resume."""
 
         from brainlayer.mcp import _full_tool_definitions
 
         tools = _full_tool_definitions()
-        assert len(tools) == 13
+        assert len(tools) == 12
 
     def test_consolidated_tools_registered(self):
         """brain_search, brain_store, brain_recall are registered."""

@@ -18,15 +18,9 @@
 		<string>--recent-limit</string>
 		<string>5</string>
 		<string>--backlog-interval</string>
-		<string>10.0</string>
+		<string>7.0</string>
 		<string>--backlog-batch</string>
-		<string>4</string>
-		<string>--enrich-interval</string>
-		<string>10.0</string>
-		<string>--enrich-limit</string>
-		<string>0</string>
-		<string>--enrich-since-hours</string>
-		<string>87600</string>
+		<string>16</string>
 	</array>
 	<key>WorkingDirectory</key>
 	<string>__BRAINLAYER_DIR__</string>
@@ -44,16 +38,8 @@
 		<string>1</string>
 		<key>BRAINLAYER_ENV_FILE</key>
 		<string>__BRAINLAYER_ENV_FILE__</string>
-		<key>BRAINLAYER_REQUIRE_GOOGLE_API_KEY</key>
-		<string>1</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
-		<key>BRAINLAYER_GEMINI_SERVICE_TIER</key>
-		<string>flex</string>
-		<key>BRAINLAYER_ENRICH_CONCURRENCY</key>
-		<string>4</string>
-		<key>BRAINLAYER_ENRICH_RATE</key>
-		<string>15</string>
 		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
 		<string>hotlane-brainbar</string>
 	</dict>
@@ -64,7 +50,7 @@
 	<key>Nice</key>
 	<integer>10</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>ExitTimeOut</key>
 	<integer>30</integer>
 	<key>LowPriorityIO</key>

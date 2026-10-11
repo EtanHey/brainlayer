@@ -5,23 +5,24 @@
 #   ./scripts/launchd/install.sh              # Install all
 #   ./scripts/launchd/install.sh index        # Install indexing only
 #   ./scripts/launchd/install.sh watch        # Install watcher only
-#   ./scripts/launchd/install.sh enrich       # Install enrichment only
 #   ./scripts/launchd/install.sh drain        # Install queue drain only
 #   ./scripts/launchd/install.sh decay        # Install decay only
-#   ./scripts/launchd/install.sh load enrichment
-#   ./scripts/launchd/install.sh unload enrichment
+#   ./scripts/launchd/install.sh load watch
+#   ./scripts/launchd/install.sh unload watch
 #   ./scripts/launchd/install.sh checkpoint   # Install WAL checkpoint only
-#   ./scripts/launchd/install.sh repair-fts   # Install weekly explicit FTS repair
+#   ./scripts/launchd/install.sh repair-fts   # Install weekly read-only FTS check
 #   ./scripts/launchd/install.sh backup       # Install daily DB backup only
 #   ./scripts/launchd/install.sh jsonl-backup # Install daily JSONL backup only
 #   ./scripts/launchd/install.sh maintenance  # Install recurring maintenance jobs
 #   ./scripts/launchd/install.sh health-check # Install stability health check only
+#   ./scripts/launchd/install.sh log-cap      # Bound BrainLayer LaunchAgent logs every five minutes
+#   ./scripts/launchd/install.sh observability # Install observability producer only
 #   ./scripts/launchd/install.sh tier0-watchdog # Install /bin/sh meta-watchdog only
 #   ./scripts/launchd/install.sh throughput-watchdog # Install watcher throughput watchdog only
 #   ./scripts/launchd/install.sh fleet-watchdog # Install com.brainlayer.* revival watchdog only
 #   ./scripts/launchd/install.sh fleet-watchdog-quiesce # Disable + bootout the fleet watchdog (upgrades)
 #   ./scripts/launchd/install.sh fleet-watchdog-resume  # Re-enable + bootstrap the fleet watchdog
-#   ./scripts/launchd/install.sh hotlane      # Install BrainBar hotlane embed/enrich daemon only
+#   ./scripts/launchd/install.sh hotlane      # Install BrainBar local hotlane embedding daemon only
 #   ./scripts/launchd/install.sh p0-counter   # Install daily P0 longitudinal counter only
 #   ./scripts/launchd/install.sh t3-ingest    # Install T3 thread ingestion only
 #   ./scripts/launchd/install.sh remove       # Unload and remove all
@@ -37,6 +38,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Set by load_plist when an operator-disabled label was left alone (callers skip runtime verification).
 LOAD_PLIST_SKIPPED=0
+BRAINLAYER_INSTALL_TEMP=""
+cleanup_install_temp() {
+    if [ -n "$BRAINLAYER_INSTALL_TEMP" ]; then
+        rm -f "$BRAINLAYER_INSTALL_TEMP"
+        BRAINLAYER_INSTALL_TEMP=""
+    fi
+}
+trap cleanup_install_temp EXIT
 
 stable_brainlayer_path() {
     local value="${1:-}"
@@ -102,6 +111,10 @@ BRAINLAYER_LAUNCHD_DIR="$(stable_brainlayer_path "${BRAINLAYER_LAUNCHD_DIR:-$SCR
 # plist outlives the keg it was rendered against.
 BRAINLAYER_KEG="$(find_brainlayer_keg || true)"
 BRAINLAYER_KEG_STABLE="$(stable_brainlayer_path "$BRAINLAYER_KEG")"
+BRAINLAYER_CURRENT_KEG=""
+if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
+    BRAINLAYER_CURRENT_KEG="$(readlink "$BRAINLAYER_KEG_STABLE" 2>/dev/null || printf '%s' "$BRAINLAYER_KEG")"
+fi
 BRAINLAYER_KEG_PYTHON=""
 BRAINLAYER_KEG_CLI=""
 if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
@@ -138,11 +151,45 @@ fi
 # PATH happens to front. On the M4 that is the framework Python's `brainlayer`, and installing from a
 # source checkout fronts `~/Gits/brainlayer/.venv/bin/brainlayer` -- neither of which any release moves.
 BRAINLAYER_BIN="$(stable_brainlayer_path "${BRAINLAYER_BIN:-${BRAINLAYER_KEG_CLI:-$(which brainlayer 2>/dev/null || echo "$HOME/.local/bin/brainlayer")}}")"
+# Capture only caller intent before PYTHON_BIN receives its legacy PATH fallback.
+BRAINLAYER_PYTHON_REQUESTED="${BRAINLAYER_PYTHON:-}"
 # In a keg, an unset PYTHON_BIN must NOT fall through to `command -v python3`: on a Mac whose PATH
 # puts /Library/Frameworks/Python.framework first, that renders a framework interpreter that never
 # sees the keg's site-packages, and no release can move it. An explicit override still wins.
 PYTHON_BIN="$(stable_brainlayer_path "${PYTHON_BIN:-${BRAINLAYER_KEG_PYTHON:-$(command -v python3)}}")"
+# The backup wrappers import BrainLayer itself, so a source install must not inherit
+# `command -v python3`: on the M4 that is the framework interpreter whose global
+# .pth injects the mutable root checkout. Explicit overrides remain explicit; a keg
+# uses its stable opt/ path; otherwise reuse hook_python's ARM/Intel-aware resolver
+# and fail closed when neither Homebrew prefix exists.
 BRAINLAYER_PYTHON="$(stable_brainlayer_path "${BRAINLAYER_PYTHON:-$PYTHON_BIN}")"
+
+resolve_jsonl_backup_python() {
+    if [ -n "$BRAINLAYER_KEG_PYTHON" ] && [ -z "$BRAINLAYER_PYTHON_REQUESTED" ] && [ -z "${BRAINLAYER_HOOK_PYTHON:-}" ]; then
+        BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_KEG_PYTHON")"
+        return 0
+    fi
+
+    HOOK_PYTHON_RESOLVER="$BRAINLAYER_DIR/src/brainlayer/hook_python.py"
+    if [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
+        HOOK_PYTHON_RESOLVER="$BRAINLAYER_DIR/brainlayer/hook_python.py"
+    fi
+    if [ ! -f "$HOOK_PYTHON_RESOLVER" ]; then
+        echo "ERROR: hook_python.py not found; refusing a PATH-derived BrainLayer interpreter" >&2
+        return 1
+    fi
+
+    # `python hook_python.py` would put brainlayer/ itself on sys.path, where
+    # brainlayer/types.py shadows the stdlib `types` module under Apple's Python.
+    # run_path keeps the resolver executable as a standalone stdlib-only script
+    # without adding its package directory to import resolution.
+    if [ -n "$BRAINLAYER_PYTHON_REQUESTED" ]; then
+        BRAINLAYER_PYTHON="$(BRAINLAYER_HOOK_PYTHON="$BRAINLAYER_PYTHON_REQUESTED" /usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || return 1
+    else
+        BRAINLAYER_PYTHON="$(/usr/bin/python3 -c 'import runpy, sys; path = sys.argv.pop(1); runpy.run_path(path, run_name="__main__")' "$HOOK_PYTHON_RESOLVER" --print-interpreter)" || return 1
+    fi
+    BRAINLAYER_PYTHON="$(stable_brainlayer_path "$BRAINLAYER_PYTHON")"
+}
 BRAINLAYER_ENV_FILE="${BRAINLAYER_ENV_FILE:-$HOME/.config/brainlayer/brainlayer.env}"
 BRAINLAYER_ENV_RUN="$BRAINLAYER_LIB_DIR/brainlayer-env-run.sh"
 TIER0_WATCHDOG_DST="$BRAINLAYER_LIB_DIR/tier0-watchdog.sh"
@@ -180,11 +227,11 @@ fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
 launchd_install_usage() {
-    echo "Usage: $0 [index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load [name]|unload [name]|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
+    echo "Usage: $0 [index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load <name>|unload <name>|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    index|t3-ingest|watch|enrich|enrichment|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
+    index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
@@ -265,6 +312,81 @@ install_env_runner() {
     echo "Installed: $BRAINLAYER_ENV_RUN"
 }
 
+job_display_name() {
+    case "$1" in
+        backup-daily) echo "BrainLayer DB Backup" ;;
+        decay) echo "BrainLayer Decay" ;;
+        drain) echo "BrainLayer Queue Drain" ;;
+        enrich|enrichment) echo "BrainLayer Enrichment" ;;
+        health-check) echo "BrainLayer Health Check" ;;
+        hotlane-brainbar) echo "BrainLayer Hotlane" ;;
+        index) echo "BrainLayer Index" ;;
+        jsonl-backup) echo "BrainLayer Transcript Backup" ;;
+        log-cap) echo "BrainLayer Log Cap" ;;
+        maintenance-nightly) echo "BrainLayer Nightly Maintenance" ;;
+        maintenance-weekly) echo "BrainLayer Weekly Maintenance" ;;
+        observability) echo "BrainLayer Observability" ;;
+        p0-counter) echo "BrainLayer P0 Counter" ;;
+        repair-fts) echo "BrainLayer FTS Repair" ;;
+        t3-ingest) echo "BrainLayer T3 Ingest" ;;
+        throughput-watchdog) echo "BrainLayer Throughput Watchdog" ;;
+        wal-checkpoint) echo "BrainLayer WAL Checkpoint" ;;
+        watch) echo "BrainLayer Watcher" ;;
+        *) echo "ERROR: no display name for launchd job $1" >&2; return 1 ;;
+    esac
+}
+
+install_job_wrapper() {
+    local display_name
+    local wrapper_tmp
+    display_name="$(job_display_name "$1")" || return 1
+    BRAINLAYER_JOB_WRAPPER="$BRAINLAYER_LIB_DIR/$display_name"
+    cleanup_install_temp
+    wrapper_tmp="$(mktemp "${BRAINLAYER_JOB_WRAPPER}.tmp.XXXXXX")" || return 1
+    BRAINLAYER_INSTALL_TEMP="$wrapper_tmp"
+    printf '%s\n' \
+        '#!/bin/sh' \
+        'set -eu' \
+        'runner_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)' \
+        'exec "$runner_dir/brainlayer-env-run.sh" "$@"' > "$wrapper_tmp" || return 1
+    chmod 0755 "$wrapper_tmp" || return 1
+    if [ -f "$BRAINLAYER_JOB_WRAPPER" ] && cmp -s "$wrapper_tmp" "$BRAINLAYER_JOB_WRAPPER"; then
+        rm -f "$wrapper_tmp"
+    else
+        mv "$wrapper_tmp" "$BRAINLAYER_JOB_WRAPPER" || return 1
+    fi
+    BRAINLAYER_INSTALL_TEMP=""
+    echo "Installed: $BRAINLAYER_JOB_WRAPPER"
+}
+
+remove_job_wrapper() {
+    local display_name
+    display_name="$(job_display_name "$1" 2>/dev/null)" || return 0
+    rm -f "$BRAINLAYER_LIB_DIR/$display_name"
+}
+
+install_rendered_plist() {
+    local rendered="$1"
+    local destination="$2"
+    local reload_marker="${destination}.reload-pending"
+    PLIST_CHANGED=1
+    if [ -f "$destination" ] && cmp -s "$rendered" "$destination"; then
+        rm -f "$rendered"
+        if [ -f "$reload_marker" ]; then
+            echo "Reload pending: $destination"
+        else
+            PLIST_CHANGED=0
+            echo "Unchanged: $destination"
+        fi
+    else
+        : > "$reload_marker" || return 1
+        chmod 0644 "$rendered" || return 1
+        mv "$rendered" "$destination" || return 1
+        echo "Installed: $destination"
+    fi
+    BRAINLAYER_INSTALL_TEMP=""
+}
+
 verify_gemini_env_file() {
     if [ ! -f "$BRAINLAYER_ENV_FILE" ]; then
         echo "ERROR: BrainLayer Gemini env file not found at $BRAINLAYER_ENV_FILE"
@@ -279,23 +401,6 @@ verify_gemini_env_file() {
         test -n "${GOOGLE_API_KEY:-${GOOGLE_GENERATIVE_AI_API_KEY:-}}"
     ' >/dev/null; then
         echo "ERROR: $BRAINLAYER_ENV_FILE did not provide GOOGLE_API_KEY"
-        return 1
-    fi
-
-    if ! BRAINLAYER_ENV_FILE="$BRAINLAYER_ENV_FILE" /bin/sh -c '
-        set -a
-        . "$BRAINLAYER_ENV_FILE"
-        set +a
-        for key in BRAINLAYER_ENRICH_ENABLED BRAINLAYER_ENRICH_MODE BRAINLAYER_ENRICH_PROVIDER BRAINLAYER_ENRICH_BACKEND BRAINLAYER_ENRICH_RATE BRAINLAYER_ENRICH_CONCURRENCY BRAINLAYER_MAX_COMMIT_BATCH BRAINLAYER_GEMINI_SERVICE_TIER; do
-            eval "value=\${$key:-}"
-            if [ -z "$value" ]; then
-                echo "missing $key" >&2
-                exit 1
-            fi
-        done
-    ' >/dev/null; then
-        echo "ERROR: $BRAINLAYER_ENV_FILE is missing required enrichment config keys"
-        echo "Run 'brainlayer init' or create it from scripts/launchd/brainlayer.env.example"
         return 1
     fi
 }
@@ -324,8 +429,36 @@ label_disabled_by_operator() {
     return 1
 }
 
+is_resident_keepalive_job() {
+    case "$1" in
+        drain|hotlane-brainbar|watch) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+loaded_keg_changed() {
+    local state_file="${1}.loaded-keg"
+    [ -n "$BRAINLAYER_CURRENT_KEG" ] \
+        && [ -f "$state_file" ] \
+        && [ "$(cat "$state_file")" != "$BRAINLAYER_CURRENT_KEG" ]
+}
+
+record_loaded_keg() {
+    local state_file="${1}.loaded-keg"
+    if [ -n "$BRAINLAYER_CURRENT_KEG" ]; then
+        printf '%s\n' "$BRAINLAYER_CURRENT_KEG" > "$state_file"
+    fi
+}
+
 load_plist() {
     local name="$1"
+    case "$name" in
+        enrich|enrichment)
+            echo "ERROR: enrichment is retired; refusing to load com.brainlayer.$name" >&2
+            return 1
+            ;;
+    esac
+    local plist_changed="${2:-0}"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
     local label="com.brainlayer.${name}"
     local domain="gui/$UID/$label"
@@ -345,8 +478,12 @@ load_plist() {
     local current_pid=""
     local plist_exit_timeout=""
 
+    if [ -f "${dst}.reload-pending" ]; then
+        plist_changed=1
+    fi
+
     case "$name" in
-        hotlane-brainbar|watch|drain|health-check|enrichment)
+        hotlane-brainbar|watch|drain|health-check)
             supervisor_managed=1
             ;;
     esac
@@ -411,15 +548,28 @@ if isinstance(value, (int, float)) and value >= 0:
         *) return 1 ;;
     esac
 
-    if [ "$supervisor_managed" -eq 1 ]; then
-        if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
+    if initial_output="$(launchctl print "$domain" 2>/dev/null)"; then
+        if [ "$plist_changed" -eq 0 ]; then
+            if is_resident_keepalive_job "$name" && loaded_keg_changed "$dst"; then
+                if ! launchctl kickstart -k "$domain"; then
+                    echo "ERROR: launchctl kickstart failed for $label after keg change" >&2
+                    return 1
+                fi
+                record_loaded_keg "$dst"
+                echo "  Restarted for new keg: $label"
+                return 0
+            fi
+            echo "  Unchanged and loaded: $label"
+            return 0
+        fi
+        if [ "$supervisor_managed" -eq 1 ]; then
             initial_pid="$(
                 printf '%s\n' "$initial_output" \
                     | awk -F'= ' '/^[[:space:]]*pid = [0-9]+$/ { print $2; exit }'
             )"
-        else
-            initially_unloaded=1
         fi
+    else
+        initially_unloaded=1
     fi
     if launchctl bootout "$domain" 2>/dev/null; then
         bootout_succeeded=1
@@ -489,14 +639,45 @@ if isinstance(value, (int, float)) and value >= 0:
         echo "ERROR: launchctl print failed for $label after bootstrap" >&2
         return 1
     fi
+    rm -f "${dst}.reload-pending"
+    record_loaded_keg "$dst"
     echo "  Loaded: com.brainlayer.${name}"
 }
 
 unload_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    launchctl unload "$dst" 2>/dev/null || true
-    echo "  Unloaded: com.brainlayer.${name}"
+    local label="com.brainlayer.${name}"
+    local domain="gui/$UID/$label"
+    local attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-20}"
+    local interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
+    local attempt=1
+
+    case "$attempts" in
+        *[!0-9]*|'')
+            echo "ERROR: unload attempts must be a positive integer for $label; got '$attempts'" >&2
+            return 1
+            ;;
+    esac
+    if [ "$attempts" -lt 1 ]; then
+        echo "ERROR: unload attempts must be a positive integer for $label; got '$attempts'" >&2
+        return 1
+    fi
+    if [ "${2:-}" != "--wait-only" ]; then
+        launchctl unload "$dst" 2>/dev/null || true
+    fi
+    while [ "$attempt" -le "$attempts" ]; do
+        if ! launchctl print "$domain" >/dev/null 2>&1; then
+            echo "  Unloaded: $label"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [ "$attempt" -le "$attempts" ]; then
+            sleep "$interval"
+        fi
+    done
+    echo "ERROR: $label did not unload; refusing to remove its plist or executable" >&2
+    return 1
 }
 
 install_hotlane_brainbar_daemon() {
@@ -601,6 +782,46 @@ verify_hotlane_runtime() {
     return 1
 }
 
+render_t3_ingest_selection() {
+    # Read the same private env file as the job. Never source it as shell code.
+    # Modify only the temporary plist; invalid selection leaves the installed job intact.
+    BRAINLAYER_SKIP_DISABLE_GATES=1 "$BRAINLAYER_ENV_RUN" "$BRAINLAYER_PYTHON" - "$1" <<'PY'
+import os
+import plistlib
+import sys
+from pathlib import Path
+from brainlayer.paths import resolve_t3_health_path
+
+def absolute_path(value, key):
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise SystemExit(f"ERROR: {key} must be an absolute path")
+    return str(path)
+
+version = os.environ.get("BRAINLAYER_T3_INGEST_PROJECTION_VERSION", "1")
+if version not in {"1", "2"}:
+    raise SystemExit("ERROR: BRAINLAYER_T3_INGEST_PROJECTION_VERSION must be 1 or 2")
+state = os.environ.get("BRAINLAYER_T3_INGEST_STATE_DB")
+if version == "2" and not state:
+    raise SystemExit("ERROR: V2 requires explicit BRAINLAYER_T3_INGEST_STATE_DB")
+state = absolute_path(state or "~/.t3/userdata/state.sqlite", "BRAINLAYER_T3_INGEST_STATE_DB")
+destination = absolute_path(os.environ.get("BRAINLAYER_DB") or "~/.local/share/brainlayer/brainlayer.db", "BRAINLAYER_DB")
+health = absolute_path(str(resolve_t3_health_path(destination)), "BRAINLAYER_T3_INGEST_HEALTH_PATH")
+interval = os.environ.get("BRAINLAYER_T3_INGEST_INTERVAL_SECONDS")
+if interval is not None and (not interval.isdecimal() or int(interval) < 60 or int(interval) > 86400):
+    raise SystemExit("ERROR: BRAINLAYER_T3_INGEST_INTERVAL_SECONDS must be an integer from 60 to 86400")
+path = Path(sys.argv[1])
+with path.open("rb") as handle:
+    plist = plistlib.load(handle)
+plist["ProgramArguments"] += ["--state-db", state, "--projection-version", version, "--db", destination, "--health-path", health]
+if interval is not None:
+    plist.pop("StartCalendarInterval", None)
+    plist["StartInterval"] = int(interval)
+with path.open("wb") as handle:
+    plistlib.dump(plist, handle)
+PY
+}
+
 install_plist() {
     local name="$1"
     local src="$SCRIPT_DIR/com.brainlayer.${name}.plist"
@@ -616,11 +837,21 @@ install_plist() {
     fi
 
     install_env_runner || return 1
+    install_job_wrapper "$name" || return 1
     verify_config_file || return 1
 
-    if [ "$name" = "enrichment" ] || [ "$name" = "enrich" ]; then
-        verify_gemini_env_file || return 1
-    fi
+    # XML-escape the interpreter path, then escape sed replacement metacharacters.
+    # `&` is legal in a filename but means "the matched placeholder" to sed.
+    local brainlayer_python_xml
+    local brainlayer_python_sed
+    local job_wrapper_sed
+    local rendered_plist
+    cleanup_install_temp
+    rendered_plist="$(mktemp "${dst}.tmp.XXXXXX")" || return 1
+    BRAINLAYER_INSTALL_TEMP="$rendered_plist"
+    brainlayer_python_xml="$(printf '%s' "$BRAINLAYER_PYTHON" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" || return 1
+    brainlayer_python_sed="$(printf '%s' "$brainlayer_python_xml" | sed -e 's/[\\&|]/\\&/g')" || return 1
+    job_wrapper_sed="$(printf '%s' "$BRAINLAYER_JOB_WRAPPER" | sed -e 's/[\\&|]/\\&/g')" || return 1
 
     # Replace placeholders
     sed \
@@ -629,17 +860,24 @@ install_plist() {
         -e "s|__BRAINLAYER_DIR__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_LAUNCHD_DIR__|$BRAINLAYER_LAUNCHD_DIR|g" \
         -e "s|__PYTHON_BIN__|$PYTHON_BIN|g" \
-        -e "s|__BRAINLAYER_PYTHON__|$BRAINLAYER_PYTHON|g" \
+        -e "s|__BRAINLAYER_PYTHON__|$brainlayer_python_sed|g" \
         -e "s|__REPO_ROOT__|$BRAINLAYER_DIR|g" \
         -e "s|__BRAINLAYER_ENV_FILE__|$BRAINLAYER_ENV_FILE|g" \
-        -e "s|__BRAINLAYER_ENV_RUN__|$BRAINLAYER_ENV_RUN|g" \
+        -e "s|__BRAINLAYER_ENV_RUN__|$job_wrapper_sed|g" \
         -e "s|__HOTLANE_BRAINBAR_DAEMON__|$HOTLANE_BRAINBAR_DST|g" \
-        "$src" > "$dst" || return 1
+        "$src" > "$rendered_plist" || return 1
 
-    echo "Installed: $dst"
+    if [ "$name" = "t3-ingest" ]; then
+        render_t3_ingest_selection "$rendered_plist" || return 1
+    fi
+    install_rendered_plist "$rendered_plist" "$dst" || return 1
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
 
-    if ! load_plist "$name"; then
+    if [ "$name" = "health-check" ]; then
+        BRAINLAYER_SKIP_DISABLE_GATES=1 "$BRAINLAYER_JOB_WRAPPER" "$BRAINLAYER_PYTHON" -m brainlayer.badge_state || return 1
+    fi
+
+    if ! load_plist "$name" "$PLIST_CHANGED"; then
         return 1
     fi
     if [ "$name" = "hotlane-brainbar" ] && [ "$LOAD_PLIST_SKIPPED" -ne 1 ] && ! verify_hotlane_runtime; then
@@ -692,6 +930,8 @@ install_jsonl_backup_script() {
         return 1
     fi
 
+    resolve_jsonl_backup_python || return 1
+
     escaped_brainlayer_dir="$(printf '%s' "$BRAINLAYER_DIR" | sed 's/[\\&|]/\\&/g')" || return 1
     sed \
         -e "s|__BRAINLAYER_DIR_VALUE__|$escaped_brainlayer_dir|g" \
@@ -706,6 +946,10 @@ install_tier0_watchdog() {
     local plist_dst="$LAUNCH_DIR/com.brainlayer.tier0-watchdog.plist"
     local escaped_home
     local escaped_tier0_watchdog_dst
+    local rendered_plist
+    cleanup_install_temp
+    rendered_plist="$(mktemp "${plist_dst}.tmp.XXXXXX")" || return 1
+    BRAINLAYER_INSTALL_TEMP="$rendered_plist"
 
     if [ ! -f "$script_src" ]; then
         script_src="$SCRIPT_DIR/../tier0-watchdog.sh"
@@ -732,12 +976,12 @@ install_tier0_watchdog() {
     sed \
         -e "s|__HOME__|$escaped_home|g" \
         -e "s|__TIER0_WATCHDOG_SCRIPT__|$escaped_tier0_watchdog_dst|g" \
-        "$plist_src" > "$plist_dst" || return 1
+        "$plist_src" > "$rendered_plist" || return 1
+    install_rendered_plist "$rendered_plist" "$plist_dst" || return 1
 
     echo "Installed: $TIER0_WATCHDOG_DST"
-    echo "Installed: $plist_dst"
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
-    load_plist tier0-watchdog
+    load_plist tier0-watchdog "$PLIST_CHANGED"
 }
 
 install_throughput_watchdog() {
@@ -749,6 +993,10 @@ install_throughput_watchdog() {
     local escaped_home
     local escaped_python_bin
     local escaped_watchdog_dst
+    local rendered_plist
+    cleanup_install_temp
+    rendered_plist="$(mktemp "${plist_dst}.tmp.XXXXXX")" || return 1
+    BRAINLAYER_INSTALL_TEMP="$rendered_plist"
 
     if [ ! -f "$script_src" ]; then
         echo "ERROR: throughput-watchdog.py not found in $SCRIPT_DIR"
@@ -760,6 +1008,7 @@ install_throughput_watchdog() {
     fi
 
     install_env_runner || return 1
+    install_job_wrapper throughput-watchdog || return 1
     verify_config_file || return 1
 
     escaped_home="$(
@@ -771,7 +1020,7 @@ install_throughput_watchdog() {
             | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
     )" || return 1
     escaped_env_run="$(
-        printf '%s' "$BRAINLAYER_ENV_RUN" \
+        printf '%s' "$BRAINLAYER_JOB_WRAPPER" \
             | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/[\\&|]/\\&/g'
     )" || return 1
     escaped_watchdog_dst="$(
@@ -790,33 +1039,103 @@ install_throughput_watchdog() {
         -e "s|__BRAINLAYER_ENV_RUN__|$escaped_env_run|g" \
         -e "s|__PYTHON_BIN__|$escaped_python_bin|g" \
         -e "s|__THROUGHPUT_WATCHDOG_SCRIPT__|$escaped_watchdog_dst|g" \
-        "$plist_src" > "$plist_dst" || return 1
+        "$plist_src" > "$rendered_plist" || return 1
+    install_rendered_plist "$rendered_plist" "$plist_dst" || return 1
 
     echo "Installed: $THROUGHPUT_WATCHDOG_DST"
-    echo "Installed: $plist_dst"
     echo "  Logs: $LOG_DIR/ and $BRAINLAYER_LOG_DIR/"
-    load_plist throughput-watchdog
+    load_plist throughput-watchdog "$PLIST_CHANGED"
 }
 
 # The fleet watchdog carries a com.etanhey.* label, so the generic load/unload/remove
 # helpers (which hardcode com.brainlayer.${name}.plist) cannot drive it. These four
 # functions are its explicit-path equivalents, modelled on install_tier0_watchdog.
 load_fleet_watchdog() {
+    local plist_changed="${1:-0}"
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     local domain="gui/$UID/$FLEET_WATCHDOG_LABEL"
     local disabled_rc=0
+    local unload_attempts="${BRAINLAYER_LAUNCHD_UNLOAD_ATTEMPTS:-}"
+    local unload_interval="${BRAINLAYER_LAUNCHD_UNLOAD_INTERVAL:-0.1}"
+    local unload_attempt=1
+    local confirmed_unloaded=0
+    local plist_exit_timeout=""
 
+    if [ -f "${plist_dst}.reload-pending" ]; then
+        plist_changed=1
+    fi
+
+    if [ -z "$unload_attempts" ]; then
+        plist_exit_timeout="$(
+            "$PYTHON_BIN" -c '
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as plist_file:
+    value = plistlib.load(plist_file).get("ExitTimeOut")
+if isinstance(value, (int, float)) and value >= 0:
+    print(value)
+' "$plist_dst" 2>/dev/null || true
+        )"
+        if [ -n "$plist_exit_timeout" ]; then
+            if ! unload_attempts="$(awk -v timeout="$plist_exit_timeout" -v interval="$unload_interval" '
+                BEGIN {
+                    if (interval <= 0 || timeout < 0) exit 1
+                    quotient = timeout / interval
+                    attempts = int(quotient)
+                    if (attempts < quotient) attempts++
+                    print attempts + 1
+                }
+            ')"; then
+                unload_attempts=""
+            fi
+        fi
+    fi
+    unload_attempts="${unload_attempts:-20}"
+
+    case "$unload_attempts" in
+        *[!0-9]*)
+            echo "ERROR: unload attempts must be a positive integer for $FLEET_WATCHDOG_LABEL; got '$unload_attempts'" >&2
+            return 1
+            ;;
+    esac
+    if [ "$unload_attempts" -lt 1 ]; then
+        echo "ERROR: unload attempts must be a positive integer for $FLEET_WATCHDOG_LABEL; got '$unload_attempts'" >&2
+        return 1
+    fi
+
+    LOAD_PLIST_SKIPPED=0
     label_disabled_by_operator "$FLEET_WATCHDOG_LABEL" || disabled_rc=$?
     case "$disabled_rc" in
         0)
             echo "SKIP: $FLEET_WATCHDOG_LABEL disabled by operator ($0 fleet-watchdog-resume to re-arm)"
+            LOAD_PLIST_SKIPPED=1
             return 0
             ;;
         1) ;;
         *) return 1 ;;
     esac
 
+    if [ "$plist_changed" -eq 0 ] && launchctl print "$domain" >/dev/null 2>&1; then
+        echo "  Unchanged and loaded: $FLEET_WATCHDOG_LABEL"
+        return 0
+    fi
+
     launchctl bootout "$domain" 2>/dev/null || true
+    while [ "$unload_attempt" -le "$unload_attempts" ]; do
+        if ! launchctl print "$domain" >/dev/null 2>&1; then
+            confirmed_unloaded=1
+            break
+        fi
+        unload_attempt=$((unload_attempt + 1))
+        if [ "$unload_attempt" -le "$unload_attempts" ]; then
+            sleep "$unload_interval"
+        fi
+    done
+    if [ "$confirmed_unloaded" -ne 1 ]; then
+        echo "ERROR: $FLEET_WATCHDOG_LABEL did not unload before replacement; refusing to enable or bootstrap" >&2
+        return 1
+    fi
     launchctl enable "$domain" 2>/dev/null || true
     if ! launchctl bootstrap "gui/$UID" "$plist_dst"; then
         echo "ERROR: launchctl bootstrap failed for $FLEET_WATCHDOG_LABEL" >&2
@@ -826,6 +1145,7 @@ load_fleet_watchdog() {
         echo "ERROR: launchctl print failed for $FLEET_WATCHDOG_LABEL after bootstrap" >&2
         return 1
     fi
+    rm -f "${plist_dst}.reload-pending"
     echo "  Loaded: $FLEET_WATCHDOG_LABEL"
 }
 
@@ -835,6 +1155,10 @@ install_fleet_watchdog() {
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     local escaped_home
     local escaped_fleet_watchdog_dst
+    local rendered_plist
+    cleanup_install_temp
+    rendered_plist="$(mktemp "${plist_dst}.tmp.XXXXXX")" || return 1
+    BRAINLAYER_INSTALL_TEMP="$rendered_plist"
 
     if [ ! -f "$script_src" ]; then
         echo "ERROR: fleet-watchdog.sh not found in $SCRIPT_DIR"
@@ -858,15 +1182,15 @@ install_fleet_watchdog() {
     sed \
         -e "s|__HOME__|$escaped_home|g" \
         -e "s|__FLEET_WATCHDOG_SCRIPT__|$escaped_fleet_watchdog_dst|g" \
-        "$plist_src" > "$plist_dst" || return 1
+        "$plist_src" > "$rendered_plist" || return 1
+    install_rendered_plist "$rendered_plist" "$plist_dst" || return 1
 
     echo "Installed: $FLEET_WATCHDOG_DST"
-    echo "Installed: $plist_dst"
     echo "  Logs: $LOG_DIR/brainlayer/"
     echo "  NOTE: while this watchdog runs, 'launchctl bootout' on a com.brainlayer.* label does"
     echo "        NOT hold -- it is re-bootstrapped within 300s. Quiesce for upgrades with:"
     echo "          $0 fleet-watchdog-quiesce"
-    load_fleet_watchdog
+    load_fleet_watchdog "$PLIST_CHANGED"
 }
 
 # The only supported way to make a bootout hold across an upgrade. `launchctl bootout`
@@ -912,6 +1236,7 @@ resume_fleet_watchdog() {
         echo "ERROR: launchctl bootstrap failed for $FLEET_WATCHDOG_LABEL" >&2
         return 1
     fi
+    rm -f "${plist_dst}.reload-pending"
     echo "Resumed: $FLEET_WATCHDOG_LABEL"
 }
 
@@ -919,6 +1244,7 @@ remove_fleet_watchdog() {
     local plist_dst="$LAUNCH_DIR/$FLEET_WATCHDOG_PLIST_NAME"
     launchctl bootout "gui/$UID/$FLEET_WATCHDOG_LABEL" 2>/dev/null || true
     rm -f "$plist_dst"
+    rm -f "${plist_dst}.reload-pending"
     rm -f "$FLEET_WATCHDOG_DST"
     echo "Removed: $FLEET_WATCHDOG_LABEL"
 }
@@ -926,8 +1252,19 @@ remove_fleet_watchdog() {
 remove_plist() {
     local name="$1"
     local dst="$LAUNCH_DIR/com.brainlayer.${name}.plist"
-    unload_plist "$name"
+    if [ ! -f "$dst" ]; then
+        local domain="gui/$UID/com.brainlayer.$name"
+        if launchctl print "$domain" >/dev/null 2>&1 && { ! launchctl bootout "$domain" || ! unload_plist "$name" --wait-only; }; then
+            echo "ERROR: could not retire $domain without a plist; refusing to remove its executable" >&2
+            return 1
+        fi
+    elif ! unload_plist "$name"; then
+        return 1
+    fi
     rm -f "$dst"
+    rm -f "${dst}.reload-pending"
+    rm -f "${dst}.loaded-keg"
+    remove_job_wrapper "$name"
     echo "Removed: com.brainlayer.${name}"
 }
 
@@ -935,13 +1272,11 @@ case "${1:-all}" in
     index)
         install_plist index
         ;;
-    enrich)
-        # Legacy alias: install the unified enrichment plist
-        install_plist enrichment
-        remove_plist enrich 2>/dev/null || true
-        ;;
-    enrichment)
-        install_plist enrichment
+    enrich|enrichment)
+        remove_plist enrichment
+        remove_plist enrich
+        echo "ERROR: enrichment is retired; old services removed; no service was installed" >&2
+        exit 1
         ;;
     watch)
         install_plist watch
@@ -950,10 +1285,20 @@ case "${1:-all}" in
         install_plist decay
         ;;
     load)
-        load_plist "${2:-enrichment}"
+        case "${2:-}" in
+            ""|enrich|enrichment)
+                echo "ERROR: load requires an explicit active service name; enrichment is retired" >&2
+                exit 1
+                ;;
+        esac
+        load_plist "$2"
         ;;
     unload)
-        unload_plist "${2:-enrichment}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: unload requires an explicit service name" >&2
+            exit 1
+        fi
+        unload_plist "$2"
         ;;
     checkpoint)
         install_plist wal-checkpoint
@@ -984,6 +1329,12 @@ case "${1:-all}" in
     health-check)
         install_plist health-check
         ;;
+    log-cap)
+        install_plist log-cap
+        ;;
+    observability)
+        install_plist observability
+        ;;
     tier0|tier0-watchdog)
         install_tier0_watchdog
         ;;
@@ -1000,7 +1351,6 @@ case "${1:-all}" in
         resume_fleet_watchdog
         ;;
     hotlane|hotlane-brainbar)
-        verify_gemini_env_file
         install_plist hotlane-brainbar
         ;;
     p0-counter)
@@ -1010,17 +1360,13 @@ case "${1:-all}" in
         install_plist t3-ingest
         ;;
     all)
+        remove_plist enrichment
+        remove_plist enrich
         install_env_runner
         verify_config_file
         verify_gemini_env_file
         failures=0
-        enrichment_ok=0
         if ! install_many index t3-ingest drain watch hotlane-brainbar; then
-            failures=1
-        fi
-        if install_plist enrichment; then
-            enrichment_ok=1
-        else
             failures=1
         fi
         if ! install_many decay wal-checkpoint repair-fts; then
@@ -1036,7 +1382,7 @@ case "${1:-all}" in
         elif ! install_many jsonl-backup; then
             failures=1
         fi
-        if ! install_many maintenance-nightly maintenance-weekly health-check p0-counter; then
+        if ! install_many maintenance-nightly maintenance-weekly health-check log-cap observability p0-counter; then
             failures=1
         fi
         if ! install_tier0_watchdog; then
@@ -1048,34 +1394,32 @@ case "${1:-all}" in
         if ! install_fleet_watchdog; then
             failures=1
         fi
-        # Remove old enrich plist only after the replacement enrichment service loads.
-        if [ "$enrichment_ok" -eq 1 ]; then
-            remove_plist enrich 2>/dev/null || true
-        fi
         if [ "$failures" -ne 0 ]; then
             exit 1
         fi
         ;;
     remove)
         remove_plist index
-        remove_plist t3-ingest 2>/dev/null || true
-        remove_plist enrich 2>/dev/null || true
-        remove_plist enrichment 2>/dev/null || true
-        remove_plist watch 2>/dev/null || true
-        remove_plist decay 2>/dev/null || true
-        remove_plist drain 2>/dev/null || true
+        remove_plist t3-ingest
+        remove_plist enrich
+        remove_plist enrichment
+        remove_plist watch
+        remove_plist decay
+        remove_plist drain
         remove_plist wal-checkpoint
-        remove_plist repair-fts 2>/dev/null || true
-        remove_plist backup-daily 2>/dev/null || true
-        remove_plist jsonl-backup 2>/dev/null || true
-        remove_plist maintenance-nightly 2>/dev/null || true
-        remove_plist maintenance-weekly 2>/dev/null || true
-        remove_plist health-check 2>/dev/null || true
-        remove_plist tier0-watchdog 2>/dev/null || true
-        remove_plist throughput-watchdog 2>/dev/null || true
-        remove_fleet_watchdog 2>/dev/null || true
-        remove_plist hotlane-brainbar 2>/dev/null || true
-        remove_plist p0-counter 2>/dev/null || true
+        remove_plist repair-fts
+        remove_plist backup-daily
+        remove_plist jsonl-backup
+        remove_plist maintenance-nightly
+        remove_plist maintenance-weekly
+        remove_plist health-check
+        remove_plist log-cap
+        remove_plist observability
+        remove_plist tier0-watchdog
+        remove_plist throughput-watchdog
+        remove_fleet_watchdog
+        remove_plist hotlane-brainbar
+        remove_plist p0-counter
         rm -f "$BRAINLAYER_LIB_DIR/backup-daily.sh"
         rm -f "$BRAINLAYER_LIB_DIR/jsonl-backup.sh"
         rm -f "$TIER0_WATCHDOG_DST"
@@ -1095,5 +1439,4 @@ esac
 
 echo ""
 echo "Done. Check logs at: $LOG_DIR/"
-echo "Enrichment label: com.brainlayer.enrichment"
 echo "Status: launchctl list | grep brainlayer"

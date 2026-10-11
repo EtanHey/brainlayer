@@ -1196,12 +1196,12 @@
       "path": "happy_path",
       "description": "Digest ingests meeting notes, stores a digest chunk, and returns extracted entities and sentiment metadata.",
       "input": {
-        "content": "Etan Heyman met with Dor Zohar to discuss the Domica project. They decided to use React Native. Action: write the architecture summary. What is the delivery timeline?",
+        "content": "Etan Heyman met with Person Alpha to discuss the Domica project. They decided to use React Native. Action: write the architecture summary. What is the delivery timeline?",
         "title": "Domica meeting notes",
         "project": "eval-mcp-digest",
         "participants": [
           "Etan Heyman",
-          "Dor Zohar"
+          "Person Alpha"
         ]
       },
       "setup": [
@@ -1234,7 +1234,7 @@
           "type": "text_contains_any",
           "expected": [
             "Etan Heyman",
-            "Dor Zohar",
+            "Person Alpha",
             "Domica"
           ]
         },

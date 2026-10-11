@@ -17,28 +17,33 @@ exec their service command. API keys stay out of rendered LaunchAgent plists.
 |----------|---------|-------------|
 | `BRAINLAYER_DB` | `~/.local/share/brainlayer/brainlayer.db` | Database file path. Set to override the default location. |
 
-### Enrichment
+### Launchd environment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BRAINLAYER_SYSTEM_ENABLED` | `1` | Global launchd gate. Set to `0`/`false`/`off` to disable launchd-managed BrainLayer jobs. |
-| `BRAINLAYER_ENRICH_ENABLED` | `1` | Realtime enrichment gate. The launchd enrichment service sleeps/exits disabled when false. |
-| `BRAINLAYER_ENRICH_MODE` | `remote` | Enrichment mode seam: `remote` for provider-backed enrichment, `local` for local model backends. |
-| `BRAINLAYER_ENRICH_PROVIDER` | `gemini` | Provider selection seam. Gemini is wired today; other providers should coordinate on this key. |
-| `BRAINLAYER_ENRICH_BACKEND` | `gemini` in config file, auto-detect elsewhere | Backend key. Local flows historically use `mlx`, `ollama`, or `groq`; the unified config uses `gemini` for the remote Gemini path. |
-| `BRAINLAYER_ENRICH_MODEL` | `glm-4.7-flash` | Ollama model name for enrichment |
-| `BRAINLAYER_MLX_MODEL` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | MLX model identifier |
-| `BRAINLAYER_OLLAMA_URL` | `http://127.0.0.1:11434/api/generate` | Ollama API endpoint |
-| `BRAINLAYER_MLX_URL` | `http://127.0.0.1:8080/v1/chat/completions` | MLX server endpoint |
-| `GOOGLE_API_KEY` | empty | Google AI API key used by realtime Gemini enrichment. Prefer a 1Password `op read` reference in the config file. |
-| `BRAINLAYER_ENV_FILE` | `~/.config/brainlayer/brainlayer.env` | Override path for the config file that launchd templates source. |
-| `BRAINLAYER_ENRICH_RATE` | `5.0` | Realtime enrichment rate, requests/second (`5.0` = 300 RPM). The packaged launchd jobs override it to `15`. |
-| `BRAINLAYER_ENRICH_CONCURRENCY` | `4` | Realtime Gemini enrichment concurrency used by launchd jobs. |
-| `BRAINLAYER_MAX_COMMIT_BATCH` | `25` | Max enrichment write batch used by launchd jobs. |
-| `BRAINLAYER_GEMINI_SERVICE_TIER` | `flex` | Gemini service tier used by launchd jobs. |
-| `BRAINLAYER_DISABLED_SLEEP_SECONDS` | `3600` | Sleep duration for disabled KeepAlive jobs to avoid tight launchd restart loops. Use `0` in tests. |
-| `BRAINLAYER_STALL_TIMEOUT` | `300` | Seconds before killing a stuck enrichment chunk |
-| `BRAINLAYER_HEARTBEAT_INTERVAL` | `25` | Log progress every N chunks during enrichment |
+| `BRAINLAYER_ENV_FILE` | `~/.config/brainlayer/brainlayer.env` | Override the config file sourced by launchd templates. |
+| `BRAINLAYER_DISABLED_SLEEP_SECONDS` | `3600` | Sleep duration for disabled KeepAlive jobs to avoid restart loops. Use `0` in tests. |
+
+### Enrichment (retired)
+
+LLM chunk and session enrichment is retired. Provider, backend, model, concurrency,
+and rate controls are no longer activation instructions.
+History: [retirement details](enrichment.md).
+
+### Google credential compatibility gate
+
+Older installed hotlane plists can still set `BRAINLAYER_REQUIRE_GOOGLE_API_KEY=1`.
+The installed `brainlayer-env-run.sh` then exits **78** before exec if neither a
+`GOOGLE_API_KEY`/`GOOGLE_GENERATIVE_AI_API_KEY` value nor a Google key declaration
+in the env file is present. Keep the 1Password-backed `GOOGLE_API_KEY` configuration,
+the require-key flag, and this exit-78 gate until the release re-renders the installed
+hotlane plists. Retirement alone does not authorize deleting or bypassing them.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOOGLE_API_KEY` | empty | Retained Google key configuration for the installed-hotlane compatibility gate. Prefer a 1Password `op read` reference. |
+| `BRAINLAYER_REQUIRE_GOOGLE_API_KEY` | `0` in env-run | When an installed plist sets `1`, require Google key configuration before executing its command. |
 
 ### Launchd Toggles
 
@@ -47,8 +52,7 @@ checks its own `BRAINLAYER_LAUNCHD_*_ENABLED` gate before exec.
 
 | Variable | Default | Controls |
 |----------|---------|----------|
-| `BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED` | `1` | `com.brainlayer.enrichment` |
-| `BRAINLAYER_LAUNCHD_HOTLANE_ENABLED` | `1` | Reserved for the hotlane LaunchAgent when installed by the deploy path. |
+| `BRAINLAYER_LAUNCHD_HOTLANE_ENABLED` | `1` | Gates `com.brainlayer.hotlane-brainbar`. |
 | `BRAINLAYER_LAUNCHD_DECAY_ENABLED` | `1` | `com.brainlayer.decay` |
 | `BRAINLAYER_LAUNCHD_DRAIN_ENABLED` | `1` | `com.brainlayer.drain` |
 | `BRAINLAYER_LAUNCHD_WATCH_ENABLED` | `1` | `com.brainlayer.watch` |
@@ -83,7 +87,56 @@ BrainLayer reads from these locations by default:
 | Claude Code conversations | `~/.claude/projects/` |
 | Deduplicated system prompts | `~/.local/share/brainlayer/prompts/` |
 | Daemon socket | `/tmp/brainlayer.sock` |
-| Enrichment lock | `/tmp/brainlayer-enrichment.lock` |
+| Historical enrichment lock | `/tmp/brainlayer-enrichment.lock` (legacy safety/cleanup only) |
+
+### T3 projection selection
+
+`ingest-t3` defaults to the legacy `~/.t3/userdata/state.sqlite` and projection
+version 1. T3 V2 uses a separate database and separate projection tables;
+pointing the legacy reader at `statev2.sqlite` still reads its retained legacy
+tables. Select both explicitly for V2:
+
+```bash
+brainlayer ingest-t3 --state-db ~/.t3/userdata/statev2.sqlite --projection-version 2 --dry-run
+```
+
+V2 reads settled user/assistant messages from their JSON payloads and retains
+all projects, stable message IDs, source timestamps, and `t3-thread` provenance.
+Streaming messages become eligible when settled. Missing schema or invalid
+payloads raise an alarm; the reader never falls back to legacy tables. Dry-run
+writes the health file but does not write the destination database.
+
+The packaged T3 LaunchAgent retains legacy selection and the daily 03:45 schedule
+by default. To select V2 durably, add these settings to the private BrainLayer env
+file, then rerender with the installed `scripts/launchd/install.sh t3-ingest`:
+
+```dotenv
+BRAINLAYER_T3_INGEST_STATE_DB=/Users/example/.t3/userdata/statev2.sqlite
+BRAINLAYER_T3_INGEST_PROJECTION_VERSION=2
+BRAINLAYER_T3_INGEST_INTERVAL_SECONDS=60
+```
+
+V2 requires an explicitly selected absolute source path. No source is detected
+automatically; the importer reads all projects. The renderer pins `--db` to the
+configured `BRAINLAYER_DB` (or canonical DB) and `--health-path` beside that DB.
+`BRAINLAYER_T3_INGEST_HEALTH_PATH` may explicitly override health placement.
+Invalid configuration fails before the installed plist is replaced.
+The public ingest and health-check CLIs and direct health-check configuration
+share this path resolver; explicit `--health-path`/`--t3-health-path` options
+take precedence over the environment. Rerender the job after changing its DB
+or health selection so the loaded importer and scheduled consumer agree.
+
+The optional interval accepts 60–86400 seconds and replaces the daily calendar;
+unset restores the original daily schedule. `RunAtLoad` remains enabled. launchd
+runs one instance of this label, and the existing DB writer arbitration still
+applies. Freshness is the interval plus import runtime, model startup, and any
+writer contention; the daily default does not meet active-chat freshness. First
+V2 execution also imports historical settled messages. Verify loaded argv,
+schedule, health and exact persisted message IDs after a reviewed deployment.
+
+These settings select the SQLite importer. `BRAINLAYER_T3_STATE_DB` configures
+watcher provider linkage separately; selecting V2 ingestion does not correct
+provider-rollout provenance by itself.
 
 ## Config File
 
@@ -98,20 +151,12 @@ Secure 1Password-backed form:
 ```bash
 GOOGLE_API_KEY="$(op read 'op://Private/Google AI/Gemini API key')"
 BRAINLAYER_SYSTEM_ENABLED=1
-BRAINLAYER_ENRICH_ENABLED=1
-BRAINLAYER_ENRICH_MODE=remote
-BRAINLAYER_ENRICH_PROVIDER=gemini
-BRAINLAYER_ENRICH_BACKEND=gemini
-BRAINLAYER_ENRICH_RATE=15
-BRAINLAYER_ENRICH_CONCURRENCY=4
-BRAINLAYER_MAX_COMMIT_BATCH=25
-BRAINLAYER_GEMINI_SERVICE_TIER=flex
 ```
 
 Plaintext Google keys are intentionally not supported in generated BrainLayer
-env files. Manual configs should keep the same tuning keys as the 1Password
-form. See
-`scripts/launchd/brainlayer.env.example` for the full schema and launchd job gates.
+env files. Existing configs retain the credential reference for the compatibility
+gate; it does not enable the retired enrichment feature. See
+`scripts/launchd/brainlayer.env.example` for the packaged schema and launchd job gates.
 
 ## Scheduled Tasks (macOS)
 
@@ -120,28 +165,29 @@ BrainLayer includes launchd plist templates for automated operation:
 | Service | Schedule | Description |
 |---------|----------|-------------|
 | `com.brainlayer.index` | Nightly | Incremental indexing of new conversations |
-| `com.brainlayer.enrichment` | KeepAlive supervisor | Run realtime Gemini enrichment against recent chunks |
 | `com.brainlayer.watch` | KeepAlive watcher | Watch and queue new conversation writes |
 | `com.brainlayer.drain` | Queue/WatchPaths trigger | Drain queued writes as the single writer |
 | `com.brainlayer.decay` | Weekly | Refresh decay metadata |
-| `com.brainlayer.repair-fts` | Weekly | Repair FTS indexes |
+| `com.brainlayer.repair-fts` | Weekly | Read-only FTS row-count check |
 | `com.brainlayer.wal-checkpoint` | Daily 09:30 | Checkpoint the WAL |
 | `com.brainlayer.backup-daily` | Daily | Backup the BrainLayer DB |
 | `com.brainlayer.jsonl-backup` | Daily | Backup Claude JSONL files |
 | `com.brainlayer.maintenance-nightly` | Nightly | Light maintenance |
 | `com.brainlayer.maintenance-weekly` | Weekly | Full maintenance |
 
-Manual install and control:
+Weekly maintenance waits up to two hours for an in-flight daily DB backup. A recent, verified daily backup is reused because daily and weekly Drive retention policies are the same. A fresh backup uses the daily process supervisor with a deadline at the end of the quiet window. After the backup wait, it reruns the quiet-window, queue-idle, and writer gates. If the wait times out or the backup is unverified, light maintenance continues, VACUUM is skipped, and the job exits **76**. If a post-backup gate fails, the job skips service bootout and all database maintenance, records the failed gate, and exits **76**. The maintenance log records the backup status. `--full --dry-run` reports a held backup lock without waiting or running backup work.
+
+Scheduled FTS row-count checks use a read-only connection and do not acquire the maintenance writer lock. Full FTS rebuilds require an explicit offline database copy path.
+
+Install the remaining packaged agents with:
 
 ```bash
-brainlayer setup --google-api-key-op-ref "op://Private/Google AI/Gemini API key"
-bash scripts/launchd/install.sh enrichment
-bash scripts/launchd/install.sh unload enrichment
-bash scripts/launchd/install.sh load enrichment
+brainlayer setup
+brainlayer setup --launchd
 ```
 
-Use `brainlayer setup --launchd --google-api-key-op-ref ...` to render and load
-all packaged launchd agents in one step.
+Keep existing Google key configuration until the release re-renders installed
+hotlane plists. Do not install, load, or resume the retired enrichment service.
 
 The install-managed plists in `scripts/launchd/` render without embedding
 `GOOGLE_API_KEY`. Their ProgramArguments call the installed
@@ -164,3 +210,59 @@ Migration for an existing hardcoded LaunchAgent: move the existing key value int
 `brainlayer init`, preferably as a 1Password `op read` reference, then have the
 deployment lead reinstall the repo-generated plist. Do not paste the key into
 shell history, logs, PRs, or chat.
+
+
+## Manual credential cleanup
+
+`brainlayer scrub-at-rest --providers google_oauth --db /path/to/offline-copy.db --dry-run`
+reports matched row counts per table, column and provider. Provider modes are
+`google_oauth` (the default), `context7`, and `exa_labeled`. EXA cleanup requires
+a label with an `exa` segment and `key`; separators (`_`, `.`, `-`) or a
+camelCase capital can end the segment. Labels like `example_key` and bare UUIDs
+are preserved. Use the same mode for the survey and apply. Remove `--dry-run` to
+apply to an offline copy; `--batch-size` defaults to 100. An explicit database path
+is required. A live dry run is read-only and needs no opt-in. Live apply, including
+symlink/hardlink aliases, refuses without `--allow-live-db` and `--expect-rows N`.
+Use the sum of **all** table row counts from the preceding dry run for N (including
+FTS/history copies, not just chunks). Apply re-surveys after quiescence and refuses
+if the current total differs.
+
+The guarded mode holds the maintenance lock, requires an active enrichment pause
+sentinel and a verified backup receipt for that DB no older than 24 hours, and
+reuses VACUUM's quiet-window (04:00–06:00 local), idle-queue and writer gates.
+`--wait-for-backup-seconds N` (default 0) lets guarded live apply poll at intervals of up to 30 seconds
+for a qualifying receipt before taking the lock or quiescing services. Dry runs and
+offline applies ignore it. Poll intervals shorten near the deadline. Waiting ends
+at N seconds or when only 20 minutes remain in the quiet window, reserving that
+time for the guarded run. A refusal after sleeping reports `verified-backup-timeout`;
+if no wait is possible before the first sleep, it reports `verified-backup-required`,
+as does the default. Receipt freshness continues to use `attempted_at`.
+It quiesces the fleet/throughput/tier-0 watchdogs, health-check healer, BrainBar UI/daemon,
+hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using maintenance's service helpers. It checks
+that jobs remain unloaded, BrainBar processes are gone and no writable database
+descriptors remain before applying. Any failed gate aborts before writing.
+Service restoration runs in `finally`; services previously down or deliberately
+paused remain down, and resume failures are reported by count. Proof and rehearsal
+must use copies and synthetic service stubs; canonical execution belongs to the
+deployment lead's maintenance window.
+
+The schema survey includes logical tables, FTS and repair/history copies, including
+text stored in numeric-affinity columns. Only the selected provider spans change;
+assignment/quarantine and other providers stay intact. Selected provider regexes
+see full values so window boundaries cannot truncate spans. Changed chunk content
+gets canonical hashes, SimHash bands and character counts; summaries/previews retain
+all unmatched text. Existing chunk/KG/git FTS triggers run, and session FTS refreshes
+explicitly. Bitemporal preimage capture and preview regeneration are transactionally
+suppressed during chunk redaction and restored verbatim; independent previews keep
+their unmatched text and existing history is scrubbed. Identity/reference
+matches appear in dry counts but refuse apply. Unsupported virtual/external-content
+index layouts refuse rather than silently skip. Unique-index collisions caused by
+redaction (for example in KG entities/facts or git memories) abort the current
+batch rather than deleting or merging rows. A failed batch rolls back; earlier committed batches may remain,
+so rerun after resolving the error. Writer/maintenance locks serialize apply, with
+bounded busy retries and checkpoints on the same writer connection before/after.
+The final survey must find zero selected matches. This is logical redaction, not
+physical erasure of old WAL/free pages, embeddings, source transcripts or backups.
+During the entire command, SQLite diagnostics log only error codes/classes, including
+file handlers; the process's normal SQLite callback is restored after stores close.
+Failures retain value-free causal error categories and cleanup notes.

@@ -1,3 +1,4 @@
+import _ctypes
 import os
 import shutil
 import subprocess
@@ -10,6 +11,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "release-verify-signatures.sh"
 INSTALL_SH = REPO_ROOT / "scripts" / "launchd" / "install.sh"
+
+
+def _loadable_stdlib_extension() -> Path:
+    # Some CPython builds make _ctypes built-in; use their lib-dynload extensions instead.
+    if source := getattr(_ctypes, "__file__", None):
+        return Path(source)
+    candidates = sorted((Path(sysconfig.get_path("stdlib")) / "lib-dynload").glob("*.so"))
+    assert candidates, "no standard-library native extension in this Python"
+    return candidates[0]
 
 
 def _write_fake_codesign(path: Path, invalid_suffix: str) -> Path:
@@ -34,7 +44,10 @@ def _run(script: Path, *args: str, env: dict[str, str]) -> subprocess.CompletedP
 
 
 def test_reports_invalid_native_signature_and_fails(tmp_path: Path) -> None:
-    native_dir = tmp_path / "keg" / "libexec" / "venv" / "native"
+    venv = tmp_path / "keg" / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = venv / "native"
     native_dir.mkdir(parents=True)
     (native_dir / "valid.so").touch()
     (native_dir / "invalid.dylib").touch()
@@ -49,7 +62,10 @@ def test_reports_invalid_native_signature_and_fails(tmp_path: Path) -> None:
 
 
 def test_empty_native_tree_fails_instead_of_passing(tmp_path: Path) -> None:
-    (tmp_path / "keg" / "libexec" / "venv" / "nothing").mkdir(parents=True)
+    venv = tmp_path / "keg" / "libexec" / "venv"
+    (venv / "nothing").mkdir(parents=True)
+    (venv / "bin").mkdir()
+    (venv / "bin" / "python").symlink_to(sys.executable)
     codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
 
     result = _run(SCRIPT, str(tmp_path / "keg"), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
@@ -58,6 +74,141 @@ def test_empty_native_tree_fails_instead_of_passing(tmp_path: Path) -> None:
     assert "valid: 0" in result.stdout
     assert "invalid: 0" in result.stdout
     assert "ERROR: no native extensions found under" in result.stderr
+
+
+def test_symlinked_native_root_outside_keg_is_rejected(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "libexec").mkdir(parents=True)
+    outside_venv = tmp_path / "outside-venv"
+    (outside_venv / "bin").mkdir(parents=True)
+    (outside_venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = outside_venv / "native"
+    native_dir.mkdir()
+    shutil.copy(_loadable_stdlib_extension(), native_dir / "working.so")
+    (keg / "libexec" / "venv").symlink_to(outside_venv, target_is_directory=True)
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 2
+    assert "ERROR: native extension root escapes keg:" in result.stderr
+
+
+def test_native_symlink_outside_keg_cannot_hide_unloadable_file(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    venv = keg / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = venv / "lib" / "python3.13" / "site-packages"
+    native_dir.mkdir(parents=True)
+    shutil.copy(_loadable_stdlib_extension(), native_dir / "working.so")
+    outside = tmp_path / "broken.so"
+    outside.write_text("not a native library")
+    (native_dir / "hidden.so").symlink_to(outside)
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 2
+    assert "ERROR: symlink in native library tree:" in result.stderr
+
+
+def test_bin_directory_symlink_cannot_hide_unloadable_file(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    venv = keg / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = venv / "lib" / "python3.13" / "site-packages"
+    native_dir.mkdir(parents=True)
+    shutil.copy(_loadable_stdlib_extension(), native_dir / "working.so")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "hidden.so").write_text("not a native library")
+    (venv / "bin" / "extensions").symlink_to(outside, target_is_directory=True)
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 2
+    assert "ERROR: symlink in native library tree:" in result.stderr
+    assert "bin/extensions" in result.stderr
+
+
+def test_signed_but_unloadable_native_file_fails(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    venv = keg / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = venv / "native"
+    native_dir.mkdir()
+    (native_dir / "broken.so").write_text("not a native library")
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 1
+    assert "valid-signature: 1" in result.stdout
+    assert "loadable: 0" in result.stdout
+    assert "allowed-optional: 0" in result.stdout
+    assert "LOAD_FAILED native/broken.so:" in result.stdout
+
+
+def test_only_numba_omppool_is_allowed_to_fail_loading(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    venv = keg / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = venv / "lib" / "python3.13" / "site-packages" / "numba" / "np" / "ufunc"
+    native_dir.mkdir(parents=True)
+    (native_dir / "omppool.cpython-313-darwin.so").write_text("optional but unloadable")
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "valid-signature: 1" in result.stdout
+    assert "loadable: 0" in result.stdout
+    assert "allowed-optional: 1" in result.stdout
+    assert (
+        "ALLOWED_OPTIONAL lib/python3.13/site-packages/numba/np/ufunc/omppool.cpython-313-darwin.so:" in result.stdout
+    )
+
+
+def test_omppool_name_outside_numba_path_still_fails(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    venv = keg / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    native_dir = venv / "native"
+    native_dir.mkdir()
+    (native_dir / "omppool.so").write_text("not numba's optional extension")
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 1
+    assert "LOAD_FAILED native/omppool.so:" in result.stdout
+    assert "allowed-optional: 0" in result.stdout
+
+
+def test_loadable_native_file_is_counted(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    venv = keg / "libexec" / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    (venv / "bin" / "python3").symlink_to("python")
+    (venv / "bin" / f"python{sys.version_info.major}.{sys.version_info.minor}").symlink_to("python3")
+    native_dir = venv / "native"
+    native_dir.mkdir()
+    shutil.copy(_loadable_stdlib_extension(), native_dir / "working.so")
+    codesign = _write_fake_codesign(tmp_path / "codesign", "never-matches")
+
+    result = _run(SCRIPT, str(keg), env={"BRAINLAYER_CODESIGN_BIN": str(codesign)})
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "valid-signature: 1" in result.stdout
+    assert "loadable: 1" in result.stdout
+    assert "allowed-optional: 0" in result.stdout
 
 
 def test_packaged_layout_is_wired_into_wheel() -> None:
@@ -92,6 +243,9 @@ def _fake_packaged_keg(tmp_path: Path) -> tuple[Path, Path]:
     Returns ``(launchd_dir, unsigned_macho)``; the unsigned Mach-O sits in a dot-dir like ``PIL/.dylibs``.
     """
     keg = tmp_path / "keg"
+    python_bin = keg / "libexec" / "venv" / "bin"
+    python_bin.mkdir(parents=True)
+    (python_bin / "python").symlink_to(sys.executable)
     site_packages = keg / "libexec" / "venv" / "lib" / "python3.13" / "site-packages"
     launchd_dir = site_packages / "brainlayer" / "launchd"
     launchd_dir.mkdir(parents=True)

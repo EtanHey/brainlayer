@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreGraphics
 import Foundation
 
@@ -28,10 +29,9 @@ enum BrainBarLaunchMode: Equatable {
     }
 }
 
-enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
+enum BrainBarTab: Int, CaseIterable, Equatable, Hashable, Identifiable {
     case dashboard = 0
-    case injections = 1
-    case graph = 2
+    case settings = 1
 
     var id: Int { rawValue }
 
@@ -39,17 +39,19 @@ enum BrainBarTab: Int, CaseIterable, Equatable, Identifiable {
         switch self {
         case .dashboard:
             return "Dashboard"
-        case .injections:
-            return "Injections"
-        case .graph:
-            return "Graph"
+        case .settings:
+            return "Settings"
         }
     }
-}
 
-enum BrainBarQuickAction: Equatable {
-    case capture
-    case search
+    var systemImage: String {
+        switch self {
+        case .dashboard:
+            return "gauge"
+        case .settings:
+            return "gearshape"
+        }
+    }
 }
 
 enum BrainBarSparklineStyle: Equatable {

@@ -413,6 +413,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0,
             dashboardStatsProvider: hotProvider.fetch,
             signalCoverageProvider: coverageProvider.fetch,
@@ -483,6 +484,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 0,
             dashboardStatsProvider: { hotStats },
             signalCoverageProvider: coverageProvider.fetch,
@@ -519,6 +521,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
@@ -548,6 +551,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer { collector.stop() }
@@ -588,6 +592,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             windowedBucketsProvider: provider.fetch,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
@@ -624,6 +629,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             windowedBucketsProvider: { windowMinutes, _ in
                 guard windowMinutes == 180 else { throw WindowFetchFailure() }
                 return threeHourBuckets
@@ -670,6 +676,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             windowedBucketsProvider: provider.fetch,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
@@ -711,6 +718,7 @@ final class StatsCollectorTests: XCTestCase {
         let collector = StatsCollector(
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
+            agentActivityMonitor: .synthetic,
             windowedBucketsProvider: provider.fetch,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
@@ -736,6 +744,7 @@ final class StatsCollectorTests: XCTestCase {
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
             watcherProcessProbe: probe,
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer {
@@ -777,6 +786,7 @@ final class StatsCollectorTests: XCTestCase {
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
             watcherProcessProbe: probe,
+            agentActivityMonitor: .synthetic,
             statsRefreshCoalesceInterval: 5,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
@@ -820,6 +830,7 @@ final class StatsCollectorTests: XCTestCase {
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
             watcherProcessProbe: probe,
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer {
@@ -859,6 +870,7 @@ final class StatsCollectorTests: XCTestCase {
             dbPath: tempDBPath + ".missing",
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
             watcherProcessProbe: probe,
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer {
@@ -897,6 +909,7 @@ final class StatsCollectorTests: XCTestCase {
             dbPath: tempDBPath,
             daemonMonitor: DaemonHealthMonitor(targetPID: ProcessInfo.processInfo.processIdentifier),
             watcherProcessProbe: probe,
+            agentActivityMonitor: .synthetic,
             databaseOpenConfiguration: BrainDatabase.OpenConfiguration(readOnly: true)
         )
         defer {

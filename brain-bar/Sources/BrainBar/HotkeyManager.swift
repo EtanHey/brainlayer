@@ -1,7 +1,7 @@
 // HotkeyManager.swift — Optional global hotkey via CGEventTap (fallback path).
 //
 // Primary hotkeys are expected from Karabiner Elements → `open brainbar://toggle`
-// or `brainbar://search` (see brain-bar/karabiner/brainbar-f4.json). This tap
+// (see brain-bar/karabiner/brainbar-f4.json). This tap
 // is only started when the user enables “CGEventTap fallback” in the status
 // popover (Input Monitoring / Listen Events required).
 //

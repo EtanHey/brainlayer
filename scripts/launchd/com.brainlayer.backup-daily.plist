@@ -28,8 +28,6 @@
 	<dict>
 		<key>PATH</key>
 		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
-		<key>BRAINLAYER_BACKUP_DRIVE_FOLDER</key>
-		<string>Brain Drive/06_ARCHIVE/backups/brainlayer-db</string>
 		<key>BRAINLAYER_REPO_ROOT</key>
 		<string>__BRAINLAYER_DIR__</string>
 		<key>BRAINLAYER_ENV_FILE</key>

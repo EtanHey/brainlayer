@@ -1,47 +1,5 @@
 import Foundation
 
-enum BrainLayerEnrichmentMode: String, CaseIterable, Identifiable, Sendable {
-    case remote
-    case local
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .remote: "Remote"
-        case .local: "Local"
-        }
-    }
-}
-
-enum BrainLayerEnrichmentProvider: String, CaseIterable, Identifiable, Sendable {
-    case gemini
-    case openai
-    case anthropic
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .gemini: "Gemini"
-        case .openai: "OpenAI"
-        case .anthropic: "Anthropic"
-        }
-    }
-
-    var isWiredToday: Bool {
-        self == .gemini
-    }
-
-    static var selectableCases: [BrainLayerEnrichmentProvider] {
-        allCases.filter(\.isWiredToday)
-    }
-
-    var unavailableReason: String? {
-        isWiredToday ? nil : "Runtime integration is not available in this build."
-    }
-}
-
 enum BrainLayerGoogleAPIKey: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     enum Kind: Equatable {
         case missing
@@ -115,7 +73,6 @@ enum BrainLayerLaunchdLoadState: Equatable, Sendable {
 }
 
 enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
-    case enrichment
     case hotlane
     case decay
     case drain
@@ -132,7 +89,6 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .enrichment: "Enrichment"
         case .hotlane: "Hotlane"
         case .decay: "Decay"
         case .drain: "Drain"
@@ -149,7 +105,6 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
 
     var configKey: String {
         switch self {
-        case .enrichment: "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED"
         case .hotlane: "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED"
         case .decay: "BRAINLAYER_LAUNCHD_DECAY_ENABLED"
         case .drain: "BRAINLAYER_LAUNCHD_DRAIN_ENABLED"
@@ -166,6 +121,7 @@ enum BrainLayerLaunchdJob: String, CaseIterable, Identifiable, Sendable {
 
     var launchdLabel: String {
         switch self {
+        case .hotlane: "com.brainlayer.hotlane-brainbar"
         case .backupDaily: "com.brainlayer.backup-daily"
         case .jsonlBackup: "com.brainlayer.jsonl-backup"
         case .maintenanceNightly: "com.brainlayer.maintenance-nightly"
@@ -185,21 +141,15 @@ struct BrainLayerLaunchdJobSetting: Equatable, Sendable {
 struct BrainLayerConfig: Equatable, Sendable {
     var googleAPIKey: BrainLayerGoogleAPIKey
     var systemEnabled: Bool
-    var enrichmentEnabled: Bool
-    var enrichmentMode: BrainLayerEnrichmentMode
-    var enrichmentProvider: BrainLayerEnrichmentProvider
-    var enrichmentBackend: String
-    var tuningValues: [String: String]
     var launchdJobs: [BrainLayerLaunchdJob: BrainLayerLaunchdJobSetting]
+
+    var enrichmentIsOff: Bool {
+        true // Enrichment is retired; legacy config flags cannot enable it.
+    }
 
     static let defaultConfig = BrainLayerConfig(
         googleAPIKey: .missing,
         systemEnabled: true,
-        enrichmentEnabled: true,
-        enrichmentMode: .remote,
-        enrichmentProvider: .gemini,
-        enrichmentBackend: "gemini",
-        tuningValues: BrainLayerEnvDocument.tuningDefaults,
         launchdJobs: Dictionary(
             uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
                 ($0, BrainLayerLaunchdJobSetting(enabled: true, loadState: .unknown))
@@ -210,11 +160,6 @@ struct BrainLayerConfig: Equatable, Sendable {
     func persistedValuesEqual(to other: BrainLayerConfig) -> Bool {
         googleAPIKey == other.googleAPIKey &&
             systemEnabled == other.systemEnabled &&
-            enrichmentEnabled == other.enrichmentEnabled &&
-            enrichmentMode == other.enrichmentMode &&
-            enrichmentProvider == other.enrichmentProvider &&
-            enrichmentBackend == other.enrichmentBackend &&
-            tuningValues == other.tuningValues &&
             Dictionary(uniqueKeysWithValues: launchdJobs.map { ($0.key, $0.value.enabled) }) ==
             Dictionary(uniqueKeysWithValues: other.launchdJobs.map { ($0.key, $0.value.enabled) })
     }
@@ -232,41 +177,11 @@ enum BrainLayerConfigValidationResult: Equatable, Sendable {
     }
 }
 
-enum BrainLayerConfigValidator {
-    static func validate(
-        _ config: BrainLayerConfig,
-        previousConfig: BrainLayerConfig? = nil
-    ) -> BrainLayerConfigValidationResult {
-        let activatesUnavailableProvider = previousConfig == nil ||
-            previousConfig?.enrichmentProvider != config.enrichmentProvider ||
-            (previousConfig?.enrichmentEnabled == false && config.enrichmentEnabled)
-        if config.enrichmentEnabled,
-           config.enrichmentProvider.unavailableReason != nil,
-           activatesUnavailableProvider {
-            return .failed(
-                "\(config.enrichmentProvider.title) cannot be activated because its runtime integration is unavailable."
-            )
-        }
-        if config.enrichmentBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .failed("Enrichment backend is required.")
-        }
-        return .passed
-    }
-}
-
 struct BrainLayerActiveRuntimeValues: Equatable, Sendable {
     let systemEnabled: Bool
-    let enrichmentEnabled: Bool
-    let enrichmentMode: BrainLayerEnrichmentMode
-    let enrichmentProvider: BrainLayerEnrichmentProvider
-    let enrichmentBackend: String
 
     init(config: BrainLayerConfig) {
         systemEnabled = config.systemEnabled
-        enrichmentEnabled = config.enrichmentEnabled
-        enrichmentMode = config.enrichmentMode
-        enrichmentProvider = config.enrichmentProvider
-        enrichmentBackend = config.enrichmentBackend
     }
 
     func matches(_ config: BrainLayerConfig) -> Bool {
@@ -274,8 +189,7 @@ struct BrainLayerActiveRuntimeValues: Equatable, Sendable {
     }
 
     var summary: String {
-        "\(enrichmentEnabled ? "Enrichment on" : "Enrichment off") · " +
-            "\(enrichmentMode.title) · \(enrichmentProvider.title) · \(enrichmentBackend)"
+        "BrainLayer jobs \(systemEnabled ? "on" : "off")"
     }
 }
 
@@ -308,13 +222,11 @@ struct StaticBrainLayerActiveRuntimeProvider: BrainLayerActiveRuntimeSampling {
 }
 
 enum BrainLayerSettingsService: Equatable, Hashable, Sendable {
-    case enrichment
     case systemJobs
     case launchdJob(BrainLayerLaunchdJob)
 
     var title: String {
         switch self {
-        case .enrichment: "Enrichment service"
         case .systemJobs: "BrainLayer jobs"
         case let .launchdJob(job): job.launchdLabel
         }
@@ -406,28 +318,10 @@ struct BrainLayerEnvDocument {
         return output.joined(separator: "\n") + "\n"
     }
 
-    static let tuningDefaults: [String: String] = [
-        "BRAINLAYER_ENRICH_RATE": "15",
-        "BRAINLAYER_ENRICH_CONCURRENCY": "4",
-        "BRAINLAYER_MAX_COMMIT_BATCH": "25",
-        "BRAINLAYER_GEMINI_SERVICE_TIER": "flex",
-        "BRAINLAYER_DISABLED_SLEEP_SECONDS": "3600",
-    ]
-
     private static let managedKeyOrder: [String] = [
         "GOOGLE_API_KEY",
         "GOOGLE_GENERATIVE_AI_API_KEY",
         "BRAINLAYER_SYSTEM_ENABLED",
-        "BRAINLAYER_ENRICH_ENABLED",
-        "BRAINLAYER_ENRICH_MODE",
-        "BRAINLAYER_ENRICH_PROVIDER",
-        "BRAINLAYER_ENRICH_BACKEND",
-        "BRAINLAYER_ENRICH_RATE",
-        "BRAINLAYER_ENRICH_CONCURRENCY",
-        "BRAINLAYER_MAX_COMMIT_BATCH",
-        "BRAINLAYER_GEMINI_SERVICE_TIER",
-        "BRAINLAYER_DISABLED_SLEEP_SECONDS",
-        "BRAINLAYER_LAUNCHD_ENRICHMENT_ENABLED",
         "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED",
         "BRAINLAYER_LAUNCHD_DECAY_ENABLED",
         "BRAINLAYER_LAUNCHD_DRAIN_ENABLED",
@@ -441,14 +335,6 @@ struct BrainLayerEnvDocument {
         "BRAINLAYER_LAUNCHD_WAL_CHECKPOINT_ENABLED",
     ]
 
-    private static let tuningKeyOrder: [String] = [
-        "BRAINLAYER_ENRICH_RATE",
-        "BRAINLAYER_ENRICH_CONCURRENCY",
-        "BRAINLAYER_MAX_COMMIT_BATCH",
-        "BRAINLAYER_GEMINI_SERVICE_TIER",
-        "BRAINLAYER_DISABLED_SLEEP_SECONDS",
-    ]
-
     private static func managedValues(
         for config: BrainLayerConfig,
         includeLegacyGoogleKey: Bool
@@ -456,16 +342,9 @@ struct BrainLayerEnvDocument {
         var values: [String: String] = [
             "GOOGLE_API_KEY": config.googleAPIKey.renderedValue,
             "BRAINLAYER_SYSTEM_ENABLED": config.systemEnabled ? "1" : "0",
-            "BRAINLAYER_ENRICH_ENABLED": config.enrichmentEnabled ? "1" : "0",
-            "BRAINLAYER_ENRICH_MODE": config.enrichmentMode.rawValue,
-            "BRAINLAYER_ENRICH_PROVIDER": config.enrichmentProvider.rawValue,
-            "BRAINLAYER_ENRICH_BACKEND": config.enrichmentBackend,
         ]
         if includeLegacyGoogleKey {
             values["GOOGLE_GENERATIVE_AI_API_KEY"] = ""
-        }
-        for key in tuningKeyOrder {
-            values[key] = config.tuningValues[key] ?? tuningDefaults[key] ?? ""
         }
         for job in BrainLayerLaunchdJob.allCases {
             values[job.configKey] = config.launchdJobs[job]?.enabled == false ? "0" : "1"
@@ -482,24 +361,6 @@ struct BrainLayerEnvDocument {
         }
         if let raw = assignments["BRAINLAYER_SYSTEM_ENABLED"] {
             config.systemEnabled = !isFalse(raw)
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_ENABLED"] {
-            config.enrichmentEnabled = !isFalse(raw)
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_MODE"],
-           let mode = BrainLayerEnrichmentMode(rawValue: normalized(raw)) {
-            config.enrichmentMode = mode
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_PROVIDER"],
-           let provider = BrainLayerEnrichmentProvider(rawValue: normalized(raw)) {
-            config.enrichmentProvider = provider
-        }
-        if let raw = assignments["BRAINLAYER_ENRICH_BACKEND"], !normalized(raw).isEmpty {
-            config.enrichmentBackend = normalized(raw)
-        }
-        for key in tuningKeyOrder {
-            guard let raw = assignments[key] else { continue }
-            config.tuningValues[key] = raw
         }
         for job in BrainLayerLaunchdJob.allCases {
             guard let raw = assignments[job.configKey] else { continue }
@@ -553,6 +414,10 @@ struct BrainLayerEnvDocument {
 
     private static func isFalse(_ value: String) -> Bool {
         ["0", "false", "no", "off", "disabled"].contains(normalized(value))
+    }
+
+    private static func isTrue(_ value: String) -> Bool {
+        ["1", "true"].contains(normalized(value))
     }
 
     private static func normalized(_ value: String) -> String {
@@ -627,6 +492,13 @@ struct BrainLayerLaunchdCommandResult: Sendable, Equatable {
 
 protocol BrainLayerLaunchdStatusSampling: Sendable {
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState]
+    func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+}
+
+extension BrainLayerLaunchdStatusSampling {
+    func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
+        sample().mapValues(BrainLayerLaunchdJobObservation.stateOnly)
+    }
 }
 
 struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
@@ -634,35 +506,100 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
 
     private let commandRunner: CommandRunner
     private let uidProvider: @Sendable () -> uid_t
+    private let runRecordDate: @Sendable (BrainLayerLaunchdJob) -> Date?
+    private let schedule: @Sendable (BrainLayerLaunchdJob) -> DateComponents?
+    private let calendar: Calendar
+    private let now: @Sendable () -> Date
 
     init(
         commandRunner: @escaping CommandRunner = BrainLayerLaunchdStatusProvider.run,
-        uidProvider: @escaping @Sendable () -> uid_t = getuid
+        uidProvider: @escaping @Sendable () -> uid_t = getuid,
+        runRecordDate: @escaping @Sendable (BrainLayerLaunchdJob) -> Date? = { readRunRecord($0) },
+        schedule: @escaping @Sendable (BrainLayerLaunchdJob) -> DateComponents? = { readSchedule($0) },
+        calendar: Calendar = .current,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.commandRunner = commandRunner
         self.uidProvider = uidProvider
+        self.runRecordDate = runRecordDate
+        self.schedule = schedule
+        self.calendar = calendar
+        self.now = now
     }
 
     func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] {
-        Dictionary(
-            uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
-                (job, state(for: job.launchdLabel))
-            }
-        )
+        sampleActivity().mapValues(\.loadState)
     }
 
-    private func state(for label: String) -> BrainLayerLaunchdLoadState {
-        let target = "gui/\(uidProvider())/\(label)"
+    func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
+        Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
+    }
+
+    private func observation(for job: BrainLayerLaunchdJob) -> BrainLayerLaunchdJobObservation {
+        let target = "gui/\(uidProvider())/\(job.launchdLabel)"
         let result = commandRunner(["/bin/launchctl", "print", target])
         if result.terminationStatus == 0 {
-            return result.output.contains("pid =") ? .running : .loaded
+            let components = schedule(job)
+            return BrainLayerLaunchdJobObservation(
+                loadState: result.output.contains("pid =") ? .running : .loaded,
+                runs: integerLine(named: "runs", in: result.output),
+                lastExitCode: integerLine(named: "last exit code", in: result.output).map(Int32.init),
+                lastRunAt: runRecordDate(job),
+                nextRunAt: nextRun(components: components),
+                isContinuous: components == nil && job.isContinuous
+            )
         }
 
         if result.terminationStatus == 113 ||
             result.output.localizedCaseInsensitiveContains("could not find service") {
-            return .unloaded
+            return .stateOnly(.unloaded)
         }
-        return .probeError("launchctl exited \(result.terminationStatus)")
+        return .stateOnly(.probeError("launchctl exited \(result.terminationStatus)"))
+    }
+
+    private func integerLine(named key: String, in output: String) -> Int? {
+        let pattern = "(?m)^\\s*\(NSRegularExpression.escapedPattern(for: key))\\s*=\\s*(-?\\d+)"
+        return firstInteger(matching: pattern, in: output)
+    }
+
+    private func firstInteger(matching pattern: String, in output: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
+              let range = Range(match.range(at: 1), in: output)
+        else { return nil }
+        return Int(output[range])
+    }
+
+    private func nextRun(components: DateComponents?) -> Date? {
+        guard var components, components.hour != nil, components.minute != nil else { return nil }
+        components.second = 0
+        return calendar.nextDate(after: now(), matching: components, matchingPolicy: .nextTime)
+    }
+
+    static func readRunRecord(
+        _ job: BrainLayerLaunchdJob,
+        in directory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/brainlayer/job-runs")
+    ) -> Date? {
+        let path = directory.appendingPathComponent("\(job.launchdLabel).started")
+        guard let raw = try? String(contentsOf: path, encoding: .utf8),
+              let seconds = TimeInterval(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func readSchedule(
+        _ job: BrainLayerLaunchdJob,
+        in directory: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+    ) -> DateComponents? {
+        let path = directory.appendingPathComponent("\(job.launchdLabel).plist")
+        guard let data = try? Data(contentsOf: path),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let interval = plist["StartCalendarInterval"] as? [String: Int],
+              let hour = interval["Hour"], let minute = interval["Minute"] else { return nil }
+        var components = DateComponents(hour: hour, minute: minute)
+        if let weekday = interval["Weekday"] { components.weekday = (weekday % 7) + 1 }
+        return components
     }
 
     private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
@@ -685,6 +622,16 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             )
         } catch {
             return BrainLayerLaunchdCommandResult(terminationStatus: 1, output: "")
+        }
+    }
+
+}
+
+private extension BrainLayerLaunchdJob {
+    var isContinuous: Bool {
+        switch self {
+        case .watch, .drain, .hotlane: true
+        default: false
         }
     }
 }

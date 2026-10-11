@@ -316,7 +316,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_orders_by_time(self, populated_store):
         """Chunks are ordered by created_at timestamp."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -330,7 +330,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_counts_messages(self, populated_store):
         """Message counts are correct."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -341,7 +341,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_calculates_timing(self, populated_store):
         """Duration is calculated from first to last chunk."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -352,7 +352,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_empty_session(self, store):
         """Nonexistent session returns empty result."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         result = reconstruct_session(store, "nonexistent-session")
         assert result["chunks"] == []
@@ -361,7 +361,7 @@ class TestConversationReconstruction:
 
     def test_reconstruct_formats_roles(self, populated_store):
         """Conversation text includes role prefixes."""
-        from brainlayer.pipeline.session_enrichment import reconstruct_session
+        from brainlayer.pipeline.session_history import reconstruct_session
 
         session_id = populated_store._test_session_id
         result = reconstruct_session(populated_store, session_id)
@@ -378,7 +378,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_valid_response(self):
         """Valid JSON response is parsed correctly."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -409,7 +409,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_response_with_markdown_wrapper(self):
         """JSON wrapped in markdown code block is still parsed."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = '```json\n{"session_summary": "This is a valid session about deployment", "primary_intent": "deploying", "outcome": "success"}\n```'
         result = parse_session_enrichment(response)
@@ -418,27 +418,27 @@ class TestParseSessionEnrichment:
 
     def test_parse_empty_response(self):
         """Empty/None response returns None."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         assert parse_session_enrichment(None) is None
         assert parse_session_enrichment("") is None
 
     def test_parse_invalid_json(self):
         """Invalid JSON returns None."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         assert parse_session_enrichment("not json at all") is None
 
     def test_parse_missing_summary(self):
         """Response without session_summary returns None (required field)."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps({"primary_intent": "debugging"})
         assert parse_session_enrichment(response) is None
 
     def test_parse_clamps_scores(self):
         """Scores are clamped to 1-10 range."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -454,7 +454,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_normalizes_intent(self):
         """Intent values are lowercased and trimmed."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -467,7 +467,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_invalid_intent_ignored(self):
         """Invalid intent value is not included."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -480,7 +480,7 @@ class TestParseSessionEnrichment:
 
     def test_parse_caps_arrays(self):
         """Arrays are capped at reasonable limits."""
-        from brainlayer.pipeline.session_enrichment import parse_session_enrichment
+        from brainlayer.pipeline.session_history import parse_session_enrichment
 
         response = json.dumps(
             {
@@ -500,7 +500,7 @@ class TestListSessionsForEnrichment:
 
     def test_list_from_chunks(self, populated_store):
         """Sessions are discovered from chunks source_file."""
-        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+        from brainlayer.pipeline.session_history import list_sessions_for_enrichment
 
         sessions = list_sessions_for_enrichment(populated_store)
         # Should find at least the test session
@@ -509,7 +509,7 @@ class TestListSessionsForEnrichment:
 
     def test_already_enriched_excluded(self, populated_store):
         """Sessions that are already enriched are excluded."""
-        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+        from brainlayer.pipeline.session_history import list_sessions_for_enrichment
 
         sid = populated_store._test_session_id
 
@@ -529,7 +529,7 @@ class TestListSessionsForEnrichment:
     @pytest.mark.parametrize("source", ["codex_cli", "cursor_cli", "gemini_cli"])
     def test_agent_cli_sessions_are_discovered_from_chunks(self, store, source):
         """Agent-session sources beyond Claude are eligible for session enrichment."""
-        from brainlayer.pipeline.session_enrichment import list_sessions_for_enrichment
+        from brainlayer.pipeline.session_history import list_sessions_for_enrichment
 
         cursor = store.conn.cursor()
         session_id = f"{source}-session"
@@ -561,113 +561,4 @@ class TestListSessionsForEnrichment:
 # ── End-to-End Enrichment Tests ─────────────────────────────────
 
 
-class TestEnrichSession:
-    """Test the full enrichment pipeline."""
-
-    def test_enrich_with_mock_llm(self, populated_store):
-        """Full enrichment pipeline with mocked LLM."""
-        from brainlayer.pipeline.session_enrichment import enrich_session
-
-        # Mock LLM that returns valid JSON
-        def mock_llm(prompt: str) -> str:
-            return json.dumps(
-                {
-                    "session_summary": "Set up JWT authentication with bun package manager instead of npm",
-                    "primary_intent": "implementing",
-                    "outcome": "success",
-                    "complexity_score": 4,
-                    "session_quality_score": 7,
-                    "decisions_made": [{"decision": "Use bun over npm", "rationale": "User preference"}],
-                    "corrections": [{"what_was_wrong": "Used npm", "what_user_wanted": "Use bun"}],
-                    "learnings": ["User prefers bun package manager"],
-                    "mistakes": [],
-                    "patterns": [],
-                    "topic_tags": ["jwt", "authentication", "bun"],
-                    "tool_usage_stats": [],
-                    "what_worked": "Responsive to user corrections",
-                    "what_failed": "Initial package manager choice",
-                }
-            )
-
-        sid = populated_store._test_session_id
-        result = enrich_session(
-            store=populated_store,
-            session_id=sid,
-            call_llm_fn=mock_llm,
-            project="test-project",
-        )
-
-        assert result is not None
-        assert result["session_summary"].startswith("Set up JWT")
-        assert result["primary_intent"] == "implementing"
-        assert result["outcome"] == "success"
-        assert len(result["corrections"]) == 1
-        assert result["message_count"] == 8
-
-        # Verify it was persisted
-        stored = populated_store.get_session_enrichment(sid)
-        assert stored is not None
-        assert stored["session_summary"] == result["session_summary"]
-
-    def test_enrich_empty_session_returns_none(self, store):
-        """Enriching nonexistent session returns None."""
-        from brainlayer.pipeline.session_enrichment import enrich_session
-
-        result = enrich_session(
-            store=store,
-            session_id="nonexistent",
-            call_llm_fn=lambda p: "{}",
-        )
-        assert result is None
-
-    def test_enrich_with_llm_failure(self, populated_store):
-        """LLM returning None doesn't crash."""
-        from brainlayer.pipeline.session_enrichment import enrich_session
-
-        result = enrich_session(
-            store=populated_store,
-            session_id=populated_store._test_session_id,
-            call_llm_fn=lambda p: None,
-        )
-        assert result is None
-
-    def test_enrich_with_bad_llm_response(self, populated_store):
-        """LLM returning invalid JSON doesn't crash."""
-        from brainlayer.pipeline.session_enrichment import enrich_session
-
-        result = enrich_session(
-            store=populated_store,
-            session_id=populated_store._test_session_id,
-            call_llm_fn=lambda p: "not valid json response",
-        )
-        assert result is None
-
-
 # ── Prompt Building Tests ───────────────────────────────────────
-
-
-class TestBuildSessionPrompt:
-    """Test prompt construction."""
-
-    def test_prompt_includes_conversation(self):
-        """Prompt includes the conversation text."""
-        from brainlayer.pipeline.session_enrichment import build_session_prompt
-
-        prompt = build_session_prompt("USER: Hello\nASSISTANT: Hi!", "test-project")
-        assert "USER: Hello" in prompt
-        assert "ASSISTANT: Hi!" in prompt
-
-    def test_prompt_includes_project(self):
-        """Prompt includes the project name."""
-        from brainlayer.pipeline.session_enrichment import build_session_prompt
-
-        prompt = build_session_prompt("test conversation", "my-project")
-        assert "my-project" in prompt
-
-    def test_prompt_escapes_braces(self):
-        """Braces in conversation are escaped for str.format()."""
-        from brainlayer.pipeline.session_enrichment import build_session_prompt
-
-        # This would crash if braces aren't escaped
-        prompt = build_session_prompt("code: function() { return {}; }", "test")
-        assert "function()" in prompt

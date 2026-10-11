@@ -1,7 +1,7 @@
 [project]
 name = "brainlayer"
-version = "1.5.22"
-description = "Persistent memory MCP server for AI agents — 17 tools, semantic search, knowledge graph, on-device SQLite"
+version = "1.5.50"
+description = "Persistent local memory for AI agents — 16 BrainBar MCP tools, semantic search, knowledge graph, SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
 authors = [{name = "Etan Heyman"}]
@@ -30,11 +30,14 @@ dependencies = [
     "numpy>=1.22,<3.0",  # For sentence-transformers
     "scikit-learn>=1.0.0",  # K-means for cluster-based sampling
     "spacy>=3.7,<4.0",  # NER for PII sanitization (en_core_web_sm model)
-    "requests>=2.28.0",  # HTTP calls to Ollama for enrichment
+    "requests>=2.28.0",  # HTTP clients for backups and retained local utilities
+    "idna>=2.5,<4",  # Imported through requests by backup and hook entrypoints
     "google-api-python-client>=2.0.0",  # Daily DB backup upload to Google Drive
     "google-auth>=2.0.0",  # OAuth refresh for Google Drive backups
+    "google-auth-oauthlib>=1.1.0",  # Installed-app Drive consent for BrainLayer-owned backup tokens
     "ranx>=0.3.20",  # IR evaluation metrics + significance testing
     "abydos>=0.5.0",  # Beider-Morse phonetic matching for cross-script entity aliases
+    "deprecation>=2.1.0",  # Imported by abydos phonetic modules used by prompt hooks
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -48,9 +51,6 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-cloud = [
-    "google-genai>=1.0.0",  # Gemini Batch API for cloud backfill (new SDK)
-]
 brain = [
     "igraph>=0.11.0",  # Graph operations + Leiden via leidenalg
     "leidenalg>=0.10.0",  # Leiden community detection (replaces graspologic)
@@ -76,14 +76,15 @@ telemetry = [
 ]
 dev = [
     "deepchecks>=0.19.1",
-    "google-genai>=1.0.0",
     "numpy<2",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.3.1",
     "ruff>=0.1.0",
     "scikit-learn<1.6",
     "setuptools>=70.0.0,<81",
     "tiktoken>=0.7.0",
+    "threadpoolctl>=3.0.0",
     "umap-learn>=0.5.0",
 ]
 docs = [
@@ -117,8 +118,10 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 asyncio_mode = "auto"
 pythonpath = ["src"]
 markers = [
+    "retired_enrichment: retirement tests that forbid cloud-client construction and inet sends",
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
     "embedding_model: tests that deliberately load a real embedding model (deselected by scripts/run_tests.sh)",
+    "timeout: maximum duration for an individual test",
     "integration: tests that need the real production DB (268K+ chunks)",
     "live: tests that need the live production DB or mutable local hooks state",
     "slow: tests that load ML models or take >30s",
@@ -139,6 +142,7 @@ exclude = [
 "scripts/hotlane_brainbar_daemon.py" = "brainlayer/launchd/hotlane_brainbar_daemon.py"
 "scripts/tier0-watchdog.sh" = "brainlayer/launchd/tier0-watchdog.sh"
 "scripts/release-verify-signatures.sh" = "brainlayer/launchd/release-verify-signatures.sh"
+"src/brainlayer/cachedelete_purge.swift" = "brainlayer/cachedelete_purge.swift"
 
 [tool.hatch.build.targets.sdist]
 only-include = [

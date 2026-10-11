@@ -1,5 +1,9 @@
 # ADR-0001: sqlite-vec over a dedicated vector database
 
+> LLM enrichment is retired. Its feature and run/resume instructions below are historical.
+> Existing metadata, local pipelines, and legacy writer-stop checks remain available.
+> History: [enrichment retirement](../enrichment.md).
+
 **Status:** Accepted
 
 **Date:** 2025-12 (approximate — decision predates ADR documentation)

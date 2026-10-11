@@ -2,6 +2,7 @@
 
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -9,6 +10,7 @@ from .agent_provenance import resolve_source_class
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import embed_chunks
 from .pipeline.chunk import Chunk
+from .pipeline.secret_scrub import scrub_for_storage
 from .runtime_store import ReadonlyStore, open_writer_store
 from .system_prompt_guard import looks_like_system_prompt
 from .vector_store import IndexDeadlineExceeded, VectorStore
@@ -16,6 +18,13 @@ from .vector_store import IndexDeadlineExceeded, VectorStore
 logger = logging.getLogger(__name__)
 
 from .paths import get_db_path
+
+
+def _scrubbed_chunk(chunk: Chunk) -> Chunk:
+    content, metadata = scrub_for_storage(chunk.content, chunk.metadata)
+    if content == chunk.content and metadata == chunk.metadata:
+        return chunk
+    return replace(chunk, content=content, metadata=metadata, char_count=len(content))
 
 
 def index_chunks_to_sqlite(
@@ -43,6 +52,10 @@ def index_chunks_to_sqlite(
 
     if not filtered_chunks:
         return 0
+
+    # Scrub before embedding, so the vector, the stored row, its FTS copy and
+    # its content hash are all computed from the same scrubbed text.
+    filtered_chunks = [_scrubbed_chunk(chunk) for chunk in filtered_chunks]
 
     # Generate embeddings
     def embedding_progress(completed: int, total: int) -> None:
