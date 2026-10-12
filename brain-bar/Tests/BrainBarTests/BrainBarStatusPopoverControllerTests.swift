@@ -4,12 +4,83 @@ import XCTest
 
 @MainActor
 final class BrainBarStatusPopoverControllerTests: XCTestCase {
+    func testLongStatusReasonIsTruncatedAtAWordBoundaryInBothMenuPaths() {
+        let reason = String(repeating: "The example status reason keeps growing as neutral words repeat. ", count: 10)
+        XCTAssertGreaterThanOrEqual(reason.count, 300)
+        let badge = BadgeStatePresentation.failVisible(reason)
+        let title = BrainBarStatusPopoverController.statusLineTitle(for: badge)
+
+        XCTAssertLessThanOrEqual(title.count, 72)
+        XCTAssertTrue(title.hasSuffix("…"))
+        XCTAssertEqual(title, "Needs attention: The example status reason keeps growing as neutral…")
+        XCTAssertEqual(BrainBarStatusPopoverController.menuRowTitles(for: badge).first, title)
+    }
+
+    func testShortAndHealthyStatusTitlesAreUnchanged() {
+        XCTAssertEqual(
+            BrainBarStatusPopoverController.statusLineTitle(for: .failVisible("Watcher stopped")),
+            "Needs attention: Watcher stopped"
+        )
+        XCTAssertEqual(
+            BrainBarStatusPopoverController.statusLineTitle(for: .init(badgeOn: false, reason: "", activeCodes: [])),
+            "Nothing needs attention"
+        )
+    }
+
+    func testStatusTitleLimitCountsVisibleCharactersAndHandlesAnUnbrokenReason() {
+        let reason = String(repeating: "👩🏽‍💻", count: 55)
+        let atLimit = BrainBarStatusPopoverController.statusLineTitle(for: .failVisible(reason))
+        XCTAssertEqual(atLimit, "Needs attention: \(reason)")
+        XCTAssertEqual(atLimit.count, 72)
+
+        let overLimit = BrainBarStatusPopoverController.statusLineTitle(for: .failVisible(reason + "👩🏽‍💻"))
+        XCTAssertLessThanOrEqual(overLimit.count, 72)
+        XCTAssertTrue(overLimit.hasSuffix("…"))
+        XCTAssertEqual(overLimit, "Needs attention: \(String(reason.prefix(54)))…")
+    }
+
+    func testStatusRowTooltipPreservesTheFullReasonAndClearsOnRecovery() throws {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let panelController = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime, dashboardPanelController: panelController, statusBar: TestStatusItemHost()
+        )
+        defer { controller.stop() }
+        let menu = controller.contextMenuForTesting
+        let statusRow = try XCTUnwrap(menu.items.first)
+        XCTAssertEqual(statusRow.toolTip, "Badge state has not been read yet.")
+
+        let alertsURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let reason = String(repeating: "The example status reason keeps growing as neutral words repeat. ", count: 10)
+        controller.setBadgeForTesting(.failVisible(reason), alertsURL: alertsURL)
+        controller.menuNeedsUpdate(menu)
+        XCTAssertLessThanOrEqual(statusRow.title.count, 72)
+        XCTAssertTrue(statusRow.title.hasSuffix("…"))
+        XCTAssertEqual(statusRow.toolTip, reason)
+
+        let unboundedMenu = NSMenu(title: "Neutral width reference")
+        unboundedMenu.addItem(NSMenuItem(title: "Needs attention: \(reason)", action: nil, keyEquivalent: ""))
+        XCTAssertLessThan(menu.size.width, unboundedMenu.size.width)
+        print("[menu-width] capped=\(menu.size.width) unbounded=\(unboundedMenu.size.width)")
+
+        controller.setBadgeForTesting(.failVisible("Watcher stopped"), alertsURL: alertsURL)
+        controller.menuNeedsUpdate(menu)
+        XCTAssertEqual(statusRow.title, "Needs attention: Watcher stopped")
+        XCTAssertEqual(statusRow.toolTip, "Watcher stopped")
+
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: alertsURL)
+        controller.menuNeedsUpdate(menu)
+        XCTAssertEqual(statusRow.title, "Nothing needs attention")
+        XCTAssertNil(statusRow.toolTip)
+    }
+
     func testControllerWiresVariableLengthStatusItemToTheWindow() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let panelController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: panelController
+            dashboardPanelController: panelController,
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -25,7 +96,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: windowController
+            dashboardPanelController: windowController,
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -44,7 +116,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: windowController
+            dashboardPanelController: windowController,
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -71,7 +144,8 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: windowController
+            dashboardPanelController: windowController,
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -118,6 +192,51 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let render = String(source[renderStart.lowerBound..<renderEnd.lowerBound])
         XCTAssertTrue(render.contains("let badge = badgePresentation"))
         XCTAssertFalse(render.contains("BadgeStateReader.read"), "UI emissions must not perform badge file I/O.")
+    }
+
+    func testControllerStatusItemBelongsToTheInMemoryHostAndStopsOnThatHost() {
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let panelController = BrainBarDashboardPanelController(runtime: runtime)
+        let host = TestStatusItemHost()
+        let controller = BrainBarStatusPopoverController(
+            runtime: runtime, dashboardPanelController: panelController, statusBar: host
+        )
+        defer { controller.stop() }
+
+        XCTAssertTrue(controller.statusItemForTesting === host.createdItem,
+                      "test fixtures must never create items in the live system menu bar")
+        XCTAssertTrue(controller.statusItemForTesting is TestStatusItemHost.Item)
+        controller.stop()
+        controller.stop()
+        XCTAssertEqual(host.removedItems.count, 1, "stop must remove the item exactly once")
+        XCTAssertTrue(host.removedItems.first === controller.statusItemForTesting)
+        XCTAssertNil(controller.statusItemForTesting.menu)
+        XCTAssertNil(controller.contextMenuForTesting.delegate)
+        XCTAssertNil(panelController.statusItemButton)
+    }
+
+    func testStoppedPrivateStatusFixturesDoNotSurviveAnAutoreleaseDrain() {
+        weak var releasedController: BrainBarStatusPopoverController?
+        weak var releasedHost: TestStatusItemHost?
+        weak var releasedItem: TestStatusItemHost.Item?
+        weak var releasedButton: NSButton?
+        autoreleasepool {
+            let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+            let panelController = BrainBarDashboardPanelController(runtime: runtime)
+            let host = TestStatusItemHost()
+            let controller = BrainBarStatusPopoverController(
+                runtime: runtime, dashboardPanelController: panelController, statusBar: host
+            )
+            releasedController = controller
+            releasedHost = host
+            releasedItem = host.createdItem
+            releasedButton = host.createdItem?.button
+            controller.stop()
+        }
+        XCTAssertNil(releasedController)
+        XCTAssertNil(releasedHost)
+        XCTAssertNil(releasedItem)
+        XCTAssertNil(releasedButton)
     }
 
     private func packageRoot() -> URL {

@@ -153,7 +153,9 @@ final class BrainBarMainWindowTests: XCTestCase {
     func test_the_status_item_opens_a_small_menu_like_voicebar() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
-        let status = BrainBarStatusPopoverController(runtime: runtime, dashboardPanelController: windowController)
+        let status = BrainBarStatusPopoverController(
+            runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
+        )
         defer { status.stop(); windowController.dismiss() }
 
         XCTAssertTrue(status.statusItemForTesting.menu === status.contextMenuForTesting, "every click opens the menu")

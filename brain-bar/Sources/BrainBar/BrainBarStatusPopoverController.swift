@@ -2,16 +2,58 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Tests supply an in-memory host: AppKit only supports the system NSStatusBar,
+/// not separately allocated bars. Keep that native lifecycle behind this seam.
+@MainActor
+protocol BrainBarStatusItem: AnyObject {
+    var length: CGFloat { get }
+    var menu: NSMenu? { get set }
+    var button: NSButton? { get }
+}
+
+@MainActor
+protocol BrainBarStatusItemHosting: AnyObject {
+    func statusItem(withLength length: CGFloat) -> any BrainBarStatusItem
+    func removeStatusItem(_ item: any BrainBarStatusItem)
+}
+
+@MainActor
+final class SystemBrainBarStatusItemHost: BrainBarStatusItemHosting {
+    private let bar = NSStatusBar.system
+
+    private final class Item: BrainBarStatusItem {
+        let native: NSStatusItem
+        init(_ native: NSStatusItem) { self.native = native }
+        var length: CGFloat { native.length }
+        var menu: NSMenu? {
+            get { native.menu }
+            set { native.menu = newValue }
+        }
+        var button: NSButton? { native.button }
+    }
+
+    func statusItem(withLength length: CGFloat) -> any BrainBarStatusItem {
+        Item(bar.statusItem(withLength: length))
+    }
+
+    func removeStatusItem(_ item: any BrainBarStatusItem) {
+        guard let item = item as? Item else { preconditionFailure("Status item belongs to another host") }
+        bar.removeStatusItem(item.native)
+    }
+}
+
 /// The small menu-bar status item (#963, vNext D5), like VoiceBar's: its icon draws the live
 /// sparkline and badge, and every click opens a short menu. Dashboard and Settings open in the
 /// one real BrainBar window.
 @MainActor
 final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
-    let statusItemForTesting: NSStatusItem
+    let statusItemForTesting: any BrainBarStatusItem
     let contextMenuForTesting: NSMenu
 
     private let runtime: BrainBarRuntime
     private let dashboardPanelController: BrainBarDashboardPanelController
+    private let statusBar: any BrainBarStatusItemHosting
+    private var isStopped = false
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
     private let badgeReadQueue = DispatchQueue(label: "com.brainlayer.brainbar.badge-read", qos: .utility)
@@ -26,10 +68,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     /// Shown under the status line only while a job alert is active.
     private let showLogItem = NSMenuItem(title: BrainBarStatusPopoverController.showLogTitle, action: nil, keyEquivalent: "")
 
-    init(runtime: BrainBarRuntime, dashboardPanelController: BrainBarDashboardPanelController) {
+    init(
+        runtime: BrainBarRuntime,
+        dashboardPanelController: BrainBarDashboardPanelController,
+        statusBar: any BrainBarStatusItemHosting
+    ) {
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
-        statusItemForTesting = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusBar = statusBar
+        statusItemForTesting = statusBar.statusItem(withLength: NSStatusItem.variableLength)
         contextMenuForTesting = NSMenu(title: "BrainBar")
         super.init()
 
@@ -39,9 +86,20 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         dashboardPanelController.statusItemButton = statusItemForTesting.button
     }
 
-    /// The menu's first, informational row.
+    /// Includes the attention prefix and ellipsis, so long errors cannot widen the menu.
+    private static let statusLineTitleMaxCharacters = 72
+
+    /// The menu's first, informational row; its tooltip retains the full reason.
     static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
-        badge.badgeOn ? "Needs attention: \(badge.reason)" : "Nothing needs attention"
+        guard badge.badgeOn else { return "Nothing needs attention" }
+        let prefix = "Needs attention: "
+        let title = prefix + badge.reason
+        guard title.count > statusLineTitleMaxCharacters else { return title }
+
+        let reasonPrefix = badge.reason.prefix(statusLineTitleMaxCharacters - prefix.count - 1)
+        let boundary = reasonPrefix.lastIndex(where: { $0.isWhitespace }) ?? reasonPrefix.endIndex
+        let shortenedReason = String(reasonPrefix[..<boundary]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return prefix + shortenedReason + "…"
     }
 
     /// The failing job behind an active job-alert badge code (`job_alert_<key>`), or nil.
@@ -87,10 +145,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     func stop() {
+        guard !isStopped else { return }
+        isStopped = true
+        runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
         close(nil)
-        NSStatusBar.system.removeStatusItem(statusItemForTesting)
+        dashboardPanelController.statusItemButton = nil
+        contextMenuForTesting.delegate = nil
+        statusItemForTesting.menu = nil
+        statusBar.removeStatusItem(statusItemForTesting)
     }
 
     private func configureStatusItem() {
@@ -110,6 +174,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     private func bindCollector(_ collector: StatsCollector?) {
+        guard !isStopped else { return }
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
         badgePresentation = .failVisible("Badge state has not been read yet.")
@@ -210,6 +275,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             }
         }
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
+        statusLineItem.toolTip = badgePresentation.badgeOn ? badgePresentation.reason : nil
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
 #if BRAINBAR_UI
         if let title = Self.showLogItemTitle(
@@ -225,6 +291,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         contextMenuForTesting.delegate = self
         contextMenuForTesting.autoenablesItems = false
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
+        statusLineItem.toolTip = badgePresentation.badgeOn ? badgePresentation.reason : nil
         statusLineItem.isEnabled = false
         contextMenuForTesting.addItem(statusLineItem)
 #if BRAINBAR_UI

@@ -67,7 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.dashboardPanel = dashboardPanel
         statusPopoverController = BrainBarStatusPopoverController(
             runtime: runtime,
-            dashboardPanelController: dashboardPanel
+            dashboardPanelController: dashboardPanel,
+            statusBar: SystemBrainBarStatusItemHost()
         )
 
         let dbPath = BrainBarServer.defaultDBPath()

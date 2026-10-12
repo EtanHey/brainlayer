@@ -231,7 +231,7 @@ final class BrainBarJobAlertTests: XCTestCase {
     func test_the_menu_offers_show_log_only_while_a_job_alert_is_active() {
         let on = BadgeStatePresentation(badgeOn: true, reason: alert, activeCodes: ["queue_backed_up", "job_alert_maintenance-light"])
         XCTAssertEqual(BrainBarStatusPopoverController.jobAlertKey(for: on), "maintenance-light")
-        XCTAssertEqual(BrainBarStatusPopoverController.menuRowTitles(for: on).prefix(2), ["Needs attention: \(alert)", "Show log"])
+        XCTAssertEqual(BrainBarStatusPopoverController.menuRowTitles(for: on).prefix(2), ["Needs attention: BrainLayer light maintenance failed; check the…", "Show log"])
         let off = BadgeStatePresentation(badgeOn: false, reason: "", activeCodes: [])
         XCTAssertNil(BrainBarStatusPopoverController.jobAlertKey(for: off))
         XCTAssertFalse(BrainBarStatusPopoverController.menuRowTitles(for: off).contains("Show log"))
@@ -527,7 +527,9 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         try Data("{}".utf8).write(to: alertsURL)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
-        let status = BrainBarStatusPopoverController(runtime: runtime, dashboardPanelController: windowController)
+        let status = BrainBarStatusPopoverController(
+            runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
+        )
         defer { status.stop(); windowController.dismiss() }
         status.setBadgeForTesting(
             .init(badgeOn: true, reason: first, activeCodes: ["job_alert_maintenance-light"], activeMessages: [first]),
