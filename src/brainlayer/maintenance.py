@@ -1051,8 +1051,7 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
     )
     env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
     lease = env.get("BRAINLAYER_MAINTENANCE_FD")
-    if lease is not None:
-        env["BRAINLAYER_BACKUP_SUPERVISED_CHILD"] = "1"  # Calendar guard owns this same group.
+    inherited = tuple(int(env[n]) for n in ("BRAINLAYER_MAINTENANCE_FD", "BRAINLAYER_CALENDAR_GUARD_FD") if n in env)
     process = subprocess.Popen(
         [sys.executable, "-m", "brainlayer.backup_daily"],
         env=env,
@@ -1060,10 +1059,10 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=lease is None,
-        pass_fds=() if lease is None else (int(lease),),
+        pass_fds=inherited,
     )
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds + 10)
+        stdout, stderr = process.communicate(timeout=timeout_seconds + (30 if inherited else 10))
     except subprocess.TimeoutExpired as exc:
         try:
             if lease is None:

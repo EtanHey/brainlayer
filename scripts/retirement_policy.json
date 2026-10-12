@@ -2068,6 +2068,16 @@
         "target": "subprocess.run"
       }
     },
+    "6b1c576a9f79e4d094aae5bdc4a6c7d313149a6ff38e62cc013f477dd140bdcc": {
+      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
+      "site": {
+        "call_sha256": "268a6429539ff3089a4f3c8b21e3b1ff22a399ebeba267407af0c4a65cc21f35",
+        "kind": "child_process",
+        "owner": "<module>._supervise_backup_process",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "6b497e74019beb502d58b936ec91eff28bbf6fadfade5b3fbab2f779729b0850": {
       "non_cloud_purpose": "Retained module dependency binding: hooks/session-cleanup.py <module>",
       "site": {
@@ -2512,6 +2522,16 @@
         "owner": "<module>._detect_git_sha",
         "path": "src/brainlayer/archive_collapse.py",
         "target": "subprocess.CalledProcessError"
+      }
+    },
+    "86368bb78adc22ccd207f1265f1194046d766451f205cd43b744a22f2fbd98b9": {
+      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
+      "site": {
+        "call_sha256": "c1bb8ed47a76141758d8b908abe3a2a4983be8bbca7671f2792da4cb7e3acee0",
+        "kind": "generic_send",
+        "owner": "<module>.run_calendar",
+        "path": "src/brainlayer/maintenance_calendar.py",
+        "target": "client.request"
       }
     },
     "8670771ec5de78de96ff3727d306c32b3e13605688ea34ec4fda03639ba0c865": {
@@ -4028,16 +4048,6 @@
         "target": "sock.sendto"
       }
     },
-    "c61c3724af4b52c30b19d234c25d8fc8fe6519b1f8a40870cb3f5f79f5bef2c9": {
-      "non_cloud_purpose": "Local process-group custody only: inherit the verified maintenance writer lease into the guard and gated child; weekly backup stays in the guarded calendar group when managed and retains standalone process-group supervision otherwise. No cloud/model sender.",
-      "site": {
-        "call_sha256": "ee184702ee601ba109fdc7790acabdc39286cc09ec797fd56f6a3b278b8113c6",
-        "kind": "child_process",
-        "owner": "<module>._run_bounded_weekly_backup",
-        "path": "src/brainlayer/maintenance.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "c63154b2a0c2b96a56aa5228590d1a56a1af46e7f618fac126b7578857684741": {
       "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
       "site": {
@@ -4546,6 +4556,16 @@
         "target": "socket.socket().setblocking"
       }
     },
+    "e431de0f17da405b4cbd1f007db7eb8ac810d79c3d7afeefeb08118c11845bed": {
+      "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
+      "site": {
+        "call_sha256": "0f3e76a5b2e8912bf9866b0335eea5329810e45c1689b918adb31e9b7063fec0",
+        "kind": "child_process",
+        "owner": "<module>._run_bounded_weekly_backup",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "e5826fe904e7c0b1a1ae6f3974098232488e3ec727d9e5e35a62f9a3c0b22da4": {
       "non_cloud_purpose": "Existing SSL context or error metadata for YouTube transcript ingest or Drive backup; no model send. Site: scripts/index_youtube.py <module>._get_ssl_context ssl.create_default_context.",
       "site": {
@@ -4614,16 +4634,6 @@
         "owner": "<module>.main",
         "path": "scripts/kg_flag_batch.py",
         "target": "sqlite3.connect"
-      }
-    },
-    "eaab538dc0a4d5cb2744a3016d16f6837ae516f45e0c1c5dbee5f5199334edf8": {
-      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
-      "site": {
-        "call_sha256": "db82199611550bf5b1f12c8764f9c8871055bbc08f2f9f3eba2e1cc291662fc7",
-        "kind": "child_process",
-        "owner": "<module>._supervise_backup_process",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "subprocess.Popen"
       }
     },
     "eacf5d8b1f64569fdfd8f0efdff7f1e509670a47cb21ac6a2e9e785879313ea5": {
