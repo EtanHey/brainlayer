@@ -290,8 +290,8 @@ def _kickstart(label: str, command_runner: CommandRunner) -> str:
     if label in RETIRED_ENRICHMENT_LABELS:
         return f"retired:{label}"
     target = _launchd_target(label)
-    command_runner(["launchctl", "kickstart", "-k", target])
-    return f"kickstart:{label}"
+    outcome = command_runner(["launchctl", "kickstart", "-k", target])
+    return f"kickstart{'_failed' if _command_returncode(outcome) else ''}:{label}"
 
 
 def _launchd_process_state(label: str, command_runner: CommandRunner) -> tuple[int, str] | None:
@@ -592,7 +592,11 @@ def count_missing_embeddings(
 
 
 def _hotlane_progress_sample(state: dict[str, Any], count: int | None, now: datetime) -> tuple[bool, bool]:
-    """Compare spaced missing counts; other writers' vectors cannot mask a hotlane stall."""
+    """Compare counts at least 240 s apart, tolerating 300 s scheduler jitter.
+
+    Slow healthy hotlane during big ingest may look stalled when arrivals outrun
+    embeddings: net missing counts alone cannot distinguish overload from a wedge.
+    """
     if count is None:
         return False, False  # A transient failure preserves the last successful comparison.
     baseline = state.get("hotlane_missing_vectors", state.get("missing_vectors"))
@@ -605,7 +609,7 @@ def _hotlane_progress_sample(state: dict[str, Any], count: int | None, now: date
         elapsed = -1
     valid_baseline = type(baseline) is int and baseline >= 0 and elapsed >= 0
     progressed = valid_baseline and count < baseline
-    advanced = valid_baseline and elapsed >= 300
+    advanced = valid_baseline and elapsed >= 240
     if not valid_baseline or progressed or advanced or count == 0:
         state.update(
             hotlane_missing_vectors=count,
@@ -1250,6 +1254,19 @@ def run_health_check(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> HealthCheckResult:
+    from .supervisor_adapters import adapt_commands
+
+    command_runner = adapt_commands(
+        command_runner,
+        config.pause_sentinel_path,
+        required=(
+            config.watch_label,
+            config.drain_label,
+            config.hotlane_label,
+            config.health_check_label,
+            config.observability_label,
+        ),
+    )
     lock_path = Path(f"{config.state_path.expanduser()}.lock")
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)

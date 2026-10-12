@@ -53,7 +53,7 @@ class Supervisor:
         *,
         backoff: float = 10,
         guard_timeout: float = 30,
-        shutdown_timeout: float = 20,
+        shutdown_timeout: float = 15,
         stable_uptime: float = 60,
     ):
         if any(name.removeprefix("com.brainlayer.") in {"enrich", "enrichment"} for name in components):

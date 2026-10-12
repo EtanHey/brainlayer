@@ -24,6 +24,11 @@ exec their service command. API keys stay out of rendered LaunchAgent plists.
 | `BRAINLAYER_SYSTEM_ENABLED` | `1` | Global launchd gate. Set to `0`/`false`/`off` to disable launchd-managed BrainLayer jobs. |
 | `BRAINLAYER_ENV_FILE` | `~/.config/brainlayer/brainlayer.env` | Override the config file sourced by launchd templates. |
 | `BRAINLAYER_DISABLED_SLEEP_SECONDS` | `3600` | Sleep duration for disabled KeepAlive jobs to avoid restart loops. Use `0` in tests. |
+| `BRAINLAYER_SUPERVISOR_SOCKET` | unset | Opt in to owner-only Unix component control for health/watchdog checks; leave unset until consolidated installer migration. |
+| `BRAINLAYER_PAUSE_SENTINEL` | existing `pause.sentinel` | Override the shared hold path for standalone watchdog adapters; explicit health-check configuration takes precedence. |
+
+The staged supervisor uses a 15-second shutdown cap; its future plist must allow at least 25 seconds.
+Missing-count comparisons accept ticks at least 240 seconds apart. A slow healthy hotlane during big ingest can still look stalled when arrivals outrun embeddings; net counts alone cannot distinguish overload from a wedge.
 
 ### Enrichment (retired)
 
