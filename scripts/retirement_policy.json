@@ -190,6 +190,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "0febf7a595b17d46c165ac2677ebeb0719f6609cbc2fecb5bebbd04f4255d90d": {
+      "non_cloud_purpose": "Explicit inactive resident-command runner: local pipe-gated exec starts only after durable owner custody; no built-in production or model command.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.gated_spawn",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "1009187960a9ac692d7b39b187d199ebd847a7fede3c7c43f34c1d6480f5c12b": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm importlib.import_module.",
       "site": {
@@ -430,6 +440,16 @@
         "target": "import subprocess"
       }
     },
+    "1dbae240c09cdf5aec0a7705e0d65cbbdd6e3ddef3d11435fd732e2af945e3ea": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "abfbbda11a786681c25418cb12f43492b408512143f40d37fb48aaf0565f04f6",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_size_t"
+      }
+    },
     "1e2756986e7c87b4ad726478c8154c42b8e9339746174a2e0e7cd976bb046451": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/mcp/_shared.py <module>._detected_default_read_pool_size subprocess.SubprocessError.",
       "site": {
@@ -468,6 +488,16 @@
         "owner": "<module>._initialize_search_vector_store_pool",
         "path": "src/brainlayer/mcp/_shared.py",
         "target": "pool.put"
+      }
+    },
+    "2102820c0e122d0b9e9eef2a0749e428d825068dde48a11ee01515d59fe8a53f": {
+      "non_cloud_purpose": "Stdlib local process custody and Unix peer credentials; imports do not activate commands or connect to cloud endpoints.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "import subprocess"
       }
     },
     "210fcc6a8affcec7afa85134460f5a00ec201b5a87d47d6e49885a45e0b37133": {
@@ -670,6 +700,16 @@
         "target": "import subprocess"
       }
     },
+    "2adc9e062132f4e149e023d589d998d3fd49c6884d88551a796bbdae0f4295f2": {
+      "non_cloud_purpose": "Read the local Darwin kernel process birth timeval via the absolute system libproc library; no model/network sender.",
+      "site": {
+        "call_sha256": "f0039d7e1aecd275445d53ccb4f04939a5dc089d35d5757dc3eb6953a0057f65",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.start_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.CDLL"
+      }
+    },
     "2caff6dab225bf4212fa3e41a296db0ef64c88ff06c33d887fe5bb0ba291c423": {
       "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._quote_id urllib.parse.quote.",
       "site": {
@@ -850,6 +890,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "3403b97ffe1d6cb21815a23d45af4ad3832d0760438138e1e138617f8a35d22f": {
+      "non_cloud_purpose": "Owned local process-group shutdown and Popen type metadata; no subprocess is launched here.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.stop_group",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "3422b3fef4419bbb6b9b2791a0052e0f5962039faa61ab3b8e855f3c8d65d556": {
       "non_cloud_purpose": "Local Git merge-base resolves the immutable dependency baseline; no shell, network, or model send.",
       "site": {
@@ -958,6 +1008,16 @@
         "owner": "<module>._read_repo_evidence",
         "path": "src/brainlayer/kg_judge.py",
         "target": "subprocess.SubprocessError"
+      }
+    },
+    "38ee977dba9ab5ce46827a4a70ac243740c793a0e1fcbccf51dc4dc9530513dd": {
+      "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
+      "site": {
+        "call_sha256": "19fe4754c459d6c681b49606548454bafd45361f033cbdf9b8ef27417d5c5758",
+        "kind": "transport_call",
+        "owner": "<module>.peer_uid",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_uint"
       }
     },
     "39d56b4b3dc4758b6bf3129fa75de86c3516d1b6d6f161cf8ec8239999851d5e": {
@@ -1398,6 +1458,16 @@
         "target": "socket.socket"
       }
     },
+    "53101cdebfd3a6850500057e0ebfa5ef3eab69c2a6c223c94a6356546f298269": {
+      "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
+      "site": {
+        "call_sha256": "dae9d7fdc9a834add10d5a4da7fface1ea9d81838439afea6cb02b837202d86e",
+        "kind": "transport_call",
+        "owner": "<module>.peer_uid",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.byref"
+      }
+    },
     "53194c405c6e21cdd0368bdb7d0bf42b22c1eb1a6111bc6b14fa0cf919b7ce27": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -1628,6 +1698,16 @@
         "target": "subprocess.run"
       }
     },
+    "60300f756e30ea5cb7b4db67806afb6ffb534797de3a4bff89e23635d13bef3b": {
+      "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
+      "site": {
+        "call_sha256": "20fc7144ee32e12ec05c2b569882a60f7141b6d9d9e09285a5e9d0e1b4f18d1d",
+        "kind": "callable_reference",
+        "owner": "<module>.peer_uid",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "socket.socket"
+      }
+    },
     "60486f2c31fbd4af28db336ce804bcb712e79d01ad7cb847ddbcf4c8e6354b2d": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -1656,6 +1736,16 @@
         "owner": "<module>.merge_duplicates",
         "path": "src/brainlayer/dedupe_merge.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "611a5bc6dc5e8dd3ad0a098f88863baf8fb2742a194b7046f5f82a016ae8c02a": {
+      "non_cloud_purpose": "Read the local Darwin kernel process birth timeval via the absolute system libproc library; no model/network sender.",
+      "site": {
+        "call_sha256": "aef6bf10a9f68d6a6b540186fa5be44d785ebc76c1384de6389197a9d0b9cf88",
+        "kind": "transport_call",
+        "owner": "<module>.start_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.create_string_buffer"
       }
     },
     "61b5adfeca4a31ec577317ba2ee1e4a7f4ed7804bb53f5a81cd3b7f10f71a351": {
@@ -1986,6 +2076,16 @@
         "target": "import urllib.parse"
       }
     },
+    "6ec9334feb7960ee1c524c723ca5ca42dd0cbccf94be4af2972e6ae4bc2ba65b": {
+      "non_cloud_purpose": "Stdlib local process custody and Unix peer credentials; imports do not activate commands or connect to cloud endpoints.",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "import socket"
+      }
+    },
     "6f3c969008876a9829a61f4b1b253337728c953f18ea0bb59a439a12104459dd": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -2082,6 +2182,16 @@
         "owner": "<module>.main",
         "path": "hooks/brainbar-postcompact.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "79343417b0e866f661f3af1d34d5a944d56b914d837f420253db5afe270724b4": {
+      "non_cloud_purpose": "Stdlib local process custody and Unix peer credentials; imports do not activate commands or connect to cloud endpoints.",
+      "site": {
+        "call_sha256": "669c8db7bfb9b4e64a7aa5f9239cbd229a5c460f228936e83d225f5ab2176b82",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "import ctypes"
       }
     },
     "7ba118109017c8785a84ce462bd719049e4390669da6a476beb476980c1e0dd6": {
@@ -2502,6 +2612,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "8fa7a11bfe7881facca93e800dad75c120c0fe5493bea4f0c5239a89ffb8f41a": {
+      "non_cloud_purpose": "Launch only this package local watchdog with exact parent PID, heartbeat pipe, inherited flock, and explicit shutdown timeout. No model/production command.",
+      "site": {
+        "call_sha256": "74111a18067a7ca8df6d4ddc66af28c735f2a87f536b4bf5a6b5168c0992ffc1",
+        "kind": "child_process",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "90527e4bc3ac91388ddd254c9e76671904968e73cb1d74defb6c6ce6f7a63970": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/index_completeness.py <module>",
       "site": {
@@ -2542,6 +2662,16 @@
         "target": "socket.socket().listen"
       }
     },
+    "92c47b60a9231ccf6e80ff170fc0860befa2a8a7a8d9df8ec2abc0688386a52c": {
+      "non_cloud_purpose": "Explicit inactive resident-command runner: local pipe-gated exec starts only after durable owner custody; no built-in production or model command.",
+      "site": {
+        "call_sha256": "c655c55c9c44a1d7d359c91ea387e6f0cb0660e68fefafe3629e17532bbaee93",
+        "kind": "child_process",
+        "owner": "<module>.gated_spawn",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "92c62d93c1ab5d6fa468d1fb5975ab5ebe7508516fa56f0c698239ff2d2e380d": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>.hooks",
       "site": {
@@ -2560,6 +2690,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/health_check.py",
         "target": "import socket"
+      }
+    },
+    "93bcd9f82cbcfff362ea558d9d29b19b1e7ec9fbae4ff53bcc5c6dd69a06ff22": {
+      "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
+      "site": {
+        "call_sha256": "59b3884483cd31a9e4cf7721d99a743a050b1280bedc73d9e29563baa74c278a",
+        "kind": "transport_call",
+        "owner": "<module>.peer_uid",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.byref"
       }
     },
     "946c267aad430ab47a6d790e1ad8271bd16d88a8a794f932d3efdd7cf6465bdb": {
@@ -2588,6 +2728,16 @@
         "owner": "<module>.repair_index_completeness",
         "path": "src/brainlayer/index_completeness.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "95b955595b829d88e3519e3db0ab202d48a8a35b3ae03e01b97ea0710dbfbab0": {
+      "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.peer_uid",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.CDLL"
       }
     },
     "96486f88203067a0182d74bc0b1dad8b69586421c47e77483a0c883313b70af7": {
@@ -3048,6 +3198,16 @@
         "target": "socket.gethostname"
       }
     },
+    "aecf6babb569b55c6a3ac74b7e10b93dee25ecaa3f9b3eb4328e0843efa81c9c": {
+      "non_cloud_purpose": "Launch only this package guard under the current Python, with an exact parent PID, heartbeat pipe and inherited local flock; no model command.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "aed9b5dea2412a92d4cd4b5defb4ace626bbe2554309872f7bd632c1e5678598": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -3148,6 +3308,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "b2011dd6084e752b1b1fa27f9d8fed9caad0b3e75fe42781e1e8830191f1d61b": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.CDLL"
+      }
+    },
     "b212f1f1f02595b0cca7bb3189844cc7aef1849247fb6e36641a3ef61788c200": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/ci_ratchet_table.py <module>.Probe.detect socket.gethostname.",
       "site": {
@@ -3156,6 +3326,16 @@
         "owner": "<module>.Probe.detect",
         "path": "scripts/ci_ratchet_table.py",
         "target": "socket.gethostname"
+      }
+    },
+    "b267ea8c8f7c2e208c16a44c79fb54b8c16fcc5f133150ac221c9a652a018b24": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "55c9da3cd61d529bd92b7977c57e19efb1676260c82707ebae167009d90f237f",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.sizeof"
       }
     },
     "b26deabe85f82b84a722ceedb37fce09fdd46229846bd5a8a09a6c7cc1197ae1": {
@@ -3448,6 +3628,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "bd03d1c620d4323bb9784dcf5b20149f63ea8ff0569b7ef710feb3ce33700e87": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "cdbcf403131a1aeebe22fdab99de61ec86e927cdb74acd398bc35d8babf5eeab",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.byref"
+      }
+    },
     "bd84dfde36162fc7399c003a0f02e58ba551252cfee8730a6e21c01ac25ac526": {
       "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module> requests.exceptions.ChunkedEncodingError.",
       "site": {
@@ -3586,6 +3776,16 @@
         "owner": "<module>.helper_env.command_line",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "c55344aac21699ba19a9f0fea59efdeb28b5e96455edf00c9fb7b95f2c745386": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "201da485ae88de9e651b2a7a04f1b930af8aca43d738a3506b2fbfb214d2f09a",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_long * 2"
       }
     },
     "c565669c44ecfd5ff27d100737fa63cf71e374db4cd0a1baf5b2892eaac0f77b": {
@@ -4026,6 +4226,16 @@
         "target": "requests.Session()"
       }
     },
+    "e1a5953f4ca43fa74957222efe17a3073d20fc28d9ddbcb25978c2cb19ccba04": {
+      "non_cloud_purpose": "Local AF_UNIX peer UID query via libc getpeereid or SO_PEERCRED; no network/cloud endpoint.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.peer_uid",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "e1da2d586c38446168d11a75e953d137bbf712a97b464026686b7594365e1c61": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/code_intelligence.py <module>._pid_start_time",
       "site": {
@@ -4044,6 +4254,16 @@
         "owner": "<module>.controls",
         "path": "scripts/retirement_probe.py",
         "target": "builtins.__import__"
+      }
+    },
+    "e22969812702d719b1dc2c4da9674d6d62577d7064625cab32169e195d9a6ee6": {
+      "non_cloud_purpose": "Owned local Popen type metadata for ESRCH-confirmed journal and guard-registry removal; no process/model sender.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.Custody.forget",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "e23307232d30ae64f6ace0d5a9341c687e12ac54a4c3cf347fd7c17135db7992": {
@@ -4194,6 +4414,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import importlib"
+      }
+    },
+    "ed46e56639d4698ff9d9d990c378de6f57eb809422d3f58a54024f053851e041": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "2fe4ac2205b03d05a1d562b72766ba1e4da43c65858439b2600bbe39ed63deee",
+        "kind": "callable_reference",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_long"
       }
     },
     "ed6b68f5900e0814dfc47d89e1b33fb9ebaa5bf0b7aa0721d78f9476f6f25c23": {
@@ -4564,6 +4794,16 @@
         "owner": "<module>._trash_icloud_item",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "subprocess.run"
+      }
+    },
+    "fc4d4c12bf137369aee98eeddd67600cf772b3142d862c10ef914fcf5c8c8f31": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.get_errno"
       }
     },
     "fd03d5962e54721eacf6a27bfbe88ae9f41305171fc030530609a8f42e0b4432": {
