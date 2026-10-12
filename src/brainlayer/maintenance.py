@@ -594,6 +594,7 @@ def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any]) -> No
     if not services:
         return
     if os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET"):
+        # All configured components pause, including in burn/FTS modes: ticks can revive writers.
         from .maintenance_control import MaintenanceHold
 
         hold = MaintenanceHold()

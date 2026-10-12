@@ -490,6 +490,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "1e3a026ad47c2345c6831a75a5480869f8b03c01751f372efc1e6957e02e3468": {
+      "non_cloud_purpose": "Owner-only local supervisor recovery, bounded to three seconds: token-checked pause restoration only after exclusive writer lease acquisition; subprocess only reads launchctl operator disabled state. No cloud or model sender.",
+      "site": {
+        "call_sha256": "a0718bac3742523c6d315799d50189e4cbb1b2eb07d063bb1cdab6d610547351",
+        "kind": "generic_send",
+        "owner": "<module>.recover_hold.bounded_request",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "request"
+      }
+    },
     "1e8e00d27af9e90f5bd8cec7d595bc318c44e7f138747cecbb1759ad81456ee1": {
       "non_cloud_purpose": "Owner-only local Unix supervisor control; restart/pause/resume wait for the advertised component exit grace plus cleanup margin. No model or network sender.",
       "site": {
@@ -1708,6 +1718,16 @@
         "target": "import importlib.util"
       }
     },
+    "5df6a694d8309b9363b1b86c4fb9002db3e4526f1cfa49c9ae820ee310029ce4": {
+      "non_cloud_purpose": "Owner-only local supervisor recovery, bounded to three seconds: token-checked pause restoration only after exclusive writer lease acquisition; subprocess only reads launchctl operator disabled state. No cloud or model sender.",
+      "site": {
+        "call_sha256": "60bb5bad89bf81154acaca7825899e8854b078049a74fc6a848aad8d03e9aabf",
+        "kind": "child_process",
+        "owner": "<module>.recover_hold",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "subprocess.run"
+      }
+    },
     "5e39eba7ef504b91db45d7c0f0b4a8d4908f01d95537d469024ed6cc61f6fac8": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -1976,6 +1996,16 @@
         "owner": "<module>._build_db",
         "path": "scripts/build_observability_fixture.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "687f8f47f3150084c6ca1964ec8c253ee8b3ceae827e9d9b3b5b3b9d1766b4c2": {
+      "non_cloud_purpose": "Owner-only local supervisor recovery, bounded to three seconds: token-checked pause restoration only after exclusive writer lease acquisition; subprocess only reads launchctl operator disabled state. No cloud or model sender.",
+      "site": {
+        "call_sha256": "530420bac71aa52a48e9644e3015a326af512238f1afcb22fe79c634039d8cfc",
+        "kind": "callable_reference",
+        "owner": "<module>.recover_hold",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "client.request"
       }
     },
     "68c7c83014200612706e305514d8ec1b0566f89b91c07296a32f37238c5e632e": {

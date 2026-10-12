@@ -4,10 +4,37 @@ import fcntl
 import json
 import os
 import subprocess
+import time
 import uuid
+from pathlib import Path
 
 from .drive_credentials import _atomic_write
 from .supervisor_guard import component_gate
+
+
+def recover_hold(path):
+    """Called off the event loop; the free exclusive lease proves no inherited writer remains."""
+    from .pause import DEFAULT_PAUSE_SENTINEL_PATH
+    from .supervisor_adapters import SupervisorCommands
+
+    client = SupervisorCommands(
+        path,
+        lambda args: subprocess.run(args, capture_output=True, text=True, timeout=1, check=False),
+        pause_path=Path(os.environ.get("BRAINLAYER_PAUSE_SENTINEL", str(DEFAULT_PAUSE_SENTINEL_PATH))),
+    )
+    deadline, request = time.monotonic() + 3, client.request
+
+    def bounded_request(*args, **kwargs):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("maintenance recovery deadline")
+        kwargs["timeout"] = min(kwargs.get("timeout", 2), remaining)
+        return request(*args, **kwargs)
+
+    client.request = bounded_request
+    hold = MaintenanceHold(client)
+    with component_gate(hold.directory, exclusive=True):
+        hold._restore()
 
 
 def control_client():
@@ -31,8 +58,8 @@ def service_loaded(service):
 class MaintenanceHold:
     """Recover owned pauses; callers inherit fd/token and retain the lease until children are reaped."""
 
-    def __init__(self):
-        self.client = control_client()
+    def __init__(self, client=None):
+        self.client = client if client is not None else control_client()
         self.directory, self.journal = self.client.path.parent, self.client.path.with_name("maintenance.json")
         self.fd, self.token, self.gate, self.nested = None, "", None, False
 
@@ -62,14 +89,16 @@ class MaintenanceHold:
             for s in os.environ.get("BRAINLAYER_MAINTENANCE_KEEP_DOWN", "").split(",")
         }
         for name, restore in entry["components"].items():
-            if name not in states or name not in labels:
+            if name not in states:
                 continue
             state = states[name]
             if not restore or not state["configured"] or state.get("pause_owner") != entry["owner"]:
                 continue
+            label = labels.get(name, name)
             if (
-                {name, labels[name], labels[name].removeprefix("com.brainlayer.")} & keep_down
-                or labels[name] in disabled
+                {name, label, label.removeprefix("com.brainlayer.")} & keep_down
+                or label in disabled
+                or name in disabled
                 or "com.brainlayer.daemon" in disabled
             ):
                 self.client.request("pause", name, owner="", timeout=state["exit_timeout"] + 5)
@@ -87,6 +116,7 @@ class MaintenanceHold:
 
     def __enter__(self):
         inherited = os.environ.get("BRAINLAYER_MAINTENANCE_FD")
+        # Calendar children must inherit this open lease and its journal token; never reopen the file.
         if inherited is not None:
             self.fd = int(inherited)
             self.token = os.environ.get("BRAINLAYER_MAINTENANCE_TOKEN", "")

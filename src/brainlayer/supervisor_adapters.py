@@ -117,7 +117,9 @@ class SupervisorCommands:
         payload, active, _ = pause_sentinel_state(self.pause_path, strict=True)
         if active:
             disabled.update(
-                label for label in (*self.aliases, "com.brainlayer.daemon") if pause_applies_to_label(payload, label)
+                label
+                for label in (*self.aliases, *states, "com.brainlayer.daemon")
+                if pause_applies_to_label(payload, label)
             )
         return disabled | {
             label

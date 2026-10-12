@@ -73,6 +73,8 @@ class Supervisor:
         self.stop, self.lock = asyncio.Event(), asyncio.Lock()
         self.guard: subprocess.Popen | None = None
         self.custody, self.deadline = None, None
+        self.recovery = None
+        self.recovery_at = 0
 
     def status(self) -> dict:
         return {"components": {name: child.status() for name, child in self.components.items()}}
@@ -120,6 +122,7 @@ class Supervisor:
             child.starts += 1
             child.started_at, child.error = time.monotonic(), ""
         except BlockingIOError:
+            child.error = "maintenance lease held"
             child.retry_at = time.monotonic() + 0.5
         except OSError as exc:
             self._failed(child, str(exc))
@@ -128,6 +131,26 @@ class Supervisor:
                 os.close(gate)  # On failure the wrapper exits without running the command.
 
     def _tick(self):
+        if self.recovery and self.recovery.done():
+            try:
+                self.recovery.result()
+            except BlockingIOError:
+                pass  # A live holder or inherited child still owns the lease.
+            except Exception as exc:
+                for child in self.components.values():
+                    if child.pause_owner:
+                        child.error = f"maintenance recovery failed: {exc}"
+            self.recovery = None
+        if (
+            self.recovery is None
+            and time.monotonic() >= self.recovery_at
+            and any(c.pause_owner for c in self.components.values())
+            and self.path.with_name("maintenance.json").exists()
+        ):
+            from .maintenance_control import recover_hold
+
+            self.recovery = asyncio.create_task(asyncio.to_thread(recover_hold, self.path))
+            self.recovery_at = time.monotonic() + 1
         for child in self.components.values():
             if child.cleanup and child.cleanup.done():
                 child.cleanup.result()
@@ -180,6 +203,10 @@ class Supervisor:
                         for child in selected:
                             child.paused, child.retry_at, child.pause_owner = False, 0, ""
                             self._start(child)
+                        if action == "restart" and any(c.process is None for c in selected):
+                            raise RuntimeError(
+                                "restart did not start every component: " + "; ".join(c.error for c in selected)
+                            )
             response = self.status()
         except Exception as exc:
             response = {"error": str(exc)}
@@ -222,6 +249,8 @@ class Supervisor:
                         self._send("Q")  # Disarm before bounded shutdown.
                     except BrokenPipeError:
                         pass  # Still clean every child if the guard died.
+                if self.recovery:
+                    await asyncio.gather(self.recovery, return_exceptions=True)
                 if server:
                     server.close()
                     await server.wait_closed()

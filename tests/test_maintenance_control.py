@@ -17,6 +17,7 @@ from tests.test_service_supervisor import native  # noqa: F401
 def control(request, monkeypatch):
     path, start, query = request.getfixturevalue("native")
     monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(path / "control.sock"))
+    monkeypatch.setenv("BRAINLAYER_PAUSE_SENTINEL", str(path / "pause"))
     writer = "import sqlite3,time\nc=sqlite3.connect(%r)\nc.execute('create table if not exists samples(who)')\nwhile True:\n c.execute(\"insert into samples values('resident')\"); c.commit(); time.sleep(.02)"
     writer %= str(path / "writer.db")
     code = native_tests.BOOT.replace(
@@ -27,6 +28,11 @@ def control(request, monkeypatch):
             "s=Supervisor(",
             'status=Component.status; Component.status=lambda c:{k:v for k,v in status(c).items() if k!="pause_owner"}\ns=Supervisor(',
         )
+    monkeypatch.setattr(native_tests, "BOOT", code)
+    code = code.replace(
+        "s=Supervisor(",
+        "import subprocess\nfrom brainlayer import maintenance_control\n_real_run=maintenance_control.subprocess.run\nmaintenance_control.subprocess.run=lambda a,**kw: subprocess.CompletedProcess(a,0,'','') if a[0]=='launchctl' else _real_run(a,**kw)\ns=Supervisor(",
+    )
     monkeypatch.setattr(native_tests, "BOOT", code)
     client = SupervisorCommands(
         path / "control.sock", lambda a: subprocess.CompletedProcess(a, 0, "", ""), pause_path=path / "pause"
@@ -127,8 +133,6 @@ with MaintenanceHold() as h:
         assert all(v["pid"] is None for v in query()["components"].values())
         os.killpg(child, signal.SIGKILL)
         native_tests.eventually(lambda: not native_tests.exists(child))
-        with MaintenanceHold():
-            assert all(v["pid"] is None for v in query()["components"].values())
         native_tests.eventually(lambda: bool(query()["components"]["watch"]["pid"]))
     finally:
         if holder.poll() is None:
@@ -169,15 +173,19 @@ def test_corrupt_recovery_journal_refuses_without_resuming(control):
 
 
 @pytest.mark.parametrize("gate", ["keep-down", "sentinel", "operator"])
-def test_late_standing_hold_is_preserved_and_releases_maintenance_ownership(control, monkeypatch, gate):
+@pytest.mark.parametrize("aliased", [True, False])
+def test_late_standing_hold_is_preserved_and_releases_maintenance_ownership(control, monkeypatch, gate, aliased):
     client = maintenance_control.control_client()
     with MaintenanceHold():
+        label = "com.brainlayer.watch" if aliased else "watch"
+        if not aliased:
+            client.aliases.clear()
         if gate == "keep-down":
-            monkeypatch.setenv("BRAINLAYER_MAINTENANCE_KEEP_DOWN", "com.brainlayer.watch")
+            monkeypatch.setenv("BRAINLAYER_MAINTENANCE_KEEP_DOWN", label)
         elif gate == "sentinel":
-            client.pause_path.write_text(json.dumps({"labels": ["com.brainlayer.watch"]}))
+            client.pause_path.write_text(json.dumps({"labels": [label]}))
         else:
-            client.fallback = lambda a: subprocess.CompletedProcess(a, 0, '"com.brainlayer.watch" => disabled', "")
+            client.fallback = lambda a: subprocess.CompletedProcess(a, 0, f'"{label}" => disabled', "")
     state = control[2]()["components"]["watch"]
     assert state["paused"] and state["pause_owner"] == "" and state["pid"] is None
 
@@ -187,3 +195,70 @@ def test_owner_capability_required_before_pausing(control):
     with pytest.raises(RuntimeError), MaintenanceHold():
         pass
     assert control[2]()["components"]["watch"]["pid"]
+
+
+def test_every_unaliased_component_resumes(control):
+    with MaintenanceHold() as hold:
+        hold.client.aliases.clear()
+    native_tests.eventually(lambda: all(v["pid"] for v in control[2]()["components"].values() if v["configured"]))
+    assert all(not v["paused"] and not v["pause_owner"] for v in control[2]()["components"].values())
+
+
+@pytest.mark.parametrize("failure", ["crash", "timeout"])
+def test_tick_recovers_free_owned_lease_without_next_maintenance(control, failure, monkeypatch):
+    path, _, query, _ = control
+    query("pause", "drain")
+    if failure == "crash":
+        source = """
+import sys,time,subprocess
+from pathlib import Path
+from brainlayer import maintenance_control
+from brainlayer.supervisor_adapters import SupervisorCommands
+p=Path(sys.argv[1])
+maintenance_control.control_client=lambda: SupervisorCommands(p/'control.sock',lambda a:subprocess.CompletedProcess(a,0,'',''),pause_path=p/'pause')
+h=maintenance_control.MaintenanceHold().__enter__()
+(p/'held').touch(); time.sleep(60)
+"""
+        holder = subprocess.Popen((sys.executable, "-c", source, str(path)))
+        try:
+            native_tests.eventually(lambda: (path / "held").exists())
+        finally:
+            holder.kill()
+            holder.wait(timeout=2)
+    else:
+        client = maintenance_control.control_client()
+        request = client.request
+        lost = False
+
+        def timeout(action="status", *args, **kwargs):
+            nonlocal lost
+            if lost:
+                raise OSError("connection lost during cleanup")
+            result = request(action, *args, **kwargs)
+            if action == "pause":
+                lost = True
+                raise TimeoutError("lost pause acknowledgement")
+            return result
+
+        monkeypatch.setattr(client, "request", timeout)
+        with pytest.raises(TimeoutError), MaintenanceHold():
+            pass
+    native_tests.eventually(lambda: bool(query()["components"]["watch"]["pid"]))
+    assert query()["components"]["drain"]["paused"] and query()["components"]["off"]["pid"] is None
+    assert not (path / "maintenance.json").exists()
+    starts = {n: v["starts"] for n, v in query()["components"].items()}
+    import time
+
+    time.sleep(0.3)
+    assert starts == {n: v["starts"] for n, v in query()["components"].items()}
+
+
+def test_lease_block_is_visible_and_restart_fails(control):
+    from brainlayer.supervisor_guard import component_gate
+
+    with component_gate(control[0], exclusive=True):
+        response = control[2]("restart", "watch")
+        assert "error" in response and "maintenance lease held" in response["error"]
+        state = control[2]()["components"]["watch"]
+        assert state["pid"] is None and state["error"] == "maintenance lease held"
+    native_tests.eventually(lambda: bool(control[2]()["components"]["watch"]["pid"]))
