@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import array
 import asyncio
 import ctypes
 import fcntl
@@ -215,7 +216,7 @@ class Custody:
         self._save()
 
 
-def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_timeout: float = 20):
+def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_timeout: float = 20, lease_control=None):
     """H / +pgid / -pgid / Q, then EOF. Only the exact live parent can be killed."""
     if os.getppid() != parent:
         raise RuntimeError("guard parent identity mismatch")
@@ -223,43 +224,83 @@ def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_ti
     os.close(ready)
     groups, buffer, quiesced = set(), b"", False
     deadline = time.monotonic() + timeout
-    while True:
-        remaining = max(0, deadline - time.monotonic())
-        if not select.select([0], [], [], remaining)[0]:
-            if os.getppid() == parent:
-                os.kill(parent, signal.SIGKILL)
-            break
-        data = os.read(0, 65536)
-        if not data:
-            break  # Even Q cannot abandon groups if shutdown itself was killed.
-        buffer += data
-        while b"\n" in buffer:
-            line, buffer = buffer.split(b"\n", 1)
-            if line == b"H" and not quiesced:
-                deadline = time.monotonic() + timeout
-            elif line == b"Q" and not quiesced:
-                quiesced = True
-                deadline = time.monotonic() + shutdown_timeout + 2
-            elif line in (b"H", b"Q"):
-                pass  # Repeated pulses cannot extend quiescence forever.
-            elif line[:1] in (b"+", b"-"):
-                pgid = int(line[1:])
-                if pgid <= 1:
-                    raise RuntimeError("invalid registered group")
-                (groups.add if line[:1] == b"+" else groups.discard)(pgid)
-            else:
-                raise RuntimeError("invalid guard protocol")
-    reap_groups(groups, grace)
+    channel = socket.socket(fileno=lease_control) if lease_control is not None else None
+    lease = None
+    try:
+        while True:
+            remaining = max(0, deadline - time.monotonic())
+            readable = select.select([0, channel] if channel else [0], [], [], remaining)[0]
+            if not readable:
+                if os.getppid() == parent:
+                    os.kill(parent, signal.SIGKILL)
+                break
+            if channel and channel in readable:
+                message, ancillary, _, _ = channel.recvmsg(1, socket.CMSG_SPACE(4))
+                if not message:
+                    break
+                if message == b"L" and lease is None:
+                    level, kind, payload = ancillary[0]
+                    fds = array.array("i")
+                    fds.frombytes(payload)
+                    if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS or len(fds) != 1:
+                        raise RuntimeError("unknown lease transfer")
+                    lease = fds[0]
+                elif message == b"U" and lease is not None:
+                    os.close(lease)
+                    lease = None
+                else:
+                    raise RuntimeError("unknown lease action")
+                channel.sendall(b"R")
+                if 0 not in readable:
+                    continue
+            data = os.read(0, 65536)
+            if not data:
+                break  # Even Q cannot abandon groups if shutdown itself was killed.
+            buffer += data
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                if line == b"H" and not quiesced:
+                    deadline = time.monotonic() + timeout
+                elif line == b"Q" and not quiesced:
+                    quiesced = True
+                    deadline = time.monotonic() + shutdown_timeout + 2
+                elif line in (b"H", b"Q"):
+                    pass  # Repeated pulses cannot extend quiescence forever.
+                elif line[:1] in (b"+", b"-"):
+                    pgid = int(line[1:])
+                    if pgid <= 1:
+                        raise RuntimeError("invalid registered group")
+                    (groups.add if line[:1] == b"+" else groups.discard)(pgid)
+                else:
+                    raise RuntimeError("invalid guard protocol")
+    finally:
+        reap_groups(groups, grace, timeout=shutdown_timeout)
+        if lease is not None:
+            os.close(lease)
+        if channel:
+            channel.close()
+
+
+def guard_lease(guard, fd=None):
+    """Transfer the held open-file description; no reopen or unlock while a writer can remain."""
+    channel = guard.lease_channel
+    if fd is None:
+        channel.sendall(b"U")
+    else:
+        channel.sendmsg([b"L"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
+    if channel.recv(1) != b"R":
+        raise RuntimeError("lease transfer unacknowledged")
 
 
 def launch_guard(
-    custody: Custody, timeout: float, grace: float, shutdown_timeout: float = 20, *, extra_fds=()
+    custody: Custody, timeout: float, grace: float, shutdown_timeout: float = 20, *, extra_fds=(), lease_control=False
 ) -> subprocess.Popen:
     read, write = os.pipe()
+    channel, receiver = socket.socketpair() if lease_control else (None, None)
     try:
         command = (
             "from brainlayer.supervisor_guard import run_guard; import sys; "
-            "run_guard(int(sys.argv[1]),float(sys.argv[2]),int(sys.argv[3]),float(sys.argv[4]),float(sys.argv[5]))"
+            "run_guard(int(sys.argv[1]),float(sys.argv[2]),int(sys.argv[3]),float(sys.argv[4]),float(sys.argv[5]),None if sys.argv[6]=='-' else int(sys.argv[6]))"
         )
         guard = subprocess.Popen(
             (
@@ -271,9 +312,10 @@ def launch_guard(
                 str(write),
                 str(grace),
                 str(shutdown_timeout),
+                str(receiver.fileno()) if receiver else "-",
             ),
             stdin=subprocess.PIPE,
-            pass_fds=(custody.fd, write, *extra_fds),
+            pass_fds=(custody.fd, write, *extra_fds, *((receiver.fileno(),) if receiver else ())),
             start_new_session=True,
         )
         os.close(write)
@@ -283,11 +325,19 @@ def launch_guard(
             guard.wait()
             raise RuntimeError("guard startup failed")
         os.set_blocking(guard.stdin.fileno(), False)
+        if channel:
+            channel.settimeout(2)
+            guard.lease_channel = channel
+            channel = None
         return guard
     finally:
         os.close(read)
         if write is not None:
             os.close(write)
+        if receiver:
+            receiver.close()
+        if channel:
+            channel.close()
 
 
 def gated_spawn(argv, env, stdout, stderr, *, cwd=None, policy=None, extra_fds=()) -> tuple[subprocess.Popen, int]:
