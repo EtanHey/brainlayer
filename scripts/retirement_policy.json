@@ -42,6 +42,16 @@
         "target": "socket.socket().connect"
       }
     },
+    "0362e584b5ed2bb8d3ad2dd20bc959acdc7e05a94250f4e102759f77b7f1f40b": {
+      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
+      "site": {
+        "call_sha256": "c2f2da0ddb7646ae994e241d6ac45010cf5268373d9940f9fcd7139728dc2ecb",
+        "kind": "generic_send",
+        "owner": "<module>.SupervisorCommands.request",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "client.sendall"
+      }
+    },
     "041e3b7ae74566732035e7acf8ffc81febd89724aabf4d2417b62110aecbdbcd": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._git_toplevel",
       "site": {
@@ -330,6 +340,16 @@
         "target": "import importlib.metadata"
       }
     },
+    "16bda83ce3ba9c26a0abe9c15d5de675306b105c7d24c05d1904f9ee746a4256": {
+      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
+      "site": {
+        "call_sha256": "672c011a886ed00b07a8e3f19ebf050321ad3fcd91a473a3679f193f8411c179",
+        "kind": "generic_send",
+        "owner": "<module>.SupervisorCommands.__call__",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "self.request"
+      }
+    },
     "17830c2623b8b3dcb141cbdb24652abe46d89ba861c8aeacf9c2302be9abe990": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -440,6 +460,16 @@
         "target": "import subprocess"
       }
     },
+    "1cf690498a742b66473f8913b206b260cee34775f4c75d7be2ed179cab21fcd1": {
+      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
+      "site": {
+        "call_sha256": "3100132d50a974da1bde074085da99a778de96cf6c68582f36cedc05868118bc",
+        "kind": "generic_send",
+        "owner": "<module>.SupervisorCommands.request",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "client.connect"
+      }
+    },
     "1dbae240c09cdf5aec0a7705e0d65cbbdd6e3ddef3d11435fd732e2af945e3ea": {
       "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -458,6 +488,16 @@
         "owner": "<module>._detected_default_read_pool_size",
         "path": "src/brainlayer/mcp/_shared.py",
         "target": "subprocess.SubprocessError"
+      }
+    },
+    "1e8e00d27af9e90f5bd8cec7d595bc318c44e7f138747cecbb1759ad81456ee1": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor control; restart/pause/resume wait for the advertised component exit grace plus cleanup margin. No model or network sender.",
+      "site": {
+        "call_sha256": "a12aca56810ce876a4a29521623b9979c0024c2dd08dbc2bb4d8b81dc7c90bf0",
+        "kind": "generic_send",
+        "owner": "<module>.SupervisorCommands.__call__",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "self.request"
       }
     },
     "1f0e32635a77afd81f5bf7ccb7c39426a00ecd970c057d028996096a44d5405c": {
@@ -1768,6 +1808,16 @@
         "target": "subprocess.run"
       }
     },
+    "61b5de725e82a19592fe9ca24583b69afc2ede9be98ce567fe0b09bc5bdbfe83": {
+      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
+      "site": {
+        "call_sha256": "348853ff4c5107ccf7ef14601fc59c57454375ed005641dd708141afebfaa32b",
+        "kind": "transport_call",
+        "owner": "<module>.SupervisorCommands.request",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "socket.socket"
+      }
+    },
     "61e2cb81cdab2bbd22805c2f39cb6c86c4c11472f7635e2e5fc9029f2c3cb4f5": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.working_tree_provenance",
       "site": {
@@ -2154,6 +2204,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "73d45aef8806f03ce231ed98854ac68113442e225ef841b49b00b12b9ad9c857": {
+      "non_cloud_purpose": "Local launchctl CLI fallback for unmanaged services only; fixed OS command prefix, bounded timeout, no cloud/model subprocess.",
+      "site": {
+        "call_sha256": "a5c46beb431d0f6f43d4b05e63943bbcfd1b885c783c4385de4cf4eb2b198ec9",
+        "kind": "child_process",
+        "owner": "<module>.main.fallback",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "subprocess.run"
+      }
+    },
     "74563270e37006eea02ed62be590a39293649192fd4ba074925cca91df51ce88": {
       "non_cloud_purpose": "Local SQLite T3 source-class correction on a copy or supervised canonical DB: URI mode=ro for dry-run, mode=rw for gated apply; no Internet or model transport. Site: src/brainlayer/source_class_migration.py <module>.reclassify_t3_source_class sqlite3.connect.",
       "site": {
@@ -2282,6 +2342,16 @@
         "owner": "<module>.T3Reader._connect",
         "path": "src/brainlayer/ingest/t3.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "800da84bf99a94e9be0778b25f8ed589d3fef3dfccf9ae8205459ea70d383c95": {
+      "non_cloud_purpose": "Stdlib local Unix control and CompletedProcess policy-seam metadata; no activation/network/model sender at import.",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "import socket"
       }
     },
     "8072101ec244d4ac2ecebc8ecc05a541a757e81ee5a94626b0c45457ec4df1f6": {
@@ -2492,6 +2562,16 @@
         "owner": "<module>._optional_brain_dependency",
         "path": "src/brainlayer/clustering.py",
         "target": "importlib.import_module"
+      }
+    },
+    "8aca0d2aa5e8b625bc7b27ac73b9458ecd2708ebe98ee630e0c34670f9acb445": {
+      "non_cloud_purpose": "Stdlib local Unix control and CompletedProcess policy-seam metadata; no activation/network/model sender at import.",
+      "site": {
+        "call_sha256": "c00d59a3423d9b26725531ec404bcb695e558d7dd0dfab079a1efc9cbdba094f",
+        "kind": "transport_call",
+        "owner": "<module>.SupervisorCommands.__call__.result",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "subprocess.CompletedProcess"
       }
     },
     "8ad5b9603a04f422d708da16d89156dfdbe8d21025b2b059f01b38a846ccc1f7": {
@@ -2868,6 +2948,16 @@
         "owner": "<module>._fetch_json3_transcript",
         "path": "scripts/index_youtube.py",
         "target": "urllib.request.urlopen"
+      }
+    },
+    "9c307fa89e68026c119bc8f2f716968653e6e22550f11af0a71b3fbe5b774cbe": {
+      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
+      "site": {
+        "call_sha256": "00981f261d8beec1059bd3a3da2fd0745c7fb1bcc662a05571ab5cd035c596dc",
+        "kind": "generic_send",
+        "owner": "<module>.adapt_commands",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "backend.request"
       }
     },
     "9c482eec20d17ec76b47faeb12b4aa093cc0629179d5f40bd302ec8cf416e2c2": {
@@ -4136,6 +4226,16 @@
         "owner": "<module>.verify_mcp_transport.receive",
         "path": "src/brainlayer/setup.py",
         "target": "subprocess.Popen"
+      }
+    },
+    "d6ec4c00a9d215c79c42f4e061cbf680e7a2ee7b0505b4cc72d2aec689e35886": {
+      "non_cloud_purpose": "Stdlib local Unix control and CompletedProcess policy-seam metadata; no activation/network/model sender at import.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "import subprocess"
       }
     },
     "d7967f8b10f25c262303281063349f16884d81c8365d987b705aa6684a8023d8": {

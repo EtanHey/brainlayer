@@ -552,6 +552,9 @@ def run_once(
     command_runner: CommandRunner = _default_command_runner,
     alert_fn: AlertFn = _best_effort_alert,
 ) -> WatchdogResult:
+    from brainlayer.supervisor_adapters import adapt_commands
+
+    command_runner = adapt_commands(command_runner, required=(config.watch_label,))
     checked_at = int(time.time()) if now_epoch is None else int(now_epoch)
     state = _read_json_object(config.state_path)
     current_progress = progress_reader(config.db_path)

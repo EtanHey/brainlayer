@@ -79,5 +79,11 @@ def resolve_t3_health_path(db_path: Path | str | None = None, explicit: Path | s
     return _guard_test_runtime_path(path, source="T3 health path")
 
 
+def supervisor_socket_path() -> Path:
+    """Resolve control endpoint without creating files or activating the supervisor."""
+    override = os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET")
+    return Path(override).expanduser() if override else Path.home() / ".local/share/brainlayer/supervisor/control.sock"
+
+
 # Convenience: pre-resolved default without import-time filesystem mutation.
 DEFAULT_DB_PATH = resolve_db_path()

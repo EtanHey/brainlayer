@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,11 +14,21 @@ DEFAULT_PAUSE_SENTINEL_PATH = Path("~/.local/share/brainlayer/pause.sentinel").e
 def pause_sentinel_state(
     path: Path,
     now: datetime | None = None,
+    *,
+    strict: bool = False,
 ) -> tuple[dict[str, Any], bool, bool]:
     try:
         payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        if strict and os.path.lexists(path.expanduser()):
+            raise OSError("pause sentinel unreadable")
         return {}, False, False
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        if strict:
+            raise
+        return {}, False, False
+    if strict and not isinstance(payload, dict):
+        raise ValueError("pause sentinel must be an object")
     if not isinstance(payload, dict) or not payload:
         return {}, False, False
 
