@@ -177,8 +177,9 @@ class Supervisor:
     async def run(self, *, install_signals: bool = False):
         """Kernel exclusion precedes stale endpoint cleanup and recorded-group recovery."""
         loop, handlers, server = asyncio.get_running_loop(), {}, None
+        grace = min(1, self.shutdown_timeout / 2)
         with Custody(self.path.parent) as self.custody:
-            self.custody.recover(min(1, self.shutdown_timeout / 2))
+            self.custody.recover(grace)
             self.path.unlink(missing_ok=True)
             sock = socket.socket(socket.AF_UNIX)
             try:
@@ -189,7 +190,7 @@ class Supervisor:
                     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                         handlers[sig] = signal.getsignal(sig)
                         loop.add_signal_handler(sig, self.stop.set)
-                self.guard = launch_guard(self.custody, self.guard_timeout, min(1, self.shutdown_timeout / 2))
+                self.guard = launch_guard(self.custody, self.guard_timeout, grace, self.shutdown_timeout)
                 await server.start_serving()
                 while not self.stop.is_set():
                     if self.guard.poll() is not None:

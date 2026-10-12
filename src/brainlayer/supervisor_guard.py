@@ -6,6 +6,7 @@ import asyncio
 import ctypes
 import fcntl
 import json
+import logging
 import os
 import select
 import signal
@@ -45,6 +46,16 @@ def start_time(pid: int) -> str | None:
     raise RuntimeError("unsupported process identity platform")
 
 
+def boot_time() -> str:
+    if sys.platform == "darwin":
+        stamp = (ctypes.c_long * 2)()
+        size = ctypes.c_size_t(ctypes.sizeof(stamp))
+        if ctypes.CDLL(None, use_errno=True).sysctlbyname(b"kern.boottime", stamp, ctypes.byref(size), None, 0):
+            raise OSError(ctypes.get_errno(), "kern.boottime unreadable")
+        return ":".join(map(str, struct.unpack_from("qi", stamp)))  # Darwin timeval: long + int.
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
 def peer_uid(sock: socket.socket) -> int:
     if sys.platform == "darwin":
         uid, gid = ctypes.c_uint(), ctypes.c_uint()
@@ -54,9 +65,10 @@ def peer_uid(sock: socket.socket) -> int:
     return struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
 
 
-def reap_groups(groups: set[int], grace: float) -> None:
-    """TERM together, then KILL; retain custody until every group is ESRCH."""
-    for sig, delay in ((signal.SIGTERM, grace), (signal.SIGKILL, 0)):
+def reap_groups(groups: set[int], grace: float, *, timeout: float = 20) -> None:
+    """TERM/KILL with a total deadline; never acknowledge unresolved custody."""
+    end = time.monotonic() + timeout
+    for sig, delay in ((signal.SIGTERM, min(grace, timeout / 2)), (signal.SIGKILL, 0)):
         for pgid in groups:
             try:
                 os.killpg(pgid, sig)
@@ -66,6 +78,9 @@ def reap_groups(groups: set[int], grace: float) -> None:
         while time.monotonic() < deadline and any(group_exists(p) for p in groups):
             time.sleep(0.02)
     while any(group_exists(p) for p in groups):
+        if time.monotonic() >= end:
+            logging.error("process group reap deadline exceeded: %s", sorted(groups))
+            raise RuntimeError(f"process group reap deadline exceeded: {sorted(groups)}")
         for pgid in groups:
             try:
                 os.waitpid(pgid, os.WNOHANG)  # Reap if this process owns the leader.
@@ -105,6 +120,7 @@ class Custody:
         self.directory, self.fd = directory, None
         self.journal = directory / "groups.json"
         self.groups: dict = {}
+        self.boot = boot_time()
 
     def __enter__(self):
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -123,7 +139,11 @@ class Custody:
                 raise PermissionError("unsafe control lock")
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if self.journal.exists():
-                self.groups = json.loads(self.journal.read_text())
+                document = json.loads(self.journal.read_text())
+                self.groups = document.get("groups", document)  # Legacy journals still get birth checks.
+                if "boot_time" in document and document["boot_time"] != self.boot:
+                    self.groups = {}
+                    self._save()  # Rewrite previous-boot custody before any spawn.
             return self
         except BaseException:
             self.__exit__(None, None, None)
@@ -139,10 +159,13 @@ class Custody:
             self.groups.pop(str(pgid), None)
         else:
             self.groups[str(pgid)] = {"pgid": pgid, "start_time": birth}
+        self._save()
+
+    def _save(self):
         pending = self.journal.with_suffix(".pending")
         fd = os.open(pending, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as output:
-            json.dump(self.groups, output)
+            json.dump(dict(boot_time=self.boot, groups=self.groups), output)
             output.flush()
             os.fsync(output.fileno())
         pending.replace(self.journal)
@@ -167,15 +190,17 @@ class Custody:
             if not isinstance(pgid, int) or pgid <= 1 or not isinstance(birth, str):
                 raise RuntimeError("invalid group identity journal")
             if group_exists(pgid):
-                if start_time(pgid) != birth:
+                actual = start_time(pgid)
+                if actual is None:
                     raise RuntimeError(f"cannot establish recorded group identity: {pgid}")
-                owned.add(pgid)
+                if actual == birth:
+                    owned.add(pgid)
         reap_groups(owned, grace)
-        for pgid in tuple(self.groups):
-            self.record(int(pgid), None)
+        self.groups = {}
+        self._save()
 
 
-def run_guard(parent: int, timeout: float, ready: int, grace: float):
+def run_guard(parent: int, timeout: float, ready: int, grace: float, shutdown_timeout: float = 20):
     """H / +pgid / -pgid / Q, then EOF. Only the exact live parent can be killed."""
     if os.getppid() != parent:
         raise RuntimeError("guard parent identity mismatch")
@@ -184,7 +209,7 @@ def run_guard(parent: int, timeout: float, ready: int, grace: float):
     groups, buffer, quiesced = set(), b"", False
     deadline = time.monotonic() + timeout
     while True:
-        remaining = None if quiesced else max(0, deadline - time.monotonic())
+        remaining = max(0, deadline - time.monotonic())
         if not select.select([0], [], [], remaining)[0]:
             if os.getppid() == parent:
                 os.kill(parent, signal.SIGKILL)
@@ -195,10 +220,13 @@ def run_guard(parent: int, timeout: float, ready: int, grace: float):
         buffer += data
         while b"\n" in buffer:
             line, buffer = buffer.split(b"\n", 1)
-            if line == b"H":
+            if line == b"H" and not quiesced:
                 deadline = time.monotonic() + timeout
-            elif line == b"Q":
+            elif line == b"Q" and not quiesced:
                 quiesced = True
+                deadline = time.monotonic() + shutdown_timeout + 2
+            elif line in (b"H", b"Q"):
+                pass  # Repeated pulses cannot extend quiescence forever.
             elif line[:1] in (b"+", b"-"):
                 pgid = int(line[1:])
                 if pgid <= 1:
@@ -209,15 +237,24 @@ def run_guard(parent: int, timeout: float, ready: int, grace: float):
     reap_groups(groups, grace)
 
 
-def launch_guard(custody: Custody, timeout: float, grace: float) -> subprocess.Popen:
+def launch_guard(custody: Custody, timeout: float, grace: float, shutdown_timeout: float = 20) -> subprocess.Popen:
     read, write = os.pipe()
     try:
         command = (
             "from brainlayer.supervisor_guard import run_guard; import sys; "
-            "run_guard(int(sys.argv[1]),float(sys.argv[2]),int(sys.argv[3]),float(sys.argv[4]))"
+            "run_guard(int(sys.argv[1]),float(sys.argv[2]),int(sys.argv[3]),float(sys.argv[4]),float(sys.argv[5]))"
         )
         guard = subprocess.Popen(
-            (sys.executable, "-c", command, str(os.getpid()), str(timeout), str(write), str(grace)),
+            (
+                sys.executable,
+                "-c",
+                command,
+                str(os.getpid()),
+                str(timeout),
+                str(write),
+                str(grace),
+                str(shutdown_timeout),
+            ),
             stdin=subprocess.PIPE,
             pass_fds=(custody.fd, write),
             start_new_session=True,
