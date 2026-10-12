@@ -1050,19 +1050,26 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
         }
     )
     env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
+    lease = env.get("BRAINLAYER_MAINTENANCE_FD")
+    if lease is not None:
+        env["BRAINLAYER_BACKUP_SUPERVISED_CHILD"] = "1"  # Calendar guard owns this same group.
     process = subprocess.Popen(
         [sys.executable, "-m", "brainlayer.backup_daily"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=True,
+        start_new_session=lease is None,
+        pass_fds=() if lease is None else (int(lease),),
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds + 10)
     except subprocess.TimeoutExpired as exc:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            if lease is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()  # Never kill our own group; calendar reaps its remaining descendants.
         except ProcessLookupError:
             pass
         process.communicate()

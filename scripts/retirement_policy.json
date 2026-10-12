@@ -940,16 +940,6 @@
         "target": "sqlite3.connect"
       }
     },
-    "33b70ed042c36749cd1c72d2d8a59f716cb520fc45f81cbfc694429b48fc2bc7": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._run_bounded_weekly_backup",
-      "site": {
-        "call_sha256": "e99971d17e8a0221b43c294cef770a0b5e87a734b0ec604d57e6201878974cd8",
-        "kind": "child_process",
-        "owner": "<module>._run_bounded_weekly_backup",
-        "path": "src/brainlayer/maintenance.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "3403b97ffe1d6cb21815a23d45af4ad3832d0760438138e1e138617f8a35d22f": {
       "non_cloud_purpose": "Owned local process-group shutdown and Popen type metadata; no subprocess is launched here.",
       "site": {
@@ -1186,6 +1176,16 @@
         "owner": "<module>",
         "path": "scripts/observability_eval.py",
         "target": "import subprocess"
+      }
+    },
+    "3dd6af197819be8682eea4158358e709ee9e2a735fbc1abee7fa60990d71ef5e": {
+      "non_cloud_purpose": "Local process-group custody only: inherit the verified maintenance writer lease into the guard and gated child; weekly backup stays in the guarded calendar group when managed and retains standalone process-group supervision otherwise. No cloud/model sender.",
+      "site": {
+        "call_sha256": "9e7366d3e3dcdaea69975ee31549dadd561abcb55077dcf0f76d35715208c0e6",
+        "kind": "child_process",
+        "owner": "<module>.gated_spawn",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "3f6b2413a51f5ce41ba4ba9a57b93a327537f217453b58a316a49f2d78082e91": {
@@ -2772,16 +2772,6 @@
         "target": "subprocess.SubprocessError"
       }
     },
-    "8fa7a11bfe7881facca93e800dad75c120c0fe5493bea4f0c5239a89ffb8f41a": {
-      "non_cloud_purpose": "Launch only this package local watchdog with exact parent PID, heartbeat pipe, inherited flock, and explicit shutdown timeout. No model/production command.",
-      "site": {
-        "call_sha256": "74111a18067a7ca8df6d4ddc66af28c735f2a87f536b4bf5a6b5168c0992ffc1",
-        "kind": "child_process",
-        "owner": "<module>.launch_guard",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "90527e4bc3ac91388ddd254c9e76671904968e73cb1d74defb6c6ce6f7a63970": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/index_completeness.py <module>",
       "site": {
@@ -2820,16 +2810,6 @@
         "owner": "<module>.HybridSearchHelper.serve_forever",
         "path": "src/brainlayer/brainbar_hybrid_helper.py",
         "target": "socket.socket().listen"
-      }
-    },
-    "92c47b60a9231ccf6e80ff170fc0860befa2a8a7a8d9df8ec2abc0688386a52c": {
-      "non_cloud_purpose": "Explicit inactive resident-command runner: local pipe-gated exec starts only after durable owner custody; no built-in production or model command.",
-      "site": {
-        "call_sha256": "c655c55c9c44a1d7d359c91ea387e6f0cb0660e68fefafe3629e17532bbaee93",
-        "kind": "child_process",
-        "owner": "<module>.gated_spawn",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
       }
     },
     "92c62d93c1ab5d6fa468d1fb5975ab5ebe7508516fa56f0c698239ff2d2e380d": {
@@ -4048,6 +4028,16 @@
         "target": "sock.sendto"
       }
     },
+    "c61c3724af4b52c30b19d234c25d8fc8fe6519b1f8a40870cb3f5f79f5bef2c9": {
+      "non_cloud_purpose": "Local process-group custody only: inherit the verified maintenance writer lease into the guard and gated child; weekly backup stays in the guarded calendar group when managed and retains standalone process-group supervision otherwise. No cloud/model sender.",
+      "site": {
+        "call_sha256": "ee184702ee601ba109fdc7790acabdc39286cc09ec797fd56f6a3b278b8113c6",
+        "kind": "child_process",
+        "owner": "<module>._run_bounded_weekly_backup",
+        "path": "src/brainlayer/maintenance.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "c63154b2a0c2b96a56aa5228590d1a56a1af46e7f618fac126b7578857684741": {
       "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
       "site": {
@@ -4386,6 +4376,16 @@
         "owner": "<module>.taxonomy_git_sha",
         "path": "src/brainlayer/tag_normalization.py",
         "target": "subprocess.run"
+      }
+    },
+    "da3eed53f461455bfaff7c3622066a140b2efd611b330c967eec2075e17adb41": {
+      "non_cloud_purpose": "Local process-group custody only: inherit the verified maintenance writer lease into the guard and gated child; weekly backup stays in the guarded calendar group when managed and retains standalone process-group supervision otherwise. No cloud/model sender.",
+      "site": {
+        "call_sha256": "13e9a11434db6b1daa4c6c285e6fa0d6800646420ab218faeca3f1c21b0e525e",
+        "kind": "child_process",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "da8a2b3ed55829c503b889ae4f07d6d57af82eb08d29f8fe620fc8b940bd49b3": {
