@@ -198,7 +198,7 @@ def classify_provenance(
         )
     )
     if is_t3_app_session:
-        return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session", "desktop")
+        return ProvenanceDecision(T3_APP_SESSION, "KEEP", "T3 runtime cursor links Codex session", "cli-agent")
 
     if _has_segment(path, "wf_*"):
         repo = _repo_from_project_segment(_project_segment(path))
@@ -237,8 +237,8 @@ def derive_source_class(
 ) -> SourceClass | None:
     """Return the five-value source class only when provenance is unambiguous."""
     provenance_map: dict[str, SourceClass] = {
-        T3_APP_SESSION: "desktop",
-        "t3-thread": "desktop",
+        T3_APP_SESSION: "cli-agent",
+        "t3-thread": "cli-agent",
         "recon-agent": "brain-worker",
         "fleet-subagent": "fleet-coordination",
         "product-subagent": "subagent",
@@ -257,9 +257,9 @@ def derive_source_class(
     if path_class is not None:
         return path_class
     normalized_source = str(source or "").strip().casefold().replace("-", "_")
-    if normalized_source in {"t3", "chatgpt", "claude_desktop", "gemini_desktop"}:
+    if normalized_source in {"chatgpt", "claude_desktop", "gemini_desktop"}:
         return "desktop"
-    if normalized_source in {"claude_code", "codex", "gemini_cli", "cursor", "antigravity"}:
+    if normalized_source in {"t3", "claude_code", "codex", "gemini_cli", "cursor", "antigravity"}:
         return "cli-agent"
     return None
 

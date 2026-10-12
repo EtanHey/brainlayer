@@ -128,6 +128,32 @@ def test_per_class_default_visibility_opt_in_and_exact_expansion(tmp_path: Path)
     store.close()
 
 
+@pytest.mark.parametrize(
+    "provenance,source,expected",
+    [
+        ("t3-thread", "t3", "cli-agent"),
+        ("t3-app-session", "codex", "cli-agent"),
+        (None, "t3", "cli-agent"),
+        (None, "claude_desktop", "desktop"),
+        (None, "chatgpt", "desktop"),
+        (None, "gemini_desktop", "desktop"),
+    ],
+)
+def test_t3_is_default_visible_while_desktop_apps_stay_hidden(tmp_path, provenance, source, expected):
+    source_class = derive_source_class("/archived/session.jsonl", provenance_class=provenance, source=source)
+    assert source_class == expected
+    with VectorStore(tmp_path / "t3-visibility.db") as store:
+        store.conn.execute(
+            """INSERT INTO chunks (id, content, metadata, source_file, project,
+                                   content_type, char_count, source_class)
+               VALUES ('sample', 'T3VisibilityNeedle durable memory', '{}',
+                       '/archived/session.jsonl', 'brainlayer', 'user_message', 32, ?)""",
+            (source_class,),
+        )
+        ids = store.search(query_text="T3VisibilityNeedle", n_results=10)["ids"][0]
+        assert ("sample" in ids) == (expected == "cli-agent")
+
+
 def test_hidden_class_audit_fails_on_any_sampled_desktop_leak(tmp_path: Path, monkeypatch) -> None:
     store = VectorStore(tmp_path / "source-class-audit.db")
     store.conn.cursor().execute(
