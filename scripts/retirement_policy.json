@@ -440,6 +440,16 @@
         "target": "import subprocess"
       }
     },
+    "1dbae240c09cdf5aec0a7705e0d65cbbdd6e3ddef3d11435fd732e2af945e3ea": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "abfbbda11a786681c25418cb12f43492b408512143f40d37fb48aaf0565f04f6",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_size_t"
+      }
+    },
     "1e2756986e7c87b4ad726478c8154c42b8e9339746174a2e0e7cd976bb046451": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/mcp/_shared.py <module>._detected_default_read_pool_size subprocess.SubprocessError.",
       "site": {
@@ -2602,6 +2612,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "8fa7a11bfe7881facca93e800dad75c120c0fe5493bea4f0c5239a89ffb8f41a": {
+      "non_cloud_purpose": "Launch only this package local watchdog with exact parent PID, heartbeat pipe, inherited flock, and explicit shutdown timeout. No model/production command.",
+      "site": {
+        "call_sha256": "74111a18067a7ca8df6d4ddc66af28c735f2a87f536b4bf5a6b5168c0992ffc1",
+        "kind": "child_process",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "90527e4bc3ac91388ddd254c9e76671904968e73cb1d74defb6c6ce6f7a63970": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/index_completeness.py <module>",
       "site": {
@@ -3288,6 +3308,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "b2011dd6084e752b1b1fa27f9d8fed9caad0b3e75fe42781e1e8830191f1d61b": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.CDLL"
+      }
+    },
     "b212f1f1f02595b0cca7bb3189844cc7aef1849247fb6e36641a3ef61788c200": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/ci_ratchet_table.py <module>.Probe.detect socket.gethostname.",
       "site": {
@@ -3296,6 +3326,16 @@
         "owner": "<module>.Probe.detect",
         "path": "scripts/ci_ratchet_table.py",
         "target": "socket.gethostname"
+      }
+    },
+    "b267ea8c8f7c2e208c16a44c79fb54b8c16fcc5f133150ac221c9a652a018b24": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "55c9da3cd61d529bd92b7977c57e19efb1676260c82707ebae167009d90f237f",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.sizeof"
       }
     },
     "b26deabe85f82b84a722ceedb37fce09fdd46229846bd5a8a09a6c7cc1197ae1": {
@@ -3588,6 +3628,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "bd03d1c620d4323bb9784dcf5b20149f63ea8ff0569b7ef710feb3ce33700e87": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "cdbcf403131a1aeebe22fdab99de61ec86e927cdb74acd398bc35d8babf5eeab",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.byref"
+      }
+    },
     "bd84dfde36162fc7399c003a0f02e58ba551252cfee8730a6e21c01ac25ac526": {
       "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module> requests.exceptions.ChunkedEncodingError.",
       "site": {
@@ -3726,6 +3776,16 @@
         "owner": "<module>.helper_env.command_line",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "c55344aac21699ba19a9f0fea59efdeb28b5e96455edf00c9fb7b95f2c745386": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "201da485ae88de9e651b2a7a04f1b930af8aca43d738a3506b2fbfb214d2f09a",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_long * 2"
       }
     },
     "c565669c44ecfd5ff27d100737fa63cf71e374db4cd0a1baf5b2892eaac0f77b": {
@@ -4015,16 +4075,6 @@
         "kind": "callable_reference",
         "owner": "<module>.verify_mcp_transport.receive",
         "path": "src/brainlayer/setup.py",
-        "target": "subprocess.Popen"
-      }
-    },
-    "d6f901d9098bfef9cf9a129d634de70d759e447eda7f25b06eb453408c15bcd7": {
-      "non_cloud_purpose": "Launch only this package guard under the current Python, with an exact parent PID, heartbeat pipe and inherited local flock; no model command.",
-      "site": {
-        "call_sha256": "9fbd57de78149fa0315b1913acb9ca1cc82f99dc692f8ca0b66424295a1222b2",
-        "kind": "child_process",
-        "owner": "<module>.launch_guard",
-        "path": "src/brainlayer/supervisor_guard.py",
         "target": "subprocess.Popen"
       }
     },
@@ -4364,6 +4414,16 @@
         "owner": "<module>",
         "path": "scripts/retirement_probe.py",
         "target": "import importlib"
+      }
+    },
+    "ed46e56639d4698ff9d9d990c378de6f57eb809422d3f58a54024f053851e041": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "2fe4ac2205b03d05a1d562b72766ba1e4da43c65858439b2600bbe39ed63deee",
+        "kind": "callable_reference",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.c_long"
       }
     },
     "ed6b68f5900e0814dfc47d89e1b33fb9ebaa5bf0b7aa0721d78f9476f6f25c23": {
@@ -4734,6 +4794,16 @@
         "owner": "<module>._trash_icloud_item",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "subprocess.run"
+      }
+    },
+    "fc4d4c12bf137369aee98eeddd67600cf772b3142d862c10ef914fcf5c8c8f31": {
+      "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.boot_time",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "ctypes.get_errno"
       }
     },
     "fd03d5962e54721eacf6a27bfbe88ae9f41305171fc030530609a8f42e0b4432": {
