@@ -1,7 +1,5 @@
 """Opt-in acknowledged component quiescence with an inherited writer-exclusion lease."""
 
-from __future__ import annotations
-
 import fcntl
 import json
 import os
@@ -64,6 +62,8 @@ class MaintenanceHold:
             for s in os.environ.get("BRAINLAYER_MAINTENANCE_KEEP_DOWN", "").split(",")
         }
         for name, restore in entry["components"].items():
+            if name not in states or name not in labels:
+                continue
             state = states[name]
             if not restore or not state["configured"] or state.get("pause_owner") != entry["owner"]:
                 continue

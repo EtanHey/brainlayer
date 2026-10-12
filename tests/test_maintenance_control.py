@@ -1,5 +1,3 @@
-"""Private-process writer exclusion, acknowledgement, recovery and hold ownership."""
-
 import json
 import os
 import signal
@@ -19,10 +17,8 @@ from tests.test_service_supervisor import native  # noqa: F401
 def control(request, monkeypatch):
     path, start, query = request.getfixturevalue("native")
     monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(path / "control.sock"))
-    writer = (
-        "import sqlite3,time\nc=sqlite3.connect(%r)\nc.execute('create table if not exists samples(who)')\nwhile True:\n c.execute(\"insert into samples values('resident')\"); c.commit(); time.sleep(.02)"
-        % str(path / "writer.db")
-    )
+    writer = "import sqlite3,time\nc=sqlite3.connect(%r)\nc.execute('create table if not exists samples(who)')\nwhile True:\n c.execute(\"insert into samples values('resident')\"); c.commit(); time.sleep(.02)"
+    writer %= str(path / "writer.db")
     code = native_tests.BOOT.replace(
         "s=Supervisor(", f"watch=watch.rsplit('time.sleep(60)',1)[0] + {'exec(' + repr(writer) + ')'!r}\ns=Supervisor("
     )
@@ -157,6 +153,10 @@ def test_nested_child_hold_requires_inherited_fd_and_matching_token(control, mon
         monkeypatch.setenv("BRAINLAYER_MAINTENANCE_TOKEN", "foreign")
         with pytest.raises(RuntimeError), MaintenanceHold():
             pass
+        entry = dict(owner=outer.token, components=dict(removed=True, watch=True, drain=True))
+        outer.journal.write_text(json.dumps(entry))
+        outer.client.aliases.pop("com.brainlayer.drain")
+    native_tests.eventually(lambda: bool(control[2]()["components"]["watch"]["pid"]))
 
 
 def test_corrupt_recovery_journal_refuses_without_resuming(control):
