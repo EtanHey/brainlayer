@@ -490,6 +490,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "1e8e00d27af9e90f5bd8cec7d595bc318c44e7f138747cecbb1759ad81456ee1": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor control; restart/pause/resume wait for the advertised component exit grace plus cleanup margin. No model or network sender.",
+      "site": {
+        "call_sha256": "a12aca56810ce876a4a29521623b9979c0024c2dd08dbc2bb4d8b81dc7c90bf0",
+        "kind": "generic_send",
+        "owner": "<module>.SupervisorCommands.__call__",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "self.request"
+      }
+    },
     "1f0e32635a77afd81f5bf7ccb7c39426a00ecd970c057d028996096a44d5405c": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module>._run subprocess.CompletedProcess.",
       "site": {
@@ -3946,16 +3956,6 @@
         "owner": "<module>.run_command",
         "path": "src/brainlayer/maintenance.py",
         "target": "subprocess.run"
-      }
-    },
-    "c5fdc8cc1c284fb3d81d1aa9e42594d95f5c56549a9425ec1f36a3ec1d3589d3": {
-      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
-      "site": {
-        "call_sha256": "54c35d82327212bf962ad68fc0e4f085f68f768b382444dac4755f70febb9193",
-        "kind": "generic_send",
-        "owner": "<module>.SupervisorCommands.__call__",
-        "path": "src/brainlayer/supervisor_adapters.py",
-        "target": "self.request"
       }
     },
     "c614ab7823c9c4b0fde1c0432db80cf962ed22654b87111b7a6fe3a4da300b8a": {

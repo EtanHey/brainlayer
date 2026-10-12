@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import socket
 import stat
 import subprocess
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
-from .pause import DEFAULT_PAUSE_SENTINEL_PATH, _parse_iso_datetime
+from .paths import supervisor_socket_path
+from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_sentinel_state
 from .supervisor_guard import peer_uid
 
 ALIASES = {
@@ -60,8 +61,9 @@ class SupervisorCommands:
         self.path, self.fallback, self.pause_path = path, fallback, pause_path
         self.aliases = ALIASES.copy()
         self.domain = f"gui/{os.getuid()}"
+        self.control_error = ""
 
-    def request(self, action="status", component="*"):
+    def request(self, action="status", component="*", *, timeout=2):
         directory, endpoint = self.path.parent.lstat(), self.path.lstat()
         if (
             directory.st_uid != os.getuid()
@@ -73,20 +75,30 @@ class SupervisorCommands:
         ):
             raise PermissionError("supervisor endpoint must be owner-only")
         with socket.socket(socket.AF_UNIX) as client:
-            client.settimeout(2 if action == "status" else 20)
+            client.settimeout(timeout)
             client.connect(str(self.path))
             if peer_uid(client) != os.getuid():
                 raise PermissionError("supervisor peer uid differs")
             client.sendall(json.dumps(dict(action=action, component=component)).encode() + b"\n")
             with client.makefile("rb") as reader:
                 response = json.loads(reader.readline(65537))
+        if not isinstance(response, dict):
+            raise ValueError("supervisor response must be an object")
         if "error" in response:
             raise RuntimeError(response["error"])
         states = response["components"]
+        if not isinstance(states, dict):
+            raise ValueError("supervisor components must be an object")
         for value in states.values():
             if (
-                type(value["configured"]) is not bool
+                not isinstance(value, dict)
+                or type(value["configured"]) is not bool
                 or type(value["paused"]) is not bool
+                or type(value["starts"]) is not int
+                or value["starts"] < 0
+                or type(value["exit_timeout"]) not in {int, float}
+                or not math.isfinite(value["exit_timeout"])
+                or value["exit_timeout"] < 0
                 or value["pid"] is not None
                 and (type(value["pid"]) is not int or value["pid"] <= 1)
             ):
@@ -102,21 +114,11 @@ class SupervisorCommands:
             for label, value in re.findall(r'["\']([^"\']+)["\']\s*=>\s*(true|false|disabled|enabled)', observed.stdout)
             if value in {"true", "disabled"}
         }
-        try:
-            payload = json.loads(self.pause_path.read_text())
-        except FileNotFoundError:
-            if os.path.lexists(self.pause_path):
-                raise OSError("pause sentinel unreadable")
-            payload = {"labels": []}
-        if (
-            not isinstance(payload, dict)
-            or not isinstance(payload.get("labels"), list)
-            or not all(isinstance(v, str) for v in payload["labels"])
-        ):
-            raise ValueError("pause sentinel is corrupt")
-        expiry = _parse_iso_datetime(payload.get("expires_at"))
-        if expiry is None or datetime.now(UTC) <= expiry:
-            disabled.update(payload["labels"])
+        payload, active, _ = pause_sentinel_state(self.pause_path, strict=True)
+        if active:
+            disabled.update(
+                label for label in (*self.aliases, "com.brainlayer.daemon") if pause_applies_to_label(payload, label)
+            )
         return disabled | {
             label
             for label, name in self.aliases.items()
@@ -136,6 +138,8 @@ class SupervisorCommands:
         if args[:2] != ["launchctl", "print-disabled"] and label not in self.aliases and command != "kill":
             return self.fallback(args)
         try:
+            if self.control_error:
+                raise RuntimeError(self.control_error)
             states = self.request()
             if args[:2] == ["launchctl", "print-disabled"]:
                 disabled = self._disabled(states)
@@ -177,24 +181,30 @@ class SupervisorCommands:
                 disabled = self._disabled(states, include_paused=action != "resume")
                 if label in disabled or "com.brainlayer.daemon" in disabled:
                     raise PermissionError("component is OFF, paused or disabled")
-            self.request(action, name)
+            self.request(action, name, timeout=states[name]["exit_timeout"] + 5)
             return result()
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError, StopIteration) as exc:
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, RuntimeError, StopIteration) as exc:
             return result(127, error=f"supervisor control failed: {exc}")
 
 
-def adapt_commands(runner, pause_path=None, *, required=()):
+def adapt_commands(runner, pause_path=None, *, required=(), tolerate_unavailable=False):
     path = os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET")
     if not path or isinstance(runner, SupervisorCommands):
         return runner
     backend = SupervisorCommands(
-        Path(path),
+        supervisor_socket_path(),
         runner,
         pause_path=pause_path or Path(os.environ.get("BRAINLAYER_PAUSE_SENTINEL", str(DEFAULT_PAUSE_SENTINEL_PATH))),
     )
-    states = backend.request()  # Unknown transport must fail the worker.
-    if any(backend.aliases[label] not in states for label in required if label in backend.aliases):
-        raise RuntimeError("required supervisor component is unavailable")
+    try:
+        states = backend.request()
+        if any(backend.aliases[label] not in states for label in required if label in backend.aliases):
+            raise RuntimeError("required supervisor component is unavailable")
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RuntimeError) as exc:
+        if not tolerate_unavailable:
+            raise
+        backend.control_error = str(exc) or type(exc).__name__
+
     return backend
 
 

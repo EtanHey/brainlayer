@@ -27,6 +27,7 @@ exec their service command. API keys stay out of rendered LaunchAgent plists.
 | `BRAINLAYER_SUPERVISOR_SOCKET` | unset | Opt in to owner-only Unix component control for health/watchdog checks; leave unset until consolidated installer migration. |
 | `BRAINLAYER_PAUSE_SENTINEL` | existing `pause.sentinel` | Override the shared hold path for standalone watchdog adapters; explicit health-check configuration takes precedence. |
 
+Control defaults to `~/.local/share/brainlayer/supervisor/control.sock`; the environment override is resolved identically by supervisor and adapters. Read-only health never connects to control. Healing with unavailable or malformed control returns a critical `supervisor_control_unavailable` result, preserves badge/canary checks, and records failed heals. Mutations wait for the advertised component exit grace plus five seconds.
 The staged supervisor uses a 15-second shutdown cap; its future plist must allow at least 25 seconds.
 Missing-count comparisons accept ticks at least 240 seconds apart. A slow healthy hotlane during big ingest can still look stalled when arrivals outrun embeddings; net counts alone cannot distinguish overload from a wedge.
 

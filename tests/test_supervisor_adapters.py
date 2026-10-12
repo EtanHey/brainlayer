@@ -18,8 +18,9 @@ from tests.test_throughput_watchdog import _config, _load_module, _progress
 
 @pytest.fixture
 def backend(request, monkeypatch):
+    grace = getattr(request, "param", 1)
     path, start, request = request.getfixturevalue("native")
-    code = native_tests.BOOT.replace(
+    code = native_tests.BOOT.replace("exit_timeout=1)", f"exit_timeout={grace})").replace(
         "'off':Component", "'hotlane':Component((sys.executable,'-c','import time; time.sleep(60)')), 'off':Component"
     )
     monkeypatch.setattr(native_tests, "BOOT", code)
@@ -64,12 +65,13 @@ def test_health_heal_is_component_scoped_and_keeps_alerts(backend, tmp_path, mon
     assert not any(a[0] == "launchctl" and a[1] != "print-disabled" for a in commands)
 
 
-@pytest.mark.parametrize("gate", ["pause", "corrupt", "null", "operator", "unknown", "off"])
+@pytest.mark.parametrize("gate", ["pause", "daemon-pause", "corrupt", "null", "operator", "unknown", "off"])
 def test_stop_signals_block_heals_and_bootstrap(backend, gate):
     client, path, request, initial, commands, disabled = backend
     label = "com.brainlayer.watch"
-    if gate == "pause":
-        (path / "pause.sentinel").write_text(json.dumps({"labels": [label]}))
+    if gate in {"pause", "daemon-pause"}:
+        held = "com.brainlayer.daemon" if gate == "daemon-pause" else label
+        (path / "pause.sentinel").write_text(json.dumps({"labels": [held]}))
     elif gate == "corrupt":
         (path / "pause.sentinel").write_text("{")
     elif gate == "null":
@@ -152,3 +154,130 @@ def test_inactive_mode_and_shutdown_fits_default_launchd(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(tmp_path / "missing"))
     with pytest.raises(OSError):
         adapt_commands(runner)
+
+
+@pytest.fixture
+def reply_endpoint(request):
+    import socket
+    import threading
+
+    path = request.getfixturevalue("native")[0] / "reply.sock"
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(path))
+    path.chmod(0o600)
+    server.listen(1)
+    threads = []
+
+    def serve(payload, delay=0):
+        def reply():
+            import time
+
+            with server.accept()[0] as connection:
+                connection.recv(65536)
+                time.sleep(delay)
+                try:
+                    connection.sendall(json.dumps(payload).encode() + b"\n")
+                except BrokenPipeError:
+                    pass
+
+        thread = threading.Thread(target=reply)
+        thread.start()
+        threads.append(thread)
+        return path
+
+    yield serve
+    server.close()
+    for thread in threads:
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("failure", ["missing", "slow", "malformed"])
+def test_control_outage_preserves_health_result_badge_and_canary(tmp_path, monkeypatch, reply_endpoint, failure):
+    path = tmp_path / "missing.sock"
+    if failure != "missing":
+        path = reply_endpoint({"components": []}, delay=2.1 if failure == "slow" else 0)
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(path))
+    config, state, _, _ = _queue_backlog_config(tmp_path, heal=True)
+    config.badge_state_path = tmp_path / "badge.json"
+    commands = []
+
+    def runner(args):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    result = _run_queue_backlog_health(config, runner)
+    assert result.canary_status == "results"
+    assert config.badge_state_path.exists() and state.exists()
+    assert any(i.code == "supervisor_control_unavailable" and i.severity == "critical" for i in result.issues)
+    assert result.ok is False
+    assert any("failed:" in action for action in result.actions)
+    assert not any(a[0] == "launchctl" and a[1] in {"bootstrap", "kickstart", "bootout"} for a in commands)
+
+
+def test_read_only_health_does_not_build_control_adapter(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(tmp_path / "missing.sock"))
+    config, _, _, _ = _queue_backlog_config(tmp_path, heal=False)
+    result = _run_queue_backlog_health(config, lambda a: subprocess.CompletedProcess(a, 0, "", ""))
+    assert result.canary_status == "results"
+    assert not any(i.code == "supervisor_control_unavailable" for i in result.issues)
+
+
+@pytest.mark.parametrize(
+    "payload", [[], None, 4, {"components": []}, {"components": None}, {"components": {"watch": []}}]
+)
+def test_malformed_control_reply_returns_failed_command(reply_endpoint, payload):
+    client = SupervisorCommands(reply_endpoint(payload), lambda a: None)
+    result = client(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.watch"])
+    assert result.returncode == 127
+    assert "supervisor control failed" in result.stderr
+
+
+@pytest.mark.parametrize("payload", [{}, {"reason": "maintenance finished"}])
+def test_label_free_pause_sentinel_does_not_hold_component(backend, payload):
+    client, path, request, initial, _, _ = backend
+    (path / "pause.sentinel").write_text(json.dumps(payload))
+    assert client(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.watch"]).returncode == 0
+    assert request()["components"]["watch"]["pid"] != initial["watch"]["pid"]
+
+
+def test_action_timeout_covers_advertised_exit_grace(backend, monkeypatch):
+    client, _, request, _, _, _ = backend
+    states = request()["components"]
+    states["watch"]["exit_timeout"] = 60
+    calls = []
+
+    def control(action="status", component="*", *, timeout=None):
+        calls.append((action, component, timeout))
+        return states
+
+    monkeypatch.setattr(client, "request", control)
+    assert client(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.watch"]).returncode == 0
+    assert calls[-1][2] >= 65
+
+
+def test_shared_socket_resolver(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from brainlayer.paths import supervisor_socket_path
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("BRAINLAYER_SUPERVISOR_SOCKET", raising=False)
+    default = tmp_path / ".local/share/brainlayer/supervisor/control.sock"
+    assert supervisor_socket_path() == Supervisor({}).path == default
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(tmp_path / "custom.sock"))
+    assert supervisor_socket_path() == Supervisor({}).path == tmp_path / "custom.sock"
+
+
+@pytest.mark.parametrize("backend", [21], indirect=True)
+def test_slow_successful_restart_is_not_reported_as_failure(backend):
+    import time
+
+    client, _, request, initial, _, _ = backend
+    started = time.monotonic()
+    result = client(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.watch"])
+    assert result.returncode == 0, result.stderr
+    assert time.monotonic() - started >= 20
+    current = request()["components"]
+    assert current["watch"]["pid"] != initial["watch"]["pid"]
+    assert current["drain"]["pid"] == initial["drain"]["pid"]

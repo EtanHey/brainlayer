@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from brainlayer.paths import supervisor_socket_path
 from brainlayer.supervisor_guard import Custody, gated_spawn, launch_guard, peer_uid, start_time, stop_group
 
 
@@ -37,6 +38,7 @@ class Component:
     def status(self):
         return dict(
             configured=self.enabled,
+            exit_timeout=self.exit_timeout,
             paused=self.paused,
             pid=self.process.pid if self.process and self.process.poll() is None else None,
             starts=self.starts,
@@ -49,7 +51,7 @@ class Supervisor:
     def __init__(
         self,
         components: dict[str, Component],
-        path: Path,
+        path: Path | None = None,
         *,
         backoff: float = 10,
         guard_timeout: float = 30,
@@ -62,7 +64,7 @@ class Supervisor:
             math.isfinite(v) and v > 0 for v in (backoff, guard_timeout, shutdown_timeout, stable_uptime)
         ) or any(not c.argv or not math.isfinite(c.exit_timeout) or c.exit_timeout < 0 for c in components.values()):
             raise ValueError("commands and timing bounds must be valid")
-        self.components, self.path = components, path
+        self.components, self.path = components, path if path is not None else supervisor_socket_path()
         self.backoff, self.guard_timeout = backoff, guard_timeout
         self.shutdown_timeout, self.stable_uptime = shutdown_timeout, stable_uptime
         self.stop, self.lock = asyncio.Event(), asyncio.Lock()

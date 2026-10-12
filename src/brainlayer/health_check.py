@@ -592,7 +592,7 @@ def count_missing_embeddings(
 
 
 def _hotlane_progress_sample(state: dict[str, Any], count: int | None, now: datetime) -> tuple[bool, bool]:
-    """Compare counts at least 240 s apart, tolerating 300 s scheduler jitter.
+    """Compare counts at least 240 s apart on nominal 300 s ticks (60 s early jitter).
 
     Slow healthy hotlane during big ingest may look stalled when arrivals outrun
     embeddings: net missing counts alone cannot distinguish overload from a wedge.
@@ -1254,19 +1254,6 @@ def run_health_check(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> HealthCheckResult:
-    from .supervisor_adapters import adapt_commands
-
-    command_runner = adapt_commands(
-        command_runner,
-        config.pause_sentinel_path,
-        required=(
-            config.watch_label,
-            config.drain_label,
-            config.hotlane_label,
-            config.health_check_label,
-            config.observability_label,
-        ),
-    )
     lock_path = Path(f"{config.state_path.expanduser()}.lock")
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1324,6 +1311,25 @@ def _run_health_check_locked(
                 "message": message[:500],
             }
         )
+
+    if config.heal:
+        from .supervisor_adapters import adapt_commands
+
+        command_runner = adapt_commands(
+            command_runner,
+            config.pause_sentinel_path,
+            required=(
+                config.watch_label,
+                config.drain_label,
+                config.hotlane_label,
+                config.health_check_label,
+                config.observability_label,
+            ),
+            tolerate_unavailable=True,
+        )
+        if error := getattr(command_runner, "control_error", ""):
+            add_issue("supervisor_control_unavailable", "critical", f"supervisor control unavailable: {error}")
+            result.actions.append("heal_failed:supervisor_control_unavailable")
 
     if state.get("_state_corrupt_now"):
         add_issue("job_state_unknown", "critical", str(state["state_corrupt"]))
