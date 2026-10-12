@@ -591,6 +591,30 @@ def count_missing_embeddings(
     )
 
 
+def _hotlane_progress_sample(state: dict[str, Any], count: int | None, now: datetime) -> tuple[bool, bool]:
+    """Compare spaced missing counts; other writers' vectors cannot mask a hotlane stall."""
+    if count is None:
+        return False, False  # A transient failure preserves the last successful comparison.
+    baseline = state.get("hotlane_missing_vectors", state.get("missing_vectors"))
+    stalled = state.get("hotlane_stalled_ticks", 0)
+    stalled = stalled if type(stalled) is int and stalled >= 0 else 0
+    try:
+        sampled_at = datetime.fromisoformat(state.get("hotlane_sample_at", state.get("ts", "")))
+        elapsed = (now - sampled_at).total_seconds()
+    except (ValueError, TypeError):
+        elapsed = -1
+    valid_baseline = type(baseline) is int and baseline >= 0 and elapsed >= 0
+    progressed = valid_baseline and count < baseline
+    advanced = valid_baseline and elapsed >= 300
+    if not valid_baseline or progressed or advanced or count == 0:
+        state.update(
+            hotlane_missing_vectors=count,
+            hotlane_sample_at=now.isoformat(),
+            hotlane_stalled_ticks=stalled + 1 if advanced and not progressed and count > 0 else 0,
+        )
+    return advanced, progressed or count == 0
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         state = json.loads(path.expanduser().read_text(encoding="utf-8"))
@@ -1400,7 +1424,9 @@ def _run_health_check_locked(
                 )
 
     previous_missing = state.get("missing_vectors")
-    result.previous_missing_vectors = int(previous_missing) if isinstance(previous_missing, int) else None
+    result.previous_missing_vectors = (
+        previous_missing if type(previous_missing) is int and previous_missing >= 0 else None
+    )
     try:
         result.missing_vectors = count_missing_embeddings(
             config.db_path,
@@ -1414,7 +1440,7 @@ def _run_health_check_locked(
             return finish_slow("missing_embeddings", "health-check deadline interrupted missing_embeddings")
         add_issue(
             "missing_embeddings_count_failed",
-            "critical",
+            "warning" if _text_has_sqlite_busy_signal(exc) else "critical",
             f"could not count missing embeddings: {exc}",
         )
     except Exception as exc:
@@ -1426,36 +1452,8 @@ def _run_health_check_locked(
     if slow_result := deadline_reached("missing_embeddings"):
         return slow_result
 
-    embedding_vector_rows = None
-    embedding_stalled_ticks = 0
-    if result.missing_vectors is not None:
-        try:
-            embedding_vector_rows = _read_only_count(
-                config.db_path,
-                "SELECT COUNT(*) FROM chunk_vectors_rowids",
-                stage="embedding_progress",
-                deadline_at=deadline_at,
-                monotonic_fn=monotonic_fn,
-            )
-        except HealthCheckDeadlineExceeded as exc:
-            return finish_slow("embedding_progress", str(exc))
-        except Exception as exc:
-            add_issue("embedding_progress_count_failed", "critical", f"could not measure embedding progress: {exc}")
-    if slow_result := deadline_reached("embedding_progress"):
-        return slow_result
-    previous_vectors = state.get("embedding_vector_rows")
-    prior_embedding_stalls = state.get("embedding_stalled_ticks", 0)
-    if (
-        result.missing_vectors
-        and type(previous_vectors) is int
-        and previous_vectors >= 0
-        and embedding_vector_rows == previous_vectors
-    ):
-        embedding_stalled_ticks = (
-            prior_embedding_stalls if type(prior_embedding_stalls) is int and prior_embedding_stalls >= 0 else 0
-        ) + 1
-    elif embedding_vector_rows is not None and type(previous_vectors) is int:
-        # A growing vector table is progress; a shrinking one is a new baseline, not a stall.
+    hotlane_sample_advanced, hotlane_progressed = _hotlane_progress_sample(state, result.missing_vectors, now)
+    if hotlane_progressed:
         for issue_code in ("missing_embeddings_climbing", "missing_embeddings_not_draining"):
             key = _heal_key(config.hotlane_label, issue_code)
             previous_heal_failures.pop(key, None)
@@ -1464,7 +1462,9 @@ def _run_health_check_locked(
     stalled_ticks = 0
     if result.missing_vectors is not None:
         if result.previous_missing_vectors is not None:
-            prior_stalled_ticks = int(state.get("stalled_ticks", 0) or 0)
+            prior_stalled_ticks = state.get("stalled_ticks", 0)
+            if type(prior_stalled_ticks) is not int or prior_stalled_ticks < 0:
+                prior_stalled_ticks = 0
             if result.missing_vectors > result.previous_missing_vectors:
                 add_issue(
                     "missing_embeddings_climbing",
@@ -1472,25 +1472,31 @@ def _run_health_check_locked(
                     f"missing embeddings increased {result.previous_missing_vectors} -> {result.missing_vectors}",
                 )
                 stalled_ticks = 0
-                if embedding_stalled_ticks >= max(1, config.max_stalled_ticks):
-                    heal_issue_labels["missing_embeddings_climbing"] = (
-                        config.hotlane_label,
-                        _plist_for_label(config, config.hotlane_label),
-                    )
             elif result.missing_vectors == result.previous_missing_vectors and result.missing_vectors > 0:
-                stalled_ticks = prior_stalled_ticks + 1
+                stalled_ticks = prior_stalled_ticks + int(hotlane_sample_advanced)
                 if stalled_ticks >= config.max_stalled_ticks:
                     add_issue(
                         "missing_embeddings_not_draining",
                         "warning",
                         f"missing embeddings stayed at {result.missing_vectors} for {stalled_ticks} checks",
                     )
-                    if embedding_stalled_ticks >= max(1, config.max_stalled_ticks):
-                        heal_issue_labels["missing_embeddings_not_draining"] = (
-                            config.hotlane_label,
-                            _plist_for_label(config, config.hotlane_label),
-                        )
     result.stalled_ticks = stalled_ticks
+    if (
+        hotlane_sample_advanced
+        and result.missing_vectors
+        and state["hotlane_stalled_ticks"] >= max(1, config.max_stalled_ticks)
+    ):
+        # One issue key spans rise/flat alternation, so heal thresholds cannot reset each tick.
+        if not any(issue.code == "missing_embeddings_not_draining" for issue in result.issues):
+            add_issue(
+                "missing_embeddings_not_draining",
+                "warning",
+                "missing embeddings have not decreased across spaced checks",
+            )
+        heal_issue_labels["missing_embeddings_not_draining"] = (
+            config.hotlane_label,
+            _plist_for_label(config, config.hotlane_label),
+        )
 
     try:
         response = socket_request_fn(config.socket_path, config.canary_query, config.socket_timeout_seconds)
@@ -1744,8 +1750,10 @@ def _run_health_check_locked(
         and type(drain_total) is int
         and type(previous_drain_total) is int
         and drain_total > previous_drain_total >= 0
+        and type(state.get("queue_count")) is int
+        and 0 <= queue_count <= state["queue_count"]
     ):
-        # Fresh, healthy completed writes prove draining even when new arrivals keep depth high.
+        # Completed writes plus non-growing depth prove recovery, rather than a trickle under overload.
         key = _heal_key(config.drain_label, "queue_backed_up")
         previous_heal_failures.pop(key, None)
         previous_tripped.discard(key)
@@ -1761,6 +1769,11 @@ def _run_health_check_locked(
         config=config,
         command_runner=command_runner,
     )
+    if not hotlane_sample_advanced:
+        # Quick manual runs and failed queries must not erase an in-flight heal episode.
+        key = _heal_key(config.hotlane_label, "missing_embeddings_not_draining")
+        if key in previous_heal_failures:
+            heal_failures[key] = previous_heal_failures[key]
     job_tick = None
     if config.job_opt_path is not None:
         previous_jobs = state.get("job_lifecycle", {})
@@ -1819,11 +1832,7 @@ def _run_health_check_locked(
     if result.missing_vectors is not None:
         state_payload["missing_vectors"] = result.missing_vectors
         state_payload["stalled_ticks"] = result.stalled_ticks
-    state_payload["embedding_stalled_ticks"] = embedding_stalled_ticks
-    if embedding_vector_rows is None:
-        state_payload.pop("embedding_vector_rows", None)
-    else:
-        state_payload["embedding_vector_rows"] = embedding_vector_rows
+    state_payload["queue_count"] = queue_count
     if isinstance(watcher_poll_count, int):
         state_payload["watcher_poll_count"] = watcher_poll_count
     if isinstance(drain_total, int):
