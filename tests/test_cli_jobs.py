@@ -63,6 +63,10 @@ def test_maintenance_cli_forwards_paths_date_and_signal_installation(monkeypatch
     assert captured["plan"] == "plan" and captured["install_signals"] is True
     assert captured["directory"] == tmp_path / "state" and captured["logs"] == tmp_path / "logs"
     assert captured["python"] == sys.executable
+    captured.clear()
+    monkeypatch.setenv("BRAINLAYER_SUPERVISOR_SOCKET", str(tmp_path / "state" / "control.sock"))
+    result = CliRunner().invoke(app, ["maintenance-calendar", "--state-dir", str(tmp_path / "state")])
+    assert result.exit_code == 2 and not captured
 
 
 def test_real_cli_reads_private_daemon_status(monkeypatch):

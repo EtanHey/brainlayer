@@ -25,12 +25,11 @@ def register(app, jobs_app):
             date = dt.date.fromisoformat(scheduled_date) if scheduled_date else dt.date.today()
         except ValueError as exc:
             raise typer.BadParameter("date must be ISO YYYY-MM-DD") from exc
+        directory = state_dir or supervisor_socket_path().parent / "calendar"
+        if directory.resolve() == supervisor_socket_path().parent.resolve():
+            raise typer.BadParameter("calendar custody directory must differ from resident supervisor")
         plan = calendar_steps(sys.executable, str(Path(sys.executable).with_name("brainlayer")), lib_dir, date)
-        code = asyncio.run(
-            run_calendar(
-                plan, state_dir or supervisor_socket_path().parent / "calendar", logs_dir, install_signals=True
-            )
-        )
+        code = asyncio.run(run_calendar(plan, directory, logs_dir, install_signals=True))
         raise typer.Exit(code)
 
     @app.command("daemon")

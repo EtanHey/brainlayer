@@ -44,16 +44,11 @@ records an error and retries without stopping the supervisor or spawning duplica
 
 ## CLI consumers
 
-`brainlayer daemon --manifest /absolute/jobs.json` is the named daemon launcher.
-`brainlayer maintenance-calendar` runs the installed calendar plan for today's scheduled
-date; `--date YYYY-MM-DD` selects a missed date. It uses the current interpreter's
-sibling `brainlayer` executable and packaged launchd wrappers, with explicit `--lib-dir`,
-`--state-dir` and `--logs-dir` overrides for isolated runs.
-
-`brainlayer jobs component watch status` reads runtime evidence. While the legacy plist
-exists it reads that launchd label; after archival it reads the owner-only supervisor.
-`--socket` and `--manifest` select private fixtures. `restart` respects disabled/OFF/pause
-refusals and never bootstraps an archived label. `env` returns the configured env-file
-path and `logs` returns stdout/stderr paths; neither prints credential contents. JSON
-includes the component's legacy label, evidence source and definition path. This traces
-configuration provenance; it does not claim which keg a live process has mapped.
+`brainlayer daemon --manifest /absolute/jobs.json` starts the named daemon.
+`maintenance-calendar [--date YYYY-MM-DD]` passes a CalendarPlan directly to the
+singleton runner with distinct custody, sibling keg CLI, packaged wrappers, and
+`--lib-dir`/`--state-dir`/`--logs-dir` overrides.
+`jobs component NAME status|restart|env|logs` reads legacy plists until archival,
+then the owner-only supervisor; `--socket`/`--manifest` select private fixtures.
+Restart respects OFF/disable/pause. Env/log actions return paths, without credentials.
+JSON traces the legacy label, evidence source and definition; it is not live keg proof.
