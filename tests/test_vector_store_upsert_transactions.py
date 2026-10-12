@@ -180,7 +180,7 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
             "project": None,
             "source": "t3",
             "provenance_class": "t3-thread",
-            "source_class": "desktop",
+            "source_class": "cli-agent",
             "allow_duplicate": True,
         },
         {
@@ -188,7 +188,7 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
             "project": None,
             "source": "t3",
             "provenance_class": "t3-thread",
-            "source_class": "desktop",
+            "source_class": "cli-agent",
             "allow_duplicate": True,
         },
     ]
@@ -203,8 +203,8 @@ def test_t3_upsert_persists_provenance_and_accepts_mirrored_duplicates(isolated_
         .fetchall()
     )
     assert rows == [
-        ("t3-thread-1", "t3", "t3-thread", "desktop"),
-        ("t3-thread-2", "t3", "t3-thread", "desktop"),
+        ("t3-thread-1", "t3", "t3-thread", "cli-agent"),
+        ("t3-thread-2", "t3", "t3-thread", "cli-agent"),
     ]
 
 
