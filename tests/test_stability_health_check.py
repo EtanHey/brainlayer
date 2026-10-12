@@ -1837,6 +1837,163 @@ def _queue_backlog_config(tmp_path, *, heal: bool) -> tuple[HealthCheckConfig, P
     return config, state_path, queue_dir, pause_path
 
 
+@pytest.mark.parametrize(
+    ("missing", "vectors", "restart_ticks"),
+    [
+        ([3, 11, 6, 14, 1, 12], [100, 101, 102, 103, 104, 105], []),
+        ([3, 11, 14, 18], [100, 101, 102, 103], [2, 3]),
+        ([3, 3, 3], [100, 101, 102], [2]),
+        ([3, 3, 3], [100, 100, 100], [2]),
+        ([3, 11, 14], [100, 100, 100], [2]),
+        ([3, 11, 14, 18], [100, 99, 99, 99], [2, 3]),
+    ],
+)
+def test_hotlane_restart_uses_missing_progress_not_drain_vectors(tmp_path, missing, vectors, restart_ticks):
+    config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    config.job_alert_path = tmp_path / "job-alerts.json"
+    config.job_alert_path.write_text(json.dumps({"wal-checkpoint": "checkpoint busy"}))
+    for tick, (missing_count, vector_count) in enumerate(zip(missing, vectors, strict=True)):
+        db_path = tmp_path / f"sample-{tick}.db"
+        _make_db(db_path, total=vector_count + missing_count, vector_rows=vector_count)
+        commands = []
+        result = _run_queue_backlog_health(
+            replace(config, db_path=db_path),
+            _loaded_launchd_runner(commands),
+            now=datetime(2026, 9, 8, 11, 30, tzinfo=UTC) + timedelta(minutes=5 * tick),
+        )
+        kicks = [command for command in commands if command[:3] == ["launchctl", "kickstart", "-k"]]
+        assert kicks == (
+            [["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.hotlane-brainbar"]]
+            if tick in restart_ticks
+            else []
+        )
+        assert "job_alert_wal-checkpoint" in [issue.code for issue in result.issues]
+        assert json.loads(config.job_alert_path.read_text()) == {"wal-checkpoint": "checkpoint busy"}
+        assert json.loads(state_path.read_text())["missing_vectors"] == missing_count
+
+
+@pytest.mark.parametrize("intermittent_busy", [False, True])
+def test_alternating_rise_flat_stall_heals_even_with_transient_query_failures(tmp_path, monkeypatch, intermittent_busy):
+    config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    config.heal_min_consecutive_failures = 2
+    real_count = health_check.count_missing_embeddings
+    outcomes = []
+    for tick, missing in enumerate([3, 5, 5, 7, 7, 9, 9, 11, 11, 13]):
+        db = tmp_path / f"alternating-{tick}.db"
+        _make_db(db, total=100 + missing, vector_rows=100)
+        now = datetime(2026, 9, 8, 11, 30, tzinfo=UTC) + timedelta(minutes=10 * tick)
+        if intermittent_busy and tick:
+            before = json.loads(state_path.read_text())
+            with monkeypatch.context() as patch:
+
+                def busy_count(*_args, **_kwargs):
+                    raise sqlite3.OperationalError("database is locked")
+
+                patch.setattr(health_check, "count_missing_embeddings", busy_count)
+                result = _run_queue_backlog_health(config, _loaded_launchd_runner([]), now=now - timedelta(minutes=5))
+            issue = next(issue for issue in result.issues if issue.code == "missing_embeddings_count_failed")
+            assert issue.severity == "warning"
+            after = json.loads(state_path.read_text())
+            for key in (
+                "missing_vectors",
+                "hotlane_stalled_ticks",
+                "hotlane_missing_vectors",
+                "hotlane_sample_at",
+                "heal_failures",
+            ):
+                assert after[key] == before[key]
+        assert health_check.count_missing_embeddings is real_count
+        commands = []
+        _run_queue_backlog_health(replace(config, db_path=db), _loaded_launchd_runner(commands), now=now)
+        if any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands):
+            outcomes.append(tick)
+    assert outcomes == [3]
+
+
+@pytest.mark.parametrize("old_stalls", [True, "2", -1, 1.5])
+def test_rapid_heal_checks_do_not_count_stalls_and_reject_invalid_old_counter(tmp_path, old_stalls):
+    config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    _make_db(tmp_path / "missing.db", total=4, vector_rows=1)
+    config.db_path = tmp_path / "missing.db"
+    state_path.write_text(json.dumps({"missing_vectors": 3, "stalled_ticks": old_stalls}))
+    for tick in range(5):
+        commands = []
+        result = _run_queue_backlog_health(
+            config,
+            _loaded_launchd_runner(commands),
+            now=datetime(2026, 9, 8, 11, 30, tzinfo=UTC) + timedelta(seconds=tick),
+        )
+        assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+        assert result.stalled_ticks == 0
+        assert json.loads(state_path.read_text())["hotlane_stalled_ticks"] == 0
+
+
+@pytest.mark.parametrize("drain_state", ["fresh", "stale", "unknown", "stalled", "flat"])
+def test_draining_queue_resets_breaker_only_with_healthy_progress(tmp_path, monkeypatch, drain_state):
+    config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    key = "com.brainlayer.drain:queue_backed_up"
+    state_path.write_text(
+        json.dumps({"drain_drained_total": 10, "queue_count": 7000, "heal_failures": {key: 11}, "heal_tripped": [key]})
+    )
+    backlog = iter([6147, 5101, 4034, 2954, 1820, 759])
+    monkeypatch.setattr(health_check, "_queue_stats", lambda *_args: (next(backlog), 10000, 1))
+    for tick in range(6):
+        payload = {"drained_total": 11 + tick, "updated_at": "2026-09-08T11:30:00Z", "state": "ok"}
+        if drain_state == "stale":
+            payload["updated_at"] = "2026-09-08T11:00:00Z"
+        elif drain_state == "unknown":
+            payload.pop("updated_at")
+        elif drain_state == "stalled":
+            payload["state"] = "drain_progress_stalled"
+        elif drain_state == "flat":
+            payload["drained_total"] = 10
+        config.drain_health_path.write_text(json.dumps(payload))
+        commands = []
+        result = _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
+        assert "queue_backed_up" in [issue.code for issue in result.issues]
+        saved = json.loads(state_path.read_text())
+        if drain_state == "fresh":
+            assert key not in saved["heal_tripped"]
+            assert key not in saved["heal_failures"]
+            assert not any(command[:3] == ["launchctl", "kickstart", "-k"] for command in commands)
+            assert "queue draining" in next(issue.message for issue in result.issues if issue.code == "queue_backed_up")
+        else:
+            assert key in saved["heal_tripped"]
+
+
+def test_queue_recovery_does_not_disable_healing_for_a_later_stall(tmp_path):
+    config, state_path, queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    (queue / "store.jsonl").write_text('{"kind":"store_memory"}\n')
+    key = "com.brainlayer.drain:queue_backed_up"
+    state_path.write_text(
+        json.dumps({"drain_drained_total": 10, "queue_count": 1, "heal_failures": {key: 11}, "heal_tripped": [key]})
+    )
+    config.drain_health_path.write_text(
+        json.dumps({"drained_total": 11, "updated_at": "2026-09-08T11:30:00Z", "state": "ok"})
+    )
+    _run_queue_backlog_health(config, _loaded_launchd_runner([]))
+    commands = []
+    result = _run_queue_backlog_health(config, _loaded_launchd_runner(commands))
+    assert ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.drain"] in commands
+    assert "heal=failing" not in next(issue.message for issue in result.issues if issue.code == "queue_backed_up")
+
+
+def test_growing_queue_with_trickle_drain_retains_breaker(tmp_path, monkeypatch):
+    config, state_path, _queue, _pause = _queue_backlog_config(tmp_path, heal=True)
+    key = "com.brainlayer.drain:queue_backed_up"
+    state_path.write_text(
+        json.dumps({"queue_count": 1000, "drain_drained_total": 10, "heal_failures": {key: 11}, "heal_tripped": [key]})
+    )
+    counts = iter([1500, 2000, 2500])
+    monkeypatch.setattr(health_check, "_queue_stats", lambda *_args: (next(counts), 10000, 1))
+    for tick in range(3):
+        config.drain_health_path.write_text(
+            json.dumps({"drained_total": 11 + tick, "updated_at": "2026-09-08T11:30:00Z", "state": "ok"})
+        )
+        _run_queue_backlog_health(config, _loaded_launchd_runner([]))
+        assert key in json.loads(state_path.read_text())["heal_tripped"]
+
+
 def _loaded_launchd_runner(commands: list[list[str]]) -> Callable[[list[str]], SimpleNamespace]:
     def run(command: list[str]) -> SimpleNamespace:
         commands.append(command)
@@ -1845,7 +2002,7 @@ def _loaded_launchd_runner(commands: list[list[str]]) -> Callable[[list[str]], S
     return run
 
 
-def _run_queue_backlog_health(config, command_runner):
+def _run_queue_backlog_health(config, command_runner, *, now=None):
     return run_health_check(
         config,
         ps_output_fn=_ps_output_stub(
@@ -1853,7 +2010,7 @@ def _run_queue_backlog_health(config, command_runner):
         ),
         socket_request_fn=_ok_canary,
         command_runner=command_runner,
-        now_fn=lambda: datetime(2026, 9, 8, 11, 30, tzinfo=UTC),
+        now_fn=lambda: now or datetime(2026, 9, 8, 11, 30, tzinfo=UTC),
     )
 
 

@@ -45,7 +45,15 @@ stage name, and the elapsed duration.
 
 With `--heal`, the check uses `launchctl kickstart -k` for cheap recovery:
 
-- `com.brainlayer.hotlane-brainbar` when hotlane is dead, backlog is disabled, or missing vectors are climbing/stalled.
+- `com.brainlayer.hotlane-brainbar` when hotlane is dead or backlog is disabled.
+  Missing-vector warnings remain visible. Backlog-based healing requires no
+  decrease in missing vectors for `max_stalled_ticks` comparisons (default two),
+  at least 300 seconds apart, followed by the existing heal threshold. One heal
+  counter spans rising and flat counts. A decrease resets the episode. Vector
+  growth is not hotlane progress: drain can embed queued events independently.
+  Transient SQLite busy failures are warnings and preserve the last successful
+  baseline, stall counter and heal episode; a later successful sample continues
+  the comparison. An unavailable current count cannot itself trigger that heal.
 - `com.brainlayer.brainbar-daemon` when the BrainBar MCP canary fails or returns zero results.
 
 Before a kickstart, the check reads the launchd process state. Processes in an
@@ -56,6 +64,15 @@ failed ticks.
 The command writes the latest successfully measured missing-vector count to
 `~/.local/share/brainlayer/health-check-state.json`; a timed-out tick preserves
 the previous count and marks the state as slow.
+
+Missing-progress comparisons live in the private state file; the public health
+response schema is unchanged. A fresh, healthy drain heartbeat whose
+`drained_total` advances resets the queue-backlog heal counter and circuit breaker
+only when measured queue depth also stays level or shrinks. A trickle of writes
+under a growing backlog does not reset escalation. Backlog alerts remain
+visible. Stale, unknown or stalled drain health cannot reset the breaker; a later
+stall can trigger healing again. Job alerts clear through their producer's next
+successful run, never through this policy.
 
 The independent Tier-0 watchdog treats `slow_check: true` as unhealthy even
 when the state file was just refreshed, and treats any state as stale after 900
