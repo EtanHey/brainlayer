@@ -113,6 +113,8 @@ sleep_then_exit_disabled() {
     local reason="$1"
     local sleep_seconds="${BRAINLAYER_DISABLED_SLEEP_SECONDS:-3600}"
     echo "BrainLayer launchd service ${BRAINLAYER_LAUNCHD_SERVICE:-unknown} disabled by config: $reason" >&2
+    # Calendar steps record this deferral and continue; resident jobs retain their sleep gate.
+    if [ "${BRAINLAYER_CALENDAR_STEP:-0}" = "1" ]; then exit 75; fi
     if [ "$sleep_seconds" != "0" ]; then
         sleep "$sleep_seconds"
     fi
