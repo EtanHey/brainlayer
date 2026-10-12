@@ -22,6 +22,7 @@ import signal
 import socket
 import sqlite3
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1844,18 +1845,28 @@ def _run_backup_process(timeout_seconds: int) -> int:
 
 
 def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None = None) -> int:
+    guard_fd = os.environ.get("BRAINLAYER_CALENDAR_GUARD_FD")
+    managed = guard_fd is not None
+    if managed:
+        if not stat.S_ISFIFO(os.fstat(int(guard_fd)).st_mode):
+            raise ValueError("invalid calendar guard descriptor")
+    lease = os.environ.get("BRAINLAYER_MAINTENANCE_FD")
     child_env = os.environ.copy()
     child_env[BACKUP_SUPERVISED_CHILD_ENV] = "1"
     child = subprocess.Popen(
         command or [sys.executable, "-m", "brainlayer.backup_daily"],
         env=child_env,
-        start_new_session=True,
+        start_new_session=not managed,
+        pass_fds=(int(lease),) if managed and lease is not None else (),
     )
     previous_signal_handlers: dict[int, Any] = {}
 
+    def signal_child(signum):
+        (os.kill if managed else os.killpg)(child.pid, signum)
+
     def forward_shutdown_signal(signum, frame) -> None:  # noqa: ARG001
         if child.poll() is None:
-            os.killpg(child.pid, signum)
+            signal_child(signum)
         raise SystemExit(128 + signum)
 
     for shutdown_signal in (signal.SIGTERM, signal.SIGINT):
@@ -1866,11 +1877,11 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
             return child.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             if child.poll() is None:
-                os.killpg(child.pid, signal.SIGALRM)
+                signal_child(signal.SIGALRM)
                 try:
                     child.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    signal_child(signal.SIGKILL)
                     child.wait()
             message = f"backup exceeded configured wall-clock timeout ({timeout_seconds}s)"
             resolved_db_path = get_db_path()
@@ -1894,6 +1905,9 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
             print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
             return 124
     finally:
+        if managed and child.poll() is None:
+            child.kill()
+            child.wait()
         for shutdown_signal, previous_handler in previous_signal_handlers.items():
             signal.signal(shutdown_signal, previous_handler)
 
