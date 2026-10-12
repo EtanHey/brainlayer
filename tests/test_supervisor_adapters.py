@@ -6,14 +6,14 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 
 import pytest
-import test_service_supervisor as native_tests
-from test_service_supervisor import native  # noqa: F401
-from test_stability_health_check import _make_db, _queue_backlog_config, _run_queue_backlog_health
-from test_throughput_watchdog import _config, _load_module, _progress
 
+import tests.test_service_supervisor as native_tests
 from brainlayer import health_check
 from brainlayer.service_supervisor import Supervisor
 from brainlayer.supervisor_adapters import SupervisorCommands, adapt_commands
+from tests.test_service_supervisor import native  # noqa: F401
+from tests.test_stability_health_check import _make_db, _queue_backlog_config, _run_queue_backlog_health
+from tests.test_throughput_watchdog import _config, _load_module, _progress
 
 
 @pytest.fixture
