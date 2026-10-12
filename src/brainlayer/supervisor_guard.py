@@ -16,7 +16,22 @@ import struct
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def component_gate(directory: Path, *, exclusive=False):
+    """Close rather than LOCK_UN: inherited descriptors retain the maintenance lease."""
+    fd = os.open(directory / "maintenance.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise PermissionError("unsafe maintenance lease")
+        fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        yield fd
+    finally:
+        os.close(fd)
 
 
 def group_exists(pgid: int) -> bool:

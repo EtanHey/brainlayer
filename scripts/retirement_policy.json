@@ -42,16 +42,6 @@
         "target": "socket.socket().connect"
       }
     },
-    "0362e584b5ed2bb8d3ad2dd20bc959acdc7e05a94250f4e102759f77b7f1f40b": {
-      "non_cloud_purpose": "Owner-only AF_UNIX supervisor JSON status/pause/resume/restart control with UID/path validation; no TCP/MCP/cloud/model send.",
-      "site": {
-        "call_sha256": "c2f2da0ddb7646ae994e241d6ac45010cf5268373d9940f9fcd7139728dc2ecb",
-        "kind": "generic_send",
-        "owner": "<module>.SupervisorCommands.request",
-        "path": "src/brainlayer/supervisor_adapters.py",
-        "target": "client.sendall"
-      }
-    },
     "041e3b7ae74566732035e7acf8ffc81febd89724aabf4d2417b62110aecbdbcd": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._git_toplevel",
       "site": {
@@ -80,6 +70,16 @@
         "owner": "<module>.controls",
         "path": "scripts/retirement_probe.py",
         "target": "httpx.AsyncClient().send"
+      }
+    },
+    "06edcd5351504300ed1b8212f1a232ec0f7bdc9974cdeff9224f974d1fbb9247": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "950789bd31cea499e044b7c0525f8cd43a5db31b82c66a69de914db4b9ba55b4",
+        "kind": "generic_send",
+        "owner": "<module>.MaintenanceHold._states",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "self.client.request"
       }
     },
     "08812b9decf92405afe35f186f6b49f065c4ea36a62a40b64e46440bada87c3b": {
@@ -770,6 +770,16 @@
         "target": "import socket"
       }
     },
+    "2d30f3ef7f0bbf9e1a83a2bea490eb8bc2c1c546b40b6bea97d0cbda0ad84889": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "7a95f31d9051450f990b1b13ed7132df656b1e48e0cda4383b48204278c5afd3",
+        "kind": "generic_send",
+        "owner": "<module>.MaintenanceHold.__enter__",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "self.client.request"
+      }
+    },
     "2d59cd22d1a8ba719145c15300e8f4c51b9e58cdaf48fce5f78c59b232418e7f": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -1418,6 +1428,16 @@
         "target": "subprocess.run"
       }
     },
+    "4cfbbba044e834cd9083cbfff425d1a75e5e7edb974d52f5a83d54417641cc3c": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "2457c632a240c5d04ceca47c88a9aa08fae573cb4a7ba17ada66484a14b8d96b",
+        "kind": "generic_send",
+        "owner": "<module>.MaintenanceHold._restore",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "self.client.request"
+      }
+    },
     "4d0804ab4265b75dfa639328f8eb873218858ff3a5bcdfa8ec88133ebb5382a3": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ci/run_with_deadline.py <module>",
       "site": {
@@ -1646,6 +1666,16 @@
         "owner": "<module>.HybridSearchHelper.serve_forever",
         "path": "src/brainlayer/brainbar_hybrid_helper.py",
         "target": "socket.socket().accept"
+      }
+    },
+    "5aac6063d1d1298c53a9d6a5013febe40192e57160ab8bd864d84c244e3fd490": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "c1bb8ed47a76141758d8b908abe3a2a4983be8bbca7671f2792da4cb7e3acee0",
+        "kind": "generic_send",
+        "owner": "<module>.service_loaded",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "client.request"
       }
     },
     "5bbb0cda3cd45afe2ee0c349bd0a3b36d68eb1a26bfeb45c43d8ea124916c439": {
@@ -2990,6 +3020,16 @@
         "target": "subprocess.run"
       }
     },
+    "9e87eef5434c6c0016c89467c88999480208496d6a0062660b9441dde772329f": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "a5c46beb431d0f6f43d4b05e63943bbcfd1b885c783c4385de4cf4eb2b198ec9",
+        "kind": "child_process",
+        "owner": "<module>.control_client",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "subprocess.run"
+      }
+    },
     "9efe6e400a352a5c11b536f14719b6917b9eb343d3fc70e5991682753e77cf90": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.db_provenance",
       "site": {
@@ -3156,6 +3196,16 @@
         "owner": "<module>._run_case",
         "path": "scripts/observability_eval.py",
         "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "a6f8c2e9868a66b119b79a1b292f6bb87e192c1bb2ab6097a2cc86bf35ac5bac": {
+      "non_cloud_purpose": "Owner-only Unix supervisor control JSON, now carrying a bounded pause ownership token. No network or model sender.",
+      "site": {
+        "call_sha256": "e796ca79ee970a1c57c85f10d10aa38a8f86c7b2482951c96463f27cc4175424",
+        "kind": "generic_send",
+        "owner": "<module>.SupervisorCommands.request",
+        "path": "src/brainlayer/supervisor_adapters.py",
+        "target": "client.sendall"
       }
     },
     "a7b652380ad7ca586ab6ff4d20a7827225c89f0a8336295fd6cf806befc35f4f": {
@@ -4168,6 +4218,16 @@
         "target": "import subprocess"
       }
     },
+    "d08208741ef7e73bca425612f5d51e044379dc1c851039e3b6ad93361f898c7a": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "2ca59a9a197adc236264452700479a3225bcf32e90017df8987b263cfbef8425",
+        "kind": "generic_send",
+        "owner": "<module>.MaintenanceHold._restore",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "self.client.request"
+      }
+    },
     "d1360496ed5dbe116f92b78f65693d01c4bba6419f45df01e9b9b8c5c6ed01ca": {
       "non_cloud_purpose": "Private installed-wheel retirement proof loads the exact wheel-packaged local hotlane module (force-included from scripts by pyproject.toml); source-only trees lack brainlayer.launchd. This constant import exercises the preserved local embedding entrypoint under the armed OS/transport boundary; no cloud model caller.",
       "site": {
@@ -4534,6 +4594,16 @@
         "owner": "<module>._supervise_backup_process",
         "path": "src/brainlayer/backup_daily.py",
         "target": "subprocess.Popen"
+      }
+    },
+    "eacf5d8b1f64569fdfd8f0efdff7f1e509670a47cb21ac6a2e9e785879313ea5": {
+      "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "import subprocess"
       }
     },
     "eb3700ac2632d76248fd95cbf08a6bd227b20f881cbcb38fdedc0a2bb3fda021": {
