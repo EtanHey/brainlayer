@@ -2,6 +2,16 @@
   "baseline": "R11 Opus r1 narrowing adopted by lead; preserved purposes for unchanged transport import/call sites; round2 review pending",
   "schema_version": 1,
   "sites": {
+    "000354cb72058d5ffe8453d2ae0067899bb466936598d7f96f3954b1c57755dc": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
+      "site": {
+        "call_sha256": "9e760993531c13890bfe62aee1afed4c02bf07e0e4323e33d6a1f9ba9e85f4ef",
+        "kind": "generic_send",
+        "owner": "<module>.run_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "channel.sendall"
+      }
+    },
     "00db5ec85f9abd52c6d5d9ff6ed45c08d7a6b8cc3151b4371a1965a59c0c6dc3": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls socket.socket.",
       "site": {
@@ -2274,6 +2284,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "73c93860d18dfa64f39e9699f200003a308be3fde5b5a23f9d02a01ec13eac3e": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
+      "site": {
+        "call_sha256": "c32e717915cfeca38a2d92073232b053230ddbf58ad1249e66e4a60b71457d97",
+        "kind": "transport_call",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "socket.socketpair"
+      }
+    },
     "73d45aef8806f03ce231ed98854ac68113442e225ef841b49b00b12b9ad9c857": {
       "non_cloud_purpose": "Local launchctl CLI fallback for unmanaged services only; fixed OS command prefix, bounded timeout, no cloud/model subprocess.",
       "site": {
@@ -2930,6 +2950,16 @@
         "target": "import subprocess"
       }
     },
+    "974d4d489f2363c8560039316f733546a10efe0262ac83c9d980b0f981b613e4": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
+      "site": {
+        "call_sha256": "2969d91479c53bf8410693734fdab591e1ee68263b3dbfecff27dc0325401ac6",
+        "kind": "transport_call",
+        "owner": "<module>.run_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "socket.CMSG_SPACE"
+      }
+    },
     "9755da02f30771a48411dc8cb619c30acb46f59be0068ec36809dcf7d02d95d6": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/timestamp_iso.py <module>._detect_git_sha subprocess.CalledProcessError.",
       "site": {
@@ -3148,6 +3178,16 @@
         "owner": "<module>.cleanup_stale_mcp",
         "path": "hooks/session-cleanup.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "a19f15c518ba4a9d9e5d70747f377879d8050b298da3efbe74d440d24c2ffce1": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
+      "site": {
+        "call_sha256": "318457e8bab36a85fa76df673e35a01e0213359a83cc5b667421c98f4c48d1ff",
+        "kind": "transport_call",
+        "owner": "<module>.run_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "socket.socket"
       }
     },
     "a307dcc8458988ecf547cc5fa24f62df86734596ba3ca9d14896ea2dddbf4df1": {
@@ -3516,6 +3556,16 @@
         "owner": "<module>._sqlite_pragma_check",
         "path": "src/brainlayer/backup_daily.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "b1904067f944440015fc9f59afdbcd172feb086ca7d1abafaf65a1e61ee04b50": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
+      "site": {
+        "call_sha256": "8864b6d9b994d03b02991ae1cbd8275149ae855995ca99d4bdabe5cf17c9c8da",
+        "kind": "generic_send",
+        "owner": "<module>.guard_lease",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "channel.sendall"
       }
     },
     "b2011dd6084e752b1b1fa27f9d8fed9caad0b3e75fe42781e1e8830191f1d61b": {
@@ -4388,16 +4438,6 @@
         "target": "subprocess.run"
       }
     },
-    "da3eed53f461455bfaff7c3622066a140b2efd611b330c967eec2075e17adb41": {
-      "non_cloud_purpose": "Local process-group custody only: inherit the verified maintenance writer lease into the guard and gated child; weekly backup stays in the guarded calendar group when managed and retains standalone process-group supervision otherwise. No cloud/model sender.",
-      "site": {
-        "call_sha256": "13e9a11434db6b1daa4c6c285e6fa0d6800646420ab218faeca3f1c21b0e525e",
-        "kind": "child_process",
-        "owner": "<module>.launch_guard",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "da8a2b3ed55829c503b889ae4f07d6d57af82eb08d29f8fe620fc8b940bd49b3": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/archive_collapse.py <module>._detect_git_sha",
       "site": {
@@ -4944,6 +4984,16 @@
         "owner": "<module>._run",
         "path": "scripts/release_tag_contains.py",
         "target": "subprocess.run"
+      }
+    },
+    "f493453d24ffb47387f07b7306515d2088e17234a2073a6f9c402dfa2eb68e32": {
+      "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
+      "site": {
+        "call_sha256": "b17c5ee085bfd721fcb9455d253d42d72c4c0e25e805e27ae4ef3627fe5e00ea",
+        "kind": "child_process",
+        "owner": "<module>.launch_guard",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "f499d017f3e771a3bb1f4fc04d930e4cafad177043ef2b180e2f63a36d7c2c5e": {

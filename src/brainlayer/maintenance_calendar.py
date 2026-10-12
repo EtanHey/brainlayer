@@ -1,4 +1,4 @@
-"""Inactive scheduled calendar runner with isolated groups and a whole-batch writer hold."""
+"""Inactive scheduled calendar runner with isolated groups and scoped writer holds."""
 
 import asyncio
 import datetime as dt
@@ -7,6 +7,7 @@ import math
 import os
 import signal
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .job_alerts import report
 from .maintenance_control import MaintenanceHold
-from .supervisor_guard import Custody, gated_spawn, launch_guard, start_time, stop_group
+from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
 
 NAMES = tuple(
     "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts".split(
@@ -166,6 +167,21 @@ def finish(directory, state, step, code, date, defer_after, missed=False, stoppe
     return status
 
 
+@asynccontextmanager
+async def step_hold(client, guard, env, step):
+    if step.name not in {"maintenance-nightly", "maintenance-weekly", "repair-fts"}:
+        yield env
+        return
+    hold = MaintenanceHold(client)
+    await asyncio.to_thread(hold.__enter__)  # Keep watchdog pulses alive during acknowledged pause.
+    try:
+        guard_lease(guard, hold.fd)
+        yield env | dict(BRAINLAYER_MAINTENANCE_FD=str(hold.fd), BRAINLAYER_MAINTENANCE_TOKEN=hold.token)
+        guard_lease(guard, None)  # Only after the child group is confirmed gone.
+    finally:
+        await asyncio.to_thread(hold.__exit__, None, None, None)
+
+
 async def run_calendar(
     steps,
     directory,
@@ -189,7 +205,7 @@ async def run_calendar(
         record(directory, event="already-running", scheduled_date=date.isoformat())
         return 0
     stop, handlers, results = asyncio.Event(), {}, {}
-    guard, heartbeat, hold = None, None, None
+    guard, heartbeat = None, None
     loop = asyncio.get_running_loop()
     try:
         custody.recover(min(1, shutdown_timeout / 2))  # Reap stale writers before reacquiring their lease.
@@ -202,10 +218,8 @@ async def run_calendar(
             steps = steps.select(marker)
         steps = tuple(steps)
         client = maintenance_control.control_client()
-        hold = MaintenanceHold(client)
-        hold.__enter__()  # Whole batch for PR3b; scoped holds land separately in PR3c.
         logs.mkdir(parents=True, exist_ok=True)
-        guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, extra_fds=(hold.fd,))
+        guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
         heartbeat = asyncio.create_task(pulse(guard, stop, min(0.1, guard_timeout / 4)))
         record(directory, event="runner", guard=guard.pid, scheduled_date=date.isoformat())
         if install_signals:
@@ -214,8 +228,6 @@ async def run_calendar(
                 loop.add_signal_handler(sig, stop.set)
         env = os.environ | dict(
             BRAINLAYER_CALENDAR_STEP="1",
-            BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
-            BRAINLAYER_MAINTENANCE_TOKEN=hold.token,
             BRAINLAYER_CALENDAR_GUARD_FD=str(guard.stdin.fileno()),
             BRAINLAYER_SUPERVISOR_SOCKET=str(client.path),
         )
@@ -237,17 +249,21 @@ async def run_calendar(
                         | step.env
                         | dict(BRAINLAYER_LAUNCHD_SERVICE=step.name, XPC_SERVICE_NAME=f"com.brainlayer.{step.name}")
                     )
-                    code = await _execute_step(
-                        step,
-                        child_env,
-                        directory=directory,
-                        logs=logs,
-                        custody=custody,
-                        guard=guard,
-                        stop=stop,
-                        guard_timeout=guard_timeout,
-                        shutdown_timeout=shutdown_timeout,
-                    )
+                    async with step_hold(client, guard, child_env, step) as held_env:
+                        if stop.is_set():
+                            code = 143
+                        else:
+                            code = await _execute_step(
+                                step,
+                                held_env,
+                                directory=directory,
+                                logs=logs,
+                                custody=custody,
+                                guard=guard,
+                                stop=stop,
+                                guard_timeout=guard_timeout,
+                                shutdown_timeout=shutdown_timeout,
+                            )
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
@@ -263,6 +279,8 @@ async def run_calendar(
         if heartbeat:
             await asyncio.gather(heartbeat, return_exceptions=True)
         try:
+            if guard:
+                guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
             if guard and guard.poll() is None:
                 os.write(guard.stdin.fileno(), b"Q\n")
                 guard.stdin.close()
@@ -275,8 +293,4 @@ async def run_calendar(
             for sig, previous in handlers.items():
                 loop.remove_signal_handler(sig)
                 signal.signal(sig, previous)
-            try:
-                if hold:
-                    hold.__exit__(None, None, None)
-            finally:
-                custody.__exit__(None, None, None)
+            custody.__exit__(None, None, None)
