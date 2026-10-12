@@ -1010,6 +1010,16 @@
         "target": "ctypes.c_uint"
       }
     },
+    "39a53c940c32fe39a821bee7ddcf5a7e8c61ce296ce2e6300e2bd4887c304fa3": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.Component",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "39d56b4b3dc4758b6bf3129fa75de86c3516d1b6d6f161cf8ec8239999851d5e": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -2184,6 +2194,16 @@
         "target": "import ctypes"
       }
     },
+    "7ba0e37e2731db44fade41addea21c2574b2052290ce42c477b65550bacc2e85": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "f58bfe7c37b39b7c720eec7ce577cd3d2a38ae201d0544b60ec6824ba20c62b2",
+        "kind": "transport_call",
+        "owner": "<module>.Supervisor.run",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "socket.socket().bind"
+      }
+    },
     "7ba118109017c8785a84ce462bd719049e4390669da6a476beb476980c1e0dd6": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/import_sweep.py <module>.run_target subprocess.TimeoutExpired.",
       "site": {
@@ -2880,6 +2900,16 @@
         "target": "urllib.parse.urlsplit"
       }
     },
+    "a02083298b55c254bc88c4c230959dc45451aeed36acd99bdaf8778f6915911d": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "7a31d80d280ced7fa4b94f1ba00a3d1706c280e19be6ad3f43f0fb5ab5d50cc0",
+        "kind": "transport_call",
+        "owner": "<module>.Supervisor.run",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "socket.socket().close"
+      }
+    },
     "a02ded347dbbdc50a0bbaed42dab767dc2a8e2074acee991df693ac64fc73242": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/brainlayer-prompt-search.py <module>.run_with_timeout.target",
       "site": {
@@ -3168,6 +3198,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "ae75c1de3793a3bd91a166bc2adf61e9c9b321203d06bad54bd22d2587057150": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "import socket"
+      }
+    },
     "ae7f0bbdf1fa083bc78c1ad28d0f2d6075d8eb52fcd86760206cf2f1edb8884a": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: scripts/ci_ratchet_table.py <module>.collect_search_latency socket.gethostname.",
       "site": {
@@ -3308,6 +3348,16 @@
         "target": "importlib.util.module_from_spec"
       }
     },
+    "b27c9b9bd1c84a2e88e5dbb36276ed10622f4bb7529924340e448743f25bf133": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "import subprocess"
+      }
+    },
     "b2b851040fd90aaf8421ca58f0d2031f3424a28c7eacade3996819ed25390529": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/retag_t3_app_provenance.py <module>.rollback_t3_app_chunks",
       "site": {
@@ -3366,6 +3416,16 @@
         "owner": "<module>.retag_t3_app_chunks",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "b5b84efd953eb43c2f5a13c2dab19aa1961b983ded8edddfc242f117ea9fac77": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "bced65cb5175062df06361e06cfecbc47ed6371a6a2ca544ae1235ac133c2d72",
+        "kind": "callable_reference",
+        "owner": "<module>.Supervisor.run",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "socket.socket()"
       }
     },
     "b61530563b3442fc0ca7ad06d6d4fffb44b4a4cecbada58ccff0b3f30cdf8a02": {
@@ -4466,6 +4526,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "f07fa5c979439ae0e00ac3c5be1517a77e91f1393c3756fee1c298fe0e0d2c88": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "348853ff4c5107ccf7ef14601fc59c57454375ed005641dd708141afebfaa32b",
+        "kind": "transport_call",
+        "owner": "<module>.Supervisor.run",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "socket.socket"
+      }
+    },
     "f090101d5077fecd7f944369c7a9d3fd418e46442efe9db55b9f3aff547f5b34": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/pipeline/write_queue.py <module>.WriteQueue.submit",
       "site": {
@@ -4544,6 +4614,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/pipeline/style_embed.py",
         "target": "from importlib.util import find_spec"
+      }
+    },
+    "f2eb280bf2e2e62314c76d7363d15d150a35b1a2c6e4ad6fd9f143f54c36b606": {
+      "non_cloud_purpose": "Inactive owner-only AF_UNIX supervisor control or owned local process type metadata; no TCP/MCP/model sender or production command.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.Supervisor.__init__",
+        "path": "src/brainlayer/service_supervisor.py",
+        "target": "subprocess.Popen"
       }
     },
     "f349321a5001f391bfee4047e5fdfcca8017390e0d7650c7c55e8313a2fcb585": {
