@@ -27,6 +27,9 @@ class Component:
     stderr: Path | None = None
     enabled: bool = True
     exit_timeout: float = 60
+    cwd: Path | None = None
+    interval: float = 0
+    run_timeout: float = 300
     process: subprocess.Popen | None = field(default=None, init=False)
     paused: bool = field(default=False, init=False)
     pause_owner: str = field(default="", init=False)
@@ -36,6 +39,8 @@ class Component:
     error: str = field(default="", init=False)
     started_at: float = field(default=0, init=False)
     cleanup: asyncio.Task | None = field(default=None, init=False)
+    last_exit_code: int | None = field(default=None, init=False)
+    last_run_at: float | None = field(default=None, init=False)
 
     def status(self):
         return dict(
@@ -47,6 +52,10 @@ class Component:
             starts=self.starts,
             failures=self.failures,
             error=self.error,
+            interval=self.interval,
+            last_exit_code=self.last_exit_code,
+            last_run_at=self.last_run_at,
+            next_run_at=time.time() + max(0, self.retry_at - time.monotonic()) if self.interval else None,
         )
 
 
@@ -65,7 +74,16 @@ class Supervisor:
             raise ValueError("enrichment is retired")
         if not all(
             math.isfinite(v) and v > 0 for v in (backoff, guard_timeout, shutdown_timeout, stable_uptime)
-        ) or any(not c.argv or not math.isfinite(c.exit_timeout) or c.exit_timeout < 0 for c in components.values()):
+        ) or any(
+            not c.argv
+            or not math.isfinite(c.exit_timeout)
+            or c.exit_timeout < 0
+            or not math.isfinite(c.interval)
+            or c.interval < 0
+            or not math.isfinite(c.run_timeout)
+            or c.run_timeout <= 0
+            for c in components.values()
+        ):
             raise ValueError("commands and timing bounds must be valid")
         self.components, self.path = components, path if path is not None else supervisor_socket_path()
         self.backoff, self.guard_timeout = backoff, guard_timeout
@@ -112,7 +130,7 @@ class Supervisor:
                 files.enter_context(supervisor_guard.component_gate(self.path.parent))
                 stdout = files.enter_context(child.stdout.open("ab")) if child.stdout else None
                 stderr = files.enter_context(child.stderr.open("ab")) if child.stderr else None
-                child.process, gate = gated_spawn(child.argv, os.environ | child.env, stdout, stderr)
+                child.process, gate = gated_spawn(child.argv, os.environ | child.env, stdout, stderr, cwd=child.cwd)
             birth = start_time(child.process.pid)
             if birth is None:
                 raise RuntimeError("cannot establish child birth identity")
@@ -121,6 +139,9 @@ class Supervisor:
             os.write(gate, b"R")
             child.starts += 1
             child.started_at, child.error = time.monotonic(), ""
+            child.last_run_at = time.time()
+            if child.interval:
+                child.retry_at = child.started_at + child.interval
         except BlockingIOError:
             child.error = "maintenance lease held"
             child.retry_at = time.monotonic() + 0.5
@@ -156,8 +177,28 @@ class Supervisor:
                 child.cleanup.result()
                 child.cleanup = None
             if child.process and child.process.poll() is not None and child.cleanup is None:
-                self._failed(child, f"exited {child.process.returncode}")
+                child.last_exit_code = child.process.returncode
+                if child.interval:
+                    child.retry_at = time.monotonic() + child.interval
+                    if child.last_exit_code not in {0, 75}:
+                        child.failures += 1
+                        child.error = f"exited {child.last_exit_code}"
+                    else:
+                        child.failures, child.error = 0, ""
+                else:
+                    self._failed(child, f"exited {child.process.returncode}")
                 child.cleanup = asyncio.create_task(self._reap(child))  # Never under the control lock.
+            if (
+                child.interval
+                and child.process
+                and child.process.poll() is None
+                and child.cleanup is None
+                and time.monotonic() - child.started_at >= child.run_timeout
+            ):
+                child.last_exit_code, child.error = 124, "interval worker timed out"
+                child.failures += 1
+                child.retry_at = time.monotonic() + child.interval
+                child.cleanup = asyncio.create_task(self._reap(child))
             if (
                 child.process
                 and child.process.poll() is None

@@ -288,7 +288,7 @@ def launch_guard(custody: Custody, timeout: float, grace: float, shutdown_timeou
             os.close(write)
 
 
-def gated_spawn(argv, env, stdout, stderr) -> tuple[subprocess.Popen, int]:
+def gated_spawn(argv, env, stdout, stderr, *, cwd=None) -> tuple[subprocess.Popen, int]:
     """EOF aborts startup; commands run only after durable custody registration."""
     read, write = os.pipe()
     try:
@@ -301,6 +301,7 @@ def gated_spawn(argv, env, stdout, stderr) -> tuple[subprocess.Popen, int]:
             env=env,
             stdout=stdout,
             stderr=stderr,
+            cwd=cwd,
             pass_fds=(read,),
             start_new_session=True,
         )

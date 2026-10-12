@@ -2116,6 +2116,16 @@
         "path": "brain-bar/Sources/BrainBarDaemon/HybridSearchHelperClient.swift"
       }
     },
+    "6c4553358efb33490d627fdb32cfab35aab97b7a5136765f193fc1d376c3fcb8": {
+      "non_cloud_purpose": "Local pipe-gated component exec after durable owner custody, preserving rendered working directory; explicit private manifest, no model/cloud sender or automatic activation.",
+      "site": {
+        "call_sha256": "385253732881992db6aab6dd7e1ddd4268b6342bb57895ceea4723a58e8f9166",
+        "kind": "child_process",
+        "owner": "<module>.gated_spawn",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "6d59c1ba939a8c2949a0a4bef600091b2b9bbfa57d9b9cafc6a1b362f4194e3e": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/timestamp_iso.py <module>",
       "site": {
@@ -2820,16 +2830,6 @@
         "owner": "<module>.HybridSearchHelper.serve_forever",
         "path": "src/brainlayer/brainbar_hybrid_helper.py",
         "target": "socket.socket().listen"
-      }
-    },
-    "92c47b60a9231ccf6e80ff170fc0860befa2a8a7a8d9df8ec2abc0688386a52c": {
-      "non_cloud_purpose": "Explicit inactive resident-command runner: local pipe-gated exec starts only after durable owner custody; no built-in production or model command.",
-      "site": {
-        "call_sha256": "c655c55c9c44a1d7d359c91ea387e6f0cb0660e68fefafe3629e17532bbaee93",
-        "kind": "child_process",
-        "owner": "<module>.gated_spawn",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
       }
     },
     "92c62d93c1ab5d6fa468d1fb5975ab5ebe7508516fa56f0c698239ff2d2e380d": {
