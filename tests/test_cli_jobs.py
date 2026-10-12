@@ -84,6 +84,7 @@ def test_real_cli_reads_private_daemon_status(monkeypatch):
                         "enabled": True,
                         "plist": {
                             "Label": "com.brainlayer.watch",
+                            "KeepAlive": True,
                             "ProgramArguments": [sys.executable, "-c", "import time;time.sleep(60)"],
                         },
                     }

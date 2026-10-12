@@ -14,6 +14,7 @@ def setup(tmp_path):
     agents.mkdir()
     plist = dict(
         Label="com.brainlayer.watch",
+        KeepAlive=True,
         ProgramArguments=["/private/env-run", "/keg/brainlayer", "watch"],
         EnvironmentVariables={"BRAINLAYER_ENV_FILE": "/private/brainlayer.env", "API_KEY": "private-value"},
         StandardOutPath="/private/watch.out.log",
