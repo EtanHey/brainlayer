@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 
@@ -20,6 +21,11 @@ def control(request, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_PAUSE_SENTINEL", str(path / "pause"))
     writer = "import sqlite3,time\nc=sqlite3.connect(%r)\nc.execute('create table if not exists samples(who)')\nwhile True:\n c.execute(\"insert into samples values('resident')\"); c.commit(); time.sleep(.02)"
     writer %= str(path / "writer.db")
+    if getattr(request, "param", "") == "late":
+        writer = writer.replace(
+            "\nwhile True:",
+            f"\nfrom pathlib import Path\nwhile not Path({str(path / 'resident-ready')!r}).exists(): time.sleep(.02)\nwhile True:",
+        )
     code = native_tests.BOOT.replace(
         "s=Supervisor(", f"watch=watch.rsplit('time.sleep(60)',1)[0] + {'exec(' + repr(writer) + ')'!r}\ns=Supervisor("
     )
@@ -96,8 +102,19 @@ def test_supervisor_restart_cannot_reintroduce_writers_during_lease(control):
             assert replacement.wait(timeout=2) == 0
 
 
+@pytest.mark.parametrize("control", ["", "late"], indirect=True)
 def test_owner_death_keeps_child_writer_lease_and_recovers_after_exit(control):
     path, _, query, _ = control
+
+    def counts():
+        (path / "resident-ready").touch()  # Delayed fixture starts its first write on observation.
+        try:
+            with sqlite3.connect(path / "writer.db") as db:
+                return dict(db.execute("select who,count(*) from samples group by who"))
+        except sqlite3.OperationalError:
+            return {}  # First observation can precede the private fixture's CREATE TABLE.
+
+    native_tests.eventually(lambda: counts().get("resident", 0) > 0)
     source = r"""
 import os,subprocess,sys,time
 from pathlib import Path
@@ -116,12 +133,6 @@ with MaintenanceHold() as h:
     try:
         native_tests.eventually(lambda: (path / "holder-child").exists())
         child = int((path / "holder-child").read_text())
-        import sqlite3
-
-        def counts():
-            with sqlite3.connect(path / "writer.db") as db:
-                return dict(db.execute("select who,count(*) from samples group by who"))
-
         native_tests.eventually(lambda: counts().get("step", 0) > 1)
         before = counts()
         holder.kill()
