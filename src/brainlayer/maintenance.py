@@ -420,6 +420,10 @@ def _bootout_service(service: str) -> bool:
 
 
 def _service_is_loaded(service: str, *, timeout: float | None = None) -> bool:
+    if os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET"):
+        from .maintenance_control import service_loaded
+
+        return service_loaded(service)
     try:
         state = is_launchd_label_loaded(
             _launchd_label(service),
@@ -586,8 +590,16 @@ def sigterm_cleanup():
         signal.signal(signal.SIGTERM, previous)
 
 
-def _quiesce_services(services: Sequence[str], booted_out: dict[str, bool]) -> None:
+def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any]) -> None:
     if not services:
+        return
+    if os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET"):
+        # All configured components pause, including in burn/FTS modes: ticks can revive writers.
+        from .maintenance_control import MaintenanceHold
+
+        hold = MaintenanceHold()
+        booted_out["_supervisor_hold"] = hold
+        hold.__enter__()
         return
     path = _watchdog_hold_path()
     with _watchdog_hold_lock(path):
@@ -787,9 +799,15 @@ def _maintenance_keep_down_services() -> set[str]:
 def _resume_services(
     repo_root: Path,
     services: Sequence[str],
-    loaded_before: Mapping[str, bool] | None = None,
+    loaded_before: Mapping[str, Any] | None = None,
 ) -> list[tuple[str, Exception]]:
     failures: list[tuple[str, Exception]] = []
+    if loaded_before is not None and (hold := loaded_before.get("_supervisor_hold")):
+        try:
+            hold.close()
+        except Exception as exc:
+            failures.append(("supervisor", exc))
+        return failures
     keep_down = _maintenance_keep_down_services()
     held = loaded_before is not None and _WATCHDOG_DISABLED_BEFORE in loaded_before
     if held:
@@ -966,7 +984,7 @@ def _run_coordinated_fts_repair_unlocked(db_path: Path, *, repo_root: Path | Non
 
     services = DEFAULT_SERVICES
     loaded_before = {service: _service_is_loaded(service) for service in services}
-    booted_out: dict[str, bool] = {}
+    booted_out: dict[str, Any] = {}
     body_error: BaseException | None = None
     try:
         _quiesce_services(services, booted_out)
@@ -1169,7 +1187,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
     if post_backup_gates_failed:
         services = ()
     loaded_before = {service: _service_is_loaded(service) for service in services}
-    booted_out: dict[str, bool] = {}
+    booted_out: dict[str, Any] = {}
     try:
         _quiesce_services(tuple(loaded_before), booted_out)
         if not post_backup_gates_failed:

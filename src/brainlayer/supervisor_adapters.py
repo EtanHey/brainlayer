@@ -63,7 +63,7 @@ class SupervisorCommands:
         self.domain = f"gui/{os.getuid()}"
         self.control_error = ""
 
-    def request(self, action="status", component="*", *, timeout=2):
+    def request(self, action="status", component="*", *, timeout=2, owner=""):
         directory, endpoint = self.path.parent.lstat(), self.path.lstat()
         if (
             directory.st_uid != os.getuid()
@@ -79,7 +79,7 @@ class SupervisorCommands:
             client.connect(str(self.path))
             if peer_uid(client) != os.getuid():
                 raise PermissionError("supervisor peer uid differs")
-            client.sendall(json.dumps(dict(action=action, component=component)).encode() + b"\n")
+            client.sendall(json.dumps(dict(action=action, component=component, owner=owner)).encode() + b"\n")
             with client.makefile("rb") as reader:
                 response = json.loads(reader.readline(65537))
         if not isinstance(response, dict):
@@ -117,7 +117,9 @@ class SupervisorCommands:
         payload, active, _ = pause_sentinel_state(self.pause_path, strict=True)
         if active:
             disabled.update(
-                label for label in (*self.aliases, "com.brainlayer.daemon") if pause_applies_to_label(payload, label)
+                label
+                for label in (*self.aliases, *states, "com.brainlayer.daemon")
+                if pause_applies_to_label(payload, label)
             )
         return disabled | {
             label

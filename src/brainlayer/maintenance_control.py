@@ -1,0 +1,171 @@
+"""Opt-in acknowledged component quiescence with an inherited writer-exclusion lease."""
+
+import fcntl
+import json
+import os
+import subprocess
+import time
+import uuid
+from pathlib import Path
+
+from .drive_credentials import _atomic_write
+from .supervisor_guard import component_gate
+
+
+def recover_hold(path):
+    """Called off the event loop; the free exclusive lease proves no inherited writer remains."""
+    from .pause import DEFAULT_PAUSE_SENTINEL_PATH
+    from .supervisor_adapters import SupervisorCommands
+
+    client = SupervisorCommands(
+        path,
+        lambda args: subprocess.run(args, capture_output=True, text=True, timeout=1, check=False),
+        pause_path=Path(os.environ.get("BRAINLAYER_PAUSE_SENTINEL", str(DEFAULT_PAUSE_SENTINEL_PATH))),
+    )
+    deadline, request = time.monotonic() + 3, client.request
+
+    def bounded_request(*args, **kwargs):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("maintenance recovery deadline")
+        kwargs["timeout"] = min(kwargs.get("timeout", 2), remaining)
+        return request(*args, **kwargs)
+
+    client.request = bounded_request
+    hold = MaintenanceHold(client)
+    with component_gate(hold.directory, exclusive=True):
+        hold._restore()
+
+
+def control_client():
+    from .supervisor_adapters import SupervisorCommands, adapt_commands
+
+    client = adapt_commands(lambda args: subprocess.run(args, capture_output=True, text=True, timeout=20, check=False))
+    if not isinstance(client, SupervisorCommands):
+        raise RuntimeError("supervisor profile required for component quiescence")
+    return client
+
+
+def service_loaded(service):
+    client = control_client()
+    label = "com.etanhey.brainlayer-fleet-watchdog" if service == "fleet-watchdog" else f"com.brainlayer.{service}"
+    if service == "index":
+        return False  # Calendar step, never an archived resident plist.
+    state = client.request()[client.aliases[label]]
+    return state["configured"] and not state["paused"]
+
+
+class MaintenanceHold:
+    """Recover owned pauses; callers inherit fd/token and retain the lease until children are reaped."""
+
+    def __init__(self, client=None):
+        self.client = client if client is not None else control_client()
+        self.directory, self.journal = self.client.path.parent, self.client.path.with_name("maintenance.json")
+        self.fd, self.token, self.gate, self.nested = None, "", None, False
+
+    def _states(self):
+        states = self.client.request()
+        if any(not isinstance(v.get("pause_owner"), str) for v in states.values()):
+            raise RuntimeError("supervisor lacks pause ownership")
+        return states
+
+    def _restore(self):
+        if not self.journal.exists():
+            return
+        entry = json.loads(self.journal.read_text())
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("owner"), str)
+            or not entry["owner"]
+            or not isinstance(entry.get("components"), dict)
+            or any(type(v) is not bool for v in entry["components"].values())
+        ):
+            raise ValueError("unknown maintenance hold journal")
+        states = self._states()
+        disabled = self.client._disabled(states, include_paused=False)
+        labels = {name: label for label, name in self.client.aliases.items()}
+        keep_down = {
+            s.strip().removeprefix("com.brainlayer.")
+            for s in os.environ.get("BRAINLAYER_MAINTENANCE_KEEP_DOWN", "").split(",")
+        }
+        for name, restore in entry["components"].items():
+            if name not in states:
+                continue
+            state = states[name]
+            if not restore or not state["configured"] or state.get("pause_owner") != entry["owner"]:
+                continue
+            label = labels.get(name, name)
+            if (
+                {name, label, label.removeprefix("com.brainlayer.")} & keep_down
+                or label in disabled
+                or name in disabled
+                or "com.brainlayer.daemon" in disabled
+            ):
+                self.client.request("pause", name, owner="", timeout=state["exit_timeout"] + 5)
+                continue
+            self.client.request("resume", name, owner=entry["owner"], timeout=state["exit_timeout"] + 5)
+        self.journal.unlink()
+        self._sync_directory()
+
+    def _sync_directory(self):
+        fd = os.open(self.directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def __enter__(self):
+        inherited = os.environ.get("BRAINLAYER_MAINTENANCE_FD")
+        # Calendar children must inherit this open lease and its journal token; never reopen the file.
+        if inherited is not None:
+            self.fd = int(inherited)
+            self.token = os.environ.get("BRAINLAYER_MAINTENANCE_TOKEN", "")
+            actual, expected = os.fstat(self.fd), (self.directory / "maintenance.lock").lstat()
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            entry = json.loads(self.journal.read_text())
+            states = self._states()
+            if (
+                (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+                or not self.token
+                or entry["owner"] != self.token
+                or any(v["pid"] or v["configured"] and not v["paused"] for v in states.values())
+            ):
+                raise RuntimeError("unverified inherited maintenance hold")
+            self.nested = True
+            return self
+        gate = component_gate(self.directory, exclusive=True)
+        fd = gate.__enter__()
+        self.gate, self.fd = gate, fd
+        try:
+            self._restore()
+            states = self._states()
+            self.token = uuid.uuid4().hex
+            _atomic_write(
+                self.journal,
+                dict(owner=self.token, components={n: v["configured"] and not v["paused"] for n, v in states.items()}),
+            )
+            self._sync_directory()
+            stopped = self.client.request(
+                "pause", "*", owner=self.token, timeout=max((v["exit_timeout"] for v in states.values()), default=0) + 5
+            )
+            if any(v["pid"] or v["configured"] and not v["paused"] for v in stopped.values()):
+                raise RuntimeError("component quiescence not acknowledged")
+            return self
+        except BaseException as exc:
+            try:
+                self.close()
+            except Exception as cleanup:
+                exc.add_note(f"hold restore failed: {cleanup}")
+            raise
+
+    def close(self):
+        if self.nested or self.gate is None:
+            return
+        try:
+            self._restore()
+        finally:
+            self.gate.__exit__(None, None, None)
+            self.gate = None
+
+    def __exit__(self, *_):
+        self.close()

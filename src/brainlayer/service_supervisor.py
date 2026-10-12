@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from brainlayer import supervisor_guard
 from brainlayer.paths import supervisor_socket_path
 from brainlayer.supervisor_guard import Custody, gated_spawn, launch_guard, peer_uid, start_time, stop_group
 
@@ -28,6 +29,7 @@ class Component:
     exit_timeout: float = 60
     process: subprocess.Popen | None = field(default=None, init=False)
     paused: bool = field(default=False, init=False)
+    pause_owner: str = field(default="", init=False)
     starts: int = field(default=0, init=False)
     failures: int = field(default=0, init=False)
     retry_at: float = field(default=0, init=False)
@@ -40,6 +42,7 @@ class Component:
             configured=self.enabled,
             exit_timeout=self.exit_timeout,
             paused=self.paused,
+            pause_owner=self.pause_owner,
             pid=self.process.pid if self.process and self.process.poll() is None else None,
             starts=self.starts,
             failures=self.failures,
@@ -70,6 +73,8 @@ class Supervisor:
         self.stop, self.lock = asyncio.Event(), asyncio.Lock()
         self.guard: subprocess.Popen | None = None
         self.custody, self.deadline = None, None
+        self.recovery = None
+        self.recovery_at = 0
 
     def status(self) -> dict:
         return {"components": {name: child.status() for name, child in self.components.items()}}
@@ -104,6 +109,7 @@ class Supervisor:
         gate = None
         try:
             with ExitStack() as files:
+                files.enter_context(supervisor_guard.component_gate(self.path.parent))
                 stdout = files.enter_context(child.stdout.open("ab")) if child.stdout else None
                 stderr = files.enter_context(child.stderr.open("ab")) if child.stderr else None
                 child.process, gate = gated_spawn(child.argv, os.environ | child.env, stdout, stderr)
@@ -115,6 +121,9 @@ class Supervisor:
             os.write(gate, b"R")
             child.starts += 1
             child.started_at, child.error = time.monotonic(), ""
+        except BlockingIOError:
+            child.error = "maintenance lease held"
+            child.retry_at = time.monotonic() + 0.5
         except OSError as exc:
             self._failed(child, str(exc))
         finally:
@@ -122,6 +131,26 @@ class Supervisor:
                 os.close(gate)  # On failure the wrapper exits without running the command.
 
     def _tick(self):
+        if self.recovery and self.recovery.done():
+            try:
+                self.recovery.result()
+            except BlockingIOError:
+                pass  # A live holder or inherited child still owns the lease.
+            except Exception as exc:
+                for child in self.components.values():
+                    if child.pause_owner:
+                        child.error = f"maintenance recovery failed: {exc}"
+            self.recovery = None
+        if (
+            self.recovery is None
+            and time.monotonic() >= self.recovery_at
+            and any(c.pause_owner for c in self.components.values())
+            and self.path.with_name("maintenance.json").exists()
+        ):
+            from .maintenance_control import recover_hold
+
+            self.recovery = asyncio.create_task(asyncio.to_thread(recover_hold, self.path))
+            self.recovery_at = time.monotonic() + 1
         for child in self.components.values():
             if child.cleanup and child.cleanup.done():
                 child.cleanup.result()
@@ -144,6 +173,9 @@ class Supervisor:
                 raise PermissionError("control peer uid differs")
             message = json.loads(await asyncio.wait_for(reader.readline(), 2))
             action, name = message["action"], message.get("component", "*")
+            owner = message.get("owner", "")
+            if not isinstance(owner, str) or len(owner) > 128:
+                raise ValueError("invalid pause owner")
             if action not in {"status", "pause", "resume", "restart"} or (name != "*" and name not in self.components):
                 raise ValueError("unknown action or component")
             if action != "status":
@@ -155,17 +187,26 @@ class Supervisor:
                         if name != "*" and (not selected[0].enabled or (action == "restart" and selected[0].paused)):
                             raise ValueError("component is configured OFF or paused")
                         selected = [c for c in selected if c.enabled and (action == "resume" or not c.paused)]
+                    if action == "pause" and owner:
+                        selected = [c for c in selected if c.enabled and not c.paused]
                     if action == "resume":
                         selected = [c for c in selected if c.paused]
+                        if any(c.pause_owner != owner for c in selected):
+                            raise ValueError("pause belongs to another owner")
                     for child in selected:
                         child.paused = True
+                        child.pause_owner = owner
                     results = await asyncio.gather(*(self._stop_child(c) for c in selected), return_exceptions=True)
                     if any(isinstance(r, BaseException) for r in results):
                         raise RuntimeError("control could not quiesce every selected group")
                     if action != "pause" and not self.stop.is_set():
                         for child in selected:
-                            child.paused, child.retry_at = False, 0
+                            child.paused, child.retry_at, child.pause_owner = False, 0, ""
                             self._start(child)
+                        if action == "restart" and any(c.process is None for c in selected):
+                            raise RuntimeError(
+                                "restart did not start every component: " + "; ".join(c.error for c in selected)
+                            )
             response = self.status()
         except Exception as exc:
             response = {"error": str(exc)}
@@ -208,6 +249,8 @@ class Supervisor:
                         self._send("Q")  # Disarm before bounded shutdown.
                     except BrokenPipeError:
                         pass  # Still clean every child if the guard died.
+                if self.recovery:
+                    await asyncio.gather(self.recovery, return_exceptions=True)
                 if server:
                     server.close()
                     await server.wait_closed()
