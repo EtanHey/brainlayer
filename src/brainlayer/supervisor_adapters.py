@@ -118,7 +118,7 @@ class SupervisorCommands:
         if active:
             disabled.update(
                 label
-                for label in (*self.aliases, *states, "com.brainlayer.daemon")
+                for label in (*self.aliases, *states, *ARCHIVED, "com.brainlayer.daemon", "com.brainlayer.maintenance")
                 if pause_applies_to_label(payload, label)
             )
         return disabled | {
