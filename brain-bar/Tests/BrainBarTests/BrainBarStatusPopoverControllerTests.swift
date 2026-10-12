@@ -194,22 +194,22 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertFalse(render.contains("BadgeStateReader.read"), "UI emissions must not perform badge file I/O.")
     }
 
-    func testControllerStatusItemBelongsToAPrivateBarAndStopsOnThatBar() {
+    func testControllerStatusItemBelongsToTheInMemoryHostAndStopsOnThatHost() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let panelController = BrainBarDashboardPanelController(runtime: runtime)
-        let privateStatusBar = TestStatusItemHost()
+        let host = TestStatusItemHost()
         let controller = BrainBarStatusPopoverController(
-            runtime: runtime, dashboardPanelController: panelController, statusBar: privateStatusBar
+            runtime: runtime, dashboardPanelController: panelController, statusBar: host
         )
         defer { controller.stop() }
 
-        XCTAssertTrue(controller.statusItemForTesting === privateStatusBar.createdItem,
+        XCTAssertTrue(controller.statusItemForTesting === host.createdItem,
                       "test fixtures must never create items in the live system menu bar")
         XCTAssertTrue(controller.statusItemForTesting is TestStatusItemHost.Item)
         controller.stop()
         controller.stop()
-        XCTAssertEqual(privateStatusBar.removedItems.count, 1, "stop must remove the item exactly once")
-        XCTAssertTrue(privateStatusBar.removedItems.first === controller.statusItemForTesting)
+        XCTAssertEqual(host.removedItems.count, 1, "stop must remove the item exactly once")
+        XCTAssertTrue(host.removedItems.first === controller.statusItemForTesting)
         XCTAssertNil(controller.statusItemForTesting.menu)
         XCTAssertNil(controller.contextMenuForTesting.delegate)
         XCTAssertNil(panelController.statusItemButton)

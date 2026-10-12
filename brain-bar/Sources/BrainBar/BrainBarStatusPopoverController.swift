@@ -71,7 +71,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     init(
         runtime: BrainBarRuntime,
         dashboardPanelController: BrainBarDashboardPanelController,
-        statusBar: any BrainBarStatusItemHosting = SystemBrainBarStatusItemHost()
+        statusBar: any BrainBarStatusItemHosting
     ) {
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
