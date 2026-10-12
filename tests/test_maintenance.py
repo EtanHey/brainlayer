@@ -24,6 +24,7 @@ def test_existing_maintenance_uses_component_hold_without_legacy_mutation(reques
         maintenance._quiesce_services(("watch", "index", "drain"), held)
         assert all(v["pid"] is None for v in data[2]()["components"].values())
         # ACK must already mean every original group (including descendants) is gone.
+        assert any(v["pid"] for v in data[3].values())
         assert all(not native_tests.exists(v["pid"]) for v in data[3].values() if v["pid"])
     finally:
         assert maintenance._resume_services(data[0], ("watch", "index", "drain"), held) == []
