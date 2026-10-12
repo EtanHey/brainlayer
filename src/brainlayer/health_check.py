@@ -1426,6 +1426,41 @@ def _run_health_check_locked(
     if slow_result := deadline_reached("missing_embeddings"):
         return slow_result
 
+    embedding_vector_rows = None
+    embedding_stalled_ticks = 0
+    if result.missing_vectors is not None:
+        try:
+            embedding_vector_rows = _read_only_count(
+                config.db_path,
+                "SELECT COUNT(*) FROM chunk_vectors_rowids",
+                stage="embedding_progress",
+                deadline_at=deadline_at,
+                monotonic_fn=monotonic_fn,
+            )
+        except HealthCheckDeadlineExceeded as exc:
+            return finish_slow("embedding_progress", str(exc))
+        except Exception as exc:
+            add_issue("embedding_progress_count_failed", "critical", f"could not measure embedding progress: {exc}")
+    if slow_result := deadline_reached("embedding_progress"):
+        return slow_result
+    previous_vectors = state.get("embedding_vector_rows")
+    prior_embedding_stalls = state.get("embedding_stalled_ticks", 0)
+    if (
+        result.missing_vectors
+        and type(previous_vectors) is int
+        and previous_vectors >= 0
+        and embedding_vector_rows == previous_vectors
+    ):
+        embedding_stalled_ticks = (
+            prior_embedding_stalls if type(prior_embedding_stalls) is int and prior_embedding_stalls >= 0 else 0
+        ) + 1
+    elif embedding_vector_rows is not None and type(previous_vectors) is int:
+        # A growing vector table is progress; a shrinking one is a new baseline, not a stall.
+        for issue_code in ("missing_embeddings_climbing", "missing_embeddings_not_draining"):
+            key = _heal_key(config.hotlane_label, issue_code)
+            previous_heal_failures.pop(key, None)
+            previous_tripped.discard(key)
+
     stalled_ticks = 0
     if result.missing_vectors is not None:
         if result.previous_missing_vectors is not None:
@@ -1437,10 +1472,11 @@ def _run_health_check_locked(
                     f"missing embeddings increased {result.previous_missing_vectors} -> {result.missing_vectors}",
                 )
                 stalled_ticks = 0
-                heal_issue_labels["missing_embeddings_climbing"] = (
-                    config.hotlane_label,
-                    _plist_for_label(config, config.hotlane_label),
-                )
+                if embedding_stalled_ticks >= max(1, config.max_stalled_ticks):
+                    heal_issue_labels["missing_embeddings_climbing"] = (
+                        config.hotlane_label,
+                        _plist_for_label(config, config.hotlane_label),
+                    )
             elif result.missing_vectors == result.previous_missing_vectors and result.missing_vectors > 0:
                 stalled_ticks = prior_stalled_ticks + 1
                 if stalled_ticks >= config.max_stalled_ticks:
@@ -1449,10 +1485,11 @@ def _run_health_check_locked(
                         "warning",
                         f"missing embeddings stayed at {result.missing_vectors} for {stalled_ticks} checks",
                     )
-                    heal_issue_labels["missing_embeddings_not_draining"] = (
-                        config.hotlane_label,
-                        _plist_for_label(config, config.hotlane_label),
-                    )
+                    if embedding_stalled_ticks >= max(1, config.max_stalled_ticks):
+                        heal_issue_labels["missing_embeddings_not_draining"] = (
+                            config.hotlane_label,
+                            _plist_for_label(config, config.hotlane_label),
+                        )
     result.stalled_ticks = stalled_ticks
 
     try:
@@ -1698,6 +1735,23 @@ def _run_health_check_locked(
             if not pause_applies_to_label(pause_payload, label_and_path[0])
         }
 
+    if (
+        queue_backed_up
+        and queue_heal_blocking_reason is None
+        and drain_loaded is True
+        and drain_liveness_issue is None
+        and not drain_starved
+        and type(drain_total) is int
+        and type(previous_drain_total) is int
+        and drain_total > previous_drain_total >= 0
+    ):
+        # Fresh, healthy completed writes prove draining even when new arrivals keep depth high.
+        key = _heal_key(config.drain_label, "queue_backed_up")
+        previous_heal_failures.pop(key, None)
+        previous_tripped.discard(key)
+        heal_issue_labels.pop("queue_backed_up", None)
+        queue_heal_blocking_reason = "queue draining"
+
     heal_failures, heal_tripped = _apply_heals(
         result=result,
         issue_labels=heal_issue_labels,
@@ -1765,6 +1819,11 @@ def _run_health_check_locked(
     if result.missing_vectors is not None:
         state_payload["missing_vectors"] = result.missing_vectors
         state_payload["stalled_ticks"] = result.stalled_ticks
+    state_payload["embedding_stalled_ticks"] = embedding_stalled_ticks
+    if embedding_vector_rows is None:
+        state_payload.pop("embedding_vector_rows", None)
+    else:
+        state_payload["embedding_vector_rows"] = embedding_vector_rows
     if isinstance(watcher_poll_count, int):
         state_payload["watcher_poll_count"] = watcher_poll_count
     if isinstance(drain_total, int):

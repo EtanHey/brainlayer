@@ -45,7 +45,13 @@ stage name, and the elapsed duration.
 
 With `--heal`, the check uses `launchctl kickstart -k` for cheap recovery:
 
-- `com.brainlayer.hotlane-brainbar` when hotlane is dead, backlog is disabled, or missing vectors are climbing/stalled.
+- `com.brainlayer.hotlane-brainbar` when hotlane is dead or backlog is disabled.
+  Climbing/stalled missing vectors remain warnings, but only become restart
+  candidates after the vector-row count has stayed unchanged for
+  `max_stalled_ticks` comparisons (default two), followed by the existing heal
+  threshold. Growing vectors prove progress even when ingest grows the backlog.
+  Missing progress measurements prevent a backlog-based restart and report an
+  issue; a shrinking vector table resets the comparison baseline.
 - `com.brainlayer.brainbar-daemon` when the BrainBar MCP canary fails or returns zero results.
 
 Before a kickstart, the check reads the launchd process state. Processes in an
@@ -56,6 +62,14 @@ failed ticks.
 The command writes the latest successfully measured missing-vector count to
 `~/.local/share/brainlayer/health-check-state.json`; a timed-out tick preserves
 the previous count and marks the state as slow.
+
+Embedding progress comparisons live in the private state file; the public health
+response schema is unchanged. A fresh, healthy drain heartbeat whose
+`drained_total` advances resets the queue-backlog heal counter and circuit breaker
+and skips that restart, even above the backlog threshold. Backlog alerts remain
+visible. Stale, unknown or stalled drain health cannot reset the breaker; a later
+stall can trigger healing again. Job alerts clear through their producer's next
+successful run, never through this policy.
 
 The independent Tier-0 watchdog treats `slow_check: true` as unhealthy even
 when the state file was just refreshed, and treats any state as stale after 900
