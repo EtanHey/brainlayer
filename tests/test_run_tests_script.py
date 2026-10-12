@@ -1731,6 +1731,7 @@ CLI_ROOT_SUITES = (
     "test_cli_direct_sqlite.py",
     "test_cli_enrich.py",
     "test_cli_index_watchdog.py",
+    "test_cli_jobs.py",
     "test_cli_launchd_mode_a.py",
     "test_cli_provenance.py",
     "test_cli_version.py",

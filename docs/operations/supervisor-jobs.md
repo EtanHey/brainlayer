@@ -44,11 +44,9 @@ records an error and retries without stopping the supervisor or spawning duplica
 
 ## CLI consumers
 
-`brainlayer daemon --manifest /absolute/jobs.json` starts the named daemon.
-`maintenance-calendar [--date YYYY-MM-DD]` passes a CalendarPlan directly to the
-singleton runner with distinct custody, sibling keg CLI, packaged wrappers, and
-`--lib-dir`/`--state-dir`/`--logs-dir` overrides.
-`jobs component NAME status|restart|env|logs` reads legacy plists until archival,
-then the owner-only supervisor; `--socket`/`--manifest` select private fixtures.
-Restart respects OFF/disable/pause. Env/log actions return paths, without credentials.
-JSON traces the legacy label, evidence source and definition; it is not live keg proof.
+`brainlayer daemon --manifest /absolute/jobs.json` starts the daemon. The command
+`maintenance-calendar [--date YYYY-MM-DD]` passes CalendarPlan directly to its singleton with separate custody,
+sibling keg CLI and packaged wrappers. Override `--lib-dir`/`--state-dir`/`--logs-dir`; set `BRAINLAYER_SUPERVISOR_SOCKET`.
+`jobs component NAME status|restart|env|logs` uses legacy plists until archival, then owner-only control;
+`--socket`/`--manifest` select fixtures. Restart honors OFF/disable/pause; env/log actions return paths only.
+JSON traces the legacy label, evidence source and definition; live keg verification remains separate.

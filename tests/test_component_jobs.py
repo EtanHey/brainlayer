@@ -6,23 +6,24 @@ import subprocess
 
 import pytest
 
-from brainlayer.component_jobs import component_action
+from brainlayer.component_jobs import ALIASES, component_action
 
 
-def setup(tmp_path):
+def setup(tmp_path, name="watch"):
+    label = next(k for k, v in ALIASES.items() if v == name)
     agents = tmp_path / "agents"
     agents.mkdir()
     plist = dict(
-        Label="com.brainlayer.watch",
+        Label=label,
         KeepAlive=True,
         ProgramArguments=["/private/env-run", "/keg/brainlayer", "watch"],
         EnvironmentVariables={"BRAINLAYER_ENV_FILE": "/private/brainlayer.env", "API_KEY": "private-value"},
         StandardOutPath="/private/watch.out.log",
         StandardErrorPath="/private/watch.err.log",
     )
-    (agents / "com.brainlayer.watch.plist").write_bytes(plistlib.dumps(plist))
+    (agents / f"{label}.plist").write_bytes(plistlib.dumps(plist))
     manifest = tmp_path / "jobs.json"
-    manifest.write_text(json.dumps({"com.brainlayer.watch": {"enabled": False, "plist": plist}}))
+    manifest.write_text(json.dumps({label: {"enabled": False, "plist": plist}}))
     manifest.chmod(0o600)
     return agents, manifest
 
@@ -88,12 +89,16 @@ def test_legacy_restart_refuses_disabled_or_unmeasurable(tmp_path, monkeypatch, 
     assert not calls
 
 
-def test_legacy_configured_off_restart_never_kickstarts(tmp_path, monkeypatch):
-    agents, manifest = setup(tmp_path)
+@pytest.mark.parametrize("name", ["watch", "hotlane", "fleet-watchdog"])
+def test_legacy_configured_off_restart_never_kickstarts(tmp_path, monkeypatch, name):
+    agents, manifest = setup(tmp_path, name)
     monkeypatch.setattr("brainlayer.component_jobs.is_launchd_label_disabled", lambda *a, **k: False)
     monkeypatch.setattr("brainlayer.component_jobs.pause_sentinel_state", lambda *a, **k: (None, False, ""))
-    monkeypatch.setattr("brainlayer.component_jobs.configured_brainlayer_env_value", lambda *a: "0")
+    expected = "BRAINLAYER_LAUNCHD_" + name.replace("-", "_").upper() + "_ENABLED"
+    monkeypatch.setattr(
+        "brainlayer.component_jobs.configured_brainlayer_env_value", lambda key, *a: "0" if key == expected else None
+    )
     calls = []
     with pytest.raises(RuntimeError, match="configured OFF"):
-        component_action("watch", "restart", agents=agents, manifest=manifest, runner=lambda args: calls.append(args))
+        component_action(name, "restart", agents=agents, manifest=manifest, runner=lambda args: calls.append(args))
     assert not calls

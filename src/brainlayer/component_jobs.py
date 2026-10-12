@@ -65,7 +65,7 @@ def component_action(name, action, *, agents=None, manifest=None, path=None, run
             if active and pause_applies_to_label(payload, label):
                 raise RuntimeError("component is paused")
             env_path = Path(env["BRAINLAYER_ENV_FILE"]) if env.get("BRAINLAYER_ENV_FILE") else None
-            service = label.removeprefix("com.brainlayer.").replace("-", "_").upper()
+            service = name.replace("-", "_").upper()
             configured = configured_brainlayer_env_value(f"BRAINLAYER_LAUNCHD_{service}_ENABLED", env_path)
             if configured is not None and configured.lower() in {"0", "false", "no", "off"}:
                 raise RuntimeError("component is configured OFF")

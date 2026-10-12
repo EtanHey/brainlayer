@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from brainlayer.cli import app
@@ -81,21 +82,14 @@ def test_real_cli_reads_private_daemon_status(monkeypatch):
         root = Path(directory)
         monkeypatch.setenv("HOME", directory)
         path, endpoint = root / "jobs.json", root / "control.sock"
-        path.write_text(
-            json.dumps(
-                {
-                    "com.brainlayer.watch": {
-                        "enabled": True,
-                        "plist": {
-                            "Label": "com.brainlayer.watch",
-                            "KeepAlive": True,
-                            "ProgramArguments": [sys.executable, "-c", "import time;time.sleep(60)"],
-                        },
-                    }
-                }
-            )
+        definition = dict(
+            Label="com.brainlayer.watch",
+            KeepAlive=True,
+            ProgramArguments=[sys.executable, "-c", "import time;time.sleep(60)"],
         )
+        path.write_text(json.dumps({"com.brainlayer.watch": {"enabled": True, "plist": definition}}))
         path.chmod(0o600)
+        query = ["jobs", "component", "watch", "status", "--socket", str(endpoint)]
         daemon = subprocess.Popen(
             [sys.executable, "-m", "brainlayer", "daemon", "--manifest", str(path), "--socket", str(endpoint)]
         )
@@ -104,17 +98,7 @@ def test_real_cli_reads_private_daemon_status(monkeypatch):
             while time.monotonic() < deadline and daemon.poll() is None:
                 if endpoint.exists():
                     result = subprocess.run(
-                        [
-                            sys.executable,
-                            "-m",
-                            "brainlayer",
-                            "jobs",
-                            "component",
-                            "watch",
-                            "status",
-                            "--socket",
-                            str(endpoint),
-                        ],
+                        [sys.executable, "-m", "brainlayer", *query],
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -130,7 +114,5 @@ def test_real_cli_reads_private_daemon_status(monkeypatch):
             daemon.terminate()
             daemon.wait(timeout=20)
         assert daemon.returncode == 0 and not endpoint.exists()
-        import pytest
-
         with pytest.raises(ProcessLookupError):
             os.killpg(pid, 0)
