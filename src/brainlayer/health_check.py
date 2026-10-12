@@ -1138,6 +1138,10 @@ def _queue_heal_summary(
     if kickstart in result.actions:
         return f"heal=attempted action={kickstart} heal_failures={failure_count} outcome=command issued"
 
+    failed = f"kickstart_failed:{config.drain_label}"
+    if failed in result.actions:
+        return f"heal=failing action={failed} heal_failures={failure_count} outcome=command failed"
+
     backoff_prefix = f"heal_backoff:{config.drain_label}:queue_backed_up:"
     if any(action.startswith(backoff_prefix) for action in result.actions):
         return f"heal=skipped heal_failures={failure_count} outcome=process uninterruptible; backoff active"

@@ -281,3 +281,26 @@ def test_slow_successful_restart_is_not_reported_as_failure(backend):
     current = request()["components"]
     assert current["watch"]["pid"] != initial["watch"]["pid"]
     assert current["drain"]["pid"] == initial["drain"]["pid"]
+
+
+@pytest.mark.parametrize("domain", [None, "gui/99999"])
+def test_invalid_disabled_domain_does_not_escape_or_call_fallback(backend, domain):
+    client, _, _, _, commands, _ = backend
+    args = ["launchctl", "print-disabled"] + ([domain] if domain else [])
+    assert client(args).returncode == 127
+    assert not commands
+
+
+def test_failed_drain_restart_is_reported_in_queue_summary(tmp_path):
+    config, _, _, _ = _queue_backlog_config(tmp_path, heal=True)
+    action = f"kickstart_failed:{config.drain_label}"
+    summary = health_check._queue_heal_summary(
+        config=config,
+        result=health_check.HealthCheckResult(checked_at="", ok=False, actions=[action]),
+        blocking_reason=None,
+        previous_failures={},
+        heal_failures={f"{config.drain_label}:queue_backed_up": 2},
+        heal_tripped=set(),
+        backlog_issue_active=True,
+    )
+    assert "heal=failing" in summary and action in summary and "heal_failures=2" in summary

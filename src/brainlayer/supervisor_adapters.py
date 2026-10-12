@@ -142,9 +142,9 @@ class SupervisorCommands:
                 raise RuntimeError(self.control_error)
             states = self.request()
             if args[:2] == ["launchctl", "print-disabled"]:
-                disabled = self._disabled(states)
-                if args[2] != self.domain:
+                if args[2:3] != [self.domain]:
                     raise PermissionError("wrong launchd domain")
+                disabled = self._disabled(states)
                 return result(out="\n".join(f'"{label}" => disabled' for label in sorted(disabled)))
             if command == "kill":
                 if args[1:2] != ["-9"]:
@@ -183,7 +183,16 @@ class SupervisorCommands:
                     raise PermissionError("component is OFF, paused or disabled")
             self.request(action, name, timeout=states[name]["exit_timeout"] + 5)
             return result()
-        except (OSError, ValueError, KeyError, TypeError, OverflowError, RuntimeError, StopIteration) as exc:
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+            OverflowError,
+            RuntimeError,
+            StopIteration,
+        ) as exc:
             return result(127, error=f"supervisor control failed: {exc}")
 
 
