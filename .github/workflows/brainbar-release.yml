@@ -6,6 +6,8 @@ on:
       - "v*"
       # Python-only release: retain BrainBar 1.5.51 and its existing cask.
       - "!v1.5.52"
+      # Formula-only release: Swift changes remain pending a separate app release.
+      - "!v1.5.53"
 
 permissions:
   contents: write
