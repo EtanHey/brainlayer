@@ -19,6 +19,30 @@ from .paths import supervisor_socket_path
 from .service_supervisor import Component, Supervisor
 from .supervisor_adapters import ALIASES
 
+PLIST_KEYS = set(
+    "Label ProgramArguments EnvironmentVariables StandardOutPath StandardErrorPath "
+    "WorkingDirectory StartInterval RunAtLoad KeepAlive ThrottleInterval ExitTimeOut "
+    "AssociatedBundleIdentifiers SoftResourceLimits Nice LowPriorityIO ProcessType".split()
+)
+
+
+def resource_policy(plist):
+    policy = {k: plist[k] for k in ("SoftResourceLimits", "Nice", "LowPriorityIO", "ProcessType") if k in plist}
+    limits = policy.get("SoftResourceLimits", {})
+    if not isinstance(limits, dict) or set(limits) - {"NumberOfFiles"}:
+        raise ValueError(f"unsupported SoftResourceLimits: {limits}")
+    if "NumberOfFiles" in limits and (type(limits["NumberOfFiles"]) is not int or limits["NumberOfFiles"] < 1):
+        raise ValueError("invalid SoftResourceLimits.NumberOfFiles")
+    if "Nice" in policy and (type(policy["Nice"]) is not int or not -20 <= policy["Nice"] <= 20):
+        raise ValueError("invalid Nice")
+    if "LowPriorityIO" in policy and type(policy["LowPriorityIO"]) is not bool:
+        raise ValueError("invalid LowPriorityIO")
+    if "ProcessType" in policy and (
+        not isinstance(policy["ProcessType"], str) or policy["ProcessType"] not in {"Standard", "Background"}
+    ):
+        raise ValueError("unsupported ProcessType")
+    return policy
+
 
 def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "r") as stream:
@@ -35,6 +59,12 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
         plist = record.get("plist")
         if not isinstance(plist, dict) or plist.get("Label") != label or "StartCalendarInterval" in plist:
             raise ValueError(f"invalid resident/interval plist: {label}")
+        if unknown := set(plist) - PLIST_KEYS:
+            raise ValueError(f"unsupported plist keys: {sorted(unknown)}")
+        if "AssociatedBundleIdentifiers" in plist and plist["AssociatedBundleIdentifiers"] != [
+            "com.brainlayer.brainbar"
+        ]:
+            raise ValueError("unsupported AssociatedBundleIdentifiers; consolidated launcher owns BrainBar association")
         argv, env = plist.get("ProgramArguments"), plist.get("EnvironmentVariables", {})
         if (
             not isinstance(argv, list)
@@ -48,6 +78,10 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
         run_at_load = plist.get("RunAtLoad", False)
         if type(run_at_load) is not bool:
             raise ValueError(f"invalid RunAtLoad: {label}")
+        if not interval and plist.get("KeepAlive") is not True:
+            raise ValueError(f"resident requires KeepAlive=true: {label}")
+        if "KeepAlive" in plist and type(plist["KeepAlive"]) is not bool:
+            raise ValueError(f"unsupported KeepAlive: {label}")
         if (
             type(interval) not in {int, float}
             or not math.isfinite(interval)
@@ -61,6 +95,9 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
         timeout = record.get("run_timeout", max(300, grace))
         if type(timeout) not in {int, float} or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError(f"invalid run timeout: {label}")
+        throttle = plist.get("ThrottleInterval", 10)
+        if type(throttle) not in {int, float} or not math.isfinite(throttle) or throttle <= 0:
+            raise ValueError(f"invalid ThrottleInterval: {label}")
 
         def location(key):
             value = plist.get(key)
@@ -80,6 +117,8 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
             cwd=location("WorkingDirectory"),
             interval=interval,
             run_timeout=timeout,
+            policy=resource_policy(plist),
+            backoff=throttle,
         )
         if interval and not run_at_load:
             child.retry_at = time.monotonic() + interval

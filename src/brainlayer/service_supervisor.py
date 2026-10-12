@@ -19,6 +19,12 @@ from brainlayer.paths import supervisor_socket_path
 from brainlayer.supervisor_guard import Custody, gated_spawn, launch_guard, peer_uid, start_time, stop_group
 
 
+def child_environment(env):
+    """Launchd-like base; unrelated supervisor configuration never reaches children."""
+    keys = ("HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "__CF_USER_TEXT_ENCODING")
+    return {k: os.environ[k] for k in keys if k in os.environ} | {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"} | env
+
+
 @dataclass
 class Component:
     argv: tuple[str, ...]
@@ -30,6 +36,8 @@ class Component:
     cwd: Path | None = None
     interval: float = 0
     run_timeout: float = 300
+    policy: dict = field(default_factory=dict)
+    backoff: float | None = None
     process: subprocess.Popen | None = field(default=None, init=False)
     paused: bool = field(default=False, init=False)
     pause_owner: str = field(default="", init=False)
@@ -41,6 +49,7 @@ class Component:
     cleanup: asyncio.Task | None = field(default=None, init=False)
     last_exit_code: int | None = field(default=None, init=False)
     last_run_at: float | None = field(default=None, init=False)
+    cleanup_retry_at: float = field(default=0, init=False)
 
     def status(self):
         return dict(
@@ -55,7 +64,9 @@ class Component:
             interval=self.interval,
             last_exit_code=self.last_exit_code,
             last_run_at=self.last_run_at,
-            next_run_at=time.time() + max(0, self.retry_at - time.monotonic()) if self.interval else None,
+            next_run_at=time.time() + max(0, self.retry_at - time.monotonic())
+            if self.interval and self.enabled and not self.paused
+            else None,
         )
 
 
@@ -121,7 +132,7 @@ class Supervisor:
     def _failed(self, child: Component, error: str):
         child.failures += 1
         child.error = error
-        child.retry_at = time.monotonic() + min(300, self.backoff * 2 ** min(child.failures - 1, 30))
+        child.retry_at = time.monotonic() + min(300, (child.backoff or self.backoff) * 2 ** min(child.failures - 1, 30))
 
     def _start(self, child: Component):
         gate = None
@@ -130,7 +141,9 @@ class Supervisor:
                 files.enter_context(supervisor_guard.component_gate(self.path.parent))
                 stdout = files.enter_context(child.stdout.open("ab")) if child.stdout else None
                 stderr = files.enter_context(child.stderr.open("ab")) if child.stderr else None
-                child.process, gate = gated_spawn(child.argv, os.environ | child.env, stdout, stderr, cwd=child.cwd)
+                child.process, gate = gated_spawn(
+                    child.argv, child_environment(child.env), stdout, stderr, cwd=child.cwd, policy=child.policy
+                )
             birth = start_time(child.process.pid)
             if birth is None:
                 raise RuntimeError("cannot establish child birth identity")
@@ -174,8 +187,18 @@ class Supervisor:
             self.recovery_at = time.monotonic() + 1
         for child in self.components.values():
             if child.cleanup and child.cleanup.done():
-                child.cleanup.result()
+                try:
+                    child.cleanup.result()
+                except Exception as exc:
+                    child.error = f"cleanup failed: {exc}"
+                    child.cleanup_retry_at = time.monotonic() + self.backoff
                 child.cleanup = None
+            if time.monotonic() < child.cleanup_retry_at:
+                continue  # Keep custody; failed reaping never authorizes another child.
+            if child.cleanup_retry_at:
+                child.cleanup_retry_at = 0
+                child.cleanup = asyncio.create_task(self._reap(child))
+                continue  # Retry cleanup without recounting/replacing the original exit.
             if child.process and child.process.poll() is not None and child.cleanup is None:
                 child.last_exit_code = child.process.returncode
                 if child.interval:
@@ -200,7 +223,8 @@ class Supervisor:
                 child.retry_at = time.monotonic() + child.interval
                 child.cleanup = asyncio.create_task(self._reap(child))
             if (
-                child.process
+                not child.interval
+                and child.process
                 and child.process.poll() is None
                 and time.monotonic() - child.started_at >= self.stable_uptime
             ):

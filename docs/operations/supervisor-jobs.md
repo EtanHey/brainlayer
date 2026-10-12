@@ -26,3 +26,18 @@ never overlap, and wait a full interval after completion; missed ticks run once 
 catch-up. A run deadline terminates and reaps its owned group, leaving sibling children
 running. Exit 75 is deferred rather than counted as failed. Status retains the last exit
 code and start time, and supplies the next deadline as an epoch timestamp.
+
+Child policy is established after custody registration and before exec: file limits,
+nice priority, Darwin background state and disk I/O policy. Standard children clear
+inherited background state. Unknown plist keys or unsupported policy values are errors;
+BrainBar bundle association belongs to the consolidated launcher, not a child process.
+Each child's crash backoff preserves its ThrottleInterval. The supervisor launcher must
+start at nice 0 so children can adopt their own nice values without privileged elevation.
+Children receive HOME/USER/LOGNAME/SHELL/TMPDIR/encoding plus a safe PATH, then explicit
+plist environment and control endpoint; arbitrary supervisor variables are excluded.
+
+Intervals use monotonic time: elapsed-time ticks resume after wake, run once when due,
+and schedule the next run without catch-up. They do not promise wall-clock cadence while
+asleep. Timeout failure history resets only after a successful/deferred interval exit.
+Disabled/paused intervals have no next-run deadline; cleanup refusal retains custody,
+records an error and retries without stopping the supervisor or spawning duplicates.
