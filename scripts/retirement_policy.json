@@ -4206,6 +4206,16 @@
         "target": "builtins.__import__"
       }
     },
+    "e22969812702d719b1dc2c4da9674d6d62577d7064625cab32169e195d9a6ee6": {
+      "non_cloud_purpose": "Owned local Popen type metadata for ESRCH-confirmed journal and guard-registry removal; no process/model sender.",
+      "site": {
+        "call_sha256": "e34047003ef4212d0b68bca70fc10ff282ffd063f4594d751e9e2aa595785904",
+        "kind": "callable_reference",
+        "owner": "<module>.Custody.forget",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "e23307232d30ae64f6ace0d5a9341c687e12ac54a4c3cf347fd7c17135db7992": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp_stdio_bridge.py <module>",
       "site": {

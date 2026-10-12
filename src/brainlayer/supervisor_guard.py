@@ -152,6 +152,14 @@ class Custody:
         finally:
             os.close(directory_fd)
 
+    def forget(self, guard: subprocess.Popen, pgid: int):
+        """Remove custody only after ESRCH; a dead guard cannot block that proof."""
+        self.record(pgid, None)
+        try:
+            os.write(guard.stdin.fileno(), f"-{pgid}\n".encode())
+        except BrokenPipeError:
+            pass
+
     def recover(self, grace: float):
         owned = set()
         for item in self.groups.values():
