@@ -1,0 +1,58 @@
+"""Explicit consolidated launcher and component CLI commands."""
+
+import asyncio
+import datetime as dt
+import json
+import sys
+from pathlib import Path
+
+import typer
+
+
+def register(app, jobs_app):
+    @app.command("maintenance-calendar")
+    def maintenance_calendar(
+        lib_dir: Path = typer.Option(Path(__file__).parent / "launchd", "--lib-dir"),
+        scheduled_date: str | None = typer.Option(None, "--date"),
+        state_dir: Path | None = typer.Option(None, "--state-dir"),
+        logs_dir: Path = typer.Option(Path.home() / "Library/Logs/brainlayer", "--logs-dir"),
+    ):
+        """Run BrainLayer Maintenance for one scheduled date."""
+        from .maintenance_calendar import calendar_steps, run_calendar
+        from .paths import supervisor_socket_path
+
+        try:
+            date = dt.date.fromisoformat(scheduled_date) if scheduled_date else dt.date.today()
+        except ValueError as exc:
+            raise typer.BadParameter("date must be ISO YYYY-MM-DD") from exc
+        plan = calendar_steps(sys.executable, str(Path(sys.executable).with_name("brainlayer")), lib_dir, date)
+        code = asyncio.run(
+            run_calendar(
+                plan, state_dir or supervisor_socket_path().parent / "calendar", logs_dir, install_signals=True
+            )
+        )
+        raise typer.Exit(code)
+
+    @app.command("daemon")
+    def daemon(manifest: Path = typer.Option(..., "--manifest"), socket: Path | None = typer.Option(None, "--socket")):
+        """Run BrainLayer Daemon from a private command manifest."""
+        from .supervisor_jobs import run_daemon
+
+        run_daemon(manifest, socket)
+
+    @jobs_app.command("component")
+    def component(
+        name: str,
+        action: str,
+        manifest: Path | None = typer.Option(None, "--manifest"),
+        socket: Path | None = typer.Option(None, "--socket"),
+    ):
+        """Status/restart or configured env/log paths for one component."""
+        from .component_jobs import component_action
+
+        try:
+            result = component_action(name, action, manifest=manifest, path=socket)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            typer.echo(json.dumps({"error": str(exc)}))
+            raise typer.Exit(1) from exc
+        typer.echo(json.dumps(result, sort_keys=True))

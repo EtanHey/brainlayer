@@ -126,13 +126,17 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
     return components
 
 
+def run_daemon(manifest: Path, socket: Path | None = None):
+    path = socket if socket is not None else supervisor_socket_path()
+    asyncio.run(Supervisor(load_components(manifest, path), path).run(install_signals=True))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--socket", type=Path, default=None)
     args = parser.parse_args()
-    path = args.socket if args.socket is not None else supervisor_socket_path()
-    asyncio.run(Supervisor(load_components(args.manifest, path), path).run(install_signals=True))
+    run_daemon(args.manifest, args.socket)
 
 
 if __name__ == "__main__":

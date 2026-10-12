@@ -41,3 +41,19 @@ and schedule the next run without catch-up. They do not promise wall-clock caden
 asleep. Timeout failure history resets only after a successful/deferred interval exit.
 Disabled/paused intervals have no next-run deadline; cleanup refusal retains custody,
 records an error and retries without stopping the supervisor or spawning duplicates.
+
+## CLI consumers
+
+`brainlayer daemon --manifest /absolute/jobs.json` is the named daemon launcher.
+`brainlayer maintenance-calendar` runs the installed calendar plan for today's scheduled
+date; `--date YYYY-MM-DD` selects a missed date. It uses the current interpreter's
+sibling `brainlayer` executable and packaged launchd wrappers, with explicit `--lib-dir`,
+`--state-dir` and `--logs-dir` overrides for isolated runs.
+
+`brainlayer jobs component watch status` reads runtime evidence. While the legacy plist
+exists it reads that launchd label; after archival it reads the owner-only supervisor.
+`--socket` and `--manifest` select private fixtures. `restart` respects disabled/OFF/pause
+refusals and never bootstraps an archived label. `env` returns the configured env-file
+path and `logs` returns stdout/stderr paths; neither prints credential contents. JSON
+includes the component's legacy label, evidence source and definition path. This traces
+configuration provenance; it does not claim which keg a live process has mapped.
