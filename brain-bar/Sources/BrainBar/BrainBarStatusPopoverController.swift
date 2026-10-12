@@ -2,18 +2,58 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Tests supply an in-memory host: AppKit only supports the system NSStatusBar,
+/// not separately allocated bars. Keep that native lifecycle behind this seam.
+@MainActor
+protocol BrainBarStatusItem: AnyObject {
+    var length: CGFloat { get }
+    var menu: NSMenu? { get set }
+    var button: NSButton? { get }
+}
+
+@MainActor
+protocol BrainBarStatusItemHosting: AnyObject {
+    func statusItem(withLength length: CGFloat) -> any BrainBarStatusItem
+    func removeStatusItem(_ item: any BrainBarStatusItem)
+}
+
+@MainActor
+final class SystemBrainBarStatusItemHost: BrainBarStatusItemHosting {
+    private let bar = NSStatusBar.system
+
+    private final class Item: BrainBarStatusItem {
+        let native: NSStatusItem
+        init(_ native: NSStatusItem) { self.native = native }
+        var length: CGFloat { native.length }
+        var menu: NSMenu? {
+            get { native.menu }
+            set { native.menu = newValue }
+        }
+        var button: NSButton? { native.button }
+    }
+
+    func statusItem(withLength length: CGFloat) -> any BrainBarStatusItem {
+        Item(bar.statusItem(withLength: length))
+    }
+
+    func removeStatusItem(_ item: any BrainBarStatusItem) {
+        guard let item = item as? Item else { preconditionFailure("Status item belongs to another host") }
+        bar.removeStatusItem(item.native)
+    }
+}
+
 /// The small menu-bar status item (#963, vNext D5), like VoiceBar's: its icon draws the live
 /// sparkline and badge, and every click opens a short menu. Dashboard and Settings open in the
 /// one real BrainBar window.
 @MainActor
 final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
-    let statusItemForTesting: NSStatusItem
+    let statusItemForTesting: any BrainBarStatusItem
     let contextMenuForTesting: NSMenu
 
     private let runtime: BrainBarRuntime
     private let dashboardPanelController: BrainBarDashboardPanelController
-    // Retain the owning bar: NSStatusItem only holds a weak reference to it.
-    private let statusBar: NSStatusBar
+    private let statusBar: any BrainBarStatusItemHosting
+    private var isStopped = false
     private var runtimeCancellables: Set<AnyCancellable> = []
     private var collectorCancellables: Set<AnyCancellable> = []
     private let badgeReadQueue = DispatchQueue(label: "com.brainlayer.brainbar.badge-read", qos: .utility)
@@ -31,7 +71,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     init(
         runtime: BrainBarRuntime,
         dashboardPanelController: BrainBarDashboardPanelController,
-        statusBar: NSStatusBar = .system
+        statusBar: any BrainBarStatusItemHosting = SystemBrainBarStatusItemHost()
     ) {
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
@@ -105,9 +145,15 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     func stop() {
+        guard !isStopped else { return }
+        isStopped = true
+        runtimeCancellables.removeAll()
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
         close(nil)
+        dashboardPanelController.statusItemButton = nil
+        contextMenuForTesting.delegate = nil
+        statusItemForTesting.menu = nil
         statusBar.removeStatusItem(statusItemForTesting)
     }
 
@@ -128,6 +174,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     private func bindCollector(_ collector: StatsCollector?) {
+        guard !isStopped else { return }
         collectorCancellables.removeAll()
         badgeReadGeneration = UUID()
         badgePresentation = .failVisible("Badge state has not been read yet.")

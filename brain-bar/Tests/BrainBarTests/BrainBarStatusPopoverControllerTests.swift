@@ -43,7 +43,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let panelController = BrainBarDashboardPanelController(runtime: runtime)
         let controller = BrainBarStatusPopoverController(
-            runtime: runtime, dashboardPanelController: panelController, statusBar: NSStatusBar()
+            runtime: runtime, dashboardPanelController: panelController, statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
         let menu = controller.contextMenuForTesting
@@ -80,7 +80,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
             dashboardPanelController: panelController,
-            statusBar: NSStatusBar()
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -97,7 +97,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
             dashboardPanelController: windowController,
-            statusBar: NSStatusBar()
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -117,7 +117,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
             dashboardPanelController: windowController,
-            statusBar: NSStatusBar()
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -145,7 +145,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let controller = BrainBarStatusPopoverController(
             runtime: runtime,
             dashboardPanelController: windowController,
-            statusBar: NSStatusBar()
+            statusBar: TestStatusItemHost()
         )
         defer { controller.stop() }
 
@@ -197,17 +197,46 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
     func testControllerStatusItemBelongsToAPrivateBarAndStopsOnThatBar() {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let panelController = BrainBarDashboardPanelController(runtime: runtime)
-        let privateStatusBar = RecordingStatusBar()
+        let privateStatusBar = TestStatusItemHost()
         let controller = BrainBarStatusPopoverController(
             runtime: runtime, dashboardPanelController: panelController, statusBar: privateStatusBar
         )
         defer { controller.stop() }
 
-        XCTAssertTrue(controller.statusItemForTesting.statusBar === privateStatusBar)
-        XCTAssertFalse(controller.statusItemForTesting.statusBar === NSStatusBar.system,
-                       "test fixtures must never create items in the live system menu bar")
+        XCTAssertTrue(controller.statusItemForTesting === privateStatusBar.createdItem,
+                      "test fixtures must never create items in the live system menu bar")
+        XCTAssertTrue(controller.statusItemForTesting is TestStatusItemHost.Item)
         controller.stop()
-        XCTAssertTrue(privateStatusBar.removedItem === controller.statusItemForTesting)
+        controller.stop()
+        XCTAssertEqual(privateStatusBar.removedItems.count, 1, "stop must remove the item exactly once")
+        XCTAssertTrue(privateStatusBar.removedItems.first === controller.statusItemForTesting)
+        XCTAssertNil(controller.statusItemForTesting.menu)
+        XCTAssertNil(controller.contextMenuForTesting.delegate)
+        XCTAssertNil(panelController.statusItemButton)
+    }
+
+    func testStoppedPrivateStatusFixturesDoNotSurviveAnAutoreleaseDrain() {
+        weak var releasedController: BrainBarStatusPopoverController?
+        weak var releasedHost: TestStatusItemHost?
+        weak var releasedItem: TestStatusItemHost.Item?
+        weak var releasedButton: NSButton?
+        autoreleasepool {
+            let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+            let panelController = BrainBarDashboardPanelController(runtime: runtime)
+            let host = TestStatusItemHost()
+            let controller = BrainBarStatusPopoverController(
+                runtime: runtime, dashboardPanelController: panelController, statusBar: host
+            )
+            releasedController = controller
+            releasedHost = host
+            releasedItem = host.createdItem
+            releasedButton = host.createdItem?.button
+            controller.stop()
+        }
+        XCTAssertNil(releasedController)
+        XCTAssertNil(releasedHost)
+        XCTAssertNil(releasedItem)
+        XCTAssertNil(releasedButton)
     }
 
     private func packageRoot() -> URL {
@@ -215,15 +244,6 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-    }
-}
-
-private final class RecordingStatusBar: NSStatusBar {
-    private(set) var removedItem: NSStatusItem?
-
-    override func removeStatusItem(_ item: NSStatusItem) {
-        removedItem = item
-        super.removeStatusItem(item)
     }
 }
 

@@ -528,7 +528,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
         let windowController = BrainBarDashboardPanelController(runtime: runtime)
         let status = BrainBarStatusPopoverController(
-            runtime: runtime, dashboardPanelController: windowController, statusBar: NSStatusBar()
+            runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
         )
         defer { status.stop(); windowController.dismiss() }
         status.setBadgeForTesting(
