@@ -60,6 +60,11 @@ def _process_snapshot() -> dict[int, _Process]:
 
 
 def _daemon_pids(cli_pid, processes, before, cli_started, descendants):
+    """Detect group/tree daemons and new init orphans, without host-global attribution.
+
+    A double-forked child adopted by a non-init subreaper is not detected;
+    ps exposes no subreaper flag. Never whitelist all ancestors as reapers.
+    """
     owned = {cli_pid} | {pid for pid, started in descendants if pid in processes and processes[pid].started == started}
     while True:
         children = {pid for pid, process in processes.items() if process.ppid in owned}
@@ -241,16 +246,27 @@ def test_cli_check_detects_and_cleans_its_exited_parent_daemon(tmp_path, monkeyp
                 pass
 
 
-def test_cli_timeout_does_not_wait_on_descendants_inheriting_output():
+def test_cli_timeout_does_not_wait_on_descendants_inheriting_output(tmp_path):
+    pid_file = tmp_path / "timeout-child.pid"
     code = (
         "import subprocess, sys, time\n"
-        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'com.brainlayer.daemon'])\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'com.brainlayer.daemon'])\n"
+        "open(sys.argv[1], 'w').write(str(child.pid))\n"
         "time.sleep(10)\n"
     )
     started = time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):
-        _run_cli([sys.executable, "-c", code], env=os.environ.copy(), timeout=0.1)
-    assert time.monotonic() - started < 2
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_cli([sys.executable, "-c", code, str(pid_file)], env=os.environ.copy(), timeout=0.5)
+        assert time.monotonic() - started < 2
+        state = subprocess.run(["/bin/ps", "-p", pid_file.read_text(), "-o", "stat="], capture_output=True, text=True)
+        assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
+    finally:
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
 
 @pytest.mark.parametrize("shape", ["setsid-alive", "setsid-exited", "double-fork"])
@@ -306,7 +322,7 @@ def test_cli_check_ignores_a_preexisting_orphan(tmp_path):
     pid_file = tmp_path / "outside-orphan.pid"
     code = (
         "import os, sys, time\n"
-        "if os.fork(): sys.exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\n"
+        "if os.fork(): sys.exit(0)\nos.setsid()\nif os.fork():\n time.sleep(.3)\n os._exit(0)\n"
         "open(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(5)\n"
     )
     identity = None
@@ -321,7 +337,11 @@ def test_cli_check_ignores_a_preexisting_orphan(tmp_path):
         while not pid_file.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         pid = int(pid_file.read_text())
-        process = _process_snapshot()[pid]
+        while True:
+            process = _process_snapshot()[pid]
+            if process.ppid == 1 or time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
         identity = (pid, process.started)
         assert process.ppid == 1
         result = _run_cli([sys.executable, "-c", "pass"], env=os.environ.copy())
