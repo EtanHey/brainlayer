@@ -215,6 +215,58 @@ final class SocketIntegrationTests: XCTestCase {
 
     }
 
+    func testPrivateServerRestartRetainsAnUnconsumedFailureEpisode() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
+        let receipt = dir.appendingPathComponent("transport.json")
+        server.stop()
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db,
+            diagnostics: .daemon(environment: ["BRAINLAYER_TRANSPORT_HEALTH_PATH": receipt.path],
+                debugLogPath: dir.appendingPathComponent("debug.log").path,
+                lifecycleLogPath: dir.appendingPathComponent("lifecycle.log").path))
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath))
+        let client = try connectClient()
+        try initializeClient(fd: client, name: "private-restart-control")
+        let gate = SQLiteProgressGate()
+        sqlite3_progress_handler(db.dbHandle, 1, blockSQLiteProgress, Unmanaged.passUnretained(gate).toOpaque())
+        defer { sqlite3_progress_handler(db.dbHandle, 0, nil, nil) }
+        defer { gate.release.signal(); server.stop() }
+        var batch = try MCPFraming.encode(["jsonrpc": "2.0", "id": 301, "method": "tools/call",
+            "params": ["name": "brain_recall", "arguments": ["mode": "stats"]]])
+        for id in [302, 303] { batch.append(try MCPFraming.encode(["jsonrpc": "2.0", "id": id, "method": "ping"])) }
+        let written = batch.withUnsafeBytes { write(client, $0.baseAddress, batch.count) }
+        XCTAssertEqual(written, batch.count)
+        XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
+        close(client)
+        gate.release.signal()
+        let deadline = Date().addingTimeInterval(6)
+        var dropped = 0
+        while Date() < deadline {
+            if let data = try? Data(contentsOf: receipt),
+               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let counts = value["counts"] as? [String: Int] { dropped = counts["requests_dropped"] ?? 0 }
+            if dropped == 3 { break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertEqual(dropped, 3, "The private server must first measure three real unanswered requests")
+        server.stop()
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath))
+        let restartDeadline = Date().addingTimeInterval(2)
+        var restarted: [String: Any] = [:]
+        while Date() < restartDeadline {
+            if let data = try? Data(contentsOf: receipt),
+               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               value["state"] as? String == "measured" { restarted = value; break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        let incident = try XCTUnwrap(restarted["incident"] as? [String: Any], "Restart before the Python poll must retain the episode")
+        XCTAssertEqual((incident["counts"] as? [String: Int])?["requests_dropped"], 3)
+        XCTAssertEqual(restarted["observed_seconds"] as? Int, 0)
+    }
+
     // MARK: - MCP Initialize handshake
 
     func testMCPInitializeOverSocket() throws {
