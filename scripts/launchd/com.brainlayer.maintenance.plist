@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.brainlayer.maintenance</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.brainlayer.brainbar</string>
+	</array>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__BRAINLAYER_ENV_RUN__</string>
+		<string>__BRAINLAYER_PYTHON__</string>
+		<string>-m</string>
+		<string>brainlayer</string>
+		<string>maintenance-calendar</string>
+		<string>--state-dir</string>
+		<string>__HOME__/.local/share/brainlayer/supervisor/calendar</string>
+		<string>--logs-dir</string>
+		<string>__HOME__/Library/Logs/brainlayer</string>
+		<string>--lib-dir</string>
+		<string>__HOME__/.local/lib/brainlayer</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>BRAINLAYER_ENV_FILE</key>
+		<string>__BRAINLAYER_ENV_FILE__</string>
+		<key>BRAINLAYER_SUPERVISOR_SOCKET</key>
+		<string>__HOME__/.local/share/brainlayer/supervisor/control.sock</string>
+		<key>BRAINLAYER_LAUNCHD_SERVICE</key>
+		<string>maintenance</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:__HOME__/.local/bin</string>
+		<key>BRAINLAYER_REPO_ROOT</key>
+		<string>__BRAINLAYER_DIR__</string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/maintenance.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/brainlayer/maintenance.err.log</string>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>15</integer>
+	</dict>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>4096</integer>
+	</dict>
+</dict>
+</plist>
