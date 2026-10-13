@@ -41,3 +41,12 @@ and schedule the next run without catch-up. They do not promise wall-clock caden
 asleep. Timeout failure history resets only after a successful/deferred interval exit.
 Disabled/paused intervals have no next-run deadline; cleanup refusal retains custody,
 records an error and retries without stopping the supervisor or spawning duplicates.
+
+## CLI consumers
+
+`brainlayer daemon --manifest /absolute/jobs.json` starts the daemon. The command
+`maintenance-calendar [--date YYYY-MM-DD]` passes CalendarPlan directly to its singleton with separate custody,
+sibling keg CLI and packaged wrappers. Override `--lib-dir`/`--state-dir`/`--logs-dir`; set `BRAINLAYER_SUPERVISOR_SOCKET`.
+`jobs component NAME status|restart|env|logs` uses legacy plists until archival, then owner-only control;
+`--socket`/`--manifest` select fixtures. Restart honors OFF/disable/pause; env/log actions return paths only.
+JSON traces the legacy label, evidence source and definition; live keg verification remains separate.

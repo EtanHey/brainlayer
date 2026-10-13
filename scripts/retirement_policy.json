@@ -2264,6 +2264,16 @@
         "path": "brain-bar/Sources/BrainBarDaemon/BrainBusClient.swift"
       }
     },
+    "70dcf37790eb4d67348add2269c6c27bd00e4bf683b628752f003734060fe5f1": {
+      "non_cloud_purpose": "Owner-only local supervisor component status through the existing validated AF_UNIX client; no MCP, TCP, cloud or model sender. Component CLI retains legacy launchd evidence until archival.",
+      "site": {
+        "call_sha256": "c1bb8ed47a76141758d8b908abe3a2a4983be8bbca7671f2792da4cb7e3acee0",
+        "kind": "generic_send",
+        "owner": "<module>.component_action",
+        "path": "src/brainlayer/component_jobs.py",
+        "target": "client.request"
+      }
+    },
     "70f15708de023b2035d1f6286b354c97aae2f697dd658d82126ca59d297bf2fa": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/maintenance.py <module>",
       "site": {

@@ -54,6 +54,10 @@ app.add_typer(jobs_app, name="jobs")
 backup_app = typer.Typer(help="Manage BrainLayer backup authorization")
 app.add_typer(backup_app, name="backup")
 
+from ..cli_jobs import register as register_jobs_commands
+
+register_jobs_commands(app, jobs_app)
+
 
 @backup_app.command("auth")
 def backup_auth_command(
