@@ -3,6 +3,7 @@
 import json
 import plistlib
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -52,7 +53,7 @@ def test_archived_component_uses_supervisor_runtime_and_private_manifest(tmp_pat
     state = dict(configured=False, paused=False, pid=77, starts=3, exit_timeout=30)
 
     class Client:
-        def __init__(self, *args):
+        def __init__(self, *args, **kwargs):
             pass
 
         def request(self):
@@ -89,16 +90,95 @@ def test_legacy_restart_refuses_disabled_or_unmeasurable(tmp_path, monkeypatch, 
     assert not calls
 
 
-@pytest.mark.parametrize("name", ["watch", "hotlane", "fleet-watchdog"])
-def test_legacy_configured_off_restart_never_kickstarts(tmp_path, monkeypatch, name):
-    agents, manifest = setup(tmp_path, name)
+def real_legacy(tmp_path, monkeypatch, name, settings):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    label = next(k for k, v in ALIASES.items() if v == name)
+    plist = plistlib.loads((Path(__file__).parents[1] / "scripts/launchd" / f"{label}.plist").read_bytes())
+    env_path = tmp_path / ".config/brainlayer/brainlayer.env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text(settings)
+    env_path.chmod(0o600)
+    plist["EnvironmentVariables"]["BRAINLAYER_ENV_FILE"] = str(env_path)
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / f"{label}.plist").write_bytes(plistlib.dumps(plist))
+    return agents
+
+
+@pytest.mark.parametrize(
+    ("name", "settings", "enabled"),
+    [
+        ("throughput-watchdog", "BRAINLAYER_LAUNCHD_WATCH_ENABLED=0", False),
+        ("watch", "BRAINLAYER_LAUNCHD_WATCH_ENABLED=disabled", False),
+        ("watch", "BRAINLAYER_SYSTEM_ENABLED=0\nBRAINLAYER_LAUNCHD_WATCH_ENABLED=1", False),
+        ("hotlane", "BRAINLAYER_LAUNCHD_HOTLANE_ENABLED=off", False),
+        ("watch", "BRAINLAYER_SYSTEM_ENABLED=0\nBRAINLAYER_SKIP_DISABLE_GATES=1", True),
+        ("throughput-watchdog", "BRAINLAYER_LAUNCHD_WATCH_ENABLED=1", True),
+    ],
+)
+def test_legacy_configured_off_restart_never_kickstarts(tmp_path, monkeypatch, name, settings, enabled):
+    agents = real_legacy(tmp_path, monkeypatch, name, settings)
     monkeypatch.setattr("brainlayer.component_jobs.is_launchd_label_disabled", lambda *a, **k: False)
-    monkeypatch.setattr("brainlayer.component_jobs.pause_sentinel_state", lambda *a, **k: (None, False, ""))
-    expected = "BRAINLAYER_LAUNCHD_" + name.replace("-", "_").upper() + "_ENABLED"
+    monkeypatch.setattr("brainlayer.component_jobs.pause_sentinel_state", lambda *a, **k: ({}, False, False))
+    definition = plistlib.loads(next(agents.glob("*.plist")).read_bytes())
+    wrapper = Path(__file__).parents[1] / "scripts/launchd/brainlayer-env-run.sh"
+    probe = subprocess.run(
+        ["/bin/bash", str(wrapper), "/usr/bin/true"],
+        env=definition["EnvironmentVariables"] | dict(HOME=str(tmp_path), BRAINLAYER_CALENDAR_STEP="1"),
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert probe.returncode == (0 if enabled else 75), probe.stderr
+    calls = []
+
+    def run(args):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "state = running\npid = 42\n", "")
+
+    if enabled:
+        component_action(name, "restart", agents=agents, runner=run)
+        assert calls[0][:3] == ["launchctl", "kickstart", "-k"]
+    else:
+        with pytest.raises(RuntimeError, match="configured OFF"):
+            component_action(name, "restart", agents=agents, runner=run)
+        assert not calls
+
+
+@pytest.mark.parametrize("value", ["0", "1"])
+def test_legacy_status_keeps_configured_separate_from_live_pid(tmp_path, monkeypatch, value):
+    agents = real_legacy(tmp_path, monkeypatch, "throughput-watchdog", f"BRAINLAYER_LAUNCHD_WATCH_ENABLED={value}")
+    definition = next(agents.glob("*.plist"))
+    plist = plistlib.loads(definition.read_bytes())
+    plist["EnvironmentVariables"].pop("BRAINLAYER_ENV_FILE")
+    definition.write_bytes(plistlib.dumps(plist))
+
+    def run(args):
+        return subprocess.CompletedProcess(args, 0, "state = running\npid = 42\n", "")
+
+    state = component_action("throughput-watchdog", "status", agents=agents, runner=run)["runtime"]
+    assert state == dict(configured=value == "1", loaded=True, pid=42)
+    assert component_action("throughput-watchdog", "env", agents=agents)["env_file"] == str(
+        tmp_path / ".config/brainlayer/brainlayer.env"
+    )
+
+
+def test_supervisor_restart_honors_custom_pause_path(tmp_path, monkeypatch):
+    agents, manifest = setup(tmp_path)
+    (agents / "com.brainlayer.watch.plist").unlink()
+    pause = tmp_path / "custom-pause.json"
+    pause.write_text(json.dumps({"labels": ["com.brainlayer.watch"]}))
+    monkeypatch.setenv("BRAINLAYER_PAUSE_SENTINEL", str(pause))
     monkeypatch.setattr(
-        "brainlayer.component_jobs.configured_brainlayer_env_value", lambda key, *a: "0" if key == expected else None
+        "brainlayer.supervisor_adapters.SupervisorCommands.request",
+        lambda *a, **k: {"watch": dict(configured=True, paused=False, pid=42, starts=1, exit_timeout=30)},
     )
     calls = []
-    with pytest.raises(RuntimeError, match="configured OFF"):
-        component_action(name, "restart", agents=agents, manifest=manifest, runner=lambda args: calls.append(args))
-    assert not calls
+
+    def run(args):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, '"com.brainlayer.watch" => false', "")
+
+    with pytest.raises(RuntimeError, match="OFF, paused or disabled"):
+        component_action("watch", "restart", agents=agents, manifest=manifest, runner=run)
+    assert all(args[1] == "print-disabled" for args in calls)
