@@ -188,7 +188,7 @@ def collect_legacy(agents, env_file, disabled):
                 ),
                 "plist": plist,
             }
-            if env_contents[env_path] is None:
+            if env_contents[env_path] is None and label not in NON_ENV_RUN:
                 records[label]["reason"] = f"missing env file: {env_path}"
     # Preserve serializable configuration; never execute templates during preflight.
     json.dumps(records)

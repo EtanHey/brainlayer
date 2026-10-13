@@ -845,18 +845,46 @@ def _resume_services(
     return failures
 
 
+def _resume_failure_detail(service: str, failure: Exception) -> str:
+    try:
+        from .pipeline.secret_scrub import scrub_secrets
+
+        def clean(value):
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            result = scrub_secrets(str(value))
+            text = result.text
+            for token in result.quarantine:
+                text = text.replace(token.value, "[REDACTED:high-entropy]")
+            return text
+
+        # Scrub complete values before truncation, including exception/command text.
+        parts = [clean(f"{service}: {failure}")[:400]]
+        for channel in ("stdout", "stderr"):
+            value = getattr(failure, channel, None)
+            if value:
+                parts.append(f"{channel} tail: {clean(value).strip()[-768:]}")
+        return "; ".join(parts)
+    except Exception:
+        return "output withheld: scrub failed"
+
+
 def _format_resume_failures(failures: Sequence[tuple[str, Exception]]) -> str:
-    entries = []
-    for service, failure in failures:
-        stderr = getattr(failure, "stderr", "") or ""
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        tail = str(stderr).strip()[-2048:]
-        entries.append(f"{service}: {failure}" + (f"; stderr tail: {tail}" if tail else ""))
-    details = "; ".join(entries)
     count = len(failures)
     noun = "service" if count == 1 else "services"
-    return f"failed to resume {count} launchd {noun}: {details}"
+    reason = f"failed to resume {count} launchd {noun}: "
+    included = 0
+    reserve = len(f"; +{count} more")
+    for service, failure in failures:
+        entry = _resume_failure_detail(service, failure)
+        separator = "; " if included else ""
+        if len(reason) + len(separator) + len(entry) > 4096 - reserve:
+            break
+        reason += separator + entry
+        included += 1
+    if included < count:
+        reason += f"; +{count - included} more"
+    return reason
 
 
 def _checkpoint_full(db_path: Path) -> tuple[int, int, int]:

@@ -399,7 +399,7 @@ verify_gemini_env_file() {
         . "$BRAINLAYER_ENV_FILE"
         set +a
         test -n "${GOOGLE_API_KEY:-${GOOGLE_GENERATIVE_AI_API_KEY:-}}"
-    ' >/dev/null; then
+    ' >/dev/null 2>/dev/null; then
         echo "ERROR: $BRAINLAYER_ENV_FILE did not provide GOOGLE_API_KEY"
         return 1
     fi

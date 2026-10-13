@@ -335,3 +335,16 @@ def test_launch_agent_publication_refuses_foreign_name_and_writable_directory(se
     with pytest.raises(ValueError, match="group/world writable"):
         write_launch_agent(setup[1] / "com.brainlayer.daemon.plist", b"refuse")
     assert not (setup[1] / "com.brainlayer.daemon.plist").exists()
+
+
+@pytest.mark.parametrize("label", ["com.brainlayer.tier0-watchdog", "com.etanhey.brainlayer-fleet-watchdog"])
+def test_missing_env_does_not_attach_off_reason_to_non_env_run(setup, label):
+    from brainlayer.consolidation_plan import collect_legacy
+
+    (setup[1] / f"{label}.plist").write_bytes(
+        plistlib.dumps({"Label": label, "ProgramArguments": ["/bin/true"], "KeepAlive": True})
+    )
+    setup[2].unlink()
+    records, _ = collect_legacy(setup[1], setup[2], set())
+    assert records[label]["enabled"] is True and "reason" not in records[label]
+    assert "missing env file" in records[OLD]["reason"]
