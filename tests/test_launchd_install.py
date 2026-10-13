@@ -1,0 +1,292 @@
+"""Installer dispatch/preflight uses scratch HOME and gui/424242 only."""
+
+import json
+import os
+import subprocess
+import sys
+
+import pytest
+
+from tests.test_consolidation_plan import DOMAIN, ROOT
+from tests.test_consolidation_plan import setup as setup
+
+
+@pytest.fixture
+def inputs(request, monkeypatch):
+    home, agents, env = request.getfixturevalue("setup")
+    python = home / "opt/brainlayer/libexec/venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n")
+    python.chmod(0o755)
+    (python.parents[1] / "lib/python3.13/site-packages/brainlayer").mkdir(parents=True)
+    monkeypatch.setenv("BRAINLAYER_HOOK_PYTHON", str(python))
+    return dict(
+        home=home,
+        templates=ROOT / "scripts/launchd",
+        env_file=env,
+        python=python,
+        keg="keg1",
+        domain=DOMAIN,
+        run=lambda argv, **kw: subprocess.run(argv, **kw),
+    )
+
+
+def test_installer_prepares_named_launchers_and_calendar_helpers_before_migrate(inputs, monkeypatch):
+    from brainlayer import launchd_consolidation, launchd_install
+
+    def migrate(**options):
+        assert options["domain"] == DOMAIN
+        assert options["keg"] == "keg1"
+        lib = inputs["home"] / ".local/lib/brainlayer"
+        for name in (
+            "BrainLayer Daemon",
+            "BrainLayer Maintenance",
+            "brainlayer-env-run.sh",
+            "backup-daily.sh",
+            "jsonl-backup.sh",
+        ):
+            assert (lib / name).stat().st_mode & 0o111
+            assert subprocess.run(["/bin/bash", "-n", str(lib / name)]).returncode == 0
+        return {"phase": "complete"}
+
+    monkeypatch.setattr(launchd_consolidation, "migrate", migrate)
+    assert launchd_install.install(**inputs)["phase"] == "complete"
+    lib = inputs["home"] / ".local/lib/brainlayer"
+    before = {p.name: p.stat().st_mtime_ns for p in lib.iterdir()}
+    launchd_install.install(**inputs)
+    assert before == {p.name: p.stat().st_mtime_ns for p in lib.iterdir()}
+
+
+def test_invalid_renderer_has_no_helper_or_launchctl_mutation(inputs, monkeypatch):
+    from brainlayer import launchd_consolidation, launchd_install
+
+    monkeypatch.setattr(launchd_consolidation, "migrate", lambda **kw: pytest.fail("mutated"))
+    inputs["python"] = inputs["home"] / "missing/python"
+    with pytest.raises(ValueError, match="interpreter"):
+        launchd_install.install(**inputs)
+    assert not (inputs["home"] / ".local/lib/brainlayer").exists()
+
+
+def test_shared_runner_change_is_refused_before_writing_any_helper(inputs, monkeypatch):
+    from brainlayer import launchd_consolidation, launchd_install
+
+    lib = inputs["home"] / ".local/lib/brainlayer"
+    lib.mkdir(parents=True)
+    runner = lib / "brainlayer-env-run.sh"
+    runner.write_bytes(b"foreign runner\n")
+    runner.chmod(0o755)
+    monkeypatch.setattr(launchd_consolidation, "migrate", lambda **kw: pytest.fail("mutated"))
+    with pytest.raises(RuntimeError, match="helper"):
+        launchd_install.install(**inputs)
+    assert list(lib.iterdir()) == [runner]
+    assert runner.read_bytes() == b"foreign runner\n"
+
+
+def test_rollback_calls_pr_c_with_journal_path_without_forward_preflight(inputs, monkeypatch):
+    from brainlayer import launchd_consolidation, launchd_install
+
+    calls = []
+    monkeypatch.setattr(launchd_consolidation, "revert", lambda **kw: calls.append(kw), raising=False)
+    launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+    assert calls[0]["home"] == inputs["home"]
+    assert calls[0]["journal"] == inputs["home"] / ".local/share/brainlayer/supervisor/migration.json"
+    assert calls[0]["domain"] == DOMAIN
+    assert not (inputs["home"] / ".local/lib/brainlayer").exists()
+
+
+@pytest.mark.parametrize("action", ["watch", "all", "load", "unload", "remove", "fleet-watchdog-resume"])
+@pytest.mark.parametrize("phase", ["migrating", "migrated", "reverting", "complete", "unknown"])
+def test_legacy_shell_paths_refuse_when_supervisor_journal_exists(tmp_path, action, phase):
+    home = tmp_path / "home"
+    journal = home / ".local/share/brainlayer/supervisor/migration.json"
+    journal.parent.mkdir(mode=0o700, parents=True)
+    journal.write_text(json.dumps({"phase": phase}))
+    journal.chmod(0o600)
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    binary = fake / "brainlayer"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    launchctl = fake / "launchctl"
+    launchctl.write_text("#!/bin/sh\necho FORBIDDEN_LAUNCHCTL >&2\nexit 91\n")
+    launchctl.chmod(0o755)
+    env = os.environ | {
+        "HOME": str(home),
+        "BRAINLAYER_BIN": str(binary),
+        "PATH": str(fake) + ":/usr/bin:/bin",
+        "PYTHON_BIN": sys.executable,
+    }
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/launchd/install.sh"), action, "watch"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "supervisor" in result.stderr
+    assert "FORBIDDEN_LAUNCHCTL" not in result.stderr
+    assert not (home / "Library/LaunchAgents").exists()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_wiring_uses_real_transaction_for_replay_restart_and_failure(inputs, monkeypatch, failed):
+    from brainlayer import launchd_consolidation, launchd_install
+    from tests.test_launchd_consolidation import Launchctl
+
+    migrate = launchd_consolidation.migrate
+    monkeypatch.setattr(
+        launchd_consolidation, "migrate", lambda **kw: migrate(**kw, alive=lambda pid: False, verify=lambda: None)
+    )
+    runner = Launchctl(fail="com.brainlayer.maintenance" if failed else "")
+    inputs["run"] = runner
+    if failed:
+        with pytest.raises(RuntimeError, match="original files/states restored"):
+            launchd_install.install(**inputs)
+        assert runner.loaded == {"com.brainlayer.watch", "com.etanhey.brainlayer-fleet-watchdog"}
+        assert not any(c[0] == "enable" for c in runner.calls)
+        return
+    launchd_install.install(**inputs)
+    runner.calls.clear()
+    launchd_install.install(**inputs)
+    assert not any(c[0] in {"bootout", "bootstrap"} for c in runner.calls)
+    inputs["keg"] = "keg2"
+    launchd_install.install(**inputs)
+    assert ("bootout", DOMAIN + "/com.brainlayer.daemon") in runner.calls
+    assert runner.loaded == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+
+
+def test_broken_shell_helper_refused_before_mutation(inputs, monkeypatch, tmp_path):
+    import shutil
+
+    from brainlayer import launchd_consolidation, launchd_install
+
+    templates = tmp_path / "templates"
+    shutil.copytree(inputs["templates"], templates)
+    (templates / "backup-daily.sh").write_bytes(b"if ( broken\n")
+    inputs["templates"] = templates
+    monkeypatch.setattr(launchd_consolidation, "migrate", lambda **kw: pytest.fail("mutated"))
+    with pytest.raises(subprocess.CalledProcessError):
+        launchd_install.install(**inputs)
+    assert not (inputs["home"] / ".local/lib/brainlayer").exists()
+
+
+@pytest.mark.parametrize("phase", ["reverted", "rolled_back"])
+@pytest.mark.parametrize("busy", [False, True])
+def test_legacy_shell_path_reopens_after_journaled_return(tmp_path, phase, busy):
+    from contextlib import nullcontext
+
+    from brainlayer.migration_custody import migration_lock
+
+    home = tmp_path / "home"
+    journal = home / ".local/share/brainlayer/supervisor/migration.json"
+    journal.parent.mkdir(mode=0o700, parents=True)
+    journal.write_text(json.dumps({"phase": phase}))
+    journal.chmod(0o600)
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    launchctl = fake / "launchctl"
+    launchctl.write_text(
+        '#!/bin/sh\ncase "$2" in gui/424242/*) exit 113;; */home/Library/LaunchAgents/*) exit 1;; *) echo FOREIGN_DOMAIN >&2; exit 91;; esac\n'
+    )
+    launchctl.chmod(0o755)
+    harness = tmp_path / "install.sh"
+    harness.write_text((ROOT / "scripts/launchd/install.sh").read_text().replace("gui/$UID", "gui/424242"))
+    with migration_lock(home) if busy else nullcontext():
+        result = subprocess.run(
+            ["/bin/bash", str(harness), "unload", "watch"],
+            env=os.environ
+            | {
+                "HOME": str(home),
+                "BRAINLAYER_BIN": "/usr/bin/true",
+                "PYTHON_BIN": sys.executable,
+                "PATH": str(fake) + ":/usr/bin:/bin",
+            },
+            capture_output=True,
+            text=True,
+        )
+    if busy:
+        assert result.returncode != 0 and "migration busy" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+    assert journal.exists()
+
+
+@pytest.mark.parametrize("action,gate", [("consolidate", 0), ("consolidation-rollback", 0), ("consolidate", 1)])
+def test_shell_dispatch_uses_keg_interpreter_only_after_signatures(tmp_path, action, gate):
+    import shutil
+
+    keg = tmp_path / "Cellar/brainlayer/9.9.9"
+    scripts = keg / "libexec/venv/lib/python3.13/site-packages/brainlayer/launchd"
+    scripts.mkdir(parents=True)
+    shutil.copy(ROOT / "scripts/launchd/install.sh", scripts)
+    (keg / "bin").mkdir()
+    (keg / "libexec/venv/bin").mkdir()
+    opt = tmp_path / "opt/brainlayer"
+    opt.parent.mkdir()
+    opt.symlink_to(keg)
+    python = keg / "libexec/venv/bin/python"
+    python.write_text(
+        f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["DISPATCH"]).write_text(json.dumps(sys.argv[1:]))\n'
+    )
+    binary = keg / "bin/brainlayer"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    verify = scripts / "release-verify-signatures.sh"
+    verify.write_text(f"#!/bin/sh\nexit {gate}\n")
+    for path in (python, binary, verify):
+        path.chmod(0o755)
+    dispatch = tmp_path / "dispatch.json"
+    result = subprocess.run(
+        ["/bin/bash", str(scripts / "install.sh"), action],
+        env=os.environ
+        | {"HOME": str(tmp_path / "home"), "DISPATCH": str(dispatch), "BRAINLAYER_LAUNCHD_DOMAIN": DOMAIN},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == gate, result.stderr
+    if gate:
+        assert not dispatch.exists()
+    else:
+        args = json.loads(dispatch.read_text())
+        assert args[:3] == ["-m", "brainlayer.launchd_install", action]
+        assert args[args.index("--domain") + 1] == DOMAIN
+        if action == "consolidate":
+            assert args[args.index("--python") + 1] == str(opt / "libexec/venv/bin/python")
+            assert args[args.index("--keg") + 1] == str(keg)
+
+
+def test_legacy_install_blocks_concurrent_consolidation_during_preflight(tmp_path):
+    import shutil
+
+    home, fake = tmp_path / "home", tmp_path / "bin"
+    fake.mkdir()
+    templates = tmp_path / "launchd"
+    shutil.copytree(ROOT / "scripts/launchd", templates)
+    harness = templates / "install.sh"
+    harness.write_text(harness.read_text().replace("gui/$UID", "gui/424242"))
+    envfile = home / ".config/brainlayer/brainlayer.env"
+    envfile.parent.mkdir(parents=True)
+    envfile.write_text("BRAINLAYER_LAUNCHD_WATCH_ENABLED=1\n")
+    journal = home / ".local/share/brainlayer/supervisor/migration.json"
+    contender = tmp_path / "contender.py"
+    contender.write_text(
+        f"import fcntl,os\nfrom pathlib import Path\nfd=os.open({str(home)!r},os.O_RDONLY|os.O_DIRECTORY)\ntry: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: raise SystemExit('CONCURRENT_MIGRATION_REFUSED')\npath=Path({str(journal)!r}); path.parent.mkdir(mode=0o700,parents=True,exist_ok=True); path.write_text('{{\"phase\":\"migrated\"}}'); path.chmod(0o600)\n"
+    )
+    (fake / "uname").write_text(f'#!/bin/sh\n/usr/bin/python3 "{contender}"\necho Linux\n')
+    (fake / "launchctl").write_text("#!/bin/sh\necho FORBIDDEN_LAUNCHCTL >&2\nexit 91\n")
+    for path in fake.iterdir():
+        path.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", str(harness), "watch"],
+        env=os.environ
+        | {
+            "HOME": str(home),
+            "PATH": str(fake) + ":/usr/bin:/bin",
+            "BRAINLAYER_BIN": "/usr/bin/true",
+            "PYTHON_BIN": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "CONCURRENT_MIGRATION_REFUSED" in result.stderr
+    assert not journal.exists()

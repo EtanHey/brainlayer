@@ -2,7 +2,9 @@
 # Install BrainLayer launchd plists for auto-indexing and maintenance jobs.
 #
 # Usage:
-#   ./scripts/launchd/install.sh              # Install all
+#   ./scripts/launchd/install.sh consolidate # Explicit migration to named launchers
+#   ./scripts/launchd/install.sh consolidation-rollback # Restore journaled legacy jobs
+#   ./scripts/launchd/install.sh              # Install all legacy jobs
 #   ./scripts/launchd/install.sh index        # Install indexing only
 #   ./scripts/launchd/install.sh watch        # Install watcher only
 #   ./scripts/launchd/install.sh drain        # Install queue drain only
@@ -227,16 +229,98 @@ fi
 
 BRAINLAYER_INSTALL_ACTION="${1:-all}"
 launchd_install_usage() {
-    echo "Usage: $0 [index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load <name>|unload <name>|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
+    echo "Usage: $0 [consolidate|consolidation-rollback|index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load <name>|unload <name>|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove]"
 }
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
+    consolidate|consolidation-rollback|index|t3-ingest|watch|decay|drain|hotlane|hotlane-brainbar|repair-fts|load|unload|checkpoint|backup|jsonl|jsonl-backup|maintenance|maintenance-nightly|maintenance-weekly|health-check|log-cap|observability|tier0|tier0-watchdog|throughput-watchdog|fleet|fleet-watchdog|fleet-watchdog-quiesce|fleet-watchdog-resume|p0-counter|all|remove)
         ;;
     *)
         launchd_install_usage
         exit 1
         ;;
+esac
+
+# A journal includes unfinished/reverting states: fail closed before any legacy mutation.
+case "$BRAINLAYER_INSTALL_ACTION" in
+    consolidate|consolidation-rollback) ;;
+    *)
+        BRAINLAYER_MIGRATION_JOURNAL="$HOME/.local/share/brainlayer/supervisor/migration.json"
+        if [ -e "$BRAINLAYER_MIGRATION_JOURNAL" ] || [ -L "$BRAINLAYER_MIGRATION_JOURNAL" ]; then
+            if ! /usr/bin/python3 -c '
+import json, os, stat, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+if path.resolve() != path.absolute():
+    raise SystemExit("linked journal path refused")
+fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+with os.fdopen(fd, "rb") as stream:
+    info = os.fstat(stream.fileno())
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
+        raise SystemExit("journal custody refused")
+    if json.load(stream).get("phase") not in {"reverted", "rolled_back"}:
+        raise SystemExit("supervisor-owned or unknown journal phase")
+' "$BRAINLAYER_MIGRATION_JOURNAL"; then
+                echo "ERROR: supervisor migration owns or cannot verify these jobs; use consolidate or consolidation-rollback" >&2
+                exit 1
+            fi
+        fi
+        ;;
+esac
+
+case "$BRAINLAYER_INSTALL_ACTION" in
+    consolidate|consolidation-rollback) ;;
+    *)
+# Serialize legacy mutations with migration/revert, and re-enter so the phase guard
+# runs again under HOME-directory custody, plus the migration lock when present.
+# Directory locking avoids creating runtime roots during legacy teardown.
+if [ -z "${BRAINLAYER_LEGACY_INSTALL_FD:-}" ]; then
+    exec /usr/bin/python3 - "$0" "$@" <<'PY_GUARD'
+import fcntl, os, stat, subprocess, sys
+from pathlib import Path
+home = Path.home()
+if home.resolve() != home.absolute():
+    raise SystemExit("linked installer custody refused")
+fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+info = os.fstat(fd)
+if info.st_uid != os.getuid() or info.st_mode & 0o022:
+    raise SystemExit("installer HOME custody refused")
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit("migration busy; legacy installer refused")
+inherited = [fd]
+control = home / ".local/share/brainlayer/supervisor"
+if control.exists():
+    if control.resolve() != control.absolute() or control.stat().st_mode & 0o077:
+        raise SystemExit("migration custody refused")
+    lock = os.open(control / "migration.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    info = os.fstat(lock)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
+        raise SystemExit("migration lock custody refused")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("migration busy; legacy installer refused")
+    inherited.append(lock)
+env = dict(os.environ, BRAINLAYER_LEGACY_INSTALL_FD=str(fd))
+raise SystemExit(subprocess.call(["/bin/bash", *sys.argv[1:]], env=env, pass_fds=tuple(inherited)))
+PY_GUARD
+fi
+/usr/bin/python3 - "$BRAINLAYER_LEGACY_INSTALL_FD" <<'PY_GUARD'
+import fcntl, os, stat, sys
+from pathlib import Path
+path = Path.home()
+fd = int(sys.argv[1])
+info, current = os.fstat(fd), os.stat(path, follow_symlinks=False)
+if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino) or not stat.S_ISDIR(info.st_mode):
+    raise SystemExit("inherited migration lock changed")
+if info.st_uid != os.getuid() or info.st_mode & 0o022:
+    raise SystemExit("inherited migration lock custody refused")
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+PY_GUARD
+
+    ;;
 esac
 
 find_release_verify_script() {
@@ -265,7 +349,7 @@ case "$BRAINLAYER_INSTALL_ACTION" in
 esac
 
 case "$BRAINLAYER_INSTALL_ACTION" in
-    remove|unload|load)
+    remove|unload|load|consolidation-rollback)
         ;;
     *)
         if [ "$(uname -s)" = "Darwin" ]; then
@@ -297,6 +381,25 @@ except RuntimeError as exc:
         fi
         mkdir -p "$LAUNCH_DIR" "$LOG_DIR" "$LOG_DIR/brainlayer" "$BRAINLAYER_LOG_DIR" "$BRAINLAYER_LIB_DIR"
         mkdir -p "$HOME/.brainlayer/logs" "$HOME/.brainlayer/queue"
+        ;;
+esac
+
+# Use the installed interpreter, never PATH's editable checkout. Signature verification above
+# also gates rollback; a broken native library must not start legacy writers either.
+case "$BRAINLAYER_INSTALL_ACTION" in
+    consolidate|consolidation-rollback)
+        consolidation_python="${BRAINLAYER_HOOK_PYTHON:-$BRAINLAYER_KEG_PYTHON}"
+        if [ -z "$consolidation_python" ] || [ ! -x "$consolidation_python" ]; then
+            echo "ERROR: consolidation requires keg python or an explicit BRAINLAYER_HOOK_PYTHON" >&2
+            exit 1
+        fi
+        if [ "$BRAINLAYER_INSTALL_ACTION" = consolidation-rollback ]; then
+            exec "$consolidation_python" -m brainlayer.launchd_install consolidation-rollback --home "$HOME" \
+                --domain "${BRAINLAYER_LAUNCHD_DOMAIN:-gui/$UID}"
+        fi
+        exec "$consolidation_python" -m brainlayer.launchd_install consolidate --home "$HOME" \
+            --domain "${BRAINLAYER_LAUNCHD_DOMAIN:-gui/$UID}" --templates "$SCRIPT_DIR" \
+            --env-file "$BRAINLAYER_ENV_FILE" --python "$consolidation_python" --keg "$BRAINLAYER_CURRENT_KEG"
         ;;
 esac
 
