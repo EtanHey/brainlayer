@@ -25,7 +25,7 @@ watch="import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',%r]); o
 drain=resistant % str(p/'drain')
 s=Supervisor({'watch':Component((sys.executable,'-c',watch),exit_timeout=1),
  'drain':Component((sys.executable,'-c',drain),exit_timeout=.15),
- 'off':Component((sys.executable,'-c',drain),enabled=False)},p/'control.sock',backoff=.3,guard_timeout=.4)
+ 'off':Component((sys.executable,'-c',drain),enabled=False)},p/'control.sock',backoff=.3)
 s.shutdown_timeout=.6
 s.stable_uptime=.3
 async def main():
@@ -113,8 +113,32 @@ def test_startup_reports_early_supervisor_death(native, monkeypatch):
         native[1]()
 
 
+def test_healthy_supervisor_survives_slow_custody_write(native, monkeypatch):
+    slow_journal = """
+import time
+from brainlayer.supervisor_guard import Custody
+save=Custody._save
+delayed=False
+def slow_save(custody):
+ global delayed
+ save(custody)
+ if custody.groups and not delayed:
+  delayed=True
+  time.sleep(.8)
+Custody._save=slow_save
+"""
+    monkeypatch.setattr(sys.modules[__name__], "BOOT", BOOT.replace("s=Supervisor(", slow_journal + "\ns=Supervisor("))
+    _, start, request = native
+    process, initial, _ = start()
+    assert request()["components"]["watch"]["pid"] == initial["watch"]["pid"]
+    process.terminate()
+    assert process.wait(timeout=2) == 0
+
+
 @pytest.mark.parametrize("death", [signal.SIGSTOP, signal.SIGKILL])
-def test_guard_recovers_permanent_freeze_or_parent_death(native, death):
+def test_guard_recovers_permanent_freeze_or_parent_death(native, death, monkeypatch):
+    # Only intentional freeze acceptance needs a subsecond heartbeat deadline.
+    monkeypatch.setattr(sys.modules[__name__], "BOOT", BOOT.replace("backoff=.3)", "backoff=.3,guard_timeout=.4)"))
     path, start, request = native
     process, before, _ = start()
     os.kill(process.pid, death)
