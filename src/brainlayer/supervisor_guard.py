@@ -347,6 +347,7 @@ def gated_spawn(argv, env, stdout, stderr, *, cwd=None, policy=None, extra_fds=(
         process = subprocess.Popen(
             (
                 sys.executable,
+                "-I",  # Stdlib-only helper: exclude package types.py and configured PYTHONPATH.
                 str(Path(__file__).with_name("supervisor_child.py")),
                 str(read),
                 json.dumps(policy or {}),

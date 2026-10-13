@@ -132,16 +132,6 @@
         "target": "importlib.util.resolve_name"
       }
     },
-    "0b32b74433f71712813d27deb707338717863e721dd73af7bbfab42b2fc6e2ac": {
-      "non_cloud_purpose": "Local absolute stdlib gated child helper, with inherited calendar lease/guard FDs plus cwd and per-child resource policy; starts only after durable owner custody. No cloud/model sender or automatic activation.",
-      "site": {
-        "call_sha256": "b8f23ac90b14720f8815e3a57f9d0b18660ab468812494e29cfde24aa2fef243",
-        "kind": "child_process",
-        "owner": "<module>.gated_spawn",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "0c654e2294ed2d641f58f0c5af693badb1b7490cb29c6460d5fb42945b5eac3c": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_probe.py <module>.controls requests.Session().send.",
       "site": {
@@ -2890,6 +2880,16 @@
         "owner": "<module>.hooks",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "92d8d95007a245b5fdea6cf96761943c2731b8b03b79524ddb444fd6b1d7c73d": {
+      "non_cloud_purpose": "Local gated child helper under the keg interpreter with isolated stdlib imports; preserves explicit exec argv/env, cwd, resource policy and inherited custody FDs. No TCP, cloud or model sender.",
+      "site": {
+        "call_sha256": "fdd2d62bf73c16188e29a8828e4b1603aa77b9a19123942fb4fa3aee87df56a3",
+        "kind": "child_process",
+        "owner": "<module>.gated_spawn",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "93b0dcb16c7188b3190271eb1f1af530f46e40b1b02afec61e67fa068e40699a": {

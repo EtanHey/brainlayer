@@ -54,16 +54,26 @@ def test_standard_policy_clears_inherited_background_in_private_child():
     assert result.returncode == 0 and result.stdout.strip() == "0", result.stderr
 
 
-def test_gate_preserves_calendar_fd_with_cwd_and_policy(tmp_path):
+@pytest.mark.parametrize("cold_imports", [False, True])
+def test_gate_preserves_calendar_fd_with_cwd_and_policy(tmp_path, monkeypatch, cold_imports):
+    import shlex
+
     from brainlayer.supervisor_guard import gated_spawn
 
+    python = sys.executable
+    if cold_imports:
+        wrapper = tmp_path / "cold-python"
+        wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(python)} -S "$@"\n')
+        wrapper.chmod(0o700)
+        monkeypatch.setattr(sys, "executable", str(wrapper))
     read, write = os.pipe()
     process = None
-    code = "import os,resource,sys;os.write(int(sys.argv[1]),str(resource.getrlimit(resource.RLIMIT_NOFILE)[0]).encode());open('proof','w').write('cwd')"
+    (tmp_path / "configured_module.py").write_text("VALUE=17\n")
+    code = "import os,resource,sys,configured_module;os.write(int(sys.argv[1]),f'{resource.getrlimit(resource.RLIMIT_NOFILE)[0]}:{os.environ[\"PROOF\"]}:{configured_module.VALUE}'.encode());open('proof','w').write('cwd')"
     try:
         process, gate = gated_spawn(
-            (sys.executable, "-c", code, str(write)),
-            {},
+            (python, "-c", code, str(write)),
+            {"PYTHONPATH": str(tmp_path), "PROOF": "kept"},
             None,
             None,
             cwd=tmp_path,
@@ -74,7 +84,7 @@ def test_gate_preserves_calendar_fd_with_cwd_and_policy(tmp_path):
         os.write(gate, b"R")
         os.close(gate)
         assert process.wait(timeout=3) == 0
-        assert os.read(read, 100) == b"4096" and (tmp_path / "proof").read_text() == "cwd"
+        assert os.read(read, 100) == b"4096:kept:17" and (tmp_path / "proof").read_text() == "cwd"
     finally:
         os.close(read)
         if process and process.poll() is None:
