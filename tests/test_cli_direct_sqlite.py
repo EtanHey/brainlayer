@@ -68,7 +68,7 @@ def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT, tim
                         timed_out = True
                         raise
         finally:
-            if cli.poll() is None or timed_out:
+            if cli.poll() is None or timed_out or seen:
                 # This group was created by this Popen, never selected by a name pattern.
                 try:
                     os.killpg(cli.pid, signal.SIGKILL)
@@ -163,15 +163,27 @@ def test_cli_checks_ignore_an_outside_tree_daemon(tmp_path, check):
         dummy.wait(timeout=5)
 
 
-def test_cli_check_detects_its_own_daemon_descendant():
+def test_cli_check_detects_and_cleans_its_exited_parent_daemon(tmp_path):
+    pid_file = tmp_path / "child.pid"
     code = (
         "import subprocess, sys, time\n"
-        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', 'com.brainlayer.daemon'])\n"
-        "try: time.sleep(.3)\n"
-        "finally: child.terminate(); child.wait()\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'com.brainlayer.daemon'], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "open(sys.argv[1], 'w').write(str(child.pid))\n"
+        "time.sleep(.3)\n"
     )
-    with pytest.raises(AssertionError, match="CLI spawned daemon"):
-        _run_cli([sys.executable, "-c", code], env=os.environ.copy())
+    try:
+        with pytest.raises(AssertionError, match="CLI spawned daemon"):
+            _run_cli([sys.executable, "-c", code, str(pid_file)], env=os.environ.copy())
+        child_pid = int(pid_file.read_text())
+        state = subprocess.run(["/bin/ps", "-p", str(child_pid), "-o", "stat="], capture_output=True, text=True)
+        assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
+    finally:
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
 
 def test_cli_timeout_does_not_wait_on_descendants_inheriting_output():
