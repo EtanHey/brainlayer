@@ -66,15 +66,16 @@ def test_renderer_refuses_nonexistent_interpreter(setup):
         rendered_launchers(ROOT / "scripts/launchd", setup[0], setup[0] / "missing/python", setup[2])
 
 
-def test_preflight_env_off_overrides_enabled_label(setup):
+@pytest.mark.parametrize("custom", [False, True])
+def test_preflight_env_off_overrides_enabled_label(setup, custom):
     from brainlayer.consolidation_plan import collect_legacy
 
-    # The actual installed service key controls the gate, as in PR1282 R2.
+    selected = setup[2].with_name("watch.env") if custom else setup[2]
     path = setup[1] / f"{OLD}.plist"
     plist = plistlib.loads(path.read_bytes())
-    plist["EnvironmentVariables"] = {"BRAINLAYER_LAUNCHD_SERVICE": "watch"}
+    plist["EnvironmentVariables"] = dict(BRAINLAYER_LAUNCHD_SERVICE="watch", BRAINLAYER_ENV_FILE=str(selected))
     path.write_bytes(plistlib.dumps(plist))
-    setup[2].write_text("BRAINLAYER_LAUNCHD_WATCH_ENABLED=disabled\n")
+    selected.write_text("BRAINLAYER_LAUNCHD_WATCH_ENABLED=disabled\n")
     records, _ = collect_legacy(setup[1], setup[2], set())
     assert records[OLD]["enabled"] is False
 

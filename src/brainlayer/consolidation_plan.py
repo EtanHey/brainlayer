@@ -107,9 +107,10 @@ def collect_legacy(agents, env_file, disabled):
             if unsupported := set(plist) - PLIST_KEYS:
                 raise ValueError(f"unsupported resident plist keys: {sorted(unsupported)}")
             resource_policy(plist)
+            env = plist.get("EnvironmentVariables", {})
+            env_path = Path(env.get("BRAINLAYER_ENV_FILE") or env_file).expanduser()
             records[label] = {
-                "enabled": label not in disabled
-                and _legacy_configured(plist.get("EnvironmentVariables", {}), env_file),
+                "enabled": label not in disabled and _legacy_configured(env, env_path),
                 "plist": plist,
             }
     if not records:
