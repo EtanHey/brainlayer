@@ -5,6 +5,7 @@ import importlib.util
 import math
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -47,13 +48,14 @@ def _daemon_pids(cli_pgid: int) -> list[str]:
     return owned
 
 
-def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT):
+def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT, timeout: float = 10):
     # A fresh session isolates this CLI from production and other test processes.
     with subprocess.Popen(
         argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
     ) as cli:
         seen: set[str] = set()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + timeout
+        timed_out = False
         try:
             while True:
                 seen.update(_daemon_pids(cli.pid))
@@ -63,11 +65,16 @@ def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT):
                     break
                 except subprocess.TimeoutExpired:
                     if time.monotonic() >= deadline:
+                        timed_out = True
                         raise
         finally:
-            if cli.poll() is None:
-                cli.kill()
-                cli.communicate()
+            if cli.poll() is None or timed_out:
+                # This group was created by this Popen, never selected by a name pattern.
+                try:
+                    os.killpg(cli.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                cli.communicate(timeout=2)
         assert not seen, f"CLI spawned daemon descendants: {sorted(seen)}"
         return subprocess.CompletedProcess(argv, cli.returncode, stdout, stderr)
 
@@ -165,6 +172,18 @@ def test_cli_check_detects_its_own_daemon_descendant():
     )
     with pytest.raises(AssertionError, match="CLI spawned daemon"):
         _run_cli([sys.executable, "-c", code], env=os.environ.copy())
+
+
+def test_cli_timeout_does_not_wait_on_descendants_inheriting_output():
+    code = (
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'com.brainlayer.daemon'])\n"
+        "time.sleep(10)\n"
+    )
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_cli([sys.executable, "-c", code], env=os.environ.copy(), timeout=0.1)
+    assert time.monotonic() - started < 2
 
 
 def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
