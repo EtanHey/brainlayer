@@ -9,11 +9,17 @@ import stat
 from pathlib import Path
 
 from .component_jobs import _legacy_configured
-from .hook_python import is_pinned_interpreter
+from .hook_python import DEFAULT_KEG_PYTHON, HOOK_PYTHON_ENV, is_pinned_interpreter
 from .supervisor_adapters import ALIASES, ARCHIVED
 from .supervisor_jobs import PLIST_KEYS, resource_policy
 
 NEW = ("com.brainlayer.daemon", "com.brainlayer.maintenance")
+# Setuptools' standard shim is the sole trusted executable .pth line.
+DISTUTILS_PTH = (
+    "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; "
+    "enabled and __import__('_distutils_hack').add_shim();"
+)
+UNMANAGED = frozenset({"com.brainlayer.brainbar", "com.brainlayer.brainbar-daemon", "com.mcplayer.brainlayer-proxy"})
 REVIVERS = frozenset(
     "com.brainlayer.health-check com.brainlayer.throughput-watchdog "
     "com.brainlayer.tier0-watchdog com.etanhey.brainlayer-fleet-watchdog".split()
@@ -44,14 +50,43 @@ def disabled_labels(text):
     return {label for label, value in entries if value in {"true", "disabled"}}
 
 
-def rendered_launchers(templates, home, python, env_file):
+def interpreter_site(python):
+    python = Path(python)
     if (
         not is_pinned_interpreter(shlex.quote(str(python)))
-        or not Path(python).is_file()
+        or str(python) not in {DEFAULT_KEG_PYTHON, os.environ.get(HOOK_PYTHON_ENV)}
+        or not python.is_file()
         or not os.access(python, os.X_OK)
     ):
-        raise ValueError("consolidated interpreter must be an explicit executable keg/venv python")
-    root = str(Path(python).parents[3])
+        raise ValueError("consolidated interpreter must be executable keg python or BRAINLAYER_HOOK_PYTHON override")
+    sites = list((python.parent.parent / "lib").glob("python*/site-packages"))
+    if len(sites) != 1:
+        raise ValueError(f"interpreter site-packages missing or ambiguous: {python}")
+    site = sites[0]
+    if site.is_symlink():
+        raise ValueError(f"linked site-packages refused: {site}")
+    for path in site.iterdir():
+        if "editable" in path.name.lower():
+            raise ValueError(f"editable interpreter refused: {path}")
+        if path.suffix == ".pth":
+            for line in read_owned(path).decode().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(("import ", "import\t")):
+                    if path.name == "distutils-precedence.pth" and line == DISTUTILS_PTH:
+                        continue
+                    raise ValueError(f"untrusted executable interpreter .pth refused: {path}")
+                if "editable" in line.lower() or (not (site / line).resolve().is_relative_to(site.resolve())):
+                    raise ValueError(f"editable/external interpreter path refused: {path}")
+    package = site / "brainlayer"
+    if not package.is_dir() or package.is_symlink():
+        raise ValueError(f"interpreter requires an installed brainlayer package: {site}")
+    return site
+
+
+def rendered_launchers(templates, home, python, env_file):
+    root = str(interpreter_site(python))
     values = {
         "__HOME__": str(home),
         "__BRAINLAYER_PYTHON__": str(python),
@@ -89,6 +124,18 @@ def rendered_launchers(templates, home, python, env_file):
 def collect_legacy(agents, env_file, disabled):
     """Snapshot every owned legacy file/marker and reject unsupported resident policies."""
     records, files = {}, {}
+    known = set(ALIASES) | ARCHIVED | UNMANAGED
+    for path in sorted(agents.iterdir()):
+        name = path.name.removesuffix(".loaded-keg")
+        if "brainlayer" not in name or not (name.endswith(".plist") or path.name.endswith(".loaded-keg")):
+            continue
+        label = name.removesuffix(".plist")
+        if label not in known:
+            raise ValueError(f"unknown BrainLayer label {label}: {path}")
+        if path.name.endswith(".plist"):
+            plist = plistlib.loads(read_owned(path))
+            if not isinstance(plist, dict) or plist.get("Label") != label:
+                raise ValueError(f"legacy plist identity mismatch: {path}")
     for label in sorted(set(ALIASES) | ARCHIVED):
         path = agents / f"{label}.plist"
         if not os.path.lexists(path):
