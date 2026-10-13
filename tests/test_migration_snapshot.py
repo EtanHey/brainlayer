@@ -135,11 +135,25 @@ def test_snapshot_includes_archived_load_disable_and_exact_bytes(setup):
         assert journal.stat().st_mode & 0o777 == 0o600
         assert json.loads(journal.read_bytes()) == snapshot
     restored = json.loads(json.dumps(snapshot))
-    assert restored["states"][archived] == {"loaded": False, "disabled": True, "pid": None}
-    assert restored["states"][OLD] == {"loaded": True, "disabled": False, "pid": 4242}
+    assert restored["states"][archived] == {
+        "loaded": False,
+        "disabled": True,
+        "disabled_override": "disabled",
+        "pid": None,
+        "plist_present": True,
+    }
+    assert restored["states"][OLD] == {
+        "loaded": True,
+        "disabled": False,
+        "disabled_override": None,
+        "pid": 4242,
+        "plist_present": True,
+    }
     assert bytes.fromhex(restored["files"][path.name]) == raw
     assert bytes.fromhex(restored["files"][f"{OLD}.plist.loaded-keg"]) == b"previous-keg\n"
-    assert len([argv for argv in calls if argv[1] == "print"]) == 3
+    from brainlayer.consolidation_plan import ALIASES, ARCHIVED, NEW
+
+    assert len([argv for argv in calls if argv[1] == "print"]) == len(set(ALIASES) | ARCHIVED | set(NEW))
 
 
 @pytest.mark.parametrize(
@@ -187,3 +201,89 @@ def test_snapshot_publication_refuses_symlinked_parent(tmp_path):
     with pytest.raises(ValueError, match="symlink"):
         write_new_file(linked / "migration.json", b"new journal\n")
     assert not (actual / "migration.json").exists()
+
+
+def snapshot(setup, loaded=(), overrides=""):
+    from brainlayer.consolidation_plan import snapshot_legacy
+
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        assert argv[1] in {"print", "print-disabled"} and argv[2].startswith(DOMAIN)
+        text = f"disabled services = {{\n{overrides}\n}}" if argv[1] == "print-disabled" else "state = waiting"
+        rc = 0 if argv[1] == "print-disabled" or argv[2].split("/")[-1] in loaded else 113
+        return subprocess.CompletedProcess(argv, rc, text if rc == 0 else "", "Could not find service" if rc else "")
+
+    return snapshot_legacy(setup[1], setup[2], DOMAIN, run), calls
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+def test_effective_enabled_requires_loaded_but_not_pid(setup, loaded):
+    from brainlayer.supervisor_jobs import load_components
+
+    result, _ = snapshot(setup, [OLD] if loaded else [])
+    assert result["components"][OLD]["enabled"] is loaded
+    assert result["states"][OLD]["pid"] is None
+    manifest = setup[0] / "jobs.json"
+    manifest.write_text(json.dumps(result["components"]))
+    manifest.chmod(0o600)
+    assert load_components(manifest, setup[0] / "socket")["watch"].enabled is loaded
+
+
+def test_all_owned_labels_journaled_even_loaded_without_plist(setup):
+    from brainlayer.consolidation_plan import ALIASES, ARCHIVED, NEW
+
+    orphan = "com.brainlayer.enrichment"
+    result, calls = snapshot(setup, [orphan], f'"{OLD}" => false\n"{orphan}" => true')
+    assert set(result["states"]) == set(ALIASES) | ARCHIVED | set(NEW)
+    assert len(calls) == 1 + len(result["states"])
+    assert result["states"][orphan] == {
+        "loaded": True,
+        "disabled": True,
+        "disabled_override": "disabled",
+        "pid": None,
+        "plist_present": False,
+    }
+    assert result["states"][OLD]["disabled_override"] == "enabled"
+    assert result["states"][NEW[0]]["disabled_override"] is None
+    assert result["states"][NEW[0]]["loaded"] is False
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_consolidated_replay_snapshots_new_bytes_and_states(setup, partial):
+    from brainlayer.consolidation_plan import NEW
+
+    for path in setup[1].iterdir():
+        path.unlink()
+    labels = NEW[:1] if partial else NEW
+    if partial:
+        (setup[1] / f"{NEW[1]}.plist.loaded-keg").write_bytes(b"partial-keg\n")
+    for label in labels:
+        (setup[1] / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label}))
+        (setup[1] / f"{label}.plist.loaded-keg").write_bytes(b"old-keg\n")
+    result, _ = snapshot(setup, labels)
+    assert result["components"] == {}
+    for label in NEW:
+        assert result["states"][label]["plist_present"] is (label in labels)
+        assert result["states"][label]["loaded"] is (label in labels)
+    assert {name: bytes.fromhex(raw) for name, raw in result["files"].items()} == {
+        path.name: path.read_bytes() for path in setup[1].iterdir()
+    }
+
+
+def test_missing_env_is_not_runnable_and_has_reason(setup):
+    setup[2].unlink()
+    result, _ = snapshot(setup, [OLD])
+    assert result["components"][OLD]["enabled"] is False
+    assert "missing env file" in result["components"][OLD]["reason"]
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o770, 0o777])
+def test_snapshot_publication_refuses_nonprivate_directory(tmp_path, mode):
+    from brainlayer.migration_custody import write_new_file
+
+    tmp_path.chmod(mode)
+    with pytest.raises(ValueError, match="0700"):
+        write_new_file(tmp_path / "migration.json", b"private env")
+    assert list(tmp_path.iterdir()) == []

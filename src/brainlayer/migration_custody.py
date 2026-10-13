@@ -16,8 +16,8 @@ def write_new_file(path, content, mode=0o600):
     directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         info = os.fstat(directory)
-        if info.st_uid != os.getuid():
-            raise ValueError("journal directory must be owned")
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ValueError("journal directory must be owned and mode 0700")
         name = ".migration-" + uuid.uuid4().hex
         fd = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode, dir_fd=directory)
         try:
