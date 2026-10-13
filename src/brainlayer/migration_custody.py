@@ -14,6 +14,12 @@ def write_new_file(path, content, mode=0o600):
 
 def write_launch_agent(path, content):
     """Publish only a consolidated launcher/marker in the owned LaunchAgents dir."""
+    validate_launch_agent(path)
+    _write_exclusive(path, content, 0o644, private_parent=False)
+
+
+def validate_launch_agent(path):
+    """Validate a known target before staging or publishing its bytes."""
     from .consolidation_plan import NEW
 
     if (
@@ -22,7 +28,6 @@ def write_launch_agent(path, content):
         or path.name not in {label + suffix for label in NEW for suffix in (".plist", ".plist.loaded-keg")}
     ):
         raise ValueError("refusing non-consolidated LaunchAgent publication")
-    _write_exclusive(path, content, 0o644, private_parent=False)
 
 
 def _write_exclusive(path, content, mode, *, private_parent):
