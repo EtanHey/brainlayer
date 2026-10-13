@@ -34,7 +34,9 @@ def test_shape_matcher_does_not_clobber_third_party_servers_via_heuristics():
 def test_brainlayer_stdio_bridge_is_acceptable_without_migration():
     from brainlayer.mcp_socket_config import needs_socket_migration
 
-    assert not needs_socket_migration("brainlayer", {"command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"})
+    assert not needs_socket_migration(
+        "brainlayer", {"command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"}
+    )
     assert needs_socket_migration(
         "brainlayer",
         {"command": "/Users/me/.bun/bin/bun", "args": ["/Users/me/.local/bin/brainlayer-mcp-stdio-bridge"]},
