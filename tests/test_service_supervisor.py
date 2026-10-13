@@ -77,7 +77,20 @@ def native():
             process = subprocess.Popen((sys.executable, "-c", BOOT, str(path)), stderr=output)
             output.close()
             processes.append(process)
-            eventually(lambda: all((path / n).exists() for n in ("descendant", "drain", "guard")))
+
+            def ready():
+                assert process.poll() is None
+                return all((path / n).exists() for n in ("descendant", "drain", "guard"))
+
+            try:
+                # Interpreter/import startup under CI load is not a lifecycle deadline.
+                eventually(ready, timeout=10)
+            except AssertionError:
+                missing = [n for n in ("descendant", "drain", "guard") if not (path / n).exists()]
+                pytest.fail(
+                    f"supervisor startup failed: returncode={process.poll()}, missing={missing}, "
+                    f"stderr={(path / 'errors').read_text()}"
+                )
             snapshot = request()["components"]
             return process, snapshot, int((path / "guard").read_text())
 
@@ -92,6 +105,12 @@ def native():
                 if exists(group):
                     os.killpg(group, signal.SIGKILL)
             eventually(lambda: not any(exists(g) for g in groups))
+
+
+def test_startup_reports_early_supervisor_death(native, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "BOOT", "raise RuntimeError('injected startup failure')")
+    with pytest.raises(pytest.fail.Exception, match="(?s)returncode=1.*injected startup failure"):
+        native[1]()
 
 
 @pytest.mark.parametrize("death", [signal.SIGSTOP, signal.SIGKILL])
