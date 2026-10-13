@@ -29,7 +29,7 @@ def test_real_child_has_file_limit_nice_background_and_io_policy(tmp_path):
     from brainlayer.supervisor_guard import gated_spawn
 
     policy = dict(SoftResourceLimits={"NumberOfFiles": 4096}, Nice=10, LowPriorityIO=True, ProcessType="Background")
-    code = "import os,resource,ctypes,json;print(json.dumps([resource.getrlimit(resource.RLIMIT_NOFILE)[0],os.getpriority(0,0),os.getpriority(4,0),ctypes.CDLL(None).getiopolicy_np(0,0)]))"
+    code = "import os,resource,ctypes,json;lib=ctypes.CDLL(None);values=[resource.getrlimit(resource.RLIMIT_NOFILE)[0],os.getpriority(0,0),os.getpriority(4,0),lib.getiopolicy_np(0,0)];os.setpriority(4,0,0);lib.setiopolicy_np(0,0,0);print(json.dumps(values))"
     log = tmp_path / "policy"
     with log.open("wb") as output:
         process, gate = gated_spawn(
@@ -42,16 +42,25 @@ def test_real_child_has_file_limit_nice_background_and_io_policy(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Darwin background inheritance requires macOS")
-def test_standard_policy_clears_inherited_background_in_private_child():
+@pytest.mark.parametrize(
+    "policy,expected",
+    [({"ProcessType": "Standard", "LowPriorityIO": False}, [0, 0]), ({"LowPriorityIO": False}, [1, 0])],
+)
+def test_explicit_policy_clears_inherited_io_in_private_child(policy, expected):
     import subprocess
 
     from brainlayer import supervisor_child
 
-    code = "import os,runpy,sys; apply=runpy.run_path(sys.argv[1])['apply_policy']; apply({'ProcessType':'Background','LowPriorityIO':True}); apply({'ProcessType':'Standard','LowPriorityIO':False});print(os.getpriority(4,0))"
+    # Measure before normalizing this finite probe's scheduling priority for cleanup.
+    code = "import os,runpy,sys,json,ctypes; apply=runpy.run_path(sys.argv[1])['apply_policy']; apply({'ProcessType':'Background','LowPriorityIO':True}); apply(json.loads(sys.argv[2]));values=[os.getpriority(4,0),ctypes.CDLL(None).getiopolicy_np(0,0)];apply({'ProcessType':'Standard','LowPriorityIO':False});print(json.dumps(values))"
     result = subprocess.run(
-        (sys.executable, "-c", code, supervisor_child.__file__), capture_output=True, text=True, timeout=5
+        (sys.executable, "-c", code, supervisor_child.__file__, json.dumps(policy)),
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
-    assert result.returncode == 0 and result.stdout.strip() == "0", result.stderr
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == expected
 
 
 @pytest.mark.parametrize("cold_imports", [False, True])

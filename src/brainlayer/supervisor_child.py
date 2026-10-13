@@ -15,7 +15,7 @@ def apply_policy(policy):
     if "Nice" in policy:
         os.setpriority(os.PRIO_PROCESS, 0, policy["Nice"])
     background, low_io = policy.get("ProcessType") == "Background", policy.get("LowPriorityIO", False)
-    if background or low_io or sys.platform == "darwin" and "ProcessType" in policy:
+    if background or low_io or sys.platform == "darwin" and ("ProcessType" in policy or "LowPriorityIO" in policy):
         if sys.platform != "darwin":
             raise RuntimeError("Darwin ProcessType/LowPriorityIO unavailable on this platform")
         # sys/resource.h: PRIO_DARWIN_PROCESS=4, PRIO_DARWIN_BG=0x1000.
