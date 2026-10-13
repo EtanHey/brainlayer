@@ -158,6 +158,11 @@ def _migrate(
 
     started = {}
 
+    def remember_started(label, current):
+        started[label] = current
+        if current["pid"] is not None:
+            runtime.observed_pids.setdefault(label, set()).add(current["pid"])
+
     def bootstrap(label, path):
         if label not in disabled:
             if label in NEW and runtime.observe(label)["loaded"]:
@@ -172,13 +177,13 @@ def _migrate(
                 if label in NEW and not isinstance(failure, Exception) and read_owned(path) == expected_definition:
                     current = runtime.observe(label)
                     if current["loaded"]:
-                        started[label] = current
+                        remember_started(label, current)
                 raise
             current = runtime.observe(label)
             if not current["loaded"]:
                 raise RuntimeError(f"replacement did not load: {label}")
             if label in NEW:
-                started[label] = current
+                remember_started(label, current)
 
     def verify_daemon():
         if NEW[0] not in disabled:
@@ -275,7 +280,7 @@ def _migrate(
                 path = agents / f"{label}.plist"
                 if not os.path.lexists(path) or read_owned(path) != publications[path]:
                     raise RuntimeError(f"unowned replacement prevents rollback: {label}")
-                if not recovering and (label not in started or current != started[label]):
+                if not recovering and label not in started:
                     raise RuntimeError(f"unowned replacement prevents rollback: {label}")
                 stop(label, current)
             else:
@@ -398,7 +403,7 @@ def _migrate(
                 kept = False
                 current = runtime.observe(NEW[0])
                 if NEW[0] in started:
-                    stop(NEW[0], started[NEW[0]])
+                    stop(NEW[0], current)
                 elif current["loaded"]:
                     if not stopped_daemon and current == initial_state:
                         kept = True

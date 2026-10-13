@@ -239,6 +239,59 @@ def test_pinned_daemon_keeps_venv_python_symlink_and_actual_prefix(setup, monkey
     assert prefix.strip() == str(venv)
 
 
+class Relaunched(Launchctl):
+    daemon_pid = 10000
+
+    def __call__(self, argv):
+        if argv[1] == "bootstrap" and Path(argv[3]).stem == NEW:
+            self.daemon_pid += 1
+        result = super().__call__(argv)
+        if argv[1] == "print" and argv[2].endswith("/" + NEW) and result.returncode == 0:
+            result.stdout = f"state = running\npid = {self.daemon_pid}"
+        return result
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_readiness_failure_reaps_owned_launchd_replacement_after_pid_rotation(setup, restart):
+    runner = Relaunched()
+    if restart:
+        invoke(setup, runner)
+    checks = []
+
+    def verify():
+        checks.append(runner.daemon_pid)
+        if len(checks) == 1:
+            runner.daemon_pid += 1  # launchd KeepAlive restarted the same owned definition.
+            raise RuntimeError("replacement not ready")
+
+    with pytest.raises(RuntimeError, match="restored"):
+        invoke(setup, runner, "keg2" if restart else "keg1", verify=verify)
+    journal = json.loads((setup[0] / ".local/share/brainlayer/supervisor/migration.json").read_bytes())
+    assert journal["phase"] == ("migrated" if restart else "rolled_back")
+    assert "recovery_refusal" not in journal
+    assert runner.loaded == ({NEW, CALENDAR} if restart else {OLD, FLEET})
+    if restart:
+        assert journal["keg"] == "keg1" and len(checks) == 2
+
+
+def test_pid_rotation_still_waits_for_the_prior_owned_generation_before_legacy_bootstrap(setup):
+    from tests.test_migration_runtime import Clock
+
+    runner = Relaunched()
+    prior = []
+
+    def verify():
+        prior.append(runner.daemon_pid)
+        runner.daemon_pid += 1
+        raise RuntimeError("replacement not ready")
+
+    with pytest.raises(RuntimeError, match="rollback incomplete"):
+        invoke(setup, runner, verify=verify, alive=lambda pid: pid in prior, clock=Clock())
+    assert prior
+    assert ("bootout", f"gui/424242/{NEW}") in runner.calls
+    assert not any(call[0] == "bootstrap" and Path(call[2]).stem in {OLD, FLEET} for call in runner.calls)
+
+
 PROBE = r"""
 import json, os, plistlib, signal, subprocess, sys
 from pathlib import Path
