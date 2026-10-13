@@ -5116,6 +5116,16 @@
         "target": "subprocess.run"
       }
     },
+    "f812a936f606622dc89a55d99e9d89ef30fe9c8c3bfb10a9acb43cff75f292ea": {
+      "non_cloud_purpose": "Owner-only local AF_UNIX SupervisorCommands status callback passed to the migration readiness gate; parent 0700, endpoint 0600 and peer UID are checked before sending component status JSON. No TCP, remote endpoint or cloud/model sender.",
+      "site": {
+        "call_sha256": "530420bac71aa52a48e9644e3015a326af512238f1afcb22fe79c634039d8cfc",
+        "kind": "callable_reference",
+        "owner": "<module>._migrate.verify_daemon",
+        "path": "src/brainlayer/launchd_consolidation.py",
+        "target": "client.request"
+      }
+    },
     "fa3f5b16bf754ffb6681c1b70e3c8ac635902a35a1b96c60748e62969e1ad363": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/dedupe_merge.py <module>._detect_git_sha subprocess.CalledProcessError.",
       "site": {
