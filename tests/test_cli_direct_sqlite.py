@@ -35,7 +35,7 @@ def test_cli_stats_p95_budget_allows_shared_ci_runner_variance(monkeypatch: pyte
 
 def _daemon_pids(cli_pgid: int) -> list[str]:
     result = subprocess.run(
-        ["/bin/ps", "-axo", "pid=,pgid=,command="],
+        ["/bin/ps", "-ww", "-axo", "pid=,pgid=,command="],
         capture_output=True,
         text=True,
         check=True,
@@ -163,11 +163,12 @@ def test_cli_checks_ignore_an_outside_tree_daemon(tmp_path, check):
         dummy.wait(timeout=5)
 
 
-def test_cli_check_detects_and_cleans_its_exited_parent_daemon(tmp_path):
+def test_cli_check_detects_and_cleans_its_exited_parent_daemon(tmp_path, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
     pid_file = tmp_path / "child.pid"
     code = (
         "import subprocess, sys, time\n"
-        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'com.brainlayer.daemon'], "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'padding' * 30, 'com.brainlayer.daemon'], "
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
         "open(sys.argv[1], 'w').write(str(child.pid))\n"
         "time.sleep(.3)\n"
