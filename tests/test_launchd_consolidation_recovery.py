@@ -7,6 +7,7 @@ import plistlib
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -376,17 +377,55 @@ def scratch(root):
     return {path.name: path.read_bytes() for path in agents.iterdir()}
 
 
-def probe(root, keg, cut=0):
-    return subprocess.run(
-        [sys.executable, "-c", PROBE, str(root), keg, str(cut), str(ROOT)],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+@pytest.mark.parametrize("streams", [(b"partial output", b"stuck stderr"), ("partial output", "stuck stderr")])
+def test_probe_timeout_reports_exact_rerun_cut_and_journal(tmp_path, monkeypatch, streams):
+    journal = tmp_path / "home/.local/share/brainlayer/supervisor/migration.json"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({"phase": "migrating"}))
+
+    def timeout(argv, **kwargs):
+        assert kwargs["timeout"] == 30
+        raise subprocess.TimeoutExpired(argv, 30, output=streams[0], stderr=streams[1])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    with pytest.raises(pytest.fail.Exception) as error:
+        probe(tmp_path, "keg2", context="keg-restart rerun cut=356 after:os.rename")
+    message = str(error.value)
+    for detail in ("keg-restart rerun cut=356 after:os.rename", "30s", "migrating", "partial output", "stuck stderr"):
+        assert detail in message
+
+
+def probe(root, keg, cut=0, *, context="baseline"):
+    try:
+        return subprocess.run(
+            [sys.executable, "-c", PROBE, str(root), keg, str(cut), str(ROOT)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        journal = root / "home/.local/share/brainlayer/supervisor/migration.json"
+        try:
+            phase = json.loads(journal.read_bytes()).get("phase", "missing phase")
+        except (OSError, ValueError) as journal_error:
+            phase = f"unreadable: {journal_error}"
+
+        def tail(stream):
+            if isinstance(stream, bytes):
+                stream = stream.decode("utf-8", errors="replace")
+            return (stream or "")[-2000:]
+
+        pytest.fail(
+            f"probe exceeded 30s: {context}; journal phase={phase}; "
+            f"stdout={tail(error.stdout)!r}; stderr={tail(error.stderr)!r}",
+            pytrace=False,
+        )
 
 
 @pytest.mark.parametrize("restart", [False, True], ids=["first-install", "keg-restart"])
-def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, restart):
+@pytest.mark.parametrize("shard", range(32), ids=lambda shard: f"shard-{shard:02}")
+def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, restart, shard):
+    mode = "keg-restart" if restart else "first-install"
     baseline_root = tmp_path / "baseline"
     scratch(baseline_root)
     if restart:
@@ -396,17 +435,32 @@ def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, rest
     assert baseline.returncode == 0, baseline.stderr
     events = json.loads(baseline.stdout)["events"]
     assert len(events) > 100 and any("os.rename" in event for event in events) == (not restart)
+    cuts = [(cut, event) for cut, event in enumerate(events, 1) if (cut - 1) % 32 == shard]
+    assert 0 < len(cuts) <= 30, "increase shard count to retain the <=30-cut per-item bound"
     failures = []
     phases = {"rolled_back": 0, "migrated": 0}
-    for cut, event in enumerate(events, 1):
+    timings = []
+    for cut, event in cuts:
+        started = time.monotonic()
+        context = f"{mode} cut={cut} {event}"
         root = tmp_path / str(cut)
         originals = scratch(root)
         if restart:
-            first = probe(root, "keg1")
+            first = probe(root, "keg1", context=f"{context} setup")
             assert first.returncode == 0, first.stderr
-        killed = probe(root, "keg2" if restart else "keg1", cut)
+        killed = probe(root, "keg2" if restart else "keg1", cut, context=f"{context} kill")
         assert killed.returncode == -signal.SIGKILL, (cut, event, killed.stderr)
-        rerun = probe(root, "keg2" if restart else "keg1")
+        rerun_started = time.monotonic()
+        rerun = probe(root, "keg2" if restart else "keg1", context=f"{mode} rerun cut={cut} {event}")
+        timing = {
+            "mode": mode,
+            "cut": cut,
+            "boundary": event,
+            "rerun_seconds": time.monotonic() - rerun_started,
+            "total_seconds": time.monotonic() - started,
+        }
+        timings.append(timing)
+        print("CRASH_CUT " + json.dumps(timing), flush=True)
         if rerun.returncode:
             failures.append((cut, event, rerun.stderr[-500:]))
             continue
@@ -426,5 +480,19 @@ def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, rest
         assert journal["states"][OLD]["disabled_override"] == "enabled"
         assert journal["states"]["com.brainlayer.observability"]["disabled_override"] == "disabled"
         assert journal["states"][FLEET]["disabled_override"] is None
-    assert not failures, f"{len(failures)}/{len(events)} unrecovered cuts: {failures[:12]}"
-    print("CRASH_SWEEP " + json.dumps({"restart": restart, "cuts": len(events), "phases": phases, "violations": 0}))
+    assert not failures, f"{len(failures)}/{len(cuts)} unrecovered cuts: {failures[:12]}"
+    print(
+        "CRASH_SWEEP "
+        + json.dumps(
+            {
+                "mode": mode,
+                "shard": shard,
+                "cuts": len(cuts),
+                "all_cuts": len(events),
+                "phases": phases,
+                "violations": 0,
+                "slowest_rerun": max(timings, key=lambda timing: timing["rerun_seconds"]),
+            }
+        ),
+        flush=True,
+    )
