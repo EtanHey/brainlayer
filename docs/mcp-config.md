@@ -4,7 +4,8 @@ One MCP server: BrainBar on `/tmp/brainbar.sock`. Agents connect with the
 shipped reconnecting `brainlayer-mcp-stdio-bridge` (no Homebrew `socat`
 required; GUI hosts like Zed/VS Code/Claude Desktop do not have
 `/opt/homebrew/bin` on PATH). `socat STDIO UNIX-CONNECT:/tmp/brainbar.sock`
-is the documented manual alternative. The Python `brainlayer-mcp` entrypoint
+exits when BrainBar restarts and leaves persistent clients with a closed transport.
+The Python `brainlayer-mcp` entrypoint
 is deleted — do not wire it.
 
 Prerequisites:
@@ -24,8 +25,7 @@ Add this to Claude, Codex, Cursor, or Gemini MCP settings under `mcpServers`:
 }
 ```
 
-Manual alternative when you already have `socat` on PATH (Homebrew:
-`/opt/homebrew/bin/socat`):
+Legacy raw-socket form (doctor reports its restart risk; migrate persistent agent clients):
 
 ```json
 {
@@ -38,10 +38,11 @@ Manual alternative when you already have `socat` on PATH (Homebrew:
 }
 ```
 
-`brainlayer setup --migrate-mcp` rewrites owned configs still pointing at the deleted
-`brainlayer-mcp` entrypoint to the socat socket form (backing up each file first). It matches by
-server name and leaves entries that already use socat **or** `brainlayer-mcp-stdio-bridge`
-untouched — so wiring the bridge yourself, as recommended above, is not undone by setup.
+`brainlayer setup --migrate-mcp` backs up and upgrades owned legacy and raw-socat entries
+to `brainlayer-mcp-stdio-bridge`. It preserves environment, timeouts, disabled state, and
+unrelated servers, and leaves existing bridge entries unchanged. Project `.mcp.json`
+can override the base Codex config, so those owned files are included. A thread whose
+transport has already closed needs a fresh MCP connection or session.
 
 ## Testing the MCP Server
 

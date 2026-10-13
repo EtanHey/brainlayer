@@ -152,8 +152,10 @@ def _strip_toml_table_assignments(body: str, keys: frozenset[str]) -> str:
     return "".join(out)
 
 
-def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
-    """Rewrite matching [mcp_servers.NAME] / [mcpServers.NAME] blocks to socket form."""
+def _rewrite_codex_mcp_servers_to_socket(
+    text: str, names: list[str], bridge_command: str = "brainlayer-mcp-stdio-bridge"
+) -> str:
+    """Rewrite owned MCP blocks to the reconnecting bridge, retaining subtables."""
     result = text
     for name in names:
         for table in ("mcp_servers", "mcpServers"):
@@ -165,18 +167,18 @@ def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
                 continue
             header, body = match.group(1), match.group(2)
             kept_lines = _strip_toml_table_assignments(body, _TOML_TRANSPORT_KEYS)
-            new_body = 'command = "socat"\nargs = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + kept_lines
+            new_body = f"command = {json.dumps(bridge_command)}\n" + kept_lines
             result = result[: match.start()] + header + new_body + result[match.end() :]
     return result
 
 
-def _rewrite_json_mcp_servers(payload: dict) -> bool:
+def _rewrite_json_mcp_servers(payload: dict, bridge_command: str) -> bool:
     changed = False
     servers = payload.get("mcpServers")
     if isinstance(servers, dict):
         for name, server in list(servers.items()):
             if needs_socket_migration(str(name), server):
-                servers[name] = socket_server_preserving(server)
+                servers[name] = socket_server_preserving(server, bridge_command=bridge_command)
                 changed = True
     projects = payload.get("projects")
     if isinstance(projects, dict):
@@ -188,7 +190,7 @@ def _rewrite_json_mcp_servers(payload: dict) -> bool:
                 continue
             for name, server in list(nested.items()):
                 if needs_socket_migration(str(name), server):
-                    nested[name] = socket_server_preserving(server)
+                    nested[name] = socket_server_preserving(server, bridge_command=bridge_command)
                     changed = True
     return changed
 
@@ -210,14 +212,14 @@ def migrate_legacy_mcp_configs(
     *,
     bridge_command: str | None = None,
 ) -> McpMigrationReport:
-    """Rewrite owned BrainLayer MCP entries (by server name) to the canonical socat form.
+    """Rewrite owned BrainLayer MCP entries to the shipped reconnecting bridge.
 
     Name-matcher: only ``mcpServers`` keys in ``BRAINLAYER_SERVER_NAMES`` are
-    rewritten when not already socat socket or ``brainlayer-mcp-stdio-bridge``.
+    rewritten unless already using ``brainlayer-mcp-stdio-bridge``.
     Each rewritten file is backed up under ~/.local/share/brainlayer/config-backups/.
     Unreadable/malformed inputs and failed writes are reported in ``skipped``.
     """
-    del bridge_command  # socket form is the only rewrite target
+    bridge_command = bridge_command or "brainlayer-mcp-stdio-bridge"
     changed: list[Path] = []
     skipped: list[tuple[Path, str]] = []
     paths = config_paths if config_paths is not None else get_default_mcp_config_paths()
@@ -238,7 +240,7 @@ def migrate_legacy_mcp_configs(
             names = _toml_servers_needing_migration(original_text)
             if not names:
                 continue
-            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names)
+            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names, bridge_command)
             if new_text == original_text:
                 skipped.append((path, f"TOML servers {names!r} need migration but table headers were not rewritten"))
                 continue
@@ -274,7 +276,7 @@ def migrate_legacy_mcp_configs(
         if not isinstance(payload, dict):
             skipped.append((path, "MCP config root must be a JSON object"))
             continue
-        if not _rewrite_json_mcp_servers(payload):
+        if not _rewrite_json_mcp_servers(payload, bridge_command):
             continue
 
         try:

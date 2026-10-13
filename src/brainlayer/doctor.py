@@ -49,6 +49,7 @@ from .launchd_primitive import (
     verify_launchd_label_loaded,
 )
 from .mcp_socket_config import (
+    is_canonical_socket_mcp_server,
     iter_json_mcp_servers,
     iter_toml_mcp_servers,
     mcp_server_public_summary,
@@ -66,9 +67,7 @@ DEFAULT_ROUNDTRIP_TIMEOUT_SECONDS = 60.0
 DEFAULT_QUEUE_WARNING_COUNT = 25
 DEFAULT_QUEUE_MOVEMENT_SAMPLE_SECONDS = 10.0
 DOCTOR_PROBE_PROJECT = "brainlayer-doctor"
-LEGACY_PYTHON_MCP_FIX = (
-    '{"mcpServers":{"brainlayer":{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}}}'
-)
+LEGACY_PYTHON_MCP_FIX = '{"mcpServers":{"brainlayer":{"command":"brainlayer-mcp-stdio-bridge"}}}'
 
 
 def default_version_check_path() -> Path:
@@ -96,7 +95,7 @@ def default_mcp_config_paths() -> tuple[Path, ...]:
 def _legacy_python_mcp_config_issues(
     config_paths: list[Path] | tuple[Path, ...] | None = None,
 ) -> list[DoctorIssue]:
-    """Fatal when any BrainLayer MCP entry is not the canonical socat socket form."""
+    """Flag raw-socat restart risk and unsupported owned MCP transports."""
     paths = config_paths if config_paths is not None else default_mcp_config_paths()
     issues: list[DoctorIssue] = []
     for config_path in paths:
@@ -149,6 +148,24 @@ def _legacy_python_mcp_config_issues(
             servers = iter_json_mcp_servers(payload)
 
         for name, server in servers:
+            if is_canonical_socket_mcp_server(server):
+                issues.append(
+                    DoctorIssue(
+                        "mcp_transport_restart_risk",
+                        "warning",
+                        f"{path}: mcp server {name!r} uses raw socat; a BrainBar restart closes "
+                        "its transport permanently. Run brainlayer setup --migrate-mcp for owned entries "
+                        f"or replace with {LEGACY_PYTHON_MCP_FIX}",
+                        {
+                            "config_path": str(path),
+                            "server_name": name,
+                            "server": mcp_server_public_summary(server),
+                            "fix": LEGACY_PYTHON_MCP_FIX,
+                            "remediation": LEGACY_PYTHON_MCP_FIX,
+                        },
+                    )
+                )
+                continue
             if not needs_socket_migration(name, server):
                 continue
             issues.append(
@@ -156,7 +173,7 @@ def _legacy_python_mcp_config_issues(
                     "legacy_python_mcp_entrypoint",
                     "fatal",
                     (
-                        f"{path}: mcp server {name!r} is not the BrainBar socket form; "
+                        f"{path}: mcp server {name!r} is not the reconnecting BrainBar bridge; "
                         f"replace with {LEGACY_PYTHON_MCP_FIX}"
                     ),
                     {

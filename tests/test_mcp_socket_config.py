@@ -102,8 +102,8 @@ def test_socket_server_preserving_strips_remote_http_transport_keys():
         "disabled": True,
     }
     migrated = socket_server_preserving(remote)
-    assert migrated["command"] == "socat"
-    assert migrated["args"] == SOCKET_MCP["args"]
+    assert migrated["command"] == "brainlayer-mcp-stdio-bridge"
+    assert "args" not in migrated
     assert migrated["disabled"] is True
     assert "type" not in migrated
     assert "url" not in migrated

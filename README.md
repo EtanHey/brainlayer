@@ -41,9 +41,10 @@ Add to your MCP config (`~/.claude.json` for Claude Code):
 
 That's it. Your agent now remembers everything. BrainBar must be running and
 owning `/tmp/brainbar.sock`; `brainlayer-mcp-stdio-bridge` ships with the package,
-reconnects if BrainBar restarts, and needs nothing on PATH beyond itself. If you
-already have `socat`, `{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}`
-works too — but it dies with the socket, and GUI hosts often lack `/opt/homebrew/bin` on PATH.
+reconnects if BrainBar restarts, and needs nothing on PATH beyond itself. Raw
+`socat` wiring, `{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}`
+exits on BrainBar restart and leaves persistent clients disconnected. Use `brainlayer setup --migrate-mcp`
+to back up and upgrade owned legacy configs.
 See [docs/mcp-config.md](docs/mcp-config.md).
 
 <details>

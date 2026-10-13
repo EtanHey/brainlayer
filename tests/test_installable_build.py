@@ -664,7 +664,7 @@ def test_setup_rejects_relative_db_override(tmp_path: Path, monkeypatch) -> None
         )
 
 
-def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: Path, monkeypatch) -> None:
+def test_setup_migrates_retired_brainlayer_mcp_to_bridge_idempotently(tmp_path: Path, monkeypatch) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     home = tmp_path / "home"
@@ -694,8 +694,7 @@ def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: 
     assert migrated["theme"] == "dark"
     assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
     assert migrated["mcpServers"]["brainlayer"] == {
-        "command": "socat",
-        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+        "command": "brainlayer-mcp-stdio-bridge",
         "disabled": True,
         "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
         "timeout": 30,
@@ -703,15 +702,14 @@ def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: 
     assert list((home / ".local" / "share" / "brainlayer" / "config-backups").glob(".claude.json.*.bak"))
 
 
-def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> None:
+def test_setup_mcp_migration_leaves_bridge_form_untouched(tmp_path: Path) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     config_path = tmp_path / ".claude.json"
     original = {
         "mcpServers": {
             "brainlayer": {
-                "command": "socat",
-                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                "command": "brainlayer-mcp-stdio-bridge",
             }
         }
     }
@@ -725,6 +723,7 @@ def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> Non
 def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failure(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.setup as setup_helpers
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config_path = tmp_path / ".claude.json"
     original = {
         "mcpServers": {
@@ -749,7 +748,7 @@ def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failu
     assert not (tmp_path / f".{config_path.name}.{os.getpid()}.tmp").exists()
 
 
-def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path) -> None:
+def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path, monkeypatch) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     target = tmp_path / "dotfiles" / "claude.json"
@@ -767,6 +766,7 @@ def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path
         + "\n",
         encoding="utf-8",
     )
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config_path = tmp_path / ".claude.json"
     config_path.symlink_to(target)
 
@@ -775,8 +775,7 @@ def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path
     assert changed.changed == (config_path,)
     assert config_path.is_symlink()
     assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["brainlayer"] == {
-        "command": "socat",
-        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+        "command": "brainlayer-mcp-stdio-bridge",
     }
 
 

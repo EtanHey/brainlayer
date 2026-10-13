@@ -608,8 +608,8 @@ def setup(
         True,
         "--migrate-mcp/--no-migrate-mcp",
         help=(
-            "Rewrite retired brainlayer-mcp MCP entries to "
-            "socat STDIO UNIX-CONNECT:/tmp/brainbar.sock (backs up each file first)."
+            "Rewrite owned legacy and raw-socat BrainLayer MCP entries to "
+            "brainlayer-mcp-stdio-bridge (backs up each file first)."
         ),
     ),
     verify_mcp: bool = typer.Option(

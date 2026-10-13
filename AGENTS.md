@@ -314,7 +314,7 @@ brainlayer search "how did I implement authentication"
   exit-78 compatibility gate until the release re-renders installed hotlane plists. Preserve
   its documentation in [Configuration](docs/configuration.md). Do not resume retired jobs.
 
-<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge, or socat STDIO UNIX-CONNECT); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 16 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
+<!-- MCP-SERVERS: agent MCP is BrainBar on /tmp/brainbar.sock (brainlayer-mcp-stdio-bridge; raw socat loses transport on restart); brainlayer-mcp Python entrypoint DELETED; no HTTP daemon API; library handlers live under mcp/; 16 tools in MCPRouter.toolDefinitions, core palette = brain_search/brain_store/brain_recall/brain_expand + expand_palette -->
 ## Interfaces
 - **There is no HTTP API.** The FastAPI daemon and its `/health`, `/stats`, `/search`, `/brain/graph`,
   `/backlog/items` routes were removed. Anything still calling them is calling a surface that is gone.
@@ -325,9 +325,12 @@ brainlayer search "how did I implement authentication"
   BrainBar path serves both normally.
 - MCP server: BrainBar on `/tmp/brainbar.sock` only. Preferred wiring is
   `{"command":"brainlayer-mcp-stdio-bridge"}` (ships with the package, reconnects across BrainBar
-  restarts, needs nothing else on PATH); `{"command":"socat","args":["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]}`
-  also works. The Python `brainlayer-mcp` entrypoint is deleted. `brainlayer setup --migrate-mcp`
-  rewrites owned legacy configs to the **socat** form and leaves existing bridge entries in place.
+  restarts, needs nothing else on PATH). Raw `socat STDIO UNIX-CONNECT:/tmp/brainbar.sock` exits on
+  a BrainBar restart and leaves persistent clients with a closed transport; `brainlayer doctor`
+  reports that risk with the config path. The Python `brainlayer-mcp` entrypoint is deleted.
+  `brainlayer setup --migrate-mcp` backs up and rewrites owned legacy and raw-socat entries to the
+  **bridge**, preserves unrelated servers/settings, and leaves existing bridge entries in place.
+  Project `.mcp.json` can override a healthy base Codex config; migrate those owned files too.
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->
 ## Exports

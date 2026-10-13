@@ -1,10 +1,9 @@
 {
   "_comment": "Run: ~/Gits/orchestrator/scripts/mcp-setup.sh ~/Gits/brainlayer",
-  "_comment2": "ONE MCP: BrainBar on /tmp/brainbar.sock via socat. brainlayer setup rewrites non-socket forms.",
+  "_comment2": "ONE MCP: BrainBar via the reconnecting brainlayer-mcp-stdio-bridge. setup --migrate-mcp backs up and upgrades owned legacy entries.",
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     },
     "voicelayer": {
       "command": "voicelayer-mcp"

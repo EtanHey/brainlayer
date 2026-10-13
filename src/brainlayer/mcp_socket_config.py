@@ -1,11 +1,7 @@
-"""Canonical BrainBar MCP socket wiring — one shape, shared by setup + doctor.
+"""BrainBar MCP config matching shared by setup and doctor.
 
-Target form (the only acceptable BrainLayer MCP transport):
-
-    {"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}
-
-Anything else that is a BrainLayer memory MCP entry (bridge, bun+bridge,
-deleted brainlayer-mcp, python -m, …) must be migrated / flagged.
+The shipped reconnecting stdio bridge is the preferred agent transport.
+Raw socat loses the agent's stdio transport when BrainBar restarts.
 """
 
 from __future__ import annotations
@@ -57,8 +53,8 @@ def is_canonical_stdio_bridge_mcp_server(server: object) -> bool:
 
 
 def is_acceptable_brainlayer_mcp_transport(server: object) -> bool:
-    """Socat socket or stdio-bridge — both are supported BrainLayer agent transports."""
-    return is_canonical_socket_mcp_server(server) or is_canonical_stdio_bridge_mcp_server(server)
+    """Only the shipped bridge keeps an agent transport alive across restarts."""
+    return is_canonical_stdio_bridge_mcp_server(server)
 
 
 def is_brainlayer_mcp_entry(name: str, server: object) -> bool:
@@ -67,7 +63,7 @@ def is_brainlayer_mcp_entry(name: str, server: object) -> bool:
 
 
 def needs_socket_migration(name: str, server: object) -> bool:
-    """Named BrainLayer MCP entry that is not socat socket or stdio-bridge."""
+    """Owned BrainLayer entry that needs migration to the reconnecting bridge."""
     return is_brainlayer_mcp_entry(name, server) and not is_acceptable_brainlayer_mcp_transport(server)
 
 
@@ -123,13 +119,13 @@ def iter_toml_mcp_servers(payload: object) -> list[tuple[str, object]]:
     return found
 
 
-def socket_server_preserving(server: object) -> dict[str, Any]:
-    """Canonical socket transport, keeping unrelated keys (disabled/env/timeout)."""
+def socket_server_preserving(server: object, *, bridge_command: str | None = None) -> dict[str, Any]:
+    """Bridge transport, keeping unrelated keys (disabled/env/timeout)."""
     preserved: dict[str, Any] = {}
     if isinstance(server, dict):
         drop_keys = {"command", "args", "path", *_HTTP_TRANSPORT_KEYS}
         preserved = {k: v for k, v in server.items() if k not in drop_keys}
-    return {**SOCKET_MCP_SERVER, **preserved}
+    return {"command": bridge_command or _STDIO_BRIDGE_COMMAND, **preserved}
 
 
 def _arg_public_shape(arg: object) -> str:

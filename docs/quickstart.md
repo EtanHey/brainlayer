@@ -57,28 +57,26 @@ Add to each agent's MCP settings under `mcpServers`:
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
 ```
 
-BrainBar must be running and owning `/tmp/brainbar.sock`. `brainlayer setup`
-rewrites any owned config still pointing at the deleted `brainlayer-mcp`
-entrypoint to this socket form.
+BrainBar must be running and owning `/tmp/brainbar.sock`. `brainlayer setup --migrate-mcp`
+backs up and upgrades owned legacy entries to the bridge. Raw
+`socat STDIO UNIX-CONNECT:/tmp/brainbar.sock` exits on restart; doctor reports this risk.
 
 ### Zed
 
-Add the same socket command to `settings.json`:
+Add the same bridge command to `settings.json`:
 
 ```json
 {
   "context_servers": {
     "brainlayer": {
       "command": {
-        "path": "socat",
-        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+        "path": "brainlayer-mcp-stdio-bridge"
       }
     }
   }
@@ -93,8 +91,7 @@ Add to `.vscode/mcp.json`:
 {
   "servers": {
     "brainlayer": {
-      "command": "socat",
-      "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]
+      "command": "brainlayer-mcp-stdio-bridge"
     }
   }
 }
