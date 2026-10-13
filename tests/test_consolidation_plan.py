@@ -192,3 +192,35 @@ def test_renderer_refuses_linked_site_packages(setup, tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_HOOK_PYTHON", str(python))
     with pytest.raises(ValueError, match="linked site-packages"):
         interpreter_site(python)
+
+
+@pytest.mark.parametrize(
+    "label,key,value",
+    [
+        (NEW, "KeepAlive", False),
+        (NEW, "RunAtLoad", False),
+        (NEW, "StartCalendarInterval", {"Hour": 4}),
+        ("com.brainlayer.maintenance", "StartCalendarInterval", {"Hour": 4}),
+        ("com.brainlayer.maintenance", "RunAtLoad", True),
+        ("com.brainlayer.maintenance", "KeepAlive", True),
+    ],
+)
+def test_renderer_refuses_changed_launcher_behavior(setup, tmp_path, monkeypatch, label, key, value):
+    from brainlayer.consolidation_plan import rendered_launchers
+
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    for name in (NEW, "com.brainlayer.maintenance"):
+        raw = (ROOT / "scripts/launchd" / f"{name}.plist").read_bytes()
+        plist = plistlib.loads(raw)
+        if name == label:
+            plist[key] = value
+        (templates / f"{name}.plist").write_bytes(plistlib.dumps(plist))
+    python = setup[0] / "venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n")
+    python.chmod(0o755)
+    (python.parents[1] / "lib/python3.13/site-packages/brainlayer").mkdir(parents=True)
+    monkeypatch.setenv("BRAINLAYER_HOOK_PYTHON", str(python))
+    with pytest.raises(ValueError, match="launch behavior"):
+        rendered_launchers(templates, setup[0], python, setup[2])

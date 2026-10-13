@@ -117,6 +117,15 @@ def rendered_launchers(templates, home, python, env_file):
             raise ValueError("invalid consolidated launcher identity/shutdown budget")
         if plist.get("AssociatedBundleIdentifiers") != ["com.brainlayer.brainbar"]:
             raise ValueError("invalid consolidated launcher association")
+        if label == NEW[0]:
+            valid = plist.get("KeepAlive") is True and plist.get("RunAtLoad") is True
+            valid = valid and "StartCalendarInterval" not in plist and "StartInterval" not in plist
+        else:
+            valid = plist.get("StartCalendarInterval") == {"Hour": 3, "Minute": 15}
+            valid = valid and not plist.get("KeepAlive") and not plist.get("RunAtLoad")
+            valid = valid and "StartInterval" not in plist
+        if not valid:
+            raise ValueError(f"invalid consolidated launch behavior: {label}")
         result[label] = plistlib.dumps(plist, sort_keys=False)
     return result
 
