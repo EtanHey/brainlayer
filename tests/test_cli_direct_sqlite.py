@@ -4,6 +4,8 @@ import importlib
 import importlib.util
 import math
 import os
+import re
+import signal
 import subprocess
 import sys
 import time
@@ -31,16 +33,50 @@ def test_cli_stats_p95_budget_allows_shared_ci_runner_variance(monkeypatch: pyte
     assert _cli_stats_p95_budget_seconds() == 0.750
 
 
-def _daemon_pids() -> list[str]:
+def _daemon_pids(cli_pgid: int) -> list[str]:
     result = subprocess.run(
-        ["pgrep", "-f", r"brainlayer[.-]daemon|brainlayer\.daemon"],
+        ["/bin/ps", "-axo", "pid=,pgid=,command="],
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
-    if result.returncode not in (0, 1):
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    owned = []
+    for line in result.stdout.splitlines():
+        pid, pgid, command = line.strip().split(None, 2)
+        if int(pgid) == cli_pgid and int(pid) != cli_pgid and re.search(r"brainlayer[.-]daemon", command):
+            owned.append(pid)
+    return owned
+
+
+def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT, timeout: float = 10):
+    # A fresh session isolates this CLI from production and other test processes.
+    with subprocess.Popen(
+        argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    ) as cli:
+        seen: set[str] = set()
+        deadline = time.monotonic() + timeout
+        timed_out = False
+        try:
+            while True:
+                seen.update(_daemon_pids(cli.pid))
+                try:
+                    stdout, stderr = cli.communicate(timeout=0.05)
+                    seen.update(_daemon_pids(cli.pid))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        timed_out = True
+                        raise
+        finally:
+            if cli.poll() is None or timed_out:
+                # This group was created by this Popen, never selected by a name pattern.
+                try:
+                    os.killpg(cli.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                cli.communicate(timeout=2)
+        assert not seen, f"CLI spawned daemon descendants: {sorted(seen)}"
+        return subprocess.CompletedProcess(argv, cli.returncode, stdout, stderr)
 
 
 def _seed_empty_db(db_path: Path) -> None:
@@ -54,26 +90,19 @@ def test_cli_search_does_not_spawn_or_contact_daemon_process(tmp_path: Path) -> 
     db_path = tmp_path / "brainlayer.db"
     _seed_empty_db(db_path)
 
-    assert _daemon_pids() == []
-
     env = os.environ.copy()
     env["BRAINLAYER_DB"] = str(db_path)
     env["PATH"] = str(tmp_path)
     env["PYTHONPATH"] = f"{REPO_ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
-    result = subprocess.run(
+    result = _run_cli(
         [sys.executable, "-c", "from brainlayer.cli import app; app()", "search", "foo", "--text", "--num", "1"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert "daemon" not in (result.stderr + result.stdout).lower()
-    assert _daemon_pids() == []
 
 
 def test_cli_stats_missing_db_fails_closed_without_bootstrap(tmp_path: Path) -> None:
@@ -84,20 +113,15 @@ def test_cli_stats_missing_db_fails_closed_without_bootstrap(tmp_path: Path) -> 
     env["PATH"] = str(tmp_path)
     env["PYTHONPATH"] = f"{REPO_ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
-    result = subprocess.run(
+    result = _run_cli(
         [sys.executable, "-c", "from brainlayer.cli import app; app()", "stats"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
     )
 
     assert result.returncode == 1
     assert "migrate-store <copy.db>" in result.stdout
     assert not db_path.exists()
-    assert _daemon_pids() == []
 
 
 def test_cli_stats_empty_existing_db_fails_closed_without_bootstrap(tmp_path: Path) -> None:
@@ -109,20 +133,57 @@ def test_cli_stats_empty_existing_db_fails_closed_without_bootstrap(tmp_path: Pa
     env["PATH"] = str(tmp_path)
     env["PYTHONPATH"] = f"{REPO_ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
-    result = subprocess.run(
+    result = _run_cli(
         [sys.executable, "-c", "from brainlayer.cli import app; app()", "stats"],
         cwd=REPO_ROOT,
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
     )
 
     assert result.returncode == 1
     assert "migrate-store <copy.db>" in result.stdout
     assert db_path.stat().st_size == 0
-    assert _daemon_pids() == []
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        test_cli_search_does_not_spawn_or_contact_daemon_process,
+        test_cli_stats_missing_db_fails_closed_without_bootstrap,
+        test_cli_stats_empty_existing_db_fails_closed_without_bootstrap,
+    ],
+)
+def test_cli_checks_ignore_an_outside_tree_daemon(tmp_path, check):
+    dummy = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", "com.brainlayer.daemon"], start_new_session=True
+    )
+    try:
+        check(tmp_path)
+    finally:
+        dummy.terminate()
+        dummy.wait(timeout=5)
+
+
+def test_cli_check_detects_its_own_daemon_descendant():
+    code = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', 'com.brainlayer.daemon'])\n"
+        "try: time.sleep(.3)\n"
+        "finally: child.terminate(); child.wait()\n"
+    )
+    with pytest.raises(AssertionError, match="CLI spawned daemon"):
+        _run_cli([sys.executable, "-c", code], env=os.environ.copy())
+
+
+def test_cli_timeout_does_not_wait_on_descendants_inheriting_output():
+    code = (
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)', 'com.brainlayer.daemon'])\n"
+        "time.sleep(10)\n"
+    )
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_cli([sys.executable, "-c", code], env=os.environ.copy(), timeout=0.1)
+    assert time.monotonic() - started < 2
 
 
 def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
