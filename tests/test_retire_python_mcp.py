@@ -13,9 +13,14 @@ from typer.testing import CliRunner
 @pytest.fixture(autouse=True)
 def _scratch_home(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("brainlayer.setup._require_mcp_bridge", lambda command: None)
+    monkeypatch.setattr(
+        "brainlayer.setup.get_current_mcp_bridge_bin",
+        lambda: "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+    )
 
 
-BRIDGE_MCP = {"command": "brainlayer-mcp-stdio-bridge"}
+BRIDGE_MCP = {"command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"}
 SOCKET_MCP = {"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}
 
 BRIDGE_VIA_BUN = {
@@ -50,7 +55,10 @@ def test_shape_matcher_flags_bridge_and_bun_not_only_literal_name():
     from brainlayer.mcp_socket_config import needs_socket_migration
 
     assert needs_socket_migration("brainlayer", {"command": "brainlayer-mcp"})
-    assert not needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
+    assert not needs_socket_migration(
+        "brainlayer", {"command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"}
+    )
+    assert needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
     assert needs_socket_migration("brainlayer", BRIDGE_VIA_BUN)
     assert needs_socket_migration("brainlayer", CELLAR_BRIDGE_VIA_BUN)
     assert needs_socket_migration("brainlayer", SOCKET_MCP)

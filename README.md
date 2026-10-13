@@ -27,13 +27,16 @@ BrainLayer gives any MCP-compatible AI agent persistent memory across conversati
 pip install brainlayer
 ```
 
+MCP examples require the Homebrew BrainLayer bridge. On Intel, replace
+`/opt/homebrew/opt/brainlayer` with `/usr/local/opt/brainlayer`.
+
 Add to your MCP config (`~/.claude.json` for Claude Code):
 
 ```json
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }
@@ -41,7 +44,7 @@ Add to your MCP config (`~/.claude.json` for Claude Code):
 
 That's it. Your agent now remembers everything. BrainBar must be running and
 owning `/tmp/brainbar.sock`; `brainlayer-mcp-stdio-bridge` ships with the package,
-reconnects if BrainBar restarts, and needs nothing on PATH beyond itself. Raw
+reconnects if BrainBar restarts, and uses an absolute path. Raw
 `socat` wiring, `{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}`
 exits on BrainBar restart and leaves persistent clients disconnected. Use `brainlayer setup --migrate-mcp`
 to back up and upgrade owned legacy configs.
@@ -55,7 +58,7 @@ See [docs/mcp-config.md](docs/mcp-config.md).
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }
@@ -66,7 +69,7 @@ See [docs/mcp-config.md](docs/mcp-config.md).
 {
   "context_servers": {
     "brainlayer": {
-      "command": { "path": "brainlayer-mcp-stdio-bridge", "args": [] }
+      "command": { "path": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge", "args": [] }
     }
   }
 }
@@ -77,7 +80,7 @@ See [docs/mcp-config.md](docs/mcp-config.md).
 {
   "servers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }

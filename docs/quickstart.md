@@ -49,6 +49,9 @@ This parses your Claude Code conversations (JSONL files), classifies content, ch
 
 ## Connect to Your Editor
 
+MCP examples require the Homebrew BrainLayer bridge. On Intel, replace
+`/opt/homebrew/opt/brainlayer` with `/usr/local/opt/brainlayer`.
+
 ### Claude Code, Codex, Cursor, and Gemini
 
 Add to each agent's MCP settings under `mcpServers`:
@@ -57,7 +60,7 @@ Add to each agent's MCP settings under `mcpServers`:
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }
@@ -76,7 +79,7 @@ Add the same bridge command to `settings.json`:
   "context_servers": {
     "brainlayer": {
       "command": {
-        "path": "brainlayer-mcp-stdio-bridge"
+        "path": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
       }
     }
   }
@@ -91,7 +94,7 @@ Add to `.vscode/mcp.json`:
 {
   "servers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }

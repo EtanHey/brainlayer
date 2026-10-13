@@ -48,7 +48,7 @@ def test_doctor_legacy_issue_details_exclude_full_server_dict(tmp_path: Path):
     assert "args_preview" not in details["server"]
 
 
-def test_doctor_names_raw_socat_restart_risk_and_accepts_bridge(tmp_path: Path):
+def test_doctor_names_raw_socat_restart_risk_without_config_secrets(tmp_path: Path):
     import json
 
     from brainlayer.doctor import _legacy_python_mcp_config_issues
@@ -58,7 +58,6 @@ def test_doctor_names_raw_socat_restart_risk_and_accepts_bridge(tmp_path: Path):
         json.dumps(
             {
                 "mcpServers": {
-                    "brainlayer": {"command": "brainlayer-mcp-stdio-bridge"},
                     "memory-alias": {
                         "command": "/opt/bin/socat",
                         "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],

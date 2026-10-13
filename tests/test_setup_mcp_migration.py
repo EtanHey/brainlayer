@@ -12,6 +12,11 @@ import pytest
 @pytest.fixture(autouse=True)
 def _scratch_home(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("brainlayer.setup._require_mcp_bridge", lambda command: None)
+    monkeypatch.setattr(
+        "brainlayer.setup.get_current_mcp_bridge_bin",
+        lambda: "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+    )
 
 
 SOCKET_MCP = {
@@ -66,7 +71,9 @@ def test_setup_toml_migrator_preserves_multiline_args_and_unrelated_keys(tmp_pat
     report = migrate_legacy_mcp_configs([codex])
     assert report.changed == (codex,)
     payload = tomllib.loads(codex.read_text(encoding="utf-8"))
-    assert payload["mcp_servers"]["brainlayer"] == {"command": "brainlayer-mcp-stdio-bridge"}
+    assert payload["mcp_servers"]["brainlayer"] == {
+        "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
+    }
     assert payload["mcp_servers"]["other"]["command"] == "keep-me"
     assert payload["mcp_servers"]["other"]["command_timeout_sec"] == 30
 
@@ -123,11 +130,17 @@ def test_migrate_socat_json_and_codex_to_bridge_with_backups(tmp_path: Path, mon
         '[mcp_servers.brainlayer]\ncommand="socat"\nargs=["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]\nstartup_timeout_sec=15\n[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT="/tmp/private-front.sock"\n[mcp_servers.other]\ncommand="keep-me"\n'
     )
     before = {p: p.read_bytes() for p in (config, codex)}
-    report = migrate_legacy_mcp_configs([config, codex], bridge_command="/opt/bin/brainlayer-mcp-stdio-bridge")
+    report = migrate_legacy_mcp_configs(
+        [config, codex], bridge_command="/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
+    )
     assert report.changed == (config, codex)
     assert report.skipped == ()
     migrated = json.loads(config.read_text())
-    expected = {"command": "/opt/bin/brainlayer-mcp-stdio-bridge", "env": server["env"], "disabled": True}
+    expected = {
+        "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+        "env": server["env"],
+        "disabled": True,
+    }
     assert migrated["mcpServers"]["brainlayer"] == expected
     assert migrated["projects"]["repo"]["mcpServers"]["brainbar"] == expected
     assert migrated["mcpServers"]["other"] == SOCKET_MCP

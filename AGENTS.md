@@ -324,12 +324,13 @@ brainlayer search "how did I implement authentication"
 - `brain_expand` and `brain_tags` are deprecated in the Python MCP path and return errors there; the
   BrainBar path serves both normally.
 - MCP server: BrainBar on `/tmp/brainbar.sock` only. Preferred wiring is
-  `{"command":"brainlayer-mcp-stdio-bridge"}` (ships with the package, reconnects across BrainBar
-  restarts, needs nothing else on PATH). Raw `socat STDIO UNIX-CONNECT:/tmp/brainbar.sock` exits on
+  `{"command":"/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"}` (ships with the package, reconnects across BrainBar
+  restarts, uses a stable opt path). Raw `socat STDIO UNIX-CONNECT:/tmp/brainbar.sock` exits on
   a BrainBar restart and leaves persistent clients with a closed transport; `brainlayer doctor`
   reports that risk with the config path. The Python `brainlayer-mcp` entrypoint is deleted.
   `brainlayer setup --migrate-mcp` backs up and rewrites owned legacy and raw-socat entries to the
-  **bridge**, preserves unrelated servers/settings, and leaves existing bridge entries in place.
+  **absolute opt-path bridge**, verifies that same path, preserves unrelated servers/settings,
+  and leaves existing pinned bridge entries in place. Doctor flags bare or foreign bridge targets.
   Project `.mcp.json` can override a healthy base Codex config; migrate those owned files too.
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->

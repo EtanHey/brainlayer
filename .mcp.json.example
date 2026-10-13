@@ -1,9 +1,9 @@
 {
   "_comment": "Run: ~/Gits/orchestrator/scripts/mcp-setup.sh ~/Gits/brainlayer",
-  "_comment2": "ONE MCP: BrainBar via the reconnecting brainlayer-mcp-stdio-bridge. setup --migrate-mcp backs up and upgrades owned legacy entries.",
+  "_comment2": "ONE MCP: BrainBar via the reconnecting brainlayer-mcp-stdio-bridge. setup --migrate-mcp backs up and upgrades owned legacy entries. Intel: use /usr/local/opt/brainlayer instead of /opt/homebrew/opt/brainlayer.",
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     },
     "voicelayer": {
       "command": "voicelayer-mcp"

@@ -31,7 +31,7 @@ Add to Claude Code (`~/.claude.json`):
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }
