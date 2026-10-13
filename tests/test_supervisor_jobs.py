@@ -271,3 +271,60 @@ def test_cleanup_retry_preserves_original_timeout_accounting(short_path):
                 await asyncio.gather(child.cleanup, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_cleanup_retry_keeps_inflight_control_reap(short_path, monkeypatch):
+    async def scenario():
+        child = Component(("unused",), enabled=False)
+        supervisor = Supervisor({"probe": child}, short_path / "control.sock")
+        child.cleanup = asyncio.get_running_loop().create_future()
+        child.cleanup.set_exception(RuntimeError("initial cleanup failure"))
+        supervisor._tick()
+        release, entered = asyncio.Event(), []
+
+        async def held_reap(component):
+            entered.append(asyncio.current_task())
+            await release.wait()
+
+        monkeypatch.setattr(supervisor, "_reap", held_reap)
+        control = asyncio.create_task(supervisor._stop_child(child))
+        try:
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            original = child.cleanup
+            assert len(entered) == 1 and original is not None
+            child.cleanup_retry_at = time.monotonic() - 1
+            supervisor._tick()
+            await asyncio.sleep(0)
+            assert child.cleanup is original and len(entered) == 1
+        finally:
+            release.set()
+            await control
+            await asyncio.gather(*entered)
+
+    asyncio.run(scenario())
+
+
+def test_successful_control_reap_clears_retry_before_restart(short_path, monkeypatch):
+    from types import SimpleNamespace
+
+    async def scenario():
+        child = Component(("unused",), enabled=False)
+        child.process = SimpleNamespace(pid=42)
+        child.cleanup_retry_at = time.monotonic() - 1
+        supervisor = Supervisor({"probe": child}, short_path / "control.sock")
+        forgotten = []
+        supervisor.custody = SimpleNamespace(forget=lambda guard, pid: forgotten.append(pid))
+
+        async def stopped(*args):
+            pass
+
+        monkeypatch.setattr("brainlayer.service_supervisor.stop_group", stopped)
+        await supervisor._stop_child(child)
+        assert forgotten == [42] and child.process is None and child.cleanup_retry_at == 0
+        replacement = SimpleNamespace(poll=lambda: None)
+        child.process = replacement
+        supervisor._tick()
+        assert child.cleanup is None and child.process is replacement
+
+    asyncio.run(scenario())

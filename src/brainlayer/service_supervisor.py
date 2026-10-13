@@ -121,6 +121,7 @@ class Supervisor:
             lambda: (self.deadline, self.shutdown_timeout / 2) if self.deadline is not None else None,
         )
         self.custody.forget(self.guard, process.pid)
+        child.cleanup_retry_at = 0
         child.process = None
 
     async def _stop_child(self, child: Component):
@@ -196,6 +197,8 @@ class Supervisor:
             if time.monotonic() < child.cleanup_retry_at:
                 continue  # Keep custody; failed reaping never authorizes another child.
             if child.cleanup_retry_at:
+                if child.cleanup is not None:
+                    continue  # A control-initiated reap still owns this cleanup.
                 child.cleanup_retry_at = 0
                 child.cleanup = asyncio.create_task(self._reap(child))
                 continue  # Retry cleanup without recounting/replacing the original exit.
