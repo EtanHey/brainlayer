@@ -46,7 +46,13 @@ class LaunchdRuntime:
             raise RuntimeError(f"service changed since snapshot: {label}")
         if state["loaded"]:
             self._checked("bootout", f"{self.domain}/{label}")
-        while self.observe(label)["loaded"] or state["pid"] is not None and self.alive(state["pid"]):
+        pids = {state["pid"]} - {None}
+        while True:
+            current = self.observe(label)
+            if current["pid"] is not None:
+                pids.add(current["pid"])
+            if not current["loaded"] and not any(self.alive(pid) for pid in pids):
+                return
             if self.clock.monotonic() >= deadline:
                 raise RuntimeError(f"service did not exit: {label}")
             self.clock.sleep(0.1)
