@@ -279,6 +279,16 @@ def test_missing_env_is_not_runnable_and_has_reason(setup):
     assert "missing env file" in result["components"][OLD]["reason"]
 
 
+@pytest.mark.parametrize("label", ["com.brainlayer.tier0-watchdog", "com.etanhey.brainlayer-fleet-watchdog"])
+def test_missing_env_keeps_loaded_non_env_run_watchdogs_on(setup, label):
+    (setup[1] / f"{label}.plist").write_bytes(
+        plistlib.dumps({"Label": label, "ProgramArguments": ["/bin/true"], "KeepAlive": True})
+    )
+    setup[2].unlink()
+    result, _ = snapshot(setup, [label])
+    assert result["components"][label]["enabled"] is True
+
+
 @pytest.mark.parametrize("mode", [0o755, 0o770, 0o777])
 def test_snapshot_publication_refuses_nonprivate_directory(tmp_path, mode):
     from brainlayer.migration_custody import write_new_file
@@ -287,3 +297,54 @@ def test_snapshot_publication_refuses_nonprivate_directory(tmp_path, mode):
     with pytest.raises(ValueError, match="0700"):
         write_new_file(tmp_path / "migration.json", b"private env")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_launch_agent_publication_uses_owned_nonprivate_agents_dir(setup):
+    from brainlayer.migration_custody import write_launch_agent
+
+    path = setup[1] / "com.brainlayer.daemon.plist"
+    write_launch_agent(path, b"rendered plist")
+    assert path.read_bytes() == b"rendered plist" and path.stat().st_mode & 0o777 == 0o644
+    with pytest.raises(FileExistsError):
+        write_launch_agent(path, b"replacement")
+    assert path.read_bytes() == b"rendered plist"
+
+
+def test_failed_file_fsync_preserves_primary_error_when_cleanup_fsync_fails(tmp_path, monkeypatch):
+    import errno
+    import stat
+
+    from brainlayer.migration_custody import write_new_file
+
+    def fsync(fd):
+        raise OSError(errno.ENOSPC if stat.S_ISDIR(os.fstat(fd).st_mode) else errno.EIO, "injected")
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    with pytest.raises(OSError) as failure:
+        write_new_file(tmp_path / "migration.json", b"private bytes")
+    assert failure.value.errno == errno.EIO
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_launch_agent_publication_refuses_foreign_name_and_writable_directory(setup):
+    from brainlayer.migration_custody import write_launch_agent
+
+    with pytest.raises(ValueError, match="non-consolidated"):
+        write_launch_agent(setup[1] / "com.example.personal.plist", b"refuse")
+    setup[1].chmod(0o777)
+    with pytest.raises(ValueError, match="group/world writable"):
+        write_launch_agent(setup[1] / "com.brainlayer.daemon.plist", b"refuse")
+    assert not (setup[1] / "com.brainlayer.daemon.plist").exists()
+
+
+@pytest.mark.parametrize("label", ["com.brainlayer.tier0-watchdog", "com.etanhey.brainlayer-fleet-watchdog"])
+def test_missing_env_does_not_attach_off_reason_to_non_env_run(setup, label):
+    from brainlayer.consolidation_plan import collect_legacy
+
+    (setup[1] / f"{label}.plist").write_bytes(
+        plistlib.dumps({"Label": label, "ProgramArguments": ["/bin/true"], "KeepAlive": True})
+    )
+    setup[2].unlink()
+    records, _ = collect_legacy(setup[1], setup[2], set())
+    assert records[label]["enabled"] is True and "reason" not in records[label]
+    assert "missing env file" in records[OLD]["reason"]

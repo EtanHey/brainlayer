@@ -155,6 +155,7 @@ def test_successful_interval_waits_without_failure_backoff_or_catchup(short_path
 def test_daemon_entrypoint_serves_real_control_client(short_path):
     import subprocess
 
+    from brainlayer.migration_runtime import wait_supervisor
     from brainlayer.supervisor_adapters import SupervisorCommands
 
     path = manifest(short_path, ProgramArguments=[sys.executable, "-c", "import time;time.sleep(60)"])
@@ -170,17 +171,8 @@ def test_daemon_entrypoint_serves_real_control_client(short_path):
     client = SupervisorCommands(endpoint, lambda args: None)
     pid = None
     try:
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and process.poll() is None:
-            if endpoint.exists():
-                try:
-                    state = client.request()["drain"]
-                    pid = state["pid"]
-                    if pid:
-                        break
-                except ConnectionRefusedError:
-                    pass  # bind precedes the guard readiness acknowledgment/listen.
-            time.sleep(0.02)
+        state = wait_supervisor(client.request, load_components(path, endpoint), grace=5)["drain"]
+        pid = state["pid"]
         assert pid and state["configured"] is True and state["starts"] == 1
         assert endpoint.stat().st_mode & 0o777 == 0o600
     finally:
