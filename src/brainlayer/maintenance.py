@@ -846,7 +846,14 @@ def _resume_services(
 
 
 def _format_resume_failures(failures: Sequence[tuple[str, Exception]]) -> str:
-    details = "; ".join(f"{service}: {failure}" for service, failure in failures)
+    entries = []
+    for service, failure in failures:
+        stderr = getattr(failure, "stderr", "") or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        tail = str(stderr).strip()[-2048:]
+        entries.append(f"{service}: {failure}" + (f"; stderr tail: {tail}" if tail else ""))
+    details = "; ".join(entries)
     count = len(failures)
     noun = "service" if count == 1 else "services"
     return f"failed to resume {count} launchd {noun}: {details}"

@@ -182,7 +182,7 @@ def collect_legacy(agents, env_file, disabled):
                     env_contents[env_path] = None  # Missing input; never reopen or infer enabled.
             records[label] = {
                 "enabled": label not in disabled
-                and env_contents[env_path] is not None
+                and (label in NON_ENV_RUN or env_contents[env_path] is not None)
                 and _legacy_configured(
                     env, env_path, contents=env_contents[env_path], env_run=label not in NON_ENV_RUN
                 ),
@@ -195,6 +195,22 @@ def collect_legacy(agents, env_file, disabled):
     return records, files
 
 
+def probe_service(domain, label, run):
+    result = run(["launchctl", "print", f"{domain}/{label}"])
+    pid = None
+    if result.returncode == 113 and "Could not find service" in result.stdout + result.stderr:
+        loaded = False
+    elif result.returncode == 0:
+        loaded = True
+        pids = [value.strip() for value in re.findall(r"(?m)^[ \t]*pid[ \t]*=[ \t]*(.*)$", result.stdout)]
+        if len(pids) > 1 or pids and not re.fullmatch(r"[1-9][0-9]*", pids[0]):
+            raise RuntimeError(f"cannot measure launchd process state: {label}")
+        pid = int(pids[0]) if pids else None
+    else:
+        raise RuntimeError(f"cannot measure launchd loaded state: {label}")
+    return {"loaded": loaded, "pid": pid}
+
+
 def snapshot_legacy(agents, env_file, domain, run):
     """Capture all owned/archived states and bytes for a journal before any bootout."""
     result = run(["launchctl", "print-disabled", domain])
@@ -205,18 +221,8 @@ def snapshot_legacy(agents, env_file, domain, run):
     records, files = collect_legacy(agents, env_file, disabled)
     states = {}
     for label in sorted(set(ALIASES) | ARCHIVED | set(NEW)):
-        result = run(["launchctl", "print", f"{domain}/{label}"])
-        pid = None
-        if result.returncode == 113 and "Could not find service" in result.stdout + result.stderr:
-            loaded = False
-        elif result.returncode == 0:
-            loaded = True
-            pids = [value.strip() for value in re.findall(r"(?m)^[ \t]*pid[ \t]*=[ \t]*(.*)$", result.stdout)]
-            if len(pids) > 1 or pids and not re.fullmatch(r"[1-9][0-9]*", pids[0]):
-                raise RuntimeError(f"cannot measure launchd process state: {label}")
-            pid = int(pids[0]) if pids else None
-        else:
-            raise RuntimeError(f"cannot measure launchd loaded state: {label}")
+        observed = probe_service(domain, label, run)
+        loaded, pid = observed["loaded"], observed["pid"]
         states[label] = {
             "loaded": loaded,
             "disabled": label in disabled,
