@@ -223,7 +223,9 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
+        handle.flush()  # Flush before close releases the lock shared with log_cap.
 
 
 def _discover_jsonl_candidates(source_roots: list[Path | BackupSourceRoot]) -> list[JsonlCandidate]:

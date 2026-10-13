@@ -194,6 +194,7 @@ def build_backups_section(
     daily_input = record_input(daily_path, status=daily_status, rows_or_bytes=None, skipped_lines=skipped)
 
     launchd_override = env.get("BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT")
+    observed_label, extra_inputs = LABEL, []
     launchd_not_loaded = False
     command_failure: str | None = None
     if launchd_override:
@@ -216,6 +217,34 @@ def build_backups_section(
         command_stderr = b""
         try:
             completed = subprocess.run(argv, capture_output=True, text=False, timeout=5, check=False, shell=False)
+            agents = Path.home() / "Library/LaunchAgents"
+            missing_service = "Could not find service" in str(completed.stdout) + str(completed.stderr)
+            if (
+                completed.returncode == 113
+                and missing_service
+                and not os.path.lexists(agents / f"{LABEL}.plist")
+                and (agents / "com.brainlayer.maintenance.plist").exists()
+            ):
+                for definition in (agents / f"{LABEL}.plist", agents / "com.brainlayer.maintenance.plist"):
+                    extra_inputs.append(
+                        record_input(
+                            definition, status="read" if definition.exists() else "missing", rows_or_bytes=None
+                        )
+                    )
+                extra_inputs.append(
+                    record_input(
+                        None,
+                        kind="command",
+                        argv=argv,
+                        exit_code=completed.returncode,
+                        stdout=completed.stdout or b"",
+                        stderr=completed.stderr or b"",
+                        status="read",
+                    )
+                )
+                observed_label = "com.brainlayer.maintenance"
+                argv = ["launchctl", "print", f"gui/{os.getuid()}/{observed_label}"]
+                completed = subprocess.run(argv, capture_output=True, text=False, timeout=5, check=False, shell=False)
             exit_code = completed.returncode
             command_stdout = completed.stdout or b""
             command_stderr = completed.stderr or b""
@@ -226,7 +255,7 @@ def build_backups_section(
             launchd_text = (command_stdout + command_stderr).decode("utf-8", errors="replace")
             if exit_code == 113 and "Could not find service" in launchd_text:
                 launchd_status, launchd_not_loaded = "read", True
-            elif exit_code == 0 and LABEL in launchd_text:
+            elif exit_code == 0 and observed_label in launchd_text:
                 launchd_status = "read"
             else:
                 launchd_status = "malformed"
@@ -258,7 +287,7 @@ def build_backups_section(
         rows_or_bytes=disabled_count,
         in_section_inputs=False,
     )
-    inputs = [jsonl_input, daily_input, launchd_input]
+    inputs = [jsonl_input, daily_input, launchd_input, *extra_inputs]
 
     if command_failure:
         return _unmeasurable(command_failure, inputs)
@@ -281,7 +310,7 @@ def build_backups_section(
         return _unmeasurable("backup daily log has no real-provenance receipts", inputs)
     if launchd_status != "read":
         return _unmeasurable(f"launchd output is {launchd_status}: {launchd_input['path']}", inputs)
-    if LABEL not in launchd_text and "Could not find service" not in launchd_text:
+    if observed_label not in launchd_text and "Could not find service" not in launchd_text:
         return _unmeasurable("launchd output is unrecognized", inputs)
     if disabled_input.get("status") == "malformed":
         return _unmeasurable(f"disabled launchd directory is unreadable: {disabled_input['path']}", inputs)
@@ -311,7 +340,7 @@ def build_backups_section(
         freshness = "fresh"
     else:
         freshness = "unknown"
-    bootstrapped = not launchd_not_loaded and LABEL in launchd_text
+    bootstrapped = not launchd_not_loaded and observed_label in launchd_text
 
     return {
         "state": "measured",
