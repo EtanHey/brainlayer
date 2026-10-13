@@ -58,6 +58,7 @@ from .mcp_socket_config import (
     needs_socket_migration,
     owned_mcp_config_paths,
     socat_socket_conflict,
+    socat_socket_unparsed_reason,
     stable_mcp_bridge_command,
 )
 from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
@@ -152,6 +153,15 @@ def _legacy_python_mcp_config_issues(
             servers = iter_json_mcp_servers(payload)
 
         for name, server in servers:
+            if needs_socket_migration(name, server) and (reason := socat_socket_unparsed_reason(server)):
+                issues.append(
+                    DoctorIssue(
+                        "mcp_socat_target_unparsed",
+                        "warning",
+                        f"{path}: mcp server {name!r} {reason}",
+                        {"config_path": str(path), "server_name": name, "reason": reason},
+                    )
+                )
             conflict = socat_socket_conflict(server)
             if conflict:
                 issues.append(

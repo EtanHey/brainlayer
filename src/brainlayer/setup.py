@@ -23,6 +23,7 @@ from .mcp_socket_config import (
     needs_socket_migration,
     owned_mcp_config_paths,
     socat_socket_conflict,
+    socat_socket_unparsed_reason,
     socket_server_preserving,
     stable_mcp_bridge_command,
 )
@@ -190,7 +191,7 @@ def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str], bridge_com
     for name in names:
         for table in ("mcp_servers", "mcpServers"):
             server = payload.get(table, {}).get(name)
-            if not needs_socket_migration(name, server) or socat_socket_conflict(server):
+            if not needs_socket_migration(name, server) or _socat_migration_skip_reason(server):
                 continue
             pattern = re.compile(
                 rf"(?ms)^(\[{re.escape(table)}\.{re.escape(name)}\]\s*\n)(.*?)(?=^\[|\Z)",
@@ -225,7 +226,7 @@ def _rewrite_json_mcp_servers(payload: dict, bridge_command: str) -> bool:
     servers = payload.get("mcpServers")
     if isinstance(servers, dict):
         for name, server in list(servers.items()):
-            if needs_socket_migration(str(name), server) and not socat_socket_conflict(server):
+            if needs_socket_migration(str(name), server) and not _socat_migration_skip_reason(server):
                 servers[name] = socket_server_preserving(server, bridge_command=bridge_command)
                 changed = True
     projects = payload.get("projects")
@@ -237,7 +238,7 @@ def _rewrite_json_mcp_servers(payload: dict, bridge_command: str) -> bool:
             if not isinstance(nested, dict):
                 continue
             for name, server in list(nested.items()):
-                if needs_socket_migration(str(name), server) and not socat_socket_conflict(server):
+                if needs_socket_migration(str(name), server) and not _socat_migration_skip_reason(server):
                     nested[name] = socket_server_preserving(server, bridge_command=bridge_command)
                     changed = True
     return changed
@@ -255,12 +256,22 @@ def _toml_servers_needing_migration(text: str) -> list[str]:
     return [name for name, server in iter_toml_mcp_servers(payload) if needs_socket_migration(name, server)]
 
 
-def _socket_conflict_reasons(servers) -> list[str]:
+def _socat_migration_skip_reason(server: object) -> str | None:
+    if reason := socat_socket_unparsed_reason(server):
+        return reason
+    if risk := socat_socket_conflict(server):
+        return (
+            f"socat socket {risk['socat_socket_target']} conflicts with BRAINLAYER_MCP_SOCKET "
+            f"{risk['bridge_socket_target']}; entry not migrated"
+        )
+    return None
+
+
+def _socket_migration_skip_reasons(servers) -> list[str]:
     return [
-        f"{name}: socat socket {risk['socat_socket_target']} conflicts with BRAINLAYER_MCP_SOCKET "
-        f"{risk['bridge_socket_target']}; entry not migrated"
+        f"{name}: {reason}"
         for name, server in servers
-        if needs_socket_migration(name, server) and (risk := socat_socket_conflict(server))
+        if needs_socket_migration(name, server) and (reason := _socat_migration_skip_reason(server))
     ]
 
 
@@ -300,11 +311,11 @@ def migrate_legacy_mcp_configs(
             import tomllib
 
             servers = iter_toml_mcp_servers(tomllib.loads(original_text))
-            skipped.extend((path, reason) for reason in _socket_conflict_reasons(servers))
+            skipped.extend((path, reason) for reason in _socket_migration_skip_reasons(servers))
             names = [
                 name
                 for name, server in servers
-                if needs_socket_migration(name, server) and not socat_socket_conflict(server)
+                if needs_socket_migration(name, server) and not _socat_migration_skip_reason(server)
             ]
             if not names:
                 continue
@@ -349,7 +360,7 @@ def migrate_legacy_mcp_configs(
         if not isinstance(payload, dict):
             skipped.append((path, "MCP config root must be a JSON object"))
             continue
-        skipped.extend((path, reason) for reason in _socket_conflict_reasons(iter_json_mcp_servers(payload)))
+        skipped.extend((path, reason) for reason in _socket_migration_skip_reasons(iter_json_mcp_servers(payload)))
         try:
             rewritten = _rewrite_json_mcp_servers(payload, bridge_command)
         except ValueError as exc:
