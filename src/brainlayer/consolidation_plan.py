@@ -8,7 +8,7 @@ import shlex
 import stat
 from pathlib import Path
 
-from .component_jobs import _legacy_configured
+from .component_jobs import NON_ENV_RUN, _legacy_configured
 from .hook_python import DEFAULT_KEG_PYTHON, HOOK_PYTHON_ENV, is_pinned_interpreter
 from .supervisor_adapters import ALIASES, ARCHIVED
 from .supervisor_jobs import PLIST_KEYS, resource_policy
@@ -133,14 +133,19 @@ def rendered_launchers(templates, home, python, env_file):
 def collect_legacy(agents, env_file, disabled):
     """Snapshot every owned legacy file/marker and reject unsupported resident policies."""
     records, files = {}, {}
+    env_contents = {}
     known = set(ALIASES) | ARCHIVED | UNMANAGED
     for path in sorted(agents.iterdir()):
-        name = path.name.removesuffix(".loaded-keg")
-        if "brainlayer" not in name or not (name.endswith(".plist") or path.name.endswith(".loaded-keg")):
+        name = path.name[:-11] if path.name.casefold().endswith(".loaded-keg") else path.name
+        if "brainlayer" not in name.casefold() or not (
+            name.casefold().endswith(".plist") or path.name.casefold().endswith(".loaded-keg")
+        ):
             continue
-        label = name.removesuffix(".plist")
+        label = name[:-6] if name.casefold().endswith(".plist") else name
         if label not in known:
             raise ValueError(f"unknown BrainLayer label {label}: {path}")
+        if path.name not in {f"{label}.plist", f"{label}.plist.loaded-keg"}:
+            raise ValueError(f"noncanonical BrainLayer label path {label}: {path}")
         if path.name.endswith(".plist"):
             plist = plistlib.loads(read_owned(path))
             if not isinstance(plist, dict) or plist.get("Label") != label:
@@ -165,8 +170,18 @@ def collect_legacy(agents, env_file, disabled):
             resource_policy(plist)
             env = plist.get("EnvironmentVariables", {})
             env_path = Path(env.get("BRAINLAYER_ENV_FILE") or env_file).expanduser()
+            if not env_path.is_absolute():
+                raise ValueError(f"selected env file must be absolute: {env_path}")
+            if env_path not in env_contents:
+                try:
+                    env_contents[env_path] = read_owned(env_path).decode("utf-8")
+                except FileNotFoundError:
+                    env_contents[env_path] = ""  # Missing snapshot; do not reopen during parsing.
             records[label] = {
-                "enabled": label not in disabled and _legacy_configured(env, env_path),
+                "enabled": label not in disabled
+                and _legacy_configured(
+                    env, env_path, contents=env_contents[env_path], env_run=label not in NON_ENV_RUN
+                ),
                 "plist": plist,
             }
     if not records:
@@ -174,3 +189,36 @@ def collect_legacy(agents, env_file, disabled):
     # Preserve serializable configuration; never execute templates during preflight.
     json.dumps(records)
     return records, files
+
+
+def snapshot_legacy(agents, env_file, domain, run):
+    """Capture all owned/archived states and bytes for a journal before any bootout."""
+    result = run(["launchctl", "print-disabled", domain])
+    if result.returncode:
+        raise RuntimeError("cannot measure launchd disabled state")
+    disabled = disabled_labels(result.stdout)
+    records, files = collect_legacy(agents, env_file, disabled)
+    states = {}
+    for name in sorted(files):
+        if not name.endswith(".plist"):
+            continue
+        label = name.removesuffix(".plist")
+        result = run(["launchctl", "print", f"{domain}/{label}"])
+        pid = None
+        if result.returncode == 113 and "Could not find service" in result.stdout + result.stderr:
+            loaded = False
+        elif result.returncode == 0:
+            loaded = True
+            pids = [value.strip() for value in re.findall(r"(?m)^[ \t]*pid[ \t]*=[ \t]*(.*)$", result.stdout)]
+            if len(pids) > 1 or pids and not re.fullmatch(r"[1-9][0-9]*", pids[0]):
+                raise RuntimeError(f"cannot measure launchd process state: {label}")
+            pid = int(pids[0]) if pids else None
+        else:
+            raise RuntimeError(f"cannot measure launchd loaded state: {label}")
+        states[label] = {"loaded": loaded, "disabled": label in disabled, "pid": pid}
+    return {
+        "schema_version": 1,
+        "components": records,
+        "files": {k: v.hex() for k, v in files.items()},
+        "states": states,
+    }

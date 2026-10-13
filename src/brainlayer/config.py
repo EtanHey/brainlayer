@@ -115,16 +115,20 @@ def _resolve_op_read_value(value_text: str) -> str | None:
     return result.stdout.rstrip("\n")
 
 
-def configured_brainlayer_env_value(name: str, env_path: Path | None = None) -> str | None:
+def configured_brainlayer_env_value(
+    name: str, env_path: Path | None = None, *, contents: str | None = None
+) -> str | None:
     """Return one unambiguous launchd-compatible assignment from the selected env file."""
     target = env_path or get_user_env_path()
-    try:
-        lines = target.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return None
-    except (OSError, UnicodeDecodeError) as exc:
-        logger.warning("Could not read BrainLayer env file %s: %s", target, exc)
-        raise RuntimeError(f"Could not read BrainLayer env file {target}: {exc}") from exc
+    if contents is None:
+        try:
+            contents = target.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("Could not read BrainLayer env file %s: %s", target, exc)
+            raise RuntimeError(f"Could not read BrainLayer env file {target}: {exc}") from exc
+    lines = contents.splitlines()
 
     selected: str | None = None
     for line in lines:
