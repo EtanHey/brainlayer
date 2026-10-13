@@ -133,3 +133,25 @@ def test_configured_off_is_not_ready_while_a_process_is_reported():
     state = {"watch": {"configured": False, "paused": False, "pid": 4242}}
     with pytest.raises(RuntimeError, match="not ready"):
         wait_supervisor(lambda: state, {"watch": Component(("/bin/true",), enabled=False)}, grace=0, clock=Clock())
+
+
+@pytest.mark.parametrize("initial_pid", [None, 4242])
+def test_stop_waits_for_pid_observed_after_bootout(initial_pid):
+    prints = iter([initial_pid, 4343, "absent"])
+    observed = []
+
+    def run(argv):
+        if argv[1] == "bootout":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        pid = next(prints, "absent")
+        if pid == "absent":
+            return subprocess.CompletedProcess(argv, 113, "", "Could not find service")
+        return subprocess.CompletedProcess(argv, 0, "state = waiting" if pid is None else f"pid = {pid}", "")
+
+    def alive(pid):
+        observed.append(pid)
+        return pid == 4343
+
+    with pytest.raises(RuntimeError, match="did not exit"):
+        runtime(run, alive).stop(OLD, grace=0)
+    assert 4343 in observed
