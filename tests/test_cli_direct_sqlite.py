@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from typer.testing import CliRunner
@@ -33,35 +34,74 @@ def test_cli_stats_p95_budget_allows_shared_ci_runner_variance(monkeypatch: pyte
     assert _cli_stats_p95_budget_seconds() == 0.750
 
 
-def _daemon_pids(cli_pgid: int) -> list[str]:
+class _Process(NamedTuple):
+    ppid: int
+    pgid: int
+    started: float
+    command: str
+
+
+def _process_snapshot() -> dict[int, _Process]:
     result = subprocess.run(
-        ["/bin/ps", "-ww", "-axo", "pid=,pgid=,command="],
+        ["/bin/ps", "-ww", "-axo", "pid=,ppid=,pgid=,lstart=,command="],
         capture_output=True,
         text=True,
         check=True,
+        env={**os.environ, "LC_ALL": "C"},
     )
-    owned = []
+    processes = {}
     for line in result.stdout.splitlines():
-        pid, pgid, command = line.strip().split(None, 2)
-        if int(pgid) == cli_pgid and int(pid) != cli_pgid and re.search(r"brainlayer[.-]daemon", command):
-            owned.append(pid)
-    return owned
+        fields = line.strip().split(None, 8)
+        started = time.mktime(time.strptime(" ".join(fields[3:8]), "%a %b %d %H:%M:%S %Y"))
+        processes[int(fields[0])] = _Process(
+            int(fields[1]), int(fields[2]), started, fields[8] if len(fields) > 8 else ""
+        )
+    return processes
+
+
+def _daemon_pids(cli_pid, processes, before, cli_started, descendants):
+    owned = {cli_pid} | {pid for pid, started in descendants if pid in processes and processes[pid].started == started}
+    while True:
+        children = {pid for pid, process in processes.items() if process.ppid in owned}
+        if children <= owned:
+            break
+        owned |= children
+    descendants.update((pid, processes[pid].started) for pid in owned if pid in processes)
+    return {
+        (pid, process.started)
+        for pid, process in processes.items()
+        if pid != cli_pid
+        and re.search(r"brainlayer[.-]daemon", process.command)
+        and (
+            process.pgid == cli_pid
+            or pid in owned
+            or (process.ppid == 1 and (pid, process.started) not in before and process.started >= cli_started)
+        )
+    }
 
 
 def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT, timeout: float = 10):
     # A fresh session isolates this CLI from production and other test processes.
+    before = {(pid, process.started) for pid, process in _process_snapshot().items()}
+    # Portable ps lstart has one-second resolution. The baseline excludes existing
+    # orphans; a new orphan is a conservative signal, not proof of ancestry.
+    cli_started = math.floor(time.time())
     with subprocess.Popen(
         argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
     ) as cli:
-        seen: set[str] = set()
+        seen: set[tuple[int, float]] = set()
+        descendants: set[tuple[int, float]] = set()
         deadline = time.monotonic() + timeout
         timed_out = False
         try:
             while True:
-                seen.update(_daemon_pids(cli.pid))
+                processes = _process_snapshot()
+                if cli.pid in processes:
+                    cli_started = processes[cli.pid].started
+                seen.update(_daemon_pids(cli.pid, processes, before, cli_started, descendants))
                 try:
                     stdout, stderr = cli.communicate(timeout=0.05)
-                    seen.update(_daemon_pids(cli.pid))
+                    seen.update(_daemon_pids(cli.pid, _process_snapshot(), before, cli_started, descendants))
                     break
                 except subprocess.TimeoutExpired:
                     if time.monotonic() >= deadline:
@@ -74,8 +114,22 @@ def _run_cli(argv: list[str], *, env: dict[str, str], cwd: Path = REPO_ROOT, tim
                     os.killpg(cli.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                # New-orphan timing is insufficient custody for a signal. Clean
+                # only the created group or descendants observed through ppid.
+                current = _process_snapshot()
+                for pid, started in seen:
+                    if (
+                        pid in current
+                        and current[pid].started == started
+                        and (current[pid].pgid == cli.pid or (pid, started) in descendants)
+                    ):
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                 cli.communicate(timeout=2)
-        assert not seen, f"CLI spawned daemon descendants: {sorted(seen)}"
+        # Processes that finish between polls remain unobservable, as in the old check.
+        assert not seen, f"CLI spawned daemon descendants or new daemon orphans: {sorted(pid for pid, _ in seen)}"
         return subprocess.CompletedProcess(argv, cli.returncode, stdout, stderr)
 
 
@@ -197,6 +251,91 @@ def test_cli_timeout_does_not_wait_on_descendants_inheriting_output():
     with pytest.raises(subprocess.TimeoutExpired):
         _run_cli([sys.executable, "-c", code], env=os.environ.copy(), timeout=0.1)
     assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("shape", ["setsid-alive", "setsid-exited", "double-fork"])
+def test_cli_check_detects_and_cleans_escaped_daemons(tmp_path, shape):
+    pid_file = tmp_path / "escaped.pid"
+    child_code = "import os, sys, time\n"
+    if shape == "double-fork":
+        child_code += "if os.fork(): sys.exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\n"
+    child_code += (
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep("
+        + ("1" if shape == "setsid-alive" else "5")
+        + ")\n"
+    )
+    code = (
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1], 'padding' * 30, 'com.brainlayer.daemon'], "
+        "start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not pathlib.Path(sys.argv[1]).exists() and time.monotonic() < deadline: time.sleep(.01)\n"
+    )
+    if shape == "setsid-alive":
+        # Reap before CLI exit: only the ppid walk can observe this live daemon.
+        code += "child.wait()\n"
+    elif shape != "setsid-exited":
+        code += "time.sleep(.3)\n"
+    try:
+        with pytest.raises(AssertionError, match="CLI spawned daemon"):
+            _run_cli([sys.executable, "-c", code, str(pid_file), child_code], env=os.environ.copy())
+        child_pid = int(pid_file.read_text())
+        # The PID file proves this fixture's custody even when a double fork
+        # escapes between polls. The detector must not signal unknown orphans.
+        try:
+            os.kill(child_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            state = subprocess.run(["/bin/ps", "-p", str(child_pid), "-o", "stat="], capture_output=True, text=True)
+            if not state.stdout.strip() or state.stdout.strip().startswith("Z"):
+                break
+            time.sleep(0.01)
+        state = subprocess.run(["/bin/ps", "-p", str(child_pid), "-o", "stat="], capture_output=True, text=True)
+        assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
+    finally:
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+
+def test_cli_check_ignores_a_preexisting_orphan(tmp_path):
+    pid_file = tmp_path / "outside-orphan.pid"
+    code = (
+        "import os, sys, time\n"
+        "if os.fork(): sys.exit(0)\nos.setsid()\nif os.fork(): os._exit(0)\n"
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(5)\n"
+    )
+    identity = None
+    try:
+        subprocess.run(
+            [sys.executable, "-c", code, str(pid_file), "com.brainlayer.daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        deadline = time.monotonic() + 2
+        while not pid_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        pid = int(pid_file.read_text())
+        process = _process_snapshot()[pid]
+        identity = (pid, process.started)
+        assert process.ppid == 1
+        result = _run_cli([sys.executable, "-c", "pass"], env=os.environ.copy())
+        assert result.returncode == 0
+        assert _process_snapshot()[pid].started == process.started
+    finally:
+        if identity is not None:
+            pid, started = identity
+            current = _process_snapshot()
+            if pid in current and current[pid].started == started:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
 
 def test_cli_search_opens_vectorstore_readonly_directly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
