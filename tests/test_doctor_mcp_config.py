@@ -46,3 +46,33 @@ def test_doctor_legacy_issue_details_exclude_full_server_dict(tmp_path: Path):
     assert "env" not in str(details)
     assert details["server"]["command"] == "brainlayer-mcp"
     assert "args_preview" not in details["server"]
+
+
+def test_doctor_names_raw_socat_restart_risk_without_config_secrets(tmp_path: Path):
+    import json
+
+    from brainlayer.doctor import _legacy_python_mcp_config_issues
+
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "memory-alias": {
+                        "command": "/opt/bin/socat",
+                        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                        "env": {"TOKEN": "private-value"},
+                    },
+                    "other": {"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/other.sock"]},
+                }
+            }
+        )
+    )
+    issues = _legacy_python_mcp_config_issues([config])
+    assert len(issues) == 1
+    assert issues[0].code == "mcp_transport_restart_risk"
+    assert issues[0].severity == "warning"
+    assert str(config) in issues[0].message
+    assert "restart" in issues[0].message.lower()
+    assert "brainlayer-mcp-stdio-bridge" in issues[0].details["fix"]
+    assert "private-value" not in str(issues)

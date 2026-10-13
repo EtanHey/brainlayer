@@ -608,8 +608,8 @@ def setup(
         True,
         "--migrate-mcp/--no-migrate-mcp",
         help=(
-            "Rewrite retired brainlayer-mcp MCP entries to "
-            "socat STDIO UNIX-CONNECT:/tmp/brainbar.sock (backs up each file first)."
+            "Rewrite owned legacy and raw-socat BrainLayer MCP entries to "
+            "brainlayer-mcp-stdio-bridge (backs up each file first)."
         ),
     ),
     verify_mcp: bool = typer.Option(
@@ -650,6 +650,7 @@ def setup(
         McpMigrationReport,
         ensure_brainlayer_env,
         ensure_spotlight_excluded_layout,
+        get_current_mcp_bridge_bin,
         install_launchd,
         migrate_legacy_mcp_configs,
         verify_mcp_transport,
@@ -665,8 +666,11 @@ def setup(
         )
         if launchd:
             install_launchd(target, env_file=resolved_env_file)
-        migrated_configs = migrate_legacy_mcp_configs() if migrate_mcp else McpMigrationReport()
-        tool_count = verify_mcp_transport() if verify_mcp else None
+        bridge_command = get_current_mcp_bridge_bin() if migrate_mcp or verify_mcp else None
+        migrated_configs = (
+            migrate_legacy_mcp_configs(bridge_command=bridge_command) if migrate_mcp else McpMigrationReport()
+        )
+        tool_count = verify_mcp_transport(bridge_command=bridge_command) if verify_mcp else None
     except (
         FileNotFoundError,
         FileExistsError,

@@ -6,6 +6,19 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("brainlayer.setup._require_mcp_bridge", lambda command: None)
+    monkeypatch.setattr(
+        "brainlayer.setup.get_current_mcp_bridge_bin",
+        lambda: "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+    )
+
+
 SOCKET_MCP = {
     "command": "socat",
     "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
@@ -58,8 +71,9 @@ def test_setup_toml_migrator_preserves_multiline_args_and_unrelated_keys(tmp_pat
     report = migrate_legacy_mcp_configs([codex])
     assert report.changed == (codex,)
     payload = tomllib.loads(codex.read_text(encoding="utf-8"))
-    assert payload["mcp_servers"]["brainlayer"]["command"] == "socat"
-    assert payload["mcp_servers"]["brainlayer"]["args"] == SOCKET_MCP["args"]
+    assert payload["mcp_servers"]["brainlayer"] == {
+        "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
+    }
     assert payload["mcp_servers"]["other"]["command"] == "keep-me"
     assert payload["mcp_servers"]["other"]["command_timeout_sec"] == 30
 
@@ -71,7 +85,7 @@ def test_setup_toml_migrator_aborts_on_invalid_rewrite(tmp_path: Path, monkeypat
     codex.write_text(MULTILINE_CODEX_TOML, encoding="utf-8")
     original = codex.read_text(encoding="utf-8")
 
-    def broken_rewrite(text: str, names: list[str]) -> str:
+    def broken_rewrite(text: str, names: list[str], bridge_command: str) -> str:
         return text.replace('command = "/Users/me/.bun/bin/bun"', 'command = "socat"\nargs = [')
 
     monkeypatch.setattr(setup_module, "_rewrite_codex_mcp_servers_to_socket", broken_rewrite)
@@ -98,3 +112,41 @@ def test_setup_mcp_migration_reports_skipped_replace_failures(tmp_path: Path, mo
     assert report.changed == ()
     assert any(path == config_path for path, reason in report.skipped)
     assert "replace denied" in report.skipped[0][1]
+
+
+def test_migrate_socat_json_and_codex_to_bridge_with_backups(tmp_path: Path, monkeypatch):
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config = tmp_path / "mcp.json"
+    codex = tmp_path / "config.toml"
+    server = {**SOCKET_MCP, "env": {"MCPLAYER_BRAINLAYER_FRONT": "/tmp/private-front.sock"}, "disabled": True}
+    original = {
+        "mcpServers": {"brainlayer": server, "other": SOCKET_MCP},
+        "projects": {"repo": {"mcpServers": {"brainbar": server}}},
+    }
+    config.write_text(json.dumps(original))
+    codex.write_text(
+        '[mcp_servers.brainlayer]\ncommand="socat"\nargs=["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]\nstartup_timeout_sec=15\n[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT="/tmp/private-front.sock"\n[mcp_servers.other]\ncommand="keep-me"\n'
+    )
+    before = {p: p.read_bytes() for p in (config, codex)}
+    report = migrate_legacy_mcp_configs(
+        [config, codex], bridge_command="/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
+    )
+    assert report.changed == (config, codex)
+    assert report.skipped == ()
+    migrated = json.loads(config.read_text())
+    expected = {
+        "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+        "env": server["env"],
+        "disabled": True,
+    }
+    assert migrated["mcpServers"]["brainlayer"] == expected
+    assert migrated["projects"]["repo"]["mcpServers"]["brainbar"] == expected
+    assert migrated["mcpServers"]["other"] == SOCKET_MCP
+    toml_server = tomllib.loads(codex.read_text())["mcp_servers"]["brainlayer"]
+    assert toml_server == {"command": expected["command"], "env": server["env"], "startup_timeout_sec": 15}
+    backups = list((tmp_path / "home/.local/share/brainlayer/config-backups").glob("*.bak"))
+    assert sorted(p.read_bytes() for p in backups) == sorted(before.values())
+    assert migrate_legacy_mcp_configs([config, codex]).changed == ()
+    assert len(list(backups[0].parent.glob("*.bak"))) == 2

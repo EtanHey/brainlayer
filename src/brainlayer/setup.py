@@ -17,10 +17,12 @@ from pathlib import Path
 
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
 from .mcp_socket_config import (
+    bridge_path_risk,
     iter_toml_mcp_servers,
     needs_socket_migration,
     owned_mcp_config_paths,
     socket_server_preserving,
+    stable_mcp_bridge_command,
 )
 from .paths import get_canonical_db_path, resolve_db_path
 from .spotlight import ensure_spotlight_excluded_layout as _ensure_spotlight_excluded_layout
@@ -105,14 +107,14 @@ def get_current_brainlayer_bin() -> str | None:
     return None
 
 
-def get_current_mcp_bridge_bin() -> str | None:
-    """Return the bridge installed beside the active BrainLayer CLI, then fall back to PATH."""
-    brainlayer_bin = get_current_brainlayer_bin()
-    if brainlayer_bin:
-        sibling = Path(brainlayer_bin).with_name("brainlayer-mcp-stdio-bridge")
-        if sibling.is_file() and os.access(sibling, os.X_OK):
-            return str(sibling)
-    return shutil.which("brainlayer-mcp-stdio-bridge")
+def get_current_mcp_bridge_bin() -> str:
+    """Return the stable opt path without resolving it to a versioned Cellar path."""
+    return stable_mcp_bridge_command()
+
+
+def _require_mcp_bridge(command: str) -> None:
+    if risk := bridge_path_risk({"command": command}):
+        raise FileNotFoundError(f"Install the Homebrew bridge at {command}: {risk['reason']}")
 
 
 def get_default_mcp_config_paths() -> tuple[Path, ...]:
@@ -152,8 +154,8 @@ def _strip_toml_table_assignments(body: str, keys: frozenset[str]) -> str:
     return "".join(out)
 
 
-def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
-    """Rewrite matching [mcp_servers.NAME] / [mcpServers.NAME] blocks to socket form."""
+def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str], bridge_command: str) -> str:
+    """Rewrite owned MCP blocks to the reconnecting bridge, retaining subtables."""
     result = text
     for name in names:
         for table in ("mcp_servers", "mcpServers"):
@@ -165,18 +167,18 @@ def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str]) -> str:
                 continue
             header, body = match.group(1), match.group(2)
             kept_lines = _strip_toml_table_assignments(body, _TOML_TRANSPORT_KEYS)
-            new_body = 'command = "socat"\nargs = ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]\n' + kept_lines
+            new_body = f"command = {json.dumps(bridge_command)}\n" + kept_lines
             result = result[: match.start()] + header + new_body + result[match.end() :]
     return result
 
 
-def _rewrite_json_mcp_servers(payload: dict) -> bool:
+def _rewrite_json_mcp_servers(payload: dict, bridge_command: str) -> bool:
     changed = False
     servers = payload.get("mcpServers")
     if isinstance(servers, dict):
         for name, server in list(servers.items()):
             if needs_socket_migration(str(name), server):
-                servers[name] = socket_server_preserving(server)
+                servers[name] = socket_server_preserving(server, bridge_command=bridge_command)
                 changed = True
     projects = payload.get("projects")
     if isinstance(projects, dict):
@@ -188,7 +190,7 @@ def _rewrite_json_mcp_servers(payload: dict) -> bool:
                 continue
             for name, server in list(nested.items()):
                 if needs_socket_migration(str(name), server):
-                    nested[name] = socket_server_preserving(server)
+                    nested[name] = socket_server_preserving(server, bridge_command=bridge_command)
                     changed = True
     return changed
 
@@ -210,14 +212,14 @@ def migrate_legacy_mcp_configs(
     *,
     bridge_command: str | None = None,
 ) -> McpMigrationReport:
-    """Rewrite owned BrainLayer MCP entries (by server name) to the canonical socat form.
+    """Rewrite owned BrainLayer MCP entries to the shipped reconnecting bridge.
 
     Name-matcher: only ``mcpServers`` keys in ``BRAINLAYER_SERVER_NAMES`` are
-    rewritten when not already socat socket or ``brainlayer-mcp-stdio-bridge``.
+    rewritten unless already using the stable opt-path bridge.
     Each rewritten file is backed up under ~/.local/share/brainlayer/config-backups/.
     Unreadable/malformed inputs and failed writes are reported in ``skipped``.
     """
-    del bridge_command  # socket form is the only rewrite target
+    bridge_command = bridge_command or get_current_mcp_bridge_bin()
     changed: list[Path] = []
     skipped: list[tuple[Path, str]] = []
     paths = config_paths if config_paths is not None else get_default_mcp_config_paths()
@@ -238,7 +240,7 @@ def migrate_legacy_mcp_configs(
             names = _toml_servers_needing_migration(original_text)
             if not names:
                 continue
-            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names)
+            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names, bridge_command)
             if new_text == original_text:
                 skipped.append((path, f"TOML servers {names!r} need migration but table headers were not rewritten"))
                 continue
@@ -247,6 +249,7 @@ def migrate_legacy_mcp_configs(
             except ValueError as exc:
                 skipped.append((path, str(exc)))
                 continue
+            _require_mcp_bridge(bridge_command)
             try:
                 _backup_config_file(target_path)
                 mode = target_path.stat().st_mode & 0o777
@@ -274,9 +277,10 @@ def migrate_legacy_mcp_configs(
         if not isinstance(payload, dict):
             skipped.append((path, "MCP config root must be a JSON object"))
             continue
-        if not _rewrite_json_mcp_servers(payload):
+        if not _rewrite_json_mcp_servers(payload, bridge_command):
             continue
 
+        _require_mcp_bridge(bridge_command)
         try:
             _backup_config_file(target_path)
             mode = target_path.stat().st_mode & 0o777
@@ -301,7 +305,7 @@ def verify_mcp_transport(*, bridge_command: str | None = None, timeout_seconds: 
     """Require initialize + tools/list + one successful tool call on one fresh bridge."""
     resolved_bridge = bridge_command or get_current_mcp_bridge_bin()
     if not resolved_bridge:
-        raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found on PATH")
+        raise FileNotFoundError("brainlayer-mcp-stdio-bridge was not found at the pinned opt path")
     initialize_request = {
         "jsonrpc": "2.0",
         "id": 1,
