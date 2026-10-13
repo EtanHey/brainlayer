@@ -342,9 +342,20 @@ def _migrate(
             raise RuntimeError("foreign manifest prevents restart recovery")
         daemon_path = agents / f"{NEW[0]}.plist"
         old_daemon = bytes.fromhex(previous["published_files"][daemon_path.name])
-        requested_daemon = bytes.fromhex(restarting["requested_daemon"])
+        declared_daemon = requested_daemon = bytes.fromhex(restarting["requested_daemon"])
+        requested = plistlib.loads(requested_daemon)
+        old_python = Path(requested["ProgramArguments"][1])
+        if old_python != python:
+            relative_root = Path(requested["EnvironmentVariables"]["BRAINLAYER_REPO_ROOT"]).relative_to(
+                old_python.parents[1]
+            )
+            requested["ProgramArguments"][1] = str(python)
+            requested["EnvironmentVariables"]["BRAINLAYER_REPO_ROOT"] = str(python.parents[1] / relative_root)
+            requested_daemon = plistlib.dumps(requested, sort_keys=False)
+            if hashlib.sha256(requested_daemon).hexdigest() != previous["configuration_sha256"][NEW[0]]:
+                raise RuntimeError("requested launcher configuration changed; explicit replan required")
         fallback_daemon = bytes.fromhex(previous["daemon_pinned"])
-        allowed_daemons = {old_daemon, requested_daemon, fallback_daemon}
+        allowed_daemons = {old_daemon, declared_daemon, requested_daemon, fallback_daemon}
         old_marker, new_marker = (previous["keg"] + "\n").encode(), (restarting["requested_keg"] + "\n").encode()
         marker_paths = [agents / f"{label}.plist.loaded-keg" for label in NEW if label not in disabled]
         for name, raw in previous["published_files"].items():
@@ -364,9 +375,10 @@ def _migrate(
             runtime.observed_pids.setdefault(NEW[0], set()).add(original_state["pid"])
         stopping, stopped_daemon = False, False
         receipt_versions = {expected_receipt}
+        missing_previous = ""
 
         def completed(keg_value, daemon_bytes, fallback=False):
-            result = previous | dict(phase="migrated", keg=keg_value, daemon_pinned=daemon_bytes.hex())
+            result = previous | dict(phase="migrated", keg=keg_value, daemon_pinned=pinned_daemon(daemon_bytes).hex())
             files = dict(previous["published_files"])
             files[daemon_path.name] = daemon_bytes.hex()
             for marker in marker_paths:
@@ -402,6 +414,30 @@ def _migrate(
             try:
                 kept = False
                 current = runtime.observe(NEW[0])
+                fallback_python = Path(plistlib.loads(fallback_daemon)["ProgramArguments"][1])
+                if not fallback_python.is_file() or not os.access(fallback_python, os.X_OK):
+                    # Keep/recover the runnable current definition; never publish a deleted keg.
+                    missing_previous = (
+                        "previous keg removed by brew cleanup; re-run `install.sh consolidate` on the current keg"
+                    )
+                    definition = read_owned(daemon_path)
+                    if definition not in allowed_daemons:
+                        raise RuntimeError("unowned daemon definition prevents restart rollback")
+                    if current["loaded"] and NEW[0] not in started and (stopped_daemon or current != initial_state):
+                        raise RuntimeError("unowned replacement prevents restart rollback")
+                    requested_python = Path(plistlib.loads(requested_daemon)["ProgramArguments"][1])
+                    if not requested_python.is_file() or not os.access(requested_python, os.X_OK):
+                        raise RuntimeError(missing_previous + "; current interpreter is also unavailable")
+                    if current["loaded"] and definition != requested_daemon:
+                        stop(NEW[0], current)
+                        current = runtime.observe(NEW[0])
+                    if not current["loaded"]:
+                        if any(alive(pid) for pid in runtime.observed_pids.get(NEW[0], set())):
+                            raise RuntimeError(missing_previous + "; supervisor still lives; refusing bootstrap")
+                        wait_custody(control / "calendar", clock=clock)
+                        replace_known(daemon_path, allowed_daemons, requested_daemon, write_launch_agent)
+                        bootstrap(NEW[0], daemon_path)
+                    raise RuntimeError(missing_previous)
                 if NEW[0] in started:
                     stop(NEW[0], current)
                 elif current["loaded"]:
@@ -420,10 +456,13 @@ def _migrate(
                 restored = completed(previous["keg"], fallback_daemon, fallback=recovering)
             except BaseException as rollback:
                 preserve_refusal(restarting, rollback)
+                detail = str(rollback)
+                if missing_previous and missing_previous not in detail:
+                    detail = missing_previous + "; " + detail
                 if not isinstance(failure, Exception):
-                    failure.add_note(f"keg restart rollback incomplete: {rollback}")
+                    failure.add_note(f"keg restart rollback incomplete: {detail}")
                     raise failure
-                raise RuntimeError(f"keg restart failed; rollback incomplete: {rollback}") from failure
+                raise RuntimeError(f"keg restart failed; rollback incomplete: {detail}") from failure
             if not isinstance(failure, Exception):
                 raise
             if recovering:
@@ -515,7 +554,7 @@ def _migrate(
             requested_keg=keg,
             restart_preimage=previous,
             restart_state=runtime.observe(NEW[0]),
-            requested_daemon=pinned_daemon(prepared[NEW[0]]).hex(),
+            requested_daemon=prepared[NEW[0]].hex(),
         )
         restarting_bytes = json.dumps(restarting).encode()
         try:

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import plistlib
+import shutil
 import signal
 import subprocess
 import sys
@@ -173,10 +174,6 @@ def test_interrupted_restart_fallback_pins_previous_keg_after_opt_moves(setup):
     (new_python.parents[1] / "lib/python3.12/site-packages/brainlayer").mkdir(parents=True)
     daemon = agents / f"{NEW}.plist"
     requested = plistlib.loads(daemon.read_bytes())
-    requested["ProgramArguments"][1] = str(new_python)
-    requested["EnvironmentVariables"]["BRAINLAYER_REPO_ROOT"] = str(
-        new_python.parents[1] / "lib/python3.12/site-packages"
-    )
     interrupted = previous | dict(
         phase="migrating",
         requested_keg="keg2",
@@ -192,7 +189,7 @@ def test_interrupted_restart_fallback_pins_previous_keg_after_opt_moves(setup):
     def verify():
         selected = Path(plistlib.loads(daemon.read_bytes())["ProgramArguments"][1])
         checked.append(selected)
-        if selected == new_python:
+        if selected == opt / "libexec/venv/bin/python":
             raise RuntimeError("requested keg not ready")
         assert selected == old_keg / "libexec/venv/bin/python"
 
@@ -204,7 +201,125 @@ def test_interrupted_restart_fallback_pins_previous_keg_after_opt_moves(setup):
     assert (agents / f"{NEW}.plist.loaded-keg").read_bytes() == b"keg1\n"
     recovered = invoke(setup, runner, "keg2")
     assert recovered["keg"] == "keg2" and "restart_fallback" not in recovered
-    assert Path(plistlib.loads(daemon.read_bytes())["ProgramArguments"][1]) == new_python
+    assert Path(plistlib.loads(daemon.read_bytes())["ProgramArguments"][1]) == opt / "libexec/venv/bin/python"
+
+
+@pytest.mark.parametrize("interrupted_pin", [False, True], ids=["normal", "interrupted-cellar-pin"])
+def test_successful_restart_survives_next_upgrade_and_cellar_cleanup(setup, monkeypatch, interrupted_pin):
+    from brainlayer import launchd_consolidation as module
+
+    home, agents, env = setup
+    opt = home / "opt/brainlayer"
+    opt.parent.mkdir(parents=True)
+    kegs = [home / f"Cellar/brainlayer/v{version}" for version in (1, 2, 3)]
+    for keg in kegs:
+        venv = keg / "libexec/venv"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True, timeout=15)
+        (next((venv / "lib").glob("python*/site-packages")) / "brainlayer").mkdir()
+    opt.symlink_to(kegs[0], target_is_directory=True)
+    python = opt / "libexec/venv/bin/python"
+    monkeypatch.setenv("BRAINLAYER_HOOK_PYTHON", str(python))
+    runner = Launchctl()
+
+    def migrate(keg):
+        return module.migrate(
+            home=home,
+            templates=ROOT / "scripts/launchd",
+            env_file=env,
+            python=python,
+            keg=str(keg),
+            domain="gui/424242",
+            run=runner,
+            alive=lambda pid: False,
+            verify=lambda: None,
+        )
+
+    previous = migrate(kegs[0])
+    opt.unlink()
+    opt.symlink_to(kegs[1], target_is_directory=True)
+    if interrupted_pin:
+        # A pre-R3 crash journal can carry the old physically pinned requested bytes.
+        requested = plistlib.loads((agents / f"{NEW}.plist").read_bytes())
+        requested["ProgramArguments"][1] = str(kegs[1] / "libexec/venv/bin/python")
+        requested["EnvironmentVariables"]["BRAINLAYER_REPO_ROOT"] = str(
+            next((kegs[1] / "libexec/venv/lib").glob("python*/site-packages"))
+        )
+        pending = previous | dict(
+            phase="migrating",
+            requested_keg=str(kegs[1]),
+            restart_preimage=previous,
+            restart_state={"loaded": True, "pid": 4242},
+            requested_daemon=plistlib.dumps(requested, sort_keys=False).hex(),
+        )
+        (home / ".local/share/brainlayer/supervisor/migration.json").write_text(json.dumps(pending))
+    result = migrate(kegs[1])
+    daemon = agents / f"{NEW}.plist"
+    raw = daemon.read_bytes()
+    opt.unlink()
+    opt.symlink_to(kegs[2], target_is_directory=True)
+    shutil.rmtree(kegs[1])  # Only this test's private Cellar, simulating brew cleanup.
+    document = plistlib.loads(raw)
+    selected = Path(document["ProgramArguments"][1])
+    assert selected.is_file(), "successful restart published an interpreter removed by brew cleanup"
+    assert selected == python and b"/Cellar/" not in raw
+    assert Path(document["EnvironmentVariables"]["BRAINLAYER_REPO_ROOT"]).is_dir()
+    prefix = subprocess.check_output([str(selected), "-c", "import sys;print(sys.prefix)"], text=True, timeout=5)
+    assert Path(prefix.strip()).resolve() == kegs[2] / "libexec/venv"
+    assert result["configuration_sha256"][NEW] == hashlib.sha256(raw).hexdigest()
+    assert result["published_sha256"][daemon.name] == hashlib.sha256(raw).hexdigest()
+    assert plistlib.loads(bytes.fromhex(result["daemon_pinned"]))["ProgramArguments"][1] == str(
+        kegs[1] / "libexec/venv/bin/python"
+    )
+
+
+@pytest.mark.parametrize("failure", ["verify", "bootstrap", "persistent-bootstrap"])
+def test_removed_previous_keg_never_publishes_missing_fallback_and_plain_rerun_recovers(setup, failure):
+    home, agents, _ = setup
+    old, current = [home / f"Cellar/brainlayer/{name}" for name in ("old", "current")]
+    old.mkdir(parents=True)
+    current.mkdir(parents=True)
+    opt = home / "opt/brainlayer"
+    opt.parent.mkdir(parents=True)
+    opt.symlink_to(old, target_is_directory=True)
+
+    class BootstrapFailure(Launchctl):
+        refuse = False
+
+        def __call__(self, argv):
+            if self.refuse and argv[1] == "bootstrap" and Path(argv[3]).stem == NEW:
+                self.fail = NEW
+            return super().__call__(argv)
+
+    runner = BootstrapFailure()
+    invoke(setup, runner)
+    opt.unlink()
+    opt.symlink_to(current, target_is_directory=True)
+    shutil.rmtree(old)  # This test created and owns the removed keg.
+    runner.calls.clear()
+    if failure == "bootstrap":
+        runner.fail = NEW
+    runner.refuse = failure == "persistent-bootstrap"
+
+    def verify():
+        raise RuntimeError("requested keg not ready")
+
+    message = "previous keg removed by brew cleanup; re-run `install.sh consolidate` on the current keg"
+    with pytest.raises(RuntimeError, match="rollback incomplete") as error:
+        invoke(setup, runner, "keg2", verify=verify if failure == "verify" else lambda: None)
+    assert message in str(error.value)
+    daemon = agents / f"{NEW}.plist"
+    raw = daemon.read_bytes()
+    assert Path(plistlib.loads(raw)["ProgramArguments"][1]) == opt / "libexec/venv/bin/python"
+    assert b"/Cellar/" not in raw and (opt / "libexec/venv/bin/python").is_file()
+    assert runner.loaded == ({CALENDAR} if runner.refuse else {NEW, CALENDAR})
+    receipt = home / ".local/share/brainlayer/supervisor/migration.json"
+    pending = json.loads(receipt.read_bytes())
+    assert pending["phase"] == "migrating" and pending["requested_keg"] == "keg2"
+    assert "restart_fallback" not in pending and "recovery_refusal" not in pending
+    runner.refuse = False
+    recovered = invoke(setup, runner, "keg2")
+    assert recovered["phase"] == "migrated" and recovered["keg"] == "keg2"
+    assert "restart_fallback" not in recovered
 
 
 def test_pinned_daemon_keeps_venv_python_symlink_and_actual_prefix(setup, monkeypatch):
