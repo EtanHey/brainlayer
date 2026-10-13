@@ -1069,6 +1069,15 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
     finally:
         store.close()
 
+    legacy_initializations = []
+    legacy_init = VectorStore._init_db
+
+    def recording_legacy_init(store):
+        legacy_initializations.append(threading.current_thread().name)
+        return legacy_init(store)
+
+    monkeypatch.setattr(VectorStore, "_init_db", recording_legacy_init)
+
     for index in range(8):
         enqueue_store(
             content=f"drain background backlog item {index}",
@@ -1119,13 +1128,19 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
                 worker_errors.append(f"test-drain-loop: {type(exc).__name__}")
             stop.set()
 
-    def recording_cycle(**kwargs):
+    production_split_cycle = hotlane._run_split_cycle
+
+    def recording_split_cycle(**kwargs):
         nonlocal hotlane_embeddings
-        result = hotlane.run_cycle(**kwargs)
+        result = production_split_cycle(**kwargs)
         if result.embedded:
             with counters_lock:
                 hotlane_embeddings += result.embedded
         return result
+
+    # Keep run() on its default split-read/write path. Passing a cycle_fn wrapper
+    # selects the legacy adapter, which migrates schema on every cycle.
+    monkeypatch.setattr(hotlane, "_run_split_cycle", recording_split_cycle)
 
     def hotlane_loop() -> None:
         try:
@@ -1140,7 +1155,6 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
                 enrich_since_hours=24,
                 vector_store_cls=VectorStore,
                 model_factory=_FastEmbeddingModel,
-                cycle_fn=recording_cycle,
                 sleep_fn=lambda seconds: time.sleep(min(seconds, 0.005)),
                 max_cycles=400,
                 queue_dir=queue_dir,
@@ -1224,6 +1238,7 @@ def test_real_concurrent_writers_keep_interactive_store_searchable_under_sla(tmp
             marker in (item.get("content", "") + item.get("snippet", "")) for item in search_payload.get("results", [])
         ), search_payload
         assert roundtrip_latency < 2.0
+        assert legacy_initializations == [], "runtime writers must not run legacy schema initialization"
     except AssertionError as failure:
         try:
             failure_measured_at = time.perf_counter()
@@ -1464,6 +1479,9 @@ def test_concurrent_writer_sla_stuck_writer_fails_with_bounded_diagnostic(tmp_pa
 
     class StuckHotlane:
         STOP = False
+
+        def _run_split_cycle(self, **_kwargs):
+            pytest.fail("stuck hotlane must not enter a write cycle")
 
         def run(self, **_kwargs):
             release.wait(20)
