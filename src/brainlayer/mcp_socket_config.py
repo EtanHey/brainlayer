@@ -21,6 +21,7 @@ _STDIO_BRIDGE_COMMAND = "brainlayer-mcp-stdio-bridge"
 KEG_MCP_BRIDGE_PATHS = tuple(
     f"{prefix}/opt/brainlayer/bin/{_STDIO_BRIDGE_COMMAND}" for prefix in ("/opt/homebrew", "/usr/local")
 )
+MCPLAYER_FRONT_ENV = "MCPLAYER_BRAINLAYER_FRONT"
 
 
 def stable_mcp_bridge_command() -> str:
@@ -52,8 +53,28 @@ def is_socat_brainbar_transport(server: object) -> bool:
     """Any socat argument naming BrainBar has the same restart lifetime risk."""
     if mcp_command_basename(server) != "socat":
         return False
-    args = server.get("args")
-    return isinstance(args, list) and any(isinstance(a, str) and "brainbar.sock" in a for a in args)
+    command = server.get("command")
+    arg_sets = [server.get("args"), command.get("args") if isinstance(command, dict) else None]
+    return any(
+        isinstance(args, list) and any(isinstance(a, str) and "brainbar.sock" in a for a in args) for args in arg_sets
+    )
+
+
+def bridge_uses_proxy(server: object) -> bool:
+    """Config-explicit proxy route, respecting the bridge's socket override precedence."""
+    if mcp_command_basename(server) != _STDIO_BRIDGE_COMMAND:
+        return False
+    command = server.get("command")
+    env = server.get("env")
+    env = dict(env) if isinstance(env, dict) else {}
+    if isinstance(command, dict) and isinstance(command.get("env"), dict):
+        env.update(command["env"])
+    return bool(env.get(MCPLAYER_FRONT_ENV)) and not bool(env.get("BRAINLAYER_MCP_SOCKET"))
+
+
+def without_proxy_front(env: object) -> object:
+    """Copy an env map without the variable socat ignored; never mutate its preimage."""
+    return {k: v for k, v in env.items() if k != MCPLAYER_FRONT_ENV} if isinstance(env, dict) else env
 
 
 _SKIP_GITS_DIR_PARTS = frozenset({".worktrees", ".git", "docs.local", "node_modules", ".tmp"})
@@ -170,6 +191,11 @@ def socket_server_preserving(server: object, *, bridge_command: str | None = Non
     command: Any = bridge_command or stable_mcp_bridge_command()
     if isinstance(server, dict) and isinstance(server.get("command"), dict):
         command = {**server["command"], "path": command, "args": []}
+    if mcp_command_basename(server) == "socat":
+        if "env" in preserved:
+            preserved["env"] = without_proxy_front(preserved["env"])
+        if isinstance(command, dict) and "env" in command:
+            command["env"] = without_proxy_front(command["env"])
     return {"command": command, **preserved}
 
 

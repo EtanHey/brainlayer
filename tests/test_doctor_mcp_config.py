@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_doctor_does_not_crash_on_invalid_utf8_mcp_config(tmp_path: Path):
     from brainlayer.doctor import _legacy_python_mcp_config_issues
@@ -76,3 +78,35 @@ def test_doctor_names_raw_socat_restart_risk_without_config_secrets(tmp_path: Pa
     assert "restart" in issues[0].message.lower()
     assert "brainlayer-mcp-stdio-bridge" in issues[0].details["fix"]
     assert "private-value" not in str(issues)
+
+
+def test_doctor_flags_nonowned_zed_socat_args(tmp_path: Path):
+    from brainlayer.doctor import _legacy_python_mcp_config_issues
+
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        '{"mcpServers":{"memory":{"command":{"path":"socat","args":["-","UNIX-CONNECT:/tmp/brainbar.sock"]}}}}'
+    )
+    issues = _legacy_python_mcp_config_issues([config])
+    assert [(i.code, i.severity) for i in issues] == [("mcp_transport_restart_risk", "warning")]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("override", [False, True])
+def test_doctor_proxy_route_is_info_without_env_values(tmp_path: Path, monkeypatch, nested, override):
+    import json
+
+    from brainlayer.doctor import _legacy_python_mcp_config_issues
+
+    monkeypatch.setattr("brainlayer.doctor.bridge_path_risk", lambda server: None)
+    env = {"MCPLAYER_BRAINLAYER_FRONT": "/tmp/private-front.sock", "TOKEN": "secret-value"}
+    if override:
+        env["BRAINLAYER_MCP_SOCKET"] = "/tmp/direct.sock"
+    bridge = "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
+    server = {"command": {"path": bridge, "env": env}} if nested else {"command": bridge, "env": env}
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps({"mcpServers": {"brainlayer": server}}))
+    issues = _legacy_python_mcp_config_issues([config])
+    assert [(i.code, i.severity) for i in issues] == ([] if override else [("mcp_bridge_proxy_route", "info")])
+    assert "private-front.sock" not in str(issues)
+    assert "secret-value" not in str(issues)

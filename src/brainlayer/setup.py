@@ -19,10 +19,12 @@ from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
 from .mcp_socket_config import (
     bridge_path_risk,
     iter_toml_mcp_servers,
+    mcp_command_basename,
     needs_socket_migration,
     owned_mcp_config_paths,
     socket_server_preserving,
     stable_mcp_bridge_command,
+    without_proxy_front,
 )
 from .paths import get_canonical_db_path, resolve_db_path
 from .spotlight import ensure_spotlight_excluded_layout as _ensure_spotlight_excluded_layout
@@ -132,33 +134,64 @@ def _validate_toml_text(text: str) -> None:
 
 
 def _strip_toml_table_assignments(body: str, keys: frozenset[str]) -> str:
-    key_pattern = "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+    import tomllib
+
     lines = body.splitlines(keepends=True)
     out: list[str] = []
     i = 0
     while i < len(lines):
         line = lines[i]
-        if not re.match(rf"^\s*({key_pattern})\s*=", line):
+        if not line.strip() or line.lstrip().startswith("#"):
             out.append(line)
             i += 1
             continue
-        rhs = line.split("=", 1)[1] if "=" in line else ""
-        if "[" in rhs and "]" not in rhs:
-            i += 1
-            while i < len(lines) and "]" not in lines[i]:
+        assignment = line
+        while True:
+            try:
+                parsed = tomllib.loads(assignment)
+                break
+            except tomllib.TOMLDecodeError:
                 i += 1
-            if i < len(lines):
-                i += 1
-        else:
-            i += 1
+                if i == len(lines):
+                    raise ValueError("could not safely parse a TOML assignment for migration") from None
+                assignment += lines[i]
+        if not keys.intersection(parsed):
+            out.append(assignment)
+        i += 1
     return "".join(out)
+
+
+def _toml_literal(value: object) -> str:
+    """Render parsed env values without treating their contents as source text."""
+    if isinstance(value, (str, bool, int)):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_literal(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{json.dumps(k)} = {_toml_literal(v)}" for k, v in value.items()) + "}"
+    from datetime import date, datetime
+    from datetime import time as datetime_time
+
+    if isinstance(value, (date, datetime, datetime_time)):
+        return value.isoformat()
+    raise ValueError("unsupported TOML env value; migration refused")
 
 
 def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str], bridge_command: str) -> str:
     """Rewrite owned MCP blocks to the reconnecting bridge, retaining subtables."""
+    import copy
+    import tomllib
+
+    payload = tomllib.loads(text)
+    expected = copy.deepcopy(payload)
     result = text
     for name in names:
         for table in ("mcp_servers", "mcpServers"):
+            server = payload.get(table, {}).get(name)
+            if not needs_socket_migration(name, server):
+                continue
             pattern = re.compile(
                 rf"(?ms)^(\[{re.escape(table)}\.{re.escape(name)}\]\s*\n)(.*?)(?=^\[|\Z)",
             )
@@ -166,9 +199,27 @@ def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str], bridge_com
             if not match:
                 continue
             header, body = match.group(1), match.group(2)
-            kept_lines = _strip_toml_table_assignments(body, _TOML_TRANSPORT_KEYS)
-            new_body = f"command = {json.dumps(bridge_command)}\n" + kept_lines
+            drop_front = (
+                mcp_command_basename(server) == "socat"
+                and isinstance(server.get("env"), dict)
+                and "MCPLAYER_BRAINLAYER_FRONT" in server["env"]
+            )
+            keys = _TOML_TRANSPORT_KEYS | ({"env"} if drop_front else set())
+            kept_lines = _strip_toml_table_assignments(body, keys)
+            env_line = f"env = {_toml_literal(without_proxy_front(server['env']))}\n" if drop_front else ""
+            new_body = f"command = {json.dumps(bridge_command)}\n" + env_line + kept_lines
             result = result[: match.start()] + header + new_body + result[match.end() :]
+            if drop_front:
+                # Move a dedicated env table into the root's inline env map too.
+                env_pattern = re.compile(rf"(?ms)^\[{re.escape(table)}\.{re.escape(name)}\.env\]\s*\n.*?(?=^\[|\Z)")
+                result = env_pattern.sub("", result)
+            changed_server = expected[table][name]
+            changed_server["command"] = bridge_command
+            changed_server.pop("args", None)
+            if drop_front:
+                changed_server["env"] = without_proxy_front(server["env"])
+    if tomllib.loads(result) != expected:
+        raise ValueError("TOML migration could not preserve unrelated settings; no write performed")
     return result
 
 
@@ -240,7 +291,11 @@ def migrate_legacy_mcp_configs(
             names = _toml_servers_needing_migration(original_text)
             if not names:
                 continue
-            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names, bridge_command)
+            try:
+                new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names, bridge_command)
+            except ValueError as exc:
+                skipped.append((path, str(exc)))
+                continue
             if new_text == original_text:
                 skipped.append((path, f"TOML servers {names!r} need migration but table headers were not rewritten"))
                 continue

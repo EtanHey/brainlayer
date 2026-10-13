@@ -50,6 +50,7 @@ from .launchd_primitive import (
 )
 from .mcp_socket_config import (
     bridge_path_risk,
+    bridge_uses_proxy,
     is_socat_brainbar_transport,
     iter_json_mcp_servers,
     iter_toml_mcp_servers,
@@ -168,6 +169,15 @@ def _legacy_python_mcp_config_issues(
                     )
                 )
                 continue
+            if bridge_uses_proxy(server):
+                issues.append(
+                    DoctorIssue(
+                        "mcp_bridge_proxy_route",
+                        "info",
+                        f"{path}: mcp server {name!r} config routes the bridge via the mcplayer proxy",
+                        {"config_path": str(path), "server_name": name},
+                    )
+                )
             risk = bridge_path_risk(server)
             if risk:
                 issues.append(

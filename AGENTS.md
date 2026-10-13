@@ -331,6 +331,8 @@ brainlayer search "how did I implement authentication"
   `brainlayer setup --migrate-mcp` backs up and rewrites owned legacy and raw-socat entries to the
   **absolute opt-path bridge**, verifies that same path, preserves unrelated servers/settings,
   and leaves existing pinned bridge entries in place. Doctor flags bare or foreign bridge targets.
+  Converted socat entries drop `MCPLAYER_BRAINLAYER_FRONT` (retained in the backup) to keep
+  their direct route; existing bridge entries keep their env. Doctor notes proxy routes as info.
   Project `.mcp.json` can override a healthy base Codex config; migrate those owned files too.
 
 <!-- COMMANDS: `brainlayer brain-export` → graph JSON for dashboard | `brainlayer export-obsidian` → Markdown vault with backlinks + tags -->

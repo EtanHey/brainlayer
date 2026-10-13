@@ -41,8 +41,12 @@ Legacy raw-socket form (doctor reports its restart risk; migrate persistent agen
 `brainlayer setup --migrate-mcp` backs up and upgrades owned legacy and raw-socat entries
 to the absolute opt-path bridge shown above. Verification executes that same path. Setup refuses migration if the opt bridge is missing or
 does not resolve to an executable inside the BrainLayer keg; install it with Homebrew first.
-It preserves environment, timeouts, disabled state, and unrelated servers, and leaves
-existing pinned bridge entries unchanged. Doctor reports bare, version-pinned or foreign
+It preserves timeouts, disabled state, unrelated servers, and other environment variables.
+For entries converted from socat, it removes `MCPLAYER_BRAINLAYER_FRONT`: socat ignored
+that variable, but the bridge would use it to switch the entry from direct BrainBar access
+to the mcplayer proxy. The original variable remains in the backup. Existing bridge
+entries keep their environment and route. Doctor reports an explicit proxy route as info,
+and reports bare, version-pinned or foreign
 bridge targets with their resolved paths. Project `.mcp.json`
 can override the base Codex config, so those owned files are included. A thread whose
 transport has already closed needs a fresh MCP connection or session.
