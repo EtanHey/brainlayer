@@ -393,7 +393,8 @@ def test_producer_without_observability_wiring_measures_all_sections(
 
     for section in ("stores", "emitters", "author_unknown", "backups"):
         assert document[section]["state"] == "measured"
-    schema = json.loads((FIXTURES / "observability-schema.v1.json").read_text(encoding="utf-8"))
+    assert document["transport"]["state"] == "unmeasurable"
+    schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text(encoding="utf-8"))
     jsonschema.validate(document, schema)
     assert [item["path"] for item in document["backups"]["inputs"][:2]] == [
         str(logs / "jsonl-backup.log"),
@@ -482,7 +483,8 @@ def test_subprocess_error_keeps_document_measured_except_for_backups(
     assert document["backups"]["state"] == "unmeasurable"
     assert "SubprocessError" in document["backups"]["reason"]
     assert all(document[name]["state"] == "measured" for name in ("stores", "emitters", "author_unknown"))
-    schema = json.loads((FIXTURES / "observability-schema.v1.json").read_text(encoding="utf-8"))
+    assert document["transport"]["state"] == "unmeasurable"
+    schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text(encoding="utf-8"))
     jsonschema.validate(document, schema)
 
 
