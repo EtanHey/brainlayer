@@ -50,12 +50,14 @@ from .launchd_primitive import (
 )
 from .mcp_socket_config import (
     bridge_path_risk,
+    bridge_uses_proxy,
     is_socat_brainbar_transport,
     iter_json_mcp_servers,
     iter_toml_mcp_servers,
     mcp_server_public_summary,
     needs_socket_migration,
     owned_mcp_config_paths,
+    socat_socket_conflict,
     stable_mcp_bridge_command,
 )
 from .paths import SPOTLIGHT_EXCLUSION_MARKER, get_db_path, is_spotlight_excluded
@@ -150,6 +152,17 @@ def _legacy_python_mcp_config_issues(
             servers = iter_json_mcp_servers(payload)
 
         for name, server in servers:
+            conflict = socat_socket_conflict(server)
+            if conflict:
+                issues.append(
+                    DoctorIssue(
+                        "mcp_socket_override_conflict",
+                        "warning",
+                        f"{path}: mcp server {name!r} socat socket {conflict['socat_socket_target']} conflicts with "
+                        f"BRAINLAYER_MCP_SOCKET {conflict['bridge_socket_target']}; migration skipped",
+                        {"config_path": str(path), "server_name": name, **conflict},
+                    )
+                )
             if is_socat_brainbar_transport(server):
                 issues.append(
                     DoctorIssue(
@@ -168,6 +181,15 @@ def _legacy_python_mcp_config_issues(
                     )
                 )
                 continue
+            if bridge_uses_proxy(server):
+                issues.append(
+                    DoctorIssue(
+                        "mcp_bridge_proxy_route",
+                        "info",
+                        f"{path}: mcp server {name!r} config routes the bridge via the mcplayer proxy",
+                        {"config_path": str(path), "server_name": name},
+                    )
+                )
             risk = bridge_path_risk(server)
             if risk:
                 issues.append(

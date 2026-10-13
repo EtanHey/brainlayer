@@ -24,6 +24,71 @@ SOCKET_MCP = {
     "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
 }
 
+
+@pytest.mark.parametrize("shape", ["json", "zed", "toml"])
+@pytest.mark.parametrize("target", ["/tmp/brainbar.sock", "/tmp/brainbar-dev.sock"])
+@pytest.mark.parametrize("override", [None, "match", "conflict"])
+@pytest.mark.parametrize("with_env", [False, True])
+def test_socat_migration_keeps_socket_target_or_skips_conflict(tmp_path, shape, target, override, with_env):
+    from brainlayer.mcp_stdio_bridge import config_from_env
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    env = {"KEEP": "value", "MCPLAYER_BRAINLAYER_FRONT": "/tmp/front.sock"} if with_env else {}
+    if override:
+        env["BRAINLAYER_MCP_SOCKET"] = target if override == "match" else "/tmp/elsewhere.sock"
+    args = ["STDIO", "UNIX-CONNECT:" + target]
+    path = tmp_path / ("config.toml" if shape == "toml" else "mcp.json")
+    if shape == "toml":
+        path.write_text(
+            '[mcp_servers.brainlayer]\ncommand="socat"\nargs='
+            + json.dumps(args)
+            + (
+                "\n[mcp_servers.brainlayer.env]\n" + "".join(f"{k}={json.dumps(v)}\n" for k, v in env.items())
+                if env
+                else "\n"
+            )
+        )
+    else:
+        server = (
+            {"command": {"path": "socat", "args": args, "env": env}}
+            if shape == "zed"
+            else {"command": "socat", "args": args, "env": env}
+        )
+        if not env:
+            (server["command"] if shape == "zed" else server).pop("env")
+        path.write_text(json.dumps({"mcpServers": {"brainlayer": server}}))
+    before = path.read_bytes()
+    report = migrate_legacy_mcp_configs([path])
+    if override == "conflict":
+        assert report.changed == ()
+        assert path.read_bytes() == before
+        assert report.skipped and report.skipped[0][0] == path
+        assert target in report.skipped[0][1] and "/tmp/elsewhere.sock" in report.skipped[0][1]
+        assert not list((tmp_path / "home" / ".local/share/brainlayer/config-backups").glob("*"))
+        if shape == "toml":
+            path.write_text(path.read_text() + '\n[mcp_servers.brainbar]\ncommand="brainlayer-mcp"\n')
+        else:
+            payload = json.loads(path.read_text())
+            payload["mcpServers"]["brainbar"] = {"command": "brainlayer-mcp"}
+            path.write_text(json.dumps(payload))
+        mixed_before = tomllib.loads(path.read_text()) if shape == "toml" else json.loads(path.read_text())
+        report = migrate_legacy_mcp_configs([path])
+        assert report.changed == (path,) and report.skipped
+        mixed_after = tomllib.loads(path.read_text()) if shape == "toml" else json.loads(path.read_text())
+        key = "mcp_servers" if shape == "toml" else "mcpServers"
+        assert mixed_after[key]["brainlayer"] == mixed_before[key]["brainlayer"]
+        assert mixed_after[key]["brainbar"]["command"].endswith("brainlayer-mcp-stdio-bridge")
+    else:
+        assert report.changed == (path,) and report.skipped == ()
+        payload = tomllib.loads(path.read_text()) if shape == "toml" else json.loads(path.read_text())
+        server = payload["mcp_servers" if shape == "toml" else "mcpServers"]["brainlayer"]
+        migrated_env = (server["command"] if shape == "zed" else server).get("env", {})
+        assert config_from_env(migrated_env).socket_path == target
+        assert migrated_env.get("KEEP") == ("value" if with_env else None)
+        assert "MCPLAYER_BRAINLAYER_FRONT" not in migrated_env
+        assert migrate_legacy_mcp_configs([path]).changed == ()
+
+
 MULTILINE_CODEX_TOML = (
     "[mcp_servers.brainlayer]\n"
     'command = "/Users/me/.bun/bin/bun"\n'
@@ -120,14 +185,18 @@ def test_migrate_socat_json_and_codex_to_bridge_with_backups(tmp_path: Path, mon
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config = tmp_path / "mcp.json"
     codex = tmp_path / "config.toml"
-    server = {**SOCKET_MCP, "env": {"MCPLAYER_BRAINLAYER_FRONT": "/tmp/private-front.sock"}, "disabled": True}
+    server = {
+        **SOCKET_MCP,
+        "env": {"MCPLAYER_BRAINLAYER_FRONT": "/tmp/private-front.sock", "KEEP": "value"},
+        "disabled": True,
+    }
     original = {
         "mcpServers": {"brainlayer": server, "other": SOCKET_MCP},
         "projects": {"repo": {"mcpServers": {"brainbar": server}}},
     }
     config.write_text(json.dumps(original))
     codex.write_text(
-        '[mcp_servers.brainlayer]\ncommand="socat"\nargs=["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]\nstartup_timeout_sec=15\n[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT="/tmp/private-front.sock"\n[mcp_servers.other]\ncommand="keep-me"\n'
+        '[mcp_servers.brainlayer]\ncommand="socat"\nargs=["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]\nstartup_timeout_sec=15\n[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT="/tmp/private-front.sock"\nKEEP="value"\n[mcp_servers.other]\ncommand="keep-me"\n'
     )
     before = {p: p.read_bytes() for p in (config, codex)}
     report = migrate_legacy_mcp_configs(
@@ -138,15 +207,92 @@ def test_migrate_socat_json_and_codex_to_bridge_with_backups(tmp_path: Path, mon
     migrated = json.loads(config.read_text())
     expected = {
         "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
-        "env": server["env"],
+        "env": {"KEEP": "value"},
         "disabled": True,
     }
     assert migrated["mcpServers"]["brainlayer"] == expected
     assert migrated["projects"]["repo"]["mcpServers"]["brainbar"] == expected
     assert migrated["mcpServers"]["other"] == SOCKET_MCP
     toml_server = tomllib.loads(codex.read_text())["mcp_servers"]["brainlayer"]
-    assert toml_server == {"command": expected["command"], "env": server["env"], "startup_timeout_sec": 15}
+    assert toml_server == {"command": expected["command"], "env": expected["env"], "startup_timeout_sec": 15}
     backups = list((tmp_path / "home/.local/share/brainlayer/config-backups").glob("*.bak"))
     assert sorted(p.read_bytes() for p in backups) == sorted(before.values())
     assert migrate_legacy_mcp_configs([config, codex]).changed == ()
     assert len(list(backups[0].parent.glob("*.bak"))) == 2
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_socat_migration_preserves_direct_route_and_existing_bridge(tmp_path: Path, nested):
+    from brainlayer.mcp_stdio_bridge import config_from_env
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    bridge = "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
+    env = {"MCPLAYER_BRAINLAYER_FRONT": "/tmp/private-front.sock", "KEEP": "MCPLAYER_BRAINLAYER_FRONT"}
+    command = {"path": "/usr/bin/socat", "args": SOCKET_MCP["args"], "env": env} if nested else "socat"
+    old = {"command": command, "env": env, "settings": {"keep": True}}
+    existing = {"command": bridge, "env": env}
+    config = tmp_path / "mcp.json"
+    original = json.dumps({"mcpServers": {"brainlayer": old, "brainbar": existing, "foreign": old}})
+    config.write_text(original)
+    report = migrate_legacy_mcp_configs([config])
+    assert report.changed == (config,)
+    servers = json.loads(config.read_text())["mcpServers"]
+    converted = servers["brainlayer"]
+    assert converted["env"] == {"KEEP": env["KEEP"]}
+    if nested:
+        assert converted["command"]["env"] == converted["env"]
+        assert converted["command"]["path"] == bridge
+    assert config_from_env(converted["env"]).socket_path == "/tmp/brainbar.sock"
+    assert servers["brainbar"] == existing
+    assert servers["foreign"] == old
+    assert old["env"] == env  # no mutation of the preimage's shared dict
+    backups = list((tmp_path / "home/.local/share/brainlayer/config-backups").glob("*.bak"))
+    assert [p.read_text() for p in backups] == [original]
+    assert migrate_legacy_mcp_configs([config]).changed == ()
+
+
+@pytest.mark.parametrize(
+    "env_text",
+    [
+        'env = {MCPLAYER_BRAINLAYER_FRONT="/tmp/front.sock", KEEP="MCPLAYER_BRAINLAYER_FRONT"}\n',
+        'env.MCPLAYER_BRAINLAYER_FRONT="/tmp/front.sock"\nenv.KEEP="MCPLAYER_BRAINLAYER_FRONT"\n',
+        '[mcp_servers.brainlayer.env]\n"MCPLAYER_BRAINLAYER_FRONT"="/tmp/front.sock"\nKEEP="MCPLAYER_BRAINLAYER_FRONT"\n',
+        '[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT="""/tmp/front.sock"""\nKEEP="MCPLAYER_BRAINLAYER_FRONT"\n',
+    ],
+)
+def test_codex_socat_drops_only_front_env(tmp_path: Path, env_text):
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    config = tmp_path / "config.toml"
+    original = (
+        '[mcp_servers.brainlayer]\ncommand="/usr/bin/socat"\nargs=["STDIO","UNIX-CONNECT:/tmp/brainbar.sock"]\n'
+        + env_text
+        + '[mcp_servers.brainbar]\ncommand="/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"\n'
+        + '[mcp_servers.brainbar.env]\nMCPLAYER_BRAINLAYER_FRONT="/tmp/existing.sock"\n'
+    )
+    config.write_text(original)
+    assert migrate_legacy_mcp_configs([config]).changed == (config,)
+    servers = tomllib.loads(config.read_text())["mcp_servers"]
+    assert servers["brainlayer"]["env"] == {"KEEP": "MCPLAYER_BRAINLAYER_FRONT"}
+    assert servers["brainbar"] == tomllib.loads(original)["mcp_servers"]["brainbar"]
+    backups = list((tmp_path / "home/.local/share/brainlayer/config-backups").glob("*.bak"))
+    assert [p.read_text() for p in backups] == [original]
+    assert migrate_legacy_mcp_configs([config]).changed == ()
+
+
+def test_codex_migration_refuses_an_unsafe_text_rewrite_before_backup(tmp_path: Path):
+    from brainlayer.setup import migrate_legacy_mcp_configs
+
+    config = tmp_path / "config.toml"
+    # A table-like line inside a literal must never be treated as a real env table.
+    original = (
+        '[mcp_servers.brainlayer]\ncommand="socat"\n'
+        "note = '''keep\n[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT=literal\n'''\n"
+        '[mcp_servers.brainlayer.env]\nMCPLAYER_BRAINLAYER_FRONT="/tmp/front.sock"\n'
+    )
+    config.write_text(original)
+    report = migrate_legacy_mcp_configs([config])
+    assert report.changed == ()
+    assert len(report.skipped) == 1
+    assert config.read_text() == original
+    assert not (tmp_path / "home/.local/share/brainlayer/config-backups").exists()

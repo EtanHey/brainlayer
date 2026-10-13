@@ -18,9 +18,11 @@ from pathlib import Path
 from .cli.wizard import DEFAULT_BRAINLAYER_CONFIG, write_gemini_env_file
 from .mcp_socket_config import (
     bridge_path_risk,
+    iter_json_mcp_servers,
     iter_toml_mcp_servers,
     needs_socket_migration,
     owned_mcp_config_paths,
+    socat_socket_conflict,
     socket_server_preserving,
     stable_mcp_bridge_command,
 )
@@ -132,33 +134,64 @@ def _validate_toml_text(text: str) -> None:
 
 
 def _strip_toml_table_assignments(body: str, keys: frozenset[str]) -> str:
-    key_pattern = "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+    import tomllib
+
     lines = body.splitlines(keepends=True)
     out: list[str] = []
     i = 0
     while i < len(lines):
         line = lines[i]
-        if not re.match(rf"^\s*({key_pattern})\s*=", line):
+        if not line.strip() or line.lstrip().startswith("#"):
             out.append(line)
             i += 1
             continue
-        rhs = line.split("=", 1)[1] if "=" in line else ""
-        if "[" in rhs and "]" not in rhs:
-            i += 1
-            while i < len(lines) and "]" not in lines[i]:
+        assignment = line
+        while True:
+            try:
+                parsed = tomllib.loads(assignment)
+                break
+            except tomllib.TOMLDecodeError:
                 i += 1
-            if i < len(lines):
-                i += 1
-        else:
-            i += 1
+                if i == len(lines):
+                    raise ValueError("could not safely parse a TOML assignment for migration") from None
+                assignment += lines[i]
+        if not keys.intersection(parsed):
+            out.append(assignment)
+        i += 1
     return "".join(out)
+
+
+def _toml_literal(value: object) -> str:
+    """Render parsed env values without treating their contents as source text."""
+    if isinstance(value, (str, bool, int)):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_literal(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{json.dumps(k)} = {_toml_literal(v)}" for k, v in value.items()) + "}"
+    from datetime import date, datetime
+    from datetime import time as datetime_time
+
+    if isinstance(value, (date, datetime, datetime_time)):
+        return value.isoformat()
+    raise ValueError("unsupported TOML env value; migration refused")
 
 
 def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str], bridge_command: str) -> str:
     """Rewrite owned MCP blocks to the reconnecting bridge, retaining subtables."""
+    import copy
+    import tomllib
+
+    payload = tomllib.loads(text)
+    expected = copy.deepcopy(payload)
     result = text
     for name in names:
         for table in ("mcp_servers", "mcpServers"):
+            server = payload.get(table, {}).get(name)
+            if not needs_socket_migration(name, server) or socat_socket_conflict(server):
+                continue
             pattern = re.compile(
                 rf"(?ms)^(\[{re.escape(table)}\.{re.escape(name)}\]\s*\n)(.*?)(?=^\[|\Z)",
             )
@@ -166,9 +199,24 @@ def _rewrite_codex_mcp_servers_to_socket(text: str, names: list[str], bridge_com
             if not match:
                 continue
             header, body = match.group(1), match.group(2)
-            kept_lines = _strip_toml_table_assignments(body, _TOML_TRANSPORT_KEYS)
-            new_body = f"command = {json.dumps(bridge_command)}\n" + kept_lines
+            desired_env = socket_server_preserving(server, bridge_command=bridge_command).get("env")
+            rewrite_env = desired_env != server.get("env")
+            keys = _TOML_TRANSPORT_KEYS | ({"env"} if rewrite_env else set())
+            kept_lines = _strip_toml_table_assignments(body, keys)
+            env_line = f"env = {_toml_literal(desired_env)}\n" if rewrite_env else ""
+            new_body = f"command = {json.dumps(bridge_command)}\n" + env_line + kept_lines
             result = result[: match.start()] + header + new_body + result[match.end() :]
+            if rewrite_env:
+                # Move a dedicated env table into the root's inline env map too.
+                env_pattern = re.compile(rf"(?ms)^\[{re.escape(table)}\.{re.escape(name)}\.env\]\s*\n.*?(?=^\[|\Z)")
+                result = env_pattern.sub("", result)
+            changed_server = expected[table][name]
+            changed_server["command"] = bridge_command
+            changed_server.pop("args", None)
+            if rewrite_env:
+                changed_server["env"] = desired_env
+    if tomllib.loads(result) != expected:
+        raise ValueError("TOML migration could not preserve unrelated settings; no write performed")
     return result
 
 
@@ -177,7 +225,7 @@ def _rewrite_json_mcp_servers(payload: dict, bridge_command: str) -> bool:
     servers = payload.get("mcpServers")
     if isinstance(servers, dict):
         for name, server in list(servers.items()):
-            if needs_socket_migration(str(name), server):
+            if needs_socket_migration(str(name), server) and not socat_socket_conflict(server):
                 servers[name] = socket_server_preserving(server, bridge_command=bridge_command)
                 changed = True
     projects = payload.get("projects")
@@ -189,7 +237,7 @@ def _rewrite_json_mcp_servers(payload: dict, bridge_command: str) -> bool:
             if not isinstance(nested, dict):
                 continue
             for name, server in list(nested.items()):
-                if needs_socket_migration(str(name), server):
+                if needs_socket_migration(str(name), server) and not socat_socket_conflict(server):
                     nested[name] = socket_server_preserving(server, bridge_command=bridge_command)
                     changed = True
     return changed
@@ -205,6 +253,15 @@ def _toml_servers_needing_migration(text: str) -> list[str]:
     except tomllib.TOMLDecodeError:
         return []
     return [name for name, server in iter_toml_mcp_servers(payload) if needs_socket_migration(name, server)]
+
+
+def _socket_conflict_reasons(servers) -> list[str]:
+    return [
+        f"{name}: socat socket {risk['socat_socket_target']} conflicts with BRAINLAYER_MCP_SOCKET "
+        f"{risk['bridge_socket_target']}; entry not migrated"
+        for name, server in servers
+        if needs_socket_migration(name, server) and (risk := socat_socket_conflict(server))
+    ]
 
 
 def migrate_legacy_mcp_configs(
@@ -240,7 +297,22 @@ def migrate_legacy_mcp_configs(
             names = _toml_servers_needing_migration(original_text)
             if not names:
                 continue
-            new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names, bridge_command)
+            import tomllib
+
+            servers = iter_toml_mcp_servers(tomllib.loads(original_text))
+            skipped.extend((path, reason) for reason in _socket_conflict_reasons(servers))
+            names = [
+                name
+                for name, server in servers
+                if needs_socket_migration(name, server) and not socat_socket_conflict(server)
+            ]
+            if not names:
+                continue
+            try:
+                new_text = _rewrite_codex_mcp_servers_to_socket(original_text, names, bridge_command)
+            except ValueError as exc:
+                skipped.append((path, str(exc)))
+                continue
             if new_text == original_text:
                 skipped.append((path, f"TOML servers {names!r} need migration but table headers were not rewritten"))
                 continue
@@ -277,7 +349,13 @@ def migrate_legacy_mcp_configs(
         if not isinstance(payload, dict):
             skipped.append((path, "MCP config root must be a JSON object"))
             continue
-        if not _rewrite_json_mcp_servers(payload, bridge_command):
+        skipped.extend((path, reason) for reason in _socket_conflict_reasons(iter_json_mcp_servers(payload)))
+        try:
+            rewritten = _rewrite_json_mcp_servers(payload, bridge_command)
+        except ValueError as exc:
+            skipped.append((path, str(exc)))
+            continue
+        if not rewritten:
             continue
 
         _require_mcp_bridge(bridge_command)
