@@ -134,3 +134,24 @@ def test_transport_alert_reaches_the_health_badge(tmp_path, monkeypatch):
     assert value["badge_on"] is True
     issue = next(i for i in value["active"] if i["code"] == "job_alert_mcp-transport")
     assert "3 dropped requests" in issue["message"]
+
+
+def test_default_receipt_path_matches_native_db_symlink_parent(tmp_path):
+    from brainlayer.observability_transport import build_transport_section
+
+    raw = tmp_path / "alias"
+    raw.mkdir()
+    path, db, _ = sample(raw)
+    target = tmp_path / "real" / "fixture.db"
+    target.parent.mkdir()
+    target.write_bytes(b"fixture")
+    db.symlink_to(target)
+    payload = json.loads(path.read_text())
+    payload["db_path"] = str(target)
+    path.write_text(json.dumps(payload))
+    os.utime(path, (NOW.timestamp(), NOW.timestamp()))
+    section = build_transport_section(
+        env={"BRAINLAYER_DB": str(db)}, now=NOW, record_input=InputRecorder(root=None, trace_path=None, now=NOW)
+    )
+    assert section["state"] == "measured"
+    assert section["inputs"][0]["path"] == str(path)

@@ -28,8 +28,11 @@ WINDOW_SECONDS = 900
 def build_transport_section(
     *, env: Mapping[str, str], now: datetime, record_input: Callable[..., dict]
 ) -> dict[str, Any]:
-    db = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()
-    path = Path(env.get("BRAINLAYER_TRANSPORT_HEALTH_PATH", str(db.with_name("transport-health.json")))).expanduser()
+    raw_db = Path(env["BRAINLAYER_DB"]).expanduser() if env.get("BRAINLAYER_DB") else get_db_path()
+    db = raw_db.resolve()
+    path = Path(
+        env.get("BRAINLAYER_TRANSPORT_HEALTH_PATH", str(raw_db.with_name("transport-health.json")))
+    ).expanduser()
     status = "read"
     try:
         if path.stat().st_size > 65_536:

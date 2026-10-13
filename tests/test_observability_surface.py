@@ -349,3 +349,35 @@ def test_producer_v2_keeps_v1_sections_and_names_missing_transport(tmp_path: Pat
     expected = json.loads((FIXTURES / "golden/healthy-dev.json").read_text())
     for section in OWNED_SECTIONS:
         assert actual[section] == expected[section]
+
+
+@pytest.mark.parametrize("phase", ["build", "alert"])
+def test_transport_failure_still_writes_fresh_unmeasurable_document(tmp_path, monkeypatch, phase):
+    import brainlayer.observability_transport as transport
+    from brainlayer.observability_surface import write_document
+
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = _stage_db(case, tmp_path)
+    output = tmp_path / "observability.json"
+    output.write_text('{"stale": true}')
+
+    def fail(**kwargs):
+        raise PermissionError("private transport fixture denied")
+
+    if phase == "build":
+        monkeypatch.setattr(transport, "build_transport_section", fail)
+    else:
+        monkeypatch.setattr(transport, "report_transport_alert", lambda *args, **kwargs: fail())
+    document = write_document(
+        env={
+            "BRAINLAYER_DB": str(db),
+            "BRAINLAYER_OBSERVABILITY_PATH": str(output),
+            "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"]),
+        }
+    )
+    assert json.loads(output.read_text()) == document
+    assert document["schema_version"] == 2
+    assert document["transport"]["state"] == "unmeasurable"
+    assert "denied" in document["transport"]["reason"]
+    assert "counts" not in document["transport"]
+    assert document["stores"]["state"] == "measured"

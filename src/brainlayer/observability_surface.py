@@ -240,10 +240,13 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
             author_unknown = _builder_failure("author_unknown", exc, db_input)
     if connection is not None:
         connection.close()
-    from .observability_transport import build_transport_section, report_transport_alert
-    transport = build_transport_section(env=env, now=now, record_input=recorder)
-    if emit_alerts:
-        report_transport_alert(transport, env=env)
+    try:
+        from .observability_transport import build_transport_section, report_transport_alert
+        transport = build_transport_section(env=env, now=now, record_input=recorder)
+        if emit_alerts:
+            report_transport_alert(transport, env=env)
+    except Exception as exc:
+        transport = _builder_failure("transport", exc, db_input)
     try:
         from .observability_backup import build_backups_section
 
