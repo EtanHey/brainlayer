@@ -2003,11 +2003,12 @@ async def _search(
         if entity_id and not source:
             source_filter = None
 
-        # Retry hybrid_search on BusyError — WAL reads shouldn't block but
-        # they can during checkpoint or when enrichment holds exclusive lock.
+        # WAL reads can hit lock contention or an FTS constructor schema change
+        # while a legacy writer publishes DDL. Retry the latter only once.
         results = None
         hybrid_started = search_profile.now()
         hybrid_error: str | None = None
+        schema_change_retried = False
         try:
             for attempt in range(_RETRY_MAX_ATTEMPTS):
                 try:
@@ -2044,6 +2045,15 @@ async def _search(
                         )
                     break
                 except Exception as e:
+                    if (
+                        isinstance(e, apsw.SchemaChangeError)
+                        and "vtable constructor failed:" in str(e).lower()
+                        and not schema_change_retried
+                        and attempt < _RETRY_MAX_ATTEMPTS - 1
+                    ):
+                        schema_change_retried = True
+                        logger.warning("Search FTS constructor schema change, retrying once")
+                        continue
                     is_lock = isinstance(e, apsw.BusyError) or "locked" in str(e).lower() or "busy" in str(e).lower()
                     if is_lock and attempt < _RETRY_MAX_ATTEMPTS - 1:
                         delay = _retry_delay * (2**attempt)

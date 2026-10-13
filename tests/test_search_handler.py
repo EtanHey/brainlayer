@@ -1,12 +1,122 @@
 import asyncio
 import time
 
+import apsw
 import pytest
 
 import brainlayer.mcp.search_handler as search_handler_module
 from brainlayer.mcp import call_tool
 from brainlayer.mcp.search_handler import _brain_search, _search
 from brainlayer.vector_store import VectorStore
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persistent", [False, True])
+@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize("fast_profile", [False, True])
+async def test_search_bounds_real_fts_constructor_schema_retry(tmp_path, monkeypatch, persistent, hybrid, fast_profile):
+    """DDL during FTS xConnect must get one retry, using real SQLite errors."""
+    from brainlayer import search_repo
+    from brainlayer.runtime_store import ReadonlyStore
+
+    # The deliberate hundreds of DDL commits target schema retry, not the fast
+    # profile's separate wall-clock interrupt. Isolate that fault under CPU load.
+    monkeypatch.setattr(search_repo, "_BRAINBAR_HELPER_FTS_BUDGET_MS", 5000)
+
+    db_path = tmp_path / "schema-race.db"
+    marker = "schemaconcurrencymarker42"
+    with VectorStore(db_path) as bootstrap:
+        bootstrap.conn.execute(
+            "INSERT INTO chunks(id,content,metadata,source_file,source) VALUES(?,?,'{}','schema-race','mcp')",
+            ("schema-race-hit", f"{marker} memory must remain searchable during legacy initialization"),
+        )
+        if hybrid:
+            from brainlayer.vector_store import serialize_f32
+
+            bootstrap.conn.execute(
+                "INSERT INTO chunk_vectors(chunk_id,embedding) VALUES(?,?)",
+                ("schema-race-hit", serialize_f32([0.03125] * 1024)),
+            )
+    reader = ReadonlyStore(db_path)
+    writer = apsw.Connection(str(db_path))
+    trigger_sql = writer.execute("SELECT sql FROM sqlite_master WHERE name='chunks_fts_insert'").fetchone()[0]
+    connection = reader._get_read_conn()
+    schema_changes = 0
+    search_calls = 0
+    real_errors = []
+    real_hybrid_search = reader.hybrid_search
+
+    def concurrent_ddl(op, table, column, database, trigger):
+        nonlocal schema_changes
+        if op == apsw.SQLITE_READ and table == "chunks_fts_config":
+            # These are the same autocommit DROP/CREATE statements used by
+            # legacy init. Force them between FTS's internal schema reads.
+            writer.execute("DROP TRIGGER chunks_fts_insert")
+            writer.execute(trigger_sql)
+            schema_changes += 1
+        return apsw.SQLITE_OK
+
+    def observed_hybrid_search(**kwargs):
+        nonlocal search_calls
+        search_calls += 1
+        connection.set_authorizer(concurrent_ddl if persistent or search_calls == 1 else None)
+        try:
+            return real_hybrid_search(**kwargs)
+        except apsw.SchemaChangeError as exc:
+            real_errors.append(str(exc))
+            raise
+        finally:
+            connection.set_authorizer(None)
+
+    monkeypatch.setattr(reader, "hybrid_search", observed_hybrid_search)
+    monkeypatch.setattr(search_handler_module, "_get_vector_store", lambda: reader)
+    monkeypatch.setattr(
+        search_handler_module,
+        "_get_embedding_model",
+        lambda: OriginEmbeddingModel([0.03125] * 1024) if hybrid else RaisingEmbeddingModel(),
+    )
+    try:
+        result = await _search(query=marker, source="all", num_results=1, brainbar_helper_fast_profile=fast_profile)
+        assert schema_changes > 0
+        assert real_errors and all("vtable constructor failed: chunks_fts" in error for error in real_errors)
+        assert search_calls == 2
+        if persistent:
+            assert result.is_error is True
+            assert "vtable constructor failed: chunks_fts" in result.content[0].text
+        else:
+            assert isinstance(result, tuple), result
+            assert [item["chunk_id"] for item in result[1]["results"]] == ["schema-race-hit"]
+    finally:
+        connection.set_authorizer(None)
+        writer.close()
+        reader.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type,message",
+    [
+        (apsw.SchemaChangeError, "schema changed outside FTS construction"),
+        (apsw.SQLError, "vtable constructor failed: chunks_fts"),
+        (apsw.CorruptError, "database disk image is malformed"),
+    ],
+)
+async def test_search_does_not_retry_unrelated_sqlite_errors(monkeypatch, error_type, message):
+    calls = 0
+
+    def fail_search(**kwargs):
+        nonlocal calls
+        calls += 1
+        raise error_type(message)
+
+    store = RecordingSearchStore()
+    monkeypatch.setattr(store, "hybrid_search", fail_search)
+    monkeypatch.setattr(search_handler_module, "_get_vector_store", lambda: store)
+    monkeypatch.setattr(search_handler_module, "_get_embedding_model", lambda: FakeEmbeddingModel())
+    result = await _search(query="memory schema", source="all", num_results=1)
+    assert result.is_error is True
+    assert message in result.content[0].text
+    assert calls == 1
 
 
 async def _wait_for_embed_release(timeout_s: float = 1.0) -> None:
