@@ -340,19 +340,23 @@ def launch_guard(
             channel.close()
 
 
-def gated_spawn(argv, env, stdout, stderr, *, extra_fds=()) -> tuple[subprocess.Popen, int]:
+def gated_spawn(argv, env, stdout, stderr, *, cwd=None, policy=None, extra_fds=()) -> tuple[subprocess.Popen, int]:
     """EOF aborts startup; commands run only after durable custody registration."""
     read, write = os.pipe()
     try:
-        command = (
-            "import os,sys; fd=int(sys.argv[1]); token=os.read(fd,1); os.close(fd); "
-            'sys.exit(1) if token!=b"R" else os.execvpe(sys.argv[2],sys.argv[2:],os.environ)'
-        )
         process = subprocess.Popen(
-            (sys.executable, "-c", command, str(read), *argv),
+            (
+                sys.executable,
+                "-I",  # Stdlib-only helper: exclude package types.py and configured PYTHONPATH.
+                str(Path(__file__).with_name("supervisor_child.py")),
+                str(read),
+                json.dumps(policy or {}),
+                *argv,
+            ),
             env=env,
             stdout=stdout,
             stderr=stderr,
+            cwd=cwd,
             pass_fds=(read, *extra_fds),
             start_new_session=True,
         )

@@ -1188,16 +1188,6 @@
         "target": "import subprocess"
       }
     },
-    "3dd6af197819be8682eea4158358e709ee9e2a735fbc1abee7fa60990d71ef5e": {
-      "non_cloud_purpose": "Local process-group custody only: inherit the verified maintenance writer lease into the guard and gated child; weekly backup stays in the guarded calendar group when managed and retains standalone process-group supervision otherwise. No cloud/model sender.",
-      "site": {
-        "call_sha256": "9e7366d3e3dcdaea69975ee31549dadd561abcb55077dcf0f76d35715208c0e6",
-        "kind": "child_process",
-        "owner": "<module>.gated_spawn",
-        "path": "src/brainlayer/supervisor_guard.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "3f6b2413a51f5ce41ba4ba9a57b93a327537f217453b58a316a49f2d78082e91": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._process_command_line",
       "site": {
@@ -1408,6 +1398,16 @@
         "target": "importlib.metadata.distribution"
       }
     },
+    "4951fa1f75dbd1c3b04cb512d692c4300c5a778ef679e3ae9bbda5e80a0dca92": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.apply_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "4997b6e8a1b1593dc22be1f360b927424ada7ba43c6f66fd207261c94f76a626": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/watcher.py <module>.JSONLWatcher._db_realtime_inserts_since_window_start",
       "site": {
@@ -1536,6 +1536,16 @@
         "owner": "<module>._default_command_runner",
         "path": "src/brainlayer/health_check.py",
         "target": "subprocess.TimeoutExpired"
+      }
+    },
+    "5156aa55851345d0016c5c52eb324f24852cc1e788d6ce3496fb60404f7813d7": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "669c8db7bfb9b4e64a7aa5f9239cbd229a5c460f228936e83d225f5ab2176b82",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "import ctypes"
       }
     },
     "52a2414f7fd22684b952f66c8cb461fda11ceb82c05ae7cc6781fd4d6f20b3a4": {
@@ -2026,6 +2036,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/kg_session_finish.py",
         "target": "import subprocess"
+      }
+    },
+    "6908a30b18c7963cc2fe8a68548eecc7f7cf8740f9d73d03f23ebc76097349d8": {
+      "non_cloud_purpose": "Stdlib-only gated local child resource policy: inspect errno or call the current process libSystem setiopolicy_np for Darwin disk I/O priority; no dynamic library path, model, cloud or network sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.apply_policy",
+        "path": "src/brainlayer/supervisor_child.py",
+        "target": "ctypes.CDLL"
       }
     },
     "698a99706adc5b2c0b9cbf88cc98536240295abaeb8183245ecb3c121de25900": {
@@ -2860,6 +2880,16 @@
         "owner": "<module>.hooks",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "92d8d95007a245b5fdea6cf96761943c2731b8b03b79524ddb444fd6b1d7c73d": {
+      "non_cloud_purpose": "Local gated child helper under the keg interpreter with isolated stdlib imports; preserves explicit exec argv/env, cwd, resource policy and inherited custody FDs. No TCP, cloud or model sender.",
+      "site": {
+        "call_sha256": "fdd2d62bf73c16188e29a8828e4b1603aa77b9a19123942fb4fa3aee87df56a3",
+        "kind": "child_process",
+        "owner": "<module>.gated_spawn",
+        "path": "src/brainlayer/supervisor_guard.py",
+        "target": "subprocess.Popen"
       }
     },
     "93b0dcb16c7188b3190271eb1f1af530f46e40b1b02afec61e67fa068e40699a": {
