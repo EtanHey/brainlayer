@@ -46,7 +46,7 @@ def test_nested_lease_verified_and_timeout_reaps_descendants_before_next_step(ru
 
 @pytest.mark.parametrize("death", ["freeze", "term", "guard", "both"])
 @pytest.mark.parametrize("chain", [False, True])
-def test_calendar_reaps_writer_before_resident_revival(request, death, chain):
+def test_calendar_reaps_writer_before_resident_revival(request, death, chain, startup_delay=0):
     path, _, query, _ = request.getfixturevalue("control")
     source = """
 import asyncio,subprocess,sys,datetime as dt
@@ -55,14 +55,32 @@ from brainlayer import maintenance_control
 from brainlayer.supervisor_adapters import SupervisorCommands
 from brainlayer.maintenance_calendar import Step,run_calendar
 p=Path(sys.argv[1]); maintenance_control.control_client=lambda:SupervisorCommands(p/'control.sock',lambda a:subprocess.CompletedProcess(a,0,'',''),pause_path=p/'pause')
-writer="import os,time; from pathlib import Path; Path(%r).write_text(str(os.getpid())); time.sleep(60)" % str(p/'step')
+writer="import os,time; from pathlib import Path; time.sleep(%s); Path(%r).write_text(str(os.getpid())); time.sleep(60)" % (float(sys.argv[3]),str(p/'step'))
 if sys.argv[2]=='chain': writer="import sys; from brainlayer.backup_daily import _supervise_backup_process; raise SystemExit(_supervise_backup_process(60,command=[sys.executable,'-c',%r]))" % writer
 raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.executable,'-c',writer),60)],p/'calendar',p/'logs',guard_timeout=.4,install_signals=True,now_fn=lambda:dt.datetime(2026,10,12,4,30))))
 """
-    parent = subprocess.Popen((sys.executable, "-c", source, str(path), "chain" if chain else "plain"))
+    errors = path / "calendar.stderr"
+    with errors.open("ab") as output:
+        parent = subprocess.Popen(
+            (sys.executable, "-c", source, str(path), "chain" if chain else "plain", str(startup_delay)), stderr=output
+        )
     step, group = None, None
     try:
-        eventually(lambda: (path / "step").exists())
+
+        def ready():
+            assert parent.poll() is None
+            return (path / "step").exists()
+
+        try:
+            # Includes pause acknowledgement and two interpreter startups in the chain.
+            eventually(ready, timeout=10)
+        except AssertionError:
+            events = path / "calendar" / "runs.jsonl"
+            pytest.fail(
+                f"calendar writer startup failed: returncode={parent.poll()}, stderr={errors.read_text()}, "
+                f"events={events.read_text() if events.exists() else 'missing'}, "
+                f"step_errors={[p.read_text() for p in sorted((path / 'logs').glob('*.err.log'))]}"
+            )
         step = int((path / "step").read_text())
         group = os.getpgid(step)
         assert all(v["pid"] is None for v in query()["components"].values())
@@ -91,6 +109,10 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
             parent.wait()
         if group and exists(group):
             os.killpg(group, signal.SIGKILL)
+
+
+def test_calendar_waits_for_slow_chained_writer(request):
+    test_calendar_reaps_writer_before_resident_revival(request, "freeze", True, startup_delay=3.2)
 
 
 def online_writer_probe(path):
