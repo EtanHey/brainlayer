@@ -1,11 +1,13 @@
 """Checked replacement keeps the prior journal or marker in private custody."""
 
 import os
+import re
 import stat
+import time
 import uuid
 
 from .consolidation_plan import read_owned
-from .migration_custody import write_new_file
+from .migration_custody import _write_exclusive, validate_launch_agent, write_launch_agent, write_new_file
 
 
 def sync_directory(path):
@@ -16,8 +18,12 @@ def sync_directory(path):
         os.close(fd)
 
 
-def archive_replace(path, expected, content, archive, publish):
-    """Archive old bytes, then publish exclusively; never replace a new arrival."""
+_STAGING = re.compile(r"\.migration-(?:[a-f0-9]{32}|[0-9]{8}T[0-9]{6}Z-[0-9]{20}-[a-f0-9]{32})")
+
+
+def _validate_directories(path, archive):
+    if _STAGING.fullmatch(path.name):
+        raise ValueError("live journal uses reserved staging namespace")
     for directory, private in ((path.parent, False), (archive, True)):
         if directory.resolve() != directory.absolute():
             raise ValueError("journal/archive directory must not traverse symlinks")
@@ -28,29 +34,82 @@ def archive_replace(path, expected, content, archive, publish):
             or (stat.S_IMODE(info.st_mode) != 0o700 if private else info.st_mode & 0o022)
         ):
             raise ValueError("journal/archive directory custody refused")
+
+
+def recover_staging(path, archive):
+    """Under migration_lock, remove owned staging; refuse ambiguous custody."""
+    _validate_directories(path, archive)
+    for parent in (path.parent, archive):
+        directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            backup_name = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9]{20}-[a-f0-9]{32}-" + re.escape(path.name))
+            entries = {
+                name: os.stat(name, dir_fd=directory, follow_symlinks=False)
+                for name in os.listdir(directory)
+                if _STAGING.fullmatch(name) or backup_name.fullmatch(name)
+            }
+            candidates = {name: info for name, info in entries.items() if _STAGING.fullmatch(name)}
+            for name, info in candidates.items():
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) not in (0o600, 0o644)
+                    or info.st_nlink not in (1, 2)
+                ):
+                    raise ValueError("staging custody refused")
+                if info.st_nlink == 2:
+                    peers = [
+                        other
+                        for other, peer in entries.items()
+                        if other != name
+                        and (peer.st_dev, peer.st_ino) == (info.st_dev, info.st_ino)
+                        and (
+                            _STAGING.fullmatch(other)
+                            or re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9]{20}-[a-f0-9]{32}-" + re.escape(path.name), other)
+                        )
+                    ]
+                    if len(peers) != 1:
+                        raise ValueError("staging hardlink custody refused")
+            for name, info in candidates.items():
+                current = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                    raise RuntimeError("staging changed during recovery")
+                os.unlink(name, dir_fd=directory)
+            if candidates:
+                os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
+def archive_replace(path, expected, content, archive, publish):
+    """Copy the preimage, then atomically replace the live name under migration_lock."""
+    if publish is write_launch_agent:
+        validate_launch_agent(path)
+    _validate_directories(path, archive)
+    recover_staging(path, archive)
     if read_owned(path) != expected:
         raise RuntimeError(f"migration file changed: {path}")
-    backup = archive / (path.name + "." + uuid.uuid4().hex)
-    write_new_file(backup, b"")
-    moved = False
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    suffix = f"{stamp}-{time.monotonic_ns():020d}-{uuid.uuid4().hex}"
+    backup = archive / (suffix + "-" + path.name)
+    write_new_file(backup, expected)
+    stage = path.parent / (".migration-" + suffix)
     try:
-        path.rename(backup)
-        moved = True
-        sync_directory(archive)
+        if publish is write_launch_agent:
+            _write_exclusive(stage, content, 0o644, private_parent=False)
+        else:
+            publish(stage, content)
+        if read_owned(stage) != content:
+            raise RuntimeError("staged journal bytes changed")
+        if read_owned(path) != expected:
+            raise RuntimeError(f"migration file changed before atomic replace: {path}")
+        os.replace(stage, path)
         sync_directory(path.parent)
-        if read_owned(backup) != expected:
-            raise RuntimeError(f"migration file changed while archiving: {backup}")
-        publish(path, content)
     except BaseException as failure:
         try:
-            if moved and not os.path.lexists(path):
-                read_owned(backup)  # Refuse a linked/non-owned custody substitution.
-                os.link(backup, path)  # No overwrite, including a concurrent arrival.
-                backup.unlink()
+            if os.path.lexists(stage) and read_owned(stage) == content:
+                stage.unlink()
                 sync_directory(path.parent)
-                sync_directory(archive)
-        except OSError as restore:
-            failure.add_note(f"journal restoration failed: errno {restore.errno}; custody: {backup}")
-        except ValueError as restore:
-            failure.add_note(f"journal restoration refused: {restore}; custody: {backup}")
+        except (OSError, ValueError) as cleanup:
+            failure.add_note(f"staged journal cleanup refused: {cleanup}; custody: {stage}")
         raise
