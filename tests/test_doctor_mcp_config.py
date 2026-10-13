@@ -92,6 +92,28 @@ def test_doctor_flags_nonowned_zed_socat_args(tmp_path: Path):
 
 
 @pytest.mark.parametrize("nested", [False, True])
+def test_doctor_names_socat_socket_override_conflict(tmp_path, nested):
+    import json
+
+    from brainlayer.doctor import _legacy_python_mcp_config_issues
+
+    env = {"BRAINLAYER_MCP_SOCKET": "/tmp/elsewhere.sock", "TOKEN": "private-value"}
+    args = ["STDIO", "UNIX-CONNECT:/tmp/brainbar-dev.sock"]
+    server = (
+        {"command": {"path": "socat", "args": args, "env": env}}
+        if nested
+        else {"command": "socat", "args": args, "env": env}
+    )
+    path = tmp_path / "mcp.json"
+    path.write_text(json.dumps({"mcpServers": {"brainlayer": server}}))
+    issues = _legacy_python_mcp_config_issues([path])
+    issue = next(i for i in issues if i.code == "mcp_socket_override_conflict")
+    assert issue.severity == "warning" and str(path) in issue.message
+    assert "/tmp/brainbar-dev.sock" in issue.message and "/tmp/elsewhere.sock" in issue.message
+    assert "private-value" not in str(issues)
+
+
+@pytest.mark.parametrize("nested", [False, True])
 @pytest.mark.parametrize("override", [False, True])
 def test_doctor_proxy_route_is_info_without_env_values(tmp_path: Path, monkeypatch, nested, override):
     import json

@@ -22,6 +22,7 @@ KEG_MCP_BRIDGE_PATHS = tuple(
     f"{prefix}/opt/brainlayer/bin/{_STDIO_BRIDGE_COMMAND}" for prefix in ("/opt/homebrew", "/usr/local")
 )
 MCPLAYER_FRONT_ENV = "MCPLAYER_BRAINLAYER_FRONT"
+MCP_SOCKET_ENV = "BRAINLAYER_MCP_SOCKET"
 
 
 def stable_mcp_bridge_command() -> str:
@@ -75,6 +76,35 @@ def bridge_uses_proxy(server: object) -> bool:
 def without_proxy_front(env: object) -> object:
     """Copy an env map without the variable socat ignored; never mutate its preimage."""
     return {k: v for k, v in env.items() if k != MCPLAYER_FRONT_ENV} if isinstance(env, dict) else env
+
+
+def socat_socket_target(server: object) -> str | None:
+    """Read the explicit UNIX-CONNECT destination, including Zed command args."""
+    if mcp_command_basename(server) != "socat":
+        return None
+    command = server.get("command")
+    args = command.get("args", server.get("args")) if isinstance(command, dict) else server.get("args")
+    if not isinstance(args, list):
+        return None
+    targets = [
+        a.removeprefix("UNIX-CONNECT:").split(",", 1)[0]
+        for a in args or []
+        if isinstance(a, str) and a.startswith("UNIX-CONNECT:")
+    ]
+    return targets[0] if len(targets) == 1 else None
+
+
+def socat_socket_conflict(server: object) -> dict[str, str] | None:
+    target = socat_socket_target(server)
+    if target is None:
+        return None
+    command = server.get("command")
+    envs = [server.get("env"), command.get("env") if isinstance(command, dict) else None]
+    for env in envs:
+        override = env.get(MCP_SOCKET_ENV) if isinstance(env, dict) else None
+        if override and override != target:
+            return {"socat_socket_target": target, "bridge_socket_target": str(override)}
+    return None
 
 
 _SKIP_GITS_DIR_PARTS = frozenset({".worktrees", ".git", "docs.local", "node_modules", ".tmp"})
@@ -196,6 +226,13 @@ def socket_server_preserving(server: object, *, bridge_command: str | None = Non
             preserved["env"] = without_proxy_front(preserved["env"])
         if isinstance(command, dict) and "env" in command:
             command["env"] = without_proxy_front(command["env"])
+        target = socat_socket_target(server)
+        if target and target != "/tmp/brainbar.sock":
+            destination = command if isinstance(command, dict) else preserved
+            existing_env = destination.get("env")
+            if existing_env is not None and not isinstance(existing_env, dict):
+                raise ValueError("socat env is not a mapping; route migration refused")
+            destination["env"] = {**(existing_env or {}), MCP_SOCKET_ENV: target}
     return {"command": command, **preserved}
 
 

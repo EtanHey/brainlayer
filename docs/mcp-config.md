@@ -71,3 +71,6 @@ transport has already closed needs a fresh MCP connection or session.
 
    Calling `expand_palette` (or starting the server with `BRAINLAYER_MCP_PROFILE=full`) returns all
    16 with their full descriptions. A gated tool called before expanding returns an error saying so.
+
+Migrated socat entries retain a non-default UNIX-CONNECT target through `BRAINLAYER_MCP_SOCKET`.
+If an existing socket override conflicts with that target, setup skips the entry and doctor names both targets.
