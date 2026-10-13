@@ -12,12 +12,17 @@ from .pause import DEFAULT_PAUSE_SENTINEL_PATH, pause_applies_to_label, pause_se
 from .supervisor_adapters import ALIASES, SupervisorCommands
 from .supervisor_jobs import load_components
 
+NON_ENV_RUN = frozenset({"com.brainlayer.tier0-watchdog", "com.etanhey.brainlayer-fleet-watchdog"})
 
-def _legacy_configured(env, env_path):
+
+def _legacy_configured(env, env_path, *, contents=None, env_run=True):
     """Mirror env-run's disable gates for both restart and configured status."""
 
+    if not env_run:
+        return True
+
     def value(key):
-        configured = configured_brainlayer_env_value(key, env_path)
+        configured = configured_brainlayer_env_value(key, env_path, contents=contents)
         return env.get(key) if configured is None else configured
 
     if value("BRAINLAYER_SKIP_DISABLE_GATES") == "1":
@@ -82,7 +87,7 @@ def component_action(name, action, *, agents=None, manifest=None, path=None, run
             payload, active, _ = pause_sentinel_state(pause_path, strict=True)
             if active and pause_applies_to_label(payload, label):
                 raise RuntimeError("component is paused")
-            if not _legacy_configured(env, env_path):
+            if not _legacy_configured(env, env_path, env_run=label not in NON_ENV_RUN):
                 raise RuntimeError("component is configured OFF")
             command = runner(["launchctl", "kickstart", "-k", target])
         else:
@@ -96,6 +101,8 @@ def component_action(name, action, *, agents=None, manifest=None, path=None, run
         raise RuntimeError(printed.stderr or "legacy job status unavailable")
     return result | dict(
         runtime=dict(
-            configured=_legacy_configured(env, env_path), loaded=printed.returncode == 0, pid=_pid(printed.stdout)
+            configured=_legacy_configured(env, env_path, env_run=label not in NON_ENV_RUN),
+            loaded=printed.returncode == 0,
+            pid=_pid(printed.stdout),
         )
     )
