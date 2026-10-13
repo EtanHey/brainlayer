@@ -15,18 +15,66 @@ from .consolidation_plan import NEW, REVIVERS, disabled_labels, read_owned, rend
 from .migration_custody import migration_lock, write_launch_agent
 from .migration_custody import write_new_file as write_file
 from .migration_journal import archive_replace as update
+from .migration_journal import recover_staging
 from .migration_journal import sync_directory as sync
-from .migration_runtime import LaunchdRuntime, pid_alive, wait_supervisor
+from .migration_runtime import LaunchdRuntime, deadline_after, pid_alive, wait_supervisor
 from .supervisor_adapters import SupervisorCommands
+from .supervisor_guard import Custody, boot_time, group_exists, start_time
 from .supervisor_jobs import load_components
 
 
+def publication_paths(home):
+    agents, control = home / "Library/LaunchAgents", home / ".local/share/brainlayer/supervisor"
+    return (
+        control / "migration.json",
+        control / "jobs.json",
+        *(agents / (label + suffix) for label in NEW for suffix in (".plist", ".plist.loaded-keg")),
+    )
+
+
+def wait_custody(directory, *, clock=time, grace=30):
+    """Require the guard's lock and every recorded group to be quiescent; never signal."""
+    if not os.path.lexists(directory):
+        return
+    if directory.resolve() != directory.absolute():
+        raise ValueError("linked supervisor custody refused")
+    deadline = deadline_after(clock, grace) + 2
+    while True:
+        journal = directory / "groups.json"
+        if os.path.lexists(journal):
+            document = json.loads(read_owned(journal))
+            if journal.stat().st_mode & 0o077 or document.get("boot_time", boot_time()) != boot_time():
+                raise RuntimeError("supervisor custody identity refused")
+        try:
+            with Custody(directory) as custody:
+                live = False
+                for key, item in custody.groups.items():
+                    pgid, birth = item["pgid"], item["start_time"]
+                    if type(pgid) is not int or pgid <= 1 or key != str(pgid) or not isinstance(birth, str):
+                        raise RuntimeError("invalid supervisor custody group")
+                    if group_exists(pgid):
+                        if start_time(pgid) != birth:
+                            raise RuntimeError("foreign supervisor custody group")
+                        live = True
+                if not live:
+                    return
+        except BlockingIOError:
+            pass
+        if clock.monotonic() >= deadline:
+            raise RuntimeError("supervisor custody did not exit")
+        clock.sleep(0.1)
+
+
 def migrate(*, home, **options):
-    with migration_lock(home):
+    with migration_lock(home) as control:
+        receipt, *destinations = publication_paths(home)
+        recover_staging(receipt, control, destinations=destinations)
         return _migrate(home=home, **options)
 
 
-def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_alive, verify=None, clock=time):
+def _migrate(
+    *, home, templates, env_file, python, keg, domain, run, alive=pid_alive, verify=None, clock=time, retry=None
+):
     agents, control = home / "Library/LaunchAgents", home / ".local/share/brainlayer/supervisor"
     receipt, manifest = control / "migration.json", control / "jobs.json"
     runtime = LaunchdRuntime(domain, run, alive=alive, clock=clock)
@@ -41,6 +89,10 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
 
     def stop(label, expected=None):
         runtime.stop(label, expected=expected)
+        clock.sleep(0.1)
+        runtime.stop(label, grace=0.1, expected={"loaded": False, "pid": None})
+        if label in NEW:
+            wait_custody(control if label == NEW[0] else control / "calendar", clock=clock)
 
     disabled = disabled_labels(runtime._checked("print-disabled", domain).stdout)
     if NEW[0] in disabled:
@@ -55,6 +107,8 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
         if label not in disabled:
             if label in NEW and runtime.observe(label)["loaded"]:
                 raise RuntimeError(f"unowned replacement appeared: {label}")
+            if label in NEW:
+                wait_custody(control if label == NEW[0] else control / "calendar", clock=clock)
             runtime._checked("bootstrap", domain, path)
             current = runtime.observe(label)
             if not current["loaded"]:
@@ -70,7 +124,7 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
                 client = SupervisorCommands(control / "control.sock", run)
                 wait_supervisor(client.request, load_components(manifest, client.path), alive=alive, clock=clock)
 
-    if os.path.lexists(receipt):
+    if os.path.lexists(receipt) and retry is None:
         previous_bytes = read_owned(receipt)
         previous = json.loads(previous_bytes)
         archive = Path(previous["archive"])
@@ -82,7 +136,8 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
             or stat.S_IMODE(archive.stat().st_mode) != 0o700
         ):
             raise RuntimeError("migration archive custody changed")
-        if previous.get("phase") == "rolled-back":
+        recover_staging(receipt, archive, destinations=publication_paths(home)[1:])
+        if previous.get("phase") in {"rolled_back", "reverted"}:
             restored = snapshot_legacy(agents, env_file, domain, run)
             if (
                 os.path.lexists(manifest)
@@ -95,7 +150,6 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
                 )
             ):
                 raise RuntimeError("rolled-back preimage changed; explicit recovery required")
-            update(receipt, previous_bytes, b"", archive, lambda path, content: None)
             return _migrate(
                 home=home,
                 templates=templates,
@@ -107,8 +161,9 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
                 alive=alive,
                 verify=verify,
                 clock=clock,
+                retry=previous_bytes,
             )
-        if previous.get("phase") != "complete":
+        if previous.get("phase") != "migrated":
             raise RuntimeError("unfinished migration journal; explicit recovery required")
         if any(os.path.lexists(agents / name) for name in previous["files"]):
             raise RuntimeError("legacy files reappeared after consolidation")
@@ -133,7 +188,7 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
         if calendar_pid is not None and alive(calendar_pid):
             raise RuntimeError("calendar is active; defer keg restart")
         original_state = runtime.observe(NEW[0])
-        restarting = previous | dict(phase="restarting", requested_keg=keg)
+        restarting = previous | dict(phase="migrating", requested_keg=keg)
         restarting_bytes = json.dumps(restarting).encode()
         completed = previous | dict(keg=keg)
         completed_bytes = json.dumps(completed).encode()
@@ -187,18 +242,41 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
 
     if os.path.lexists(manifest) or any(observe(label)[0] for label in NEW):
         raise RuntimeError("unowned replacement state; refusing migration")
+    wait_custody(control, clock=clock)
+    wait_custody(control / "calendar", clock=clock)
     snapshot = snapshot_legacy(agents, env_file, domain, run)
     components = snapshot["components"]
     files = {name: bytes.fromhex(raw) for name, raw in snapshot["files"].items()}
     states = snapshot["states"]
+    refused = [
+        label
+        for label, state in states.items()
+        if state["loaded"]
+        and (
+            not state["plist_present"]
+            or state["disabled"]
+            or state["disabled_override"] is None
+            and plistlib.loads(files[f"{label}.plist"]).get("Disabled", False)
+        )
+    ]
+    if refused:
+        raise RuntimeError(f"loaded preimage is not revertible without changing operator state: {refused}")
     archive = agents / (".archive-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8])
     archive.mkdir(mode=0o700)
     staged_manifest = archive / "jobs.json"
     write_file(staged_manifest, json.dumps(components).encode())
     load_components(staged_manifest, control / "control.sock")  # Validate every argv/resource key before bootout.
-    journal = snapshot | dict(phase="prepared", keg=keg, archive=str(archive))
+    journal = snapshot | dict(
+        phase="migrating",
+        keg=keg,
+        archive=str(archive),
+        group_custody={label: str(control if label == NEW[0] else control / "calendar") for label in NEW},
+    )
     initial_receipt = json.dumps(journal).encode()
-    write_file(receipt, initial_receipt)
+    if retry is None:
+        write_file(receipt, initial_receipt)
+    else:
+        update(receipt, retry, initial_receipt, archive, write_file)
     moved, created, stopped = [], [], set()
     completed_receipt = None
 
@@ -243,7 +321,7 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
             if label not in disabled:
                 marker = agents / f"{label}.plist.loaded-keg"
                 publish(marker, (keg + "\n").encode(), write_launch_agent)
-        journal.update(phase="complete", manifest_sha256=hashlib.sha256(read_owned(manifest)).hexdigest())
+        journal.update(phase="migrated", manifest_sha256=hashlib.sha256(read_owned(manifest)).hexdigest())
         completed_receipt = json.dumps(journal).encode()
         journal_update(journal, initial_receipt)
         return journal
@@ -276,10 +354,10 @@ def _migrate(*, home, templates, env_file, python, keg, domain, run, alive=pid_a
                 if state["loaded"] and not loaded:
                     if not state["plist_present"] or state["disabled"]:
                         raise RuntimeError(f"original loaded service has no restorable definition/state: {label}")
-                    if state["pid"] is not None and alive(state["pid"]):
+                    if any(alive(pid) for pid in runtime.observed_pids.get(label, {state["pid"]} - {None})):
                         raise RuntimeError(f"original writer still lives; refusing rollback bootstrap: {label}")
                     bootstrap(label, agents / f"{label}.plist")
-            journal["phase"] = "rolled-back"
+            journal["phase"] = "rolled_back"
             current_receipt = read_owned(receipt)
             if current_receipt not in (initial_receipt, completed_receipt):
                 raise RuntimeError("foreign journal prevents rollback")
