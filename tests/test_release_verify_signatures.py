@@ -316,11 +316,9 @@ def test_source_checkout_install_sh_skips_gate_without_keg(tmp_path: Path) -> No
     shutil.copy(INSTALL_SH, launchd_dir / "install.sh")
     shutil.copy(SCRIPT, checkout / "scripts" / "release-verify-signatures.sh")
     install_source = INSTALL_SH.read_text(encoding="utf-8")
-    marker = (
-        'case "$BRAINLAYER_INSTALL_ACTION" in\n    remove|unload|load)\n        ;;\n    *)\n        if [ "$(uname -s)"'
-    )
-    assert marker in install_source, "install.sh gate-block marker moved; update this test"
-    gate_only = install_source.split(marker, 1)[0]
+    gate_call = install_source.index('"$BRAINLAYER_RELEASE_VERIFY" "$BRAINLAYER_KEG"')
+    gate_end = install_source.index("\nesac\n", gate_call) + len("\nesac\n")
+    gate_only = install_source[:gate_end]
     # The slice must carry the whole signature-gate block, so the skip branch below really executes it.
     assert '"$BRAINLAYER_RELEASE_VERIFY" "$BRAINLAYER_KEG"' in gate_only
     assert gate_only.rstrip().endswith("esac"), "gate block must be complete through its closing esac"
@@ -345,3 +343,62 @@ def test_release_runbook_and_installer_name_signature_gate() -> None:
     assert "scripts/release-verify-signatures.sh" in agents
     assert "find_brainlayer_keg()" in install
     assert '"$BRAINLAYER_RELEASE_VERIFY" "$BRAINLAYER_KEG"' in install
+
+
+@pytest.mark.parametrize(
+    "action",
+    INSTALL_SH.read_text().split('case "$BRAINLAYER_INSTALL_ACTION" in', 1)[1].split(")", 1)[0].strip().split("|"),
+)
+def test_every_install_action_fails_signatures_before_launching(tmp_path, action):
+    if action in {"remove", "unload"}:
+        pytest.skip("teardown does not start jobs")
+    home, launchd = tmp_path / "home", tmp_path / "keg/launchd"
+    home.mkdir()
+    launchd.mkdir(parents=True)
+    (tmp_path / "keg/libexec/venv").mkdir(parents=True)
+    shutil.copy(INSTALL_SH, launchd / "install.sh")
+    gate = launchd / "release-verify-signatures.sh"
+    gate.write_text("#!/bin/sh\nexit 79\n")
+    gate.chmod(0o755)
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    calls = tmp_path / "calls"
+    for name in ("launchctl", "python"):
+        path = fake / name
+        path.write_text(f'#!/bin/sh\necho called >> "{calls}"\nexit 0\n')
+        path.chmod(0o755)
+    result = _run(
+        launchd / "install.sh",
+        action,
+        "watch",
+        env=_install_env(home, PATH=str(fake) + ":/usr/bin:/bin", BRAINLAYER_HOOK_PYTHON=str(fake / "python")),
+    )
+    assert result.returncode == 79, result.stdout + result.stderr
+    assert not calls.exists(), "gate must precede launchctl and the Python transaction"
+
+
+@pytest.mark.parametrize("action", ["consolidate", "consolidation-rollback"])
+def test_source_consolidation_requires_keg_before_transaction(tmp_path, action):
+    result = _run(INSTALL_SH, action, env=_install_env(tmp_path, BRAINLAYER_HOOK_PYTHON="/usr/bin/true"))
+    assert result.returncode != 0 and "identified keg" in result.stderr
+
+
+@pytest.mark.parametrize("action", ["consolidate", "consolidation-rollback", "watch"])
+def test_missing_keg_python_override_is_only_for_new_actions(tmp_path, action):
+    launchd = tmp_path / "keg/launchd"
+    launchd.mkdir(parents=True)
+    (tmp_path / "keg/libexec/venv").mkdir(parents=True)
+    shutil.copy(INSTALL_SH, launchd / "install.sh")
+    gate = launchd / "release-verify-signatures.sh"
+    gate.write_text("#!/bin/sh\nexit 79\n")
+    gate.chmod(0o755)
+    override = tmp_path / "python"
+    override.write_text("#!/bin/sh\nexit 91\n")
+    override.chmod(0o755)
+    result = _run(
+        launchd / "install.sh", action, env=_install_env(tmp_path, PYTHON_BIN="", BRAINLAYER_HOOK_PYTHON=str(override))
+    )
+    if action == "watch":
+        assert result.returncode == 1 and "refusing to fall back to PATH" in result.stderr
+    else:
+        assert result.returncode == 79, result.stderr

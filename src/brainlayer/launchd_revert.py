@@ -36,9 +36,24 @@ def revert(home, journal, domain, run, *, alive=pid_alive, clock=time):
         # Recover the journal first; legacy staging peers are only known after
         # validating its filename inventory. Do not prematurely scan LaunchAgents.
         recover_staging(receipt, control, destinations=(manifest,))
+        if not os.path.lexists(receipt):
+            artifacts = [manifest, *new_paths, *(agents / f"{label}.loaded-keg" for label in NEW)]
+            archives = (
+                p
+                for p in agents.glob(".archive-*")
+                if re.fullmatch(r"\.archive-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", p.name)
+            )
+            for artifact in (*artifacts, *archives):
+                if os.path.lexists(artifact):
+                    raise RuntimeError(
+                        f"missing migration journal with supervisor artifact {artifact}; manual recovery required"
+                    )
+            return {"phase": "none"}
         expected = read_owned(receipt)
         document = json.loads(expected)
         phase = document.get("phase")
+        if phase == "rolled_back" and not document.get("recovery_refusal"):
+            return document
         if phase not in {"migrated", "reverting", "reverted"} or document.get("recovery_refusal"):
             raise RuntimeError("migration is not a completed/reverting transaction; reconciliation required")
         archive = Path(document["archive"])

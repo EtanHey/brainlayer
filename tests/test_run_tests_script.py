@@ -1142,10 +1142,14 @@ def test_changed_only_scope_maps_package_init_to_version_consistency_tests(
     assert f"{test_root}/ -v" not in logged
 
 
-def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "source,suite",
+    [("src/brainlayer/__main__.py", "test_hook_python.py"), ("scripts/launchd/install.sh", "test_launchd_hygiene.py")],
+)
+def test_changed_only_module_map(tmp_path, source, suite):
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    (test_root / "test_hook_python.py").write_text("test placeholder\n")
+    (test_root / suite).write_text("test placeholder\n")
     (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
@@ -1155,7 +1159,7 @@ def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path:
     env["BRAINLAYER_USE_UV"] = "0"
     env["BRAINLAYER_PREPUSH"] = "1"
     env["BRAINLAYER_PREPUSH_SCOPE"] = "changed-only"
-    env["BRAINLAYER_CHANGED_FILES"] = "src/brainlayer/__main__.py"
+    env["BRAINLAYER_CHANGED_FILES"] = source
     env["PYTEST_LOG"] = str(pytest_log)
     env["BUN_LOG"] = str(bun_log)
 
@@ -1165,7 +1169,7 @@ def test_changed_only_scope_maps_package_main_to_module_execution_test(tmp_path:
 
     assert result.returncode == 0, result.stdout
     logged = pytest_log.read_text()
-    assert str(test_root / "test_hook_python.py") in logged
+    assert str(test_root / suite) in logged
     assert "falling back to full pytest unit suite" not in result.stdout
     assert f"{test_root}/ -v" not in logged
 

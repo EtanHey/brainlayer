@@ -583,10 +583,13 @@ def test_launchd_installer_accepts_google_key_without_retired_enrichment_config(
     launchd_dir.mkdir()
     shutil.copy(REPO_ROOT / "scripts/launchd/brainlayer-env-run.sh", launchd_dir / "brainlayer-env-run.sh")
     install_source = (REPO_ROOT / "scripts/launchd/install.sh").read_text(encoding="utf-8")
+    assert install_source.count('case "${1:-all}" in') == 1
     functions_only = install_source.split('case "${1:-all}" in', 1)[0]
     harness = launchd_dir / "verify-config.sh"
     harness.write_text(functions_only + "\nverify_gemini_env_file\n", encoding="utf-8")
     harness.chmod(0o755)
+    syntax = subprocess.run(["/bin/bash", "-n", str(harness)], capture_output=True, text=True)
+    assert syntax.returncode == 0, syntax.stderr
 
     env_file = tmp_path / "brainlayer.env"
     env_file.write_text("GOOGLE_API_KEY='test-secret'\n", encoding="utf-8")
