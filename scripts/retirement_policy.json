@@ -182,14 +182,6 @@
         "target": "import subprocess"
       }
     },
-    "0f41d4b704fe3fd54d04e6bae8fb0b45e40087a0f63d618721bf4c7b1b4238e0": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change records connection age and counts currently live age-qualified sockets for a payload-free restart-recovery baseline in the existing mode0600 sidecar; no client identity, initialization replay, outbound transport, TCP/cloud endpoint or model sender is added.",
-      "site": {
-        "body_sha256": "cbc88ea15447f6fc2de0f5815929d721c4fcc63a24945b6ec4d07f7833c643c0",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
-      }
-    },
     "0f53d8019026802bf33844914ede0017ed4a218d1cfd358249f189d1cd72f79b": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/health_check.py <module>._default_ps_output subprocess.TimeoutExpired.",
       "site": {
@@ -2654,14 +2646,6 @@
         "target": "sqlite3.connect"
       }
     },
-    "8818085b89360764bcd1532654e841f3baf22feebb4f9f75710d19885d3220be": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change records connection age and counts currently live age-qualified sockets for a payload-free restart-recovery baseline in the existing mode0600 sidecar; no client identity, initialization replay, outbound transport, TCP/cloud endpoint or model sender is added.",
-      "site": {
-        "body_sha256": "cbc88ea15447f6fc2de0f5815929d721c4fcc63a24945b6ec4d07f7833c643c0",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
-      }
-    },
     "888b2fddabcaea9132e1e8d15d86c4cde6be134b0150f5e02c7b5e22f5618b91": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/launchd_primitive.py <module>._default_command_runner",
       "site": {
@@ -3118,6 +3102,14 @@
         "owner": "<module>.ps_sample",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "9ddbf5601184ea1b2158d21f9174b78be4d20a513f1725bba07bf6360333d785": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change counts currently live age-qualified sockets for a payload-free restart baseline in the mode0600 sidecar. Constructor-injected transport time keeps default release clocks real; the approved private clock-file adapter is DEBUG-only and release CI proves absence and no runtime effect. No client identity, initialization replay, new outbound transport, TCP/cloud endpoint or model sender.",
+      "site": {
+        "body_sha256": "e558ca8c2fd3fe3eacfb3d16f6a74c514c98182e89d674c5c140cde36843ce94",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "9e87eef5434c6c0016c89467c88999480208496d6a0062660b9441dde772329f": {
@@ -4396,6 +4388,14 @@
         "owner": "<module>._git",
         "path": "scripts/ci_ratchet_table.py",
         "target": "subprocess.run"
+      }
+    },
+    "d49484651446d4a08e8968508741128efdcec79773e4bc0c9228bb856589cedb": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change counts currently live age-qualified sockets for a payload-free restart baseline in the mode0600 sidecar. Constructor-injected transport time keeps default release clocks real; the approved private clock-file adapter is DEBUG-only and release CI proves absence and no runtime effect. No client identity, initialization replay, new outbound transport, TCP/cloud endpoint or model sender.",
+      "site": {
+        "body_sha256": "e558ca8c2fd3fe3eacfb3d16f6a74c514c98182e89d674c5c140cde36843ce94",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "d4de14cf71d304c604f13e2dfb94f500d3be6cf153c4a336d3da0e7990123c6d": {
