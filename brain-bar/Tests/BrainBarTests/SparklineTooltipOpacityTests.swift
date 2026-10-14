@@ -131,23 +131,46 @@ final class SparklineTooltipOpacityTests: XCTestCase {
 
     func testCompact112PointHoverRetainsAllThreeSeriesValues() throws {
         for scheme in [ColorScheme.light, .dark] {
-            let chart = SparklineChart(presentation: SparklineChartPresentation(
+            let presentation = SparklineChartPresentation(
                 label: "Ingest", values: values, secondaryValues: Array(repeating: 67, count: 10),
                 tertiaryValues: Array(repeating: 68, count: 10), primarySeriesLabel: "Agent",
                 secondarySeriesLabel: "Watcher", tertiarySeriesLabel: "Replay",
                 metricDisclosure: "Window: Last 30m · Count: hovered value below · Unit: chunks · Clock: ingest time"
-            ), accentColor: .systemGreen, previewHoveredBucket: 5, previewHoverX: 0)
+            )
+            let chart = SparklineChart(presentation: presentation, accentColor: .systemGreen,
+                previewHoveredBucket: 5, previewHoverX: 0)
                 .frame(width: 360, height: 112).environment(\.colorScheme, scheme)
             let renderer = ImageRenderer(content: chart)
             renderer.scale = 2
             let image = try XCTUnwrap(renderer.nsImage)
             let cg = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            try VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
-            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-            for value in ["Agent", "Watcher", "Replay", "66", "67", "68"] {
-                XCTAssertTrue(text.contains(value), "Missing \(value) from rendered compact card: \(text)")
+            // The chart body excludes the 12pt axis and 2pt VStack spacing. Match its
+            // bucket-5 dominant (68) anchor, then use production tooltip placement.
+            let plotSize = CGSize(width: 360, height: 112 - 14)
+            let anchor = CGPoint(x: 40 + 5 * (plotSize.width - 50) / 9,
+                y: 10 + (plotSize.height - 20) * (1 - 68 / CGFloat(presentation.tightAxisMax)))
+            let size = SparklineTooltipPlacement.tooltipSize(in: plotSize,
+                seriesCount: 3, showsMetricDisclosure: true)
+            let center = SparklineTooltipPlacement.position(near: CGPoint(x: 0, y: anchor.y),
+                anchorY: anchor.y, hoveredX: anchor.x, containerBounds: plotSize, tooltipSize: size)
+            // Vision uses a normalized bottom-left origin. Exclude the chart axes:
+            // whole-chart dark OCR can rotate the numeric cluster (66 -> 99).
+            let region = CGRect(x: (center.x - size.width / 2) / 360,
+                y: 1 - (center.y + size.height / 2) / 112, width: size.width / 360, height: size.height / 112)
+            for cpuOnly in [false, true] {
+                for correction in [false, true] {
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.regionOfInterest = region
+                    request.usesCPUOnly = cpuOnly
+                    request.usesLanguageCorrection = correction
+                    try VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
+                    let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                    for value in ["Agent", "Watcher", "Replay", "66", "67", "68"] {
+                        XCTAssertTrue(text.contains(value), "Missing \(value), \(scheme), CPU=\(cpuOnly), correction=\(correction): \(text)")
+                    }
+                    print("TOOLTIP_OCR \(scheme) CPU=\(cpuOnly) correction=\(correction) region=\(region): \(text)")
+                }
             }
             if let output = ProcessInfo.processInfo.environment["BRAINBAR_SNAPSHOT_DIR"] {
                 try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?
