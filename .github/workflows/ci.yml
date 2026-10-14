@@ -159,9 +159,11 @@ jobs:
       - name: Cache pip
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: ${{ runner.os }}-pip-${{ matrix.python-version }}-
+          # Share HTTP downloads across interpreters; pip still selects compatible wheels.
+          # Avoid four ~3 GiB copies evicting the ~510 MiB SwiftPM cache.
+          path: ~/.cache/pip/http-v2
+          key: ${{ runner.os }}-pip-downloads-v2-${{ hashFiles('pyproject.toml') }}
+          restore-keys: ${{ runner.os }}-pip-downloads-v2-
 
       - name: Cache Hugging Face models
         uses: actions/cache@v4
@@ -254,9 +256,9 @@ jobs:
       - name: Cache pip
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-crash-3.13-${{ hashFiles('pyproject.toml') }}
-          restore-keys: ${{ runner.os }}-pip-3.13-
+          path: ~/.cache/pip/http-v2
+          key: ${{ runner.os }}-pip-downloads-v2-${{ hashFiles('pyproject.toml') }}
+          restore-keys: ${{ runner.os }}-pip-downloads-v2-
 
       - name: Install crash test dependencies
         run: pip install -e ".[dev]" pytest-xdist
