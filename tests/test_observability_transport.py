@@ -38,6 +38,7 @@ def sample(tmp_path, *, drops=0, observed=900):
         "counts": {k: drops if k == "requests_dropped" else 0 for k in FIELDS},
     }
     path.write_text(json.dumps(payload))
+    path.chmod(0o600)
     os.utime(path, (NOW.timestamp(), NOW.timestamp()))
     return path, db, payload
 
