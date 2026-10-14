@@ -14,7 +14,7 @@ final class AsyncStoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-async-test-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-async-test-\(UUID().uuidString).db"
         db = BrainDatabase(path: tempDBPath)
     }
 

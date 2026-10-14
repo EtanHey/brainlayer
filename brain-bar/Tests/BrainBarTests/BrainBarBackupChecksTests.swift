@@ -174,23 +174,20 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
         observability: ObservabilityReadResult, workspace: Recorder = Recorder(),
         jsonl: BrainLayerLaunchdJobObservation? = nil
     ) throws -> (BrainBarSettingsViewModel, URL) {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-plain-paths-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let configURL = root.appendingPathComponent("brainlayer.env")
         let store = BrainLayerConfigStore(configURL: configURL)
         try store.save(.defaultConfig)
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: workspace, store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdObservations: [
                 .backupDaily: .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
                 .jsonlBackup: jsonl ?? .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
             ],
             refreshStatusOnLoad: false,
-            initialObservabilityResult: observability,
-            workspace: workspace
-        )
+            initialObservabilityResult: observability)
         return (viewModel, configURL)
     }
 

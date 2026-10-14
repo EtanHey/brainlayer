@@ -69,7 +69,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             configURL: URL(fileURLWithPath: "/nonexistent/settings.env"),
             loadDocumentOverride: { throw CocoaError(.fileReadNoPermission) }
         )
-        let viewModel = BrainBarSettingsViewModel(store: store, refreshStatusOnLoad: false)
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store, refreshStatusOnLoad: false)
         XCTAssertFalse(viewModel.configReadSucceeded)
         XCTAssertFalse(viewModel.reloadConfigFromDisk())
         XCTAssertFalse(viewModel.configReadSucceeded)
@@ -86,8 +86,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
         ))
-        let viewModel = BrainBarSettingsViewModel(
-            store: fixture.store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: fixture.store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false,
             observabilityURL: url
@@ -111,8 +110,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("tests/fixtures/observability/golden/missing-launchd-dev.json")
-        let viewModel = BrainBarSettingsViewModel(
-            store: fixture.store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: fixture.store,
             refreshStatusOnLoad: false,
             observabilityURL: url
         )
@@ -129,8 +127,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let reads = SequencedObservabilityReads()
         let url = fixture.root.appendingPathComponent("observability.json")
-        let viewModel = BrainBarSettingsViewModel(
-            store: fixture.store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: fixture.store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false,
             observabilityURL: url,
@@ -199,14 +196,13 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
     @MainActor
     func testFailedSaveLeavesDisplayedConfigAtLastPersistedValue() throws {
-        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let tempRoot = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-model-\(UUID().uuidString)", isDirectory: false)
         try "not a directory".write(to: tempRoot, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: tempRoot) }
 
         let store = BrainLayerConfigStore(configURL: tempRoot.appendingPathComponent("brainlayer.env"))
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false
         )
@@ -263,7 +259,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             loadDocumentOverride: { BrainLayerEnvDocument(config: initial) },
             saveOverride: { _ in }
         )
-        let viewModel = BrainBarSettingsViewModel(store: store, refreshStatusOnLoad: false)
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store, refreshStatusOnLoad: false)
         viewModel.setSystemEnabled(false)
 
         XCTAssertEqual(viewModel.lastSaveReceipt?.fileUpdated, true)
@@ -279,7 +275,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
 
     @MainActor
     func testReloadErrorAfterSuccessfulWriteReportsFileUpdatedTruthfully() throws {
-        let configURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let configURL = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-reload-error-\(UUID().uuidString).env")
         var persisted = BrainLayerConfig.defaultConfig
         var loadCount = 0
@@ -295,8 +291,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
             },
             saveOverride: { persisted = $0 }
         )
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false,
             now: { now }
@@ -379,8 +374,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         var confirmationCount = 0
-        let viewModel = BrainBarSettingsViewModel(
-            store: fixture.store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: fixture.store,
             refreshStatusOnLoad: false,
             confirmAPIKeyOverwrite: {
                 confirmationCount += 1
@@ -415,8 +409,7 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         var externalDuringConfirmation = external
         externalDuringConfirmation.googleAPIKey = .onePasswordReference("op://Private/ExternalEdit/key")
         var confirmationWriteError: Error?
-        let viewModel = BrainBarSettingsViewModel(
-            store: fixture.store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: fixture.store,
             refreshStatusOnLoad: false,
             confirmAPIKeyOverwrite: {
                 do {
@@ -490,13 +483,12 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         store: BrainLayerConfigStore,
         viewModel: BrainBarSettingsViewModel
     ) {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-model-\(UUID().uuidString)", isDirectory: true)
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(config)
         let now = fixedNow
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: launchdStatusProvider ??
                 StaticBrainLayerLaunchdStatusProvider(states: initialLaunchdStates),
             runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: runtimeObservation),

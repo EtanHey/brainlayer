@@ -63,8 +63,7 @@ enum BrainBarNoEnrichmentRender {
                     loadDocumentOverride: { throw Failure("Synthetic unavailable config") }, saveOverride: { _ in }
                 )
                 for section in BrainBarSettingsSection.allCases {
-                    let model = BrainBarSettingsViewModel(
-                        store: pageStore,
+                    let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: pageStore,
                         launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                         runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Synthetic runtime")),
                         refreshStatusOnLoad: false,

@@ -63,10 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.configureToggleHotkey()
         }
 
-        let dashboardPanel = BrainBarDashboardPanelController(runtime: runtime)
+        let workspace = BrainBarWorkspace()
+        let dashboardPanel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
         self.dashboardPanel = dashboardPanel
-        statusPopoverController = BrainBarStatusPopoverController(
-            runtime: runtime,
+        statusPopoverController = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
             dashboardPanelController: dashboardPanel,
             statusBar: SystemBrainBarStatusItemHost()
         )

@@ -181,12 +181,13 @@ final class BrainBarDashboardPanelController: NSObject, NSWindowDelegate {
     weak var statusItemButton: NSView?
 
     init(
+        workspace: any BrainBarWorkspaceActing,
         runtime: BrainBarRuntime,
         frameStore: BrainBarWindowFrameStore = BrainBarWindowFrameStore(key: frameDefaultsKey),
         screenFrames: @escaping () -> [NSRect] = { NSScreen.screens.map(\.visibleFrame) }
     ) {
         let hostingController = NSHostingController(
-            rootView: BrainBarWindowRootView(runtime: runtime, managesWindowFrame: false, panelState: panelState)
+            rootView: BrainBarWindowRootView(workspace: workspace, runtime: runtime, managesWindowFrame: false, panelState: panelState)
                 .frame(minWidth: Self.minSize.width)
                 .frame(maxWidth: .infinity)
         )

@@ -18,7 +18,7 @@ final class StoreSecretScrubTests: XCTestCase {
     private var dbPath: String!
 
     override func setUpWithError() throws {
-        tempDir = FileManager.default.temporaryDirectory
+        tempDir = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-scrub-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         dbPath = tempDir.appendingPathComponent("brainbar.db").path

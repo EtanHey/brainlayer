@@ -278,8 +278,7 @@ enum BrainBarRenderHarness {
                     in: outputDirectory
                 )
 
-                let viewModel = BrainBarSettingsViewModel(
-                    store: store,
+                let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                     launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                     runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
                         observation: .unknown("Fixture runtime state unavailable.")
@@ -425,8 +424,7 @@ enum BrainBarRenderHarness {
                         lastRunAt: Date(timeIntervalSince1970: 1_789_866_900),
                         nextRunAt: Date(timeIntervalSince1970: 1_790_471_700), isContinuous: false)
             let fixedNow: Date? = evidence != nil ? maintenanceNow : nil
-            let viewModel = BrainBarSettingsViewModel(
-                store: store,
+            let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                 runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
                     observation: .unknown("Fixture runtime state unavailable.")
@@ -701,8 +699,7 @@ enum BrainBarRenderHarness {
         for breakpoint in breakpoints {
             let runtime = BrainBarRuntime()
             runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-            let controller = BrainBarDashboardPanelController(
-                runtime: runtime,
+            let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
                 frameStore: BrainBarWindowFrameStore(defaults: RenderDefaults(), key: "render")
             )
             let window = controller.windowForTesting
@@ -722,8 +719,7 @@ enum BrainBarRenderHarness {
             ),
             database: nil
         )
-        let unknownController = BrainBarDashboardPanelController(
-            runtime: unknownRuntime,
+        let unknownController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: unknownRuntime,
             frameStore: BrainBarWindowFrameStore(defaults: RenderDefaults(), key: "render")
         )
         unknownController.windowForTesting.setFrame(NSRect(x: 0, y: 0, width: 960, height: 640), display: false)
@@ -737,8 +733,7 @@ enum BrainBarRenderHarness {
         let driveRuntime = BrainBarRuntime()
         driveRuntime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         driveRuntime.driveAuth.setForPreview(status: .init(state: .expiring, reason: nil, expiresAt: Date().addingTimeInterval(5.5 * 3_600)))
-        let driveController = BrainBarDashboardPanelController(
-            runtime: driveRuntime,
+        let driveController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: driveRuntime,
             frameStore: BrainBarWindowFrameStore(defaults: RenderDefaults(), key: "render")
         )
         driveController.windowForTesting.setFrame(NSRect(x: 0, y: 0, width: 960, height: 640), display: false)
@@ -825,8 +820,7 @@ enum BrainBarRenderHarness {
                                     name: "maint-\(state.name)-dashboard\(expanded ? "-expanded" : "")-\(breakpoint.name)-\(appearance.name)",
                                     appearance: appearance.appearance)
                     }
-                    let viewModel = BrainBarSettingsViewModel(
-                        store: store,
+                    let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                         launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                         runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
                         initialLaunchdObservations: [
@@ -863,8 +857,7 @@ enum BrainBarRenderHarness {
                 let done = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 4, lastExitCode: 0, lastRunAt: runStart,
                                                            nextRunAt: jobAt.addingTimeInterval(18 * 3_600), isContinuous: false)
                 for breakpoint in breakpoints where breakpoint.name == "default" {
-                    let jobsModel = BrainBarSettingsViewModel(
-                        store: store,
+                    let jobsModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                         launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                         runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
                         initialLaunchdObservations: [
@@ -971,8 +964,7 @@ enum BrainBarRenderHarness {
                                                  nextRunAt: now.addingTimeInterval(82_800), isContinuous: false)
         func viewModel(_ result: ObservabilityReadResult, details: Bool) -> BrainBarSettingsViewModel {
             let backups: ObservabilityDocument.Backups? = if case let .readable(document) = result { document.backups } else { nil }
-            let model = BrainBarSettingsViewModel(
-                store: store,
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                 runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture runtime state unavailable.")),
                 initialLaunchdObservations: [.backupDaily: ok, .jsonlBackup: ok],

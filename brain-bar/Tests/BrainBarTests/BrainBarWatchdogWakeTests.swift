@@ -92,7 +92,7 @@ final class BrainBarWatchdogWakeTests: XCTestCase {
     private var directory: URL!
 
     override func setUpWithError() throws {
-        directory = FileManager.default.temporaryDirectory
+        directory = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-watchdog-wake-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }

@@ -7,7 +7,7 @@ final class BrainBarRuntimeWiringTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-runtime-wiring-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-runtime-wiring-\(UUID().uuidString).db"
     }
 
     override func tearDown() async throws {

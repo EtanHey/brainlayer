@@ -69,7 +69,7 @@ jobs:
 
       - name: Test BrainBar
         if: needs.changes.outputs.brain_bar == 'true'
-        run: cd brain-bar && swift test
+        run: cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py
 
       - name: Skip BrainBar Swift build
         if: needs.changes.outputs.brain_bar != 'true'

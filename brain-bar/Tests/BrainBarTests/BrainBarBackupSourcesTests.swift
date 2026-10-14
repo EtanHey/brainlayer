@@ -102,13 +102,10 @@ final class BrainBarBackupSourcesTests: XCTestCase {
             listDirectory: { $0.path == "/d/jsonl-backups" ? ["claude-jsonl-2026-09-29.tar.gz"] : [] },
             isRegularFile: { _ in true }
         )
-        let viewModel = BrainBarSettingsViewModel(
-            store: BrainLayerConfigStore(configURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).env")),
+        let viewModel = BrainBarSettingsViewModel(workspace: recorder, store: BrainLayerConfigStore(configURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).env")),
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false,
-            backupSources: sources,
-            workspace: recorder
-        )
+            backupSources: sources)
         viewModel.refreshBackupSchedules()
         for _ in 0..<200 where viewModel.backupSchedules.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
         let transcripts = try XCTUnwrap(viewModel.backupSchedules.first { $0.title == "Transcripts" })

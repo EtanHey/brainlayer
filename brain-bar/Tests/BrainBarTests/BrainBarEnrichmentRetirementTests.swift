@@ -19,8 +19,7 @@ final class BrainBarEnrichmentRetirementTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = BrainLayerConfigStore(configURL: directory.appendingPathComponent("fixture.env"))
         try store.save(.defaultConfig)
-        let model = BrainBarSettingsViewModel(
-            store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+        let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false
         )
         model.pendingPlainAPIKey = "synthetic-google-key"

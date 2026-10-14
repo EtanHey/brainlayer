@@ -13,8 +13,8 @@ final class BrainBarAgentStoreWritesTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-store-writes-\(UUID().uuidString).db"
-        root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("brainbar-store-writes-\(UUID().uuidString)")
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-store-writes-\(UUID().uuidString).db"
+        root = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent("brainbar-store-writes-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         restoreWatcherHealthEnvironment = isolateWatcherHealthEnvironment(root: root)
         db = BrainDatabase(path: tempDBPath)

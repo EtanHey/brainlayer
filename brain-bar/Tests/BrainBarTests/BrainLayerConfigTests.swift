@@ -169,7 +169,7 @@ final class BrainLayerConfigTests: XCTestCase {
     }
 
     func testWritesMissingConfigWithFullSchemaDefaults() throws {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let directory = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-config-\(UUID().uuidString)", isDirectory: true)
         let configURL = directory.appendingPathComponent("brainlayer.env")
         let store = BrainLayerConfigStore(configURL: configURL)

@@ -78,6 +78,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private var launchdSampleGeneration: UInt64 = 0
 
     init(
+        workspace: any BrainBarWorkspaceActing,
         store: BrainLayerConfigStore = BrainLayerConfigStore(),
         launchdStatusProvider: any BrainLayerLaunchdStatusSampling = BrainLayerLaunchdStatusProvider(),
         runtimeStatusProvider: any BrainLayerActiveRuntimeSampling = UnknownBrainLayerActiveRuntimeProvider(),
@@ -98,8 +99,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         watcherHealthRead: @escaping @Sendable (URL) -> WatcherHealthFileRead = { WatcherHealthReader.read(url: $0) },
         backupSources: BrainBarBackupSources? = nil,
         initialBackupSchedules: [BrainBarBackupScheduleRow] = [],
-        initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread,
-        workspace: any BrainBarWorkspaceActing = BrainBarWorkspace()
+        initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
@@ -763,12 +763,13 @@ struct BrainBarSettingsView: View {
         ObservabilityReader.url(dbPath: databasePath, environment: environment)
     }
 
-    init(databasePath: String, activationRevision: Int = 0,
+    init(workspace: any BrainBarWorkspaceActing, databasePath: String, activationRevision: Int = 0,
          navigation: BrainBarSettingsNavigation = BrainBarSettingsNavigation(), showsSidebar: Bool = true) {
         self.activationRevision = activationRevision
         self.showsSidebar = showsSidebar
         _navigation = StateObject(wrappedValue: navigation)
         _viewModel = StateObject(wrappedValue: BrainBarSettingsViewModel(
+            workspace: workspace,
             observabilityURL: Self.observabilityURL(databasePath: databasePath),
             watcherHealthURL: WatcherHealthReader.resolvedURL(),
             backupSources: .live(databasePath: databasePath)

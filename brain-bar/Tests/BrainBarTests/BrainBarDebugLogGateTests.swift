@@ -10,7 +10,7 @@ final class BrainBarLogFileTests: XCTestCase {
     private var directory: URL!
 
     override func setUpWithError() throws {
-        directory = FileManager.default.temporaryDirectory
+        directory = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-logfile-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
@@ -291,7 +291,7 @@ final class BrainBarLogFileRotationAndDirectoryTests: XCTestCase {
     private var directory: URL!
 
     override func setUpWithError() throws {
-        directory = FileManager.default.temporaryDirectory
+        directory = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-logfile-r2-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
@@ -460,7 +460,7 @@ final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
     }
 
     func testRouterNeitherForwardsNorLogsAClientChosenProfileID() throws {
-        let dbPath = NSTemporaryDirectory() + "brainbar-profile-\(UUID().uuidString).db"
+        let dbPath = brainBarTestTemporaryPath() + "brainbar-profile-\(UUID().uuidString).db"
         tempDBPath = dbPath
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
@@ -491,7 +491,7 @@ final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
     /// valid-shaped is still client text. The router must generate the id itself.
     func testRouterIgnoresAValidShapedClientProfileID() throws {
         let clientValue = "q-c0ffee00c0de"
-        let dbPath = NSTemporaryDirectory() + "brainbar-profile-\(UUID().uuidString).db"
+        let dbPath = brainBarTestTemporaryPath() + "brainbar-profile-\(UUID().uuidString).db"
         tempDBPath = dbPath
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
@@ -521,7 +521,7 @@ final class BrainBarProfileAndHelperErrorLogTests: XCTestCase {
 
     func testRouterSendsNoProfileIDToTheHelperWhenProfilingIsOff() throws {
         unsetenv("BRAINLAYER_SEARCH_PROFILE")
-        let dbPath = NSTemporaryDirectory() + "brainbar-profile-\(UUID().uuidString).db"
+        let dbPath = brainBarTestTemporaryPath() + "brainbar-profile-\(UUID().uuidString).db"
         tempDBPath = dbPath
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }

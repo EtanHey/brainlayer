@@ -101,7 +101,7 @@ final class SocketIntegrationTests: XCTestCase {
         BrainBarSignalSafety.ignoreSIGPIPE()
         originalMCPProfile = ProcessInfo.processInfo.environment["BRAINLAYER_MCP_PROFILE"]
         setenv("BRAINLAYER_MCP_PROFILE", "full", 1)
-        tempDBPath = NSTemporaryDirectory() + "brainbar-integration-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-integration-\(UUID().uuidString).db"
         db = BrainDatabase(path: tempDBPath)
         server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db)
         server.start()
@@ -589,9 +589,9 @@ final class SocketIntegrationTests: XCTestCase {
         let socketPermissions = try XCTUnwrap(socketAttributes[.posixPermissions] as? NSNumber)
         XCTAssertEqual(socketPermissions.intValue & 0o777, 0o600, "The local MCP trust boundary must be owner-only")
 
-        let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
+        let targetPath = brainBarTestTemporaryPath() + "brainbar-backup-\(UUID().uuidString).db"
         let completionMarkerPath = targetPath + ".complete"
-        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { removeBrainBarTestDatabase(targetPath) }
         defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
 
         // Each helper call opens a fresh socket, matching the scheduled Python
@@ -709,8 +709,8 @@ final class SocketIntegrationTests: XCTestCase {
         )
         defer { sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil) }
 
-        let targetPath = NSTemporaryDirectory() + "brainbar-blocked-backup-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        let targetPath = brainBarTestTemporaryPath() + "brainbar-blocked-backup-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(targetPath) }
         defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
 
         let backupFD = try connectClient()
@@ -806,8 +806,8 @@ final class SocketIntegrationTests: XCTestCase {
             sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil)
         }
 
-        let targetPath = NSTemporaryDirectory() + "brainbar-store-snapshot-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        let targetPath = brainBarTestTemporaryPath() + "brainbar-store-snapshot-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(targetPath) }
         defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
         let backupFD = try connectClient()
         defer { close(backupFD) }
@@ -897,7 +897,7 @@ final class SocketIntegrationTests: XCTestCase {
     func testPendingDrainDoesNotBlockStoreOrInitializeDuringBackup() throws {
         server.stop()
         db.close()
-        let pendingPath = NSTemporaryDirectory() + "brainbar-backup-liveness-\(UUID().uuidString).jsonl"
+        let pendingPath = brainBarTestTemporaryPath() + "brainbar-backup-liveness-\(UUID().uuidString).jsonl"
         let previousPendingPath = ProcessInfo.processInfo.environment["BRAINBAR_PENDING_STORES_PATH"]
         setenv("BRAINBAR_PENDING_STORES_PATH", pendingPath, 1)
         defer {
@@ -939,8 +939,8 @@ final class SocketIntegrationTests: XCTestCase {
             progressGate.release.signal()
             sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil)
         }
-        let targetPath = NSTemporaryDirectory() + "brainbar-drain-liveness-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        let targetPath = brainBarTestTemporaryPath() + "brainbar-drain-liveness-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(targetPath) }
         defer { try? FileManager.default.removeItem(atPath: targetPath + ".complete") }
         let backupFD = try connectClient()
         defer { close(backupFD) }
@@ -1034,9 +1034,9 @@ final class SocketIntegrationTests: XCTestCase {
         )
         defer { sqlite3_progress_handler(writeDatabase.dbHandle, 0, nil, nil) }
 
-        let targetPath = NSTemporaryDirectory() + "brainbar-reused-fd-backup-\(UUID().uuidString).db"
+        let targetPath = brainBarTestTemporaryPath() + "brainbar-reused-fd-backup-\(UUID().uuidString).db"
         let completionMarkerPath = targetPath + ".complete"
-        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { removeBrainBarTestDatabase(targetPath) }
         defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
 
         let backupFD = try connectClient()
@@ -1127,11 +1127,11 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     func testBrainBackupVacuumIntoRefusesExistingCompletionMarkerWithoutOverwritingIt() throws {
-        let targetPath = NSTemporaryDirectory() + "brainbar-backup-\(UUID().uuidString).db"
+        let targetPath = brainBarTestTemporaryPath() + "brainbar-backup-\(UUID().uuidString).db"
         let completionMarkerPath = targetPath + ".complete"
         let originalMarker = Data("unrelated data".utf8)
         try originalMarker.write(to: URL(fileURLWithPath: completionMarkerPath))
-        defer { try? FileManager.default.removeItem(atPath: targetPath) }
+        defer { removeBrainBarTestDatabase(targetPath) }
         defer { try? FileManager.default.removeItem(atPath: completionMarkerPath) }
 
         _ = try sendMCPRequest([
@@ -1426,7 +1426,7 @@ final class SocketIntegrationTests: XCTestCase {
             "Quarantined in CI: brainlayer#891 lost-notification flake (~55% on 2026-09-22). "
             + "Set BRAINLAYER_RUN_FLAKY_SOCKET_TESTS=1 to run it."
         )
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let tempDir = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-flush-notify-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }

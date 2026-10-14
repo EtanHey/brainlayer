@@ -67,10 +67,10 @@ final class DashboardTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-dashboard-\(UUID().uuidString).db"
-        fallbackReplayRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-dashboard-\(UUID().uuidString).db"
+        fallbackReplayRoot = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-dashboard-fallback-root-\(UUID().uuidString)", isDirectory: true)
-        durableQueueRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+        durableQueueRoot = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-dashboard-durable-queue-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: fallbackReplayRoot, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: durableQueueRoot, withIntermediateDirectories: true)
@@ -938,7 +938,7 @@ final class DashboardTests: XCTestCase {
     }
 
     func testRestartHandoffAllowsOnlyMatchingFreshExistingInstance() throws {
-        let markerPath = NSTemporaryDirectory() + "brainbar-restart-handoff-\(UUID().uuidString)"
+        let markerPath = brainBarTestTemporaryPath() + "brainbar-restart-handoff-\(UUID().uuidString)"
         let timestamp = Date(timeIntervalSince1970: 1_000)
 
         BrainBarRestartHandoff.markRestartingProcess(pid: 42, at: timestamp, path: markerPath)
@@ -997,7 +997,7 @@ final class DashboardTests: XCTestCase {
     }
 
     func testWatchdogPolicyMarksMissingAndStaleHeartbeatUnhealthy() throws {
-        let directory = FileManager.default.temporaryDirectory
+        let directory = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-watchdog-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1027,7 +1027,7 @@ final class DashboardTests: XCTestCase {
     }
 
     func testWatchdogTerminatesOnlyOriginallyStaleProcessBeforeRelaunch() throws {
-        let directory = FileManager.default.temporaryDirectory
+        let directory = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-watchdog-restart-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -3154,13 +3154,13 @@ final class DashboardTests: XCTestCase {
 
     @MainActor
     func testStatsCollectorRetriesAfterFailedNonForcedRefresh() async throws {
-        let brokenPath = NSTemporaryDirectory() + "brainbar-dashboard-broken-\(UUID().uuidString).db"
+        let brokenPath = brainBarTestTemporaryPath() + "brainbar-dashboard-broken-\(UUID().uuidString).db"
         try FileManager.default.createDirectory(
             atPath: brokenPath,
             withIntermediateDirectories: false
         )
         defer {
-            try? FileManager.default.removeItem(atPath: brokenPath)
+            removeBrainBarTestDatabase(brokenPath)
             try? FileManager.default.removeItem(atPath: brokenPath + "-wal")
             try? FileManager.default.removeItem(atPath: brokenPath + "-shm")
         }

@@ -331,7 +331,7 @@ final class StatsCollectorTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-statscollector-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-statscollector-\(UUID().uuidString).db"
         // Constructor opens + ensures schema.
         let db = BrainDatabase(path: tempDBPath)
         db.close()

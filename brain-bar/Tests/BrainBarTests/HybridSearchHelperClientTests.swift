@@ -6,7 +6,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
     deinit {}
 
     func testResolvePythonExecutableUsesInstallTimeRepoRoot() throws {
-        let repoRoot = NSTemporaryDirectory() + "brainbar-helper-repo-\(UUID().uuidString)"
+        let repoRoot = brainBarTestTemporaryPath() + "brainbar-helper-repo-\(UUID().uuidString)"
         let pythonPath = "\(repoRoot)/.venv/bin/python"
         try FileManager.default.createDirectory(
             atPath: "\(repoRoot)/.venv/bin",
@@ -28,7 +28,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
         // On a Homebrew clone with no repo checkout, bare `python3` on PATH is the
         // system interpreter (e.g. python3.14) that lacks the `brainlayer` module.
         // The formula venv at <prefix>/opt/brainlayer/libexec/venv/bin/python MUST win.
-        let prefix = NSTemporaryDirectory() + "brainbar-brew-\(UUID().uuidString)"
+        let prefix = brainBarTestTemporaryPath() + "brainbar-brew-\(UUID().uuidString)"
         let venvPython = "\(prefix)/opt/brainlayer/libexec/venv/bin/python"
         try FileManager.default.createDirectory(
             atPath: "\(prefix)/opt/brainlayer/libexec/venv/bin",
@@ -37,7 +37,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
         FileManager.default.createFile(atPath: venvPython, contents: Data("#!/bin/sh\n".utf8))
         chmod(venvPython, 0o755)
 
-        let pathDir = NSTemporaryDirectory() + "brainbar-brew-path-\(UUID().uuidString)"
+        let pathDir = brainBarTestTemporaryPath() + "brainbar-brew-path-\(UUID().uuidString)"
         let barePython3 = "\(pathDir)/python3"
         try FileManager.default.createDirectory(atPath: pathDir, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: barePython3, contents: Data("#!/bin/sh\n".utf8))
@@ -57,7 +57,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
     }
 
     func testResolvePythonPathPrefersInstalledPackageWhenUnset() throws {
-        let repoRoot = NSTemporaryDirectory() + "brainbar-helper-src-\(UUID().uuidString)"
+        let repoRoot = brainBarTestTemporaryPath() + "brainbar-helper-src-\(UUID().uuidString)"
         try FileManager.default.createDirectory(
             atPath: "\(repoRoot)/src",
             withIntermediateDirectories: true
@@ -72,7 +72,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
     }
 
     func testResolvePythonPathUsesRepoSourceDirectoryOnlyWhenFallbackRequested() throws {
-        let repoRoot = NSTemporaryDirectory() + "brainbar-helper-src-\(UUID().uuidString)"
+        let repoRoot = brainBarTestTemporaryPath() + "brainbar-helper-src-\(UUID().uuidString)"
         try FileManager.default.createDirectory(
             atPath: "\(repoRoot)/src",
             withIntermediateDirectories: true
@@ -295,7 +295,7 @@ final class HybridSearchHelperClientTests: XCTestCase {
         warmDelay: TimeInterval,
         ignoreTerminate: Bool = false
     ) throws -> FakeHybridHelperFixture {
-        let directory = FileManager.default.temporaryDirectory
+        let directory = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-fake-helper-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let scriptURL = directory.appendingPathComponent("fake-helper.py")

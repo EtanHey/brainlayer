@@ -10,7 +10,7 @@ final class KGDatabaseTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-kg-test-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-kg-test-\(UUID().uuidString).db"
         db = BrainDatabase(path: tempDBPath)
     }
 

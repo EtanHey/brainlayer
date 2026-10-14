@@ -19,9 +19,9 @@ final class DatabaseTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-test-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-test-\(UUID().uuidString).db"
         restoreWatcherHealthEnvironment = isolateWatcherHealthEnvironment(
-            root: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("brainbar-test-watcher-\(UUID().uuidString)")
+            root: URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent("brainbar-test-watcher-\(UUID().uuidString)")
         )
         db = BrainDatabase(path: tempDBPath)
     }
@@ -99,7 +99,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testLegacyFiveColumnFTSSchemaMigratesToSevenColumnsAndKeepsSearchWorking() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-fts-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-legacy-fts-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -157,7 +157,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -186,7 +186,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testValidSevenColumnFTSOpenDoesNotRepopulateWhenCountsMatch() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-valid-fts-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-valid-fts-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -244,7 +244,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -261,7 +261,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testLegacyChunksSchemaAddsSenderColumnOnOpen() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-sender-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-legacy-sender-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -275,7 +275,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -289,7 +289,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testReadOnlyLegacyChunksSchemaExpandChunkWithoutSenderColumn() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-readonly-legacy-sender-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-readonly-legacy-sender-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -315,7 +315,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -372,7 +372,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testOpenConfigurationCanSkipStartupMigrationsForManagedLiveDatabase() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-skip-migrations-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-skip-migrations-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -386,7 +386,7 @@ final class DatabaseTests: XCTestCase {
         )
         let beforeSchemaObjects = try sqliteMasterObjectNames(path: legacyPath)
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -432,7 +432,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testStoreOrQueueWithinBudgetQueuesReadOnlySQLiteFailures() throws {
-        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+        let queuePath = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-readonly-queue-\(UUID().uuidString).jsonl")
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
         defer {
@@ -469,7 +469,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testQueuedStorePreassignsChunkIDAndFlushReusesIt() throws {
-        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+        let queuePath = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-preassigned-queue-\(UUID().uuidString).jsonl")
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
         defer {
@@ -533,7 +533,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testFlushPendingStoresUsesQueuedAtAsCreatedAtAndPreservesProject() throws {
-        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+        let queuePath = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-stamping-queue-\(UUID().uuidString).jsonl")
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
         defer {
@@ -571,7 +571,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testStoreOrQueueWithinDefaultBudgetStoresAfterBriefWriteLock() throws {
-        let queuePath = URL(fileURLWithPath: NSTemporaryDirectory())
+        let queuePath = URL(fileURLWithPath: brainBarTestTemporaryPath())
             .appendingPathComponent("brainbar-brief-lock-queue-\(UUID().uuidString).jsonl")
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath.path, 1)
         defer {
@@ -626,7 +626,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testQueueIDExpressionIndexMigratesExistingSchema() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-legacy-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -638,7 +638,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -651,7 +651,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testQueueIDExpressionIndexMigratesExistingSchemaWithMalformedMetadata() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-malformed-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-legacy-malformed-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -665,7 +665,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -955,7 +955,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testSearchSkipsTrigramFallbackWhenTableMissingAndMigrationsDisabled() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-no-trigram-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-no-trigram-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -1008,7 +1008,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
@@ -1581,7 +1581,7 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testListInjectionEventsReadOnlyLegacyDBWithoutModeFallsBackToNormal() throws {
-        let legacyPath = NSTemporaryDirectory() + "brainbar-legacy-injection-events-\(UUID().uuidString).db"
+        let legacyPath = brainBarTestTemporaryPath() + "brainbar-legacy-injection-events-\(UUID().uuidString).db"
         try sqliteExecWrite(
             path: legacyPath,
             sql: """
@@ -1605,7 +1605,7 @@ final class DatabaseTests: XCTestCase {
             """
         )
         defer {
-            try? FileManager.default.removeItem(atPath: legacyPath)
+            removeBrainBarTestDatabase(legacyPath)
             try? FileManager.default.removeItem(atPath: legacyPath + "-wal")
             try? FileManager.default.removeItem(atPath: legacyPath + "-shm")
         }
