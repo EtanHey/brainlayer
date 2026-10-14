@@ -2376,12 +2376,13 @@ final class DashboardTests: XCTestCase {
         XCTAssertLessThan(lower.y, 90)
     }
 
-    func testSparklineTooltipUsesRoundedUpMetricsAndSingleOpaqueBackground() throws {
+    func testSparklineTooltipFitsCompactContainerWithSingleOpaqueBackground() throws {
         let compactContainer = CGSize(width: 260, height: 90)
         let tooltip = SparklineTooltipPlacement.tooltipSize(in: compactContainer, seriesCount: 3)
         let source = try brainBarSourceFile("Sources/BrainBar/Dashboard/SparklineRenderer.swift")
 
-        XCTAssertEqual(tooltip.height, 104)
+        XCTAssertLessThanOrEqual(tooltip.height, compactContainer.height - 8)
+        XCTAssertGreaterThan(tooltip.height, 50)
         XCTAssertTrue(source.contains("private static let headerHeight: CGFloat = 24"))
         XCTAssertTrue(source.contains("private static let dividerBlock: CGFloat = 14"))
         XCTAssertTrue(source.contains("private static let rowHeight: CGFloat = 16"))

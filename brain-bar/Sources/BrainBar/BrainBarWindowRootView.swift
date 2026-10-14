@@ -340,6 +340,27 @@ enum BrainBarOnePageComposition {
     static let detailsExpandedByDefault = false
 }
 
+/// The production Ingest lane layout, shared with render regression tests.
+@ViewBuilder
+func brainBarIngestLaneStack<First: View, Second: View, Third: View>(
+    compact: Bool, @ViewBuilder allCommits: () -> First,
+    @ViewBuilder agentStores: () -> Second, @ViewBuilder jsonlWatcher: () -> Third
+) -> some View {
+    if compact {
+        VStack(spacing: 14) {
+            allCommits()
+            agentStores()
+            jsonlWatcher()
+        }
+    } else {
+        HStack(alignment: .top, spacing: 16) {
+            allCommits()
+            agentStores()
+            jsonlWatcher()
+        }
+    }
+}
+
 enum BrainBarIngestBandLayout {
     static let plotHeight: CGFloat = 96
 
@@ -1347,19 +1368,10 @@ private struct BrainBarDashboardView: View {
                 }
             }
 
-            if layout.compactCards {
-                VStack(spacing: 14) {
-                    ingestSeriesChart(.allCommits)
-                    ingestSeriesChart(.agentStores)
-                    ingestSeriesChart(.jsonlWatcher)
-                }
-            } else {
-                HStack(alignment: .top, spacing: 16) {
-                    ingestSeriesChart(.allCommits)
-                    ingestSeriesChart(.agentStores)
-                    ingestSeriesChart(.jsonlWatcher)
-                }
-            }
+            brainBarIngestLaneStack(compact: layout.compactCards,
+                allCommits: { ingestSeriesChart(.allCommits) },
+                agentStores: { ingestSeriesChart(.agentStores) },
+                jsonlWatcher: { ingestSeriesChart(.jsonlWatcher) })
         }
         .padding(16)
         .background(BrainBarDashboardCardStyle(emphasized: true))
