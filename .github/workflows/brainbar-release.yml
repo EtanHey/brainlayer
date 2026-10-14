@@ -8,6 +8,8 @@ on:
       - "!v1.5.52"
       # Formula-only release: Swift changes remain pending a separate app release.
       - "!v1.5.53"
+      # Python-only transport clock fix: retain the installed BrainBar 1.5.55.
+      - "!v1.5.56"
 
 permissions:
   contents: write
