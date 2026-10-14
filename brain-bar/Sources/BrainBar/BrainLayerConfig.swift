@@ -60,6 +60,9 @@ enum BrainLayerLaunchdLoadState: Equatable, Sendable {
     case unloaded
     case unknown
     case probeError(String)
+    case ownerUnknown(String)
+    case paused
+    case failed(String)
 
     var title: String {
         switch self {
@@ -68,6 +71,9 @@ enum BrainLayerLaunchdLoadState: Equatable, Sendable {
         case .unloaded: "Unloaded"
         case .unknown: "Unknown"
         case let .probeError(reason): "Unknown — probe error: \(reason)"
+        case let .ownerUnknown(reason): reason
+        case .paused: "Paused"
+        case let .failed(reason): "Failed — \(reason)"
         }
     }
 }
@@ -510,6 +516,11 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     private let schedule: @Sendable (BrainLayerLaunchdJob) -> DateComponents?
     private let calendar: Calendar
     private let now: @Sendable () -> Date
+    private let ownership: @Sendable () -> BrainBarJobOwnership
+    private let calendarHistory: @Sendable () -> BrainBarCalendarHistory
+    private let calendarSchedule: @Sendable () -> DateComponents?
+    private let calendarLogsDirectory: @Sendable () -> URL
+    private let calendarIsDisabled: @Sendable (BrainLayerLaunchdJob) -> Bool
 
     init(
         commandRunner: @escaping CommandRunner = BrainLayerLaunchdStatusProvider.run,
@@ -517,8 +528,20 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         runRecordDate: @escaping @Sendable (BrainLayerLaunchdJob) -> Date? = { readRunRecord($0) },
         schedule: @escaping @Sendable (BrainLayerLaunchdJob) -> DateComponents? = { readSchedule($0) },
         calendar: Calendar = .current,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        ownership: @escaping @Sendable () -> BrainBarJobOwnership = { .read() },
+        calendarHistory: @escaping @Sendable () -> BrainBarCalendarHistory = { .read() },
+        calendarSchedule: @escaping @Sendable () -> DateComponents? = { readSchedule(label: "com.brainlayer.maintenance") },
+        calendarLogsDirectory: @escaping @Sendable () -> URL = { readCalendarLogsDirectory() },
+        calendarIsDisabled: @escaping @Sendable (BrainLayerLaunchdJob) -> Bool = {
+            (try? BrainLayerConfigStore().loadDocument())?.config.launchdJobs[$0]?.enabled == false
+        }
     ) {
+        self.ownership = ownership
+        self.calendarHistory = calendarHistory
+        self.calendarSchedule = calendarSchedule
+        self.calendarLogsDirectory = calendarLogsDirectory
+        self.calendarIsDisabled = calendarIsDisabled
         self.commandRunner = commandRunner
         self.uidProvider = uidProvider
         self.runRecordDate = runRecordDate
@@ -532,7 +555,25 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     }
 
     func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] {
-        Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
+        switch ownership() {
+        case .legacy:
+            return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, observation(for: $0)) })
+        case let .unknown(reason):
+            return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
+                var result = BrainLayerLaunchdJobObservation.stateOnly(.ownerUnknown(reason))
+                result.ownership = .unknown(reason)
+                return ($0, result)
+            })
+        case .supervisor:
+            let parent = commandRunner(["/bin/launchctl", "print", "gui/\(uidProvider())/com.brainlayer.maintenance"])
+            let history = calendarHistory()
+            let next = nextRun(components: calendarSchedule())
+            return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
+                var result = job.isContinuous ? component(job) : calendarStep(job, parent: parent, history: history, next: next)
+                result.ownership = .supervisor
+                return (job, result)
+            })
+        }
     }
 
     private func observation(for job: BrainLayerLaunchdJob) -> BrainLayerLaunchdJobObservation {
@@ -555,6 +596,80 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
             return .stateOnly(.unloaded)
         }
         return .stateOnly(.probeError("launchctl exited \(result.terminationStatus)"))
+    }
+
+    private func component(_ job: BrainLayerLaunchdJob) -> BrainLayerLaunchdJobObservation {
+        let name = job.rawValue
+        let result = commandRunner([BrainBarSupervisorRuntime.cli, "jobs", "component", name, "status"])
+        guard result.terminationStatus == 0, let runtime = try? BrainBarSupervisorRuntime.decode(result.output) else {
+            return .stateOnly(.probeError("Supervisor status unavailable for \(name)"))
+        }
+        let state: BrainLayerLaunchdLoadState
+        if runtime.paused || !runtime.configured { state = .paused }
+        else if runtime.pid != nil { state = .running }
+        else if let error = runtime.error, !error.isEmpty { state = .failed(error) }
+        else if let code = runtime.last_exit_code, code != 0 { state = .failed("last exit \(code)") }
+        else { state = .loaded }
+        var observation = BrainLayerLaunchdJobObservation(
+            loadState: state, runs: runtime.starts, lastExitCode: runtime.last_exit_code,
+            lastRunAt: runtime.last_run_at.map(Date.init(timeIntervalSince1970:)),
+            nextRunAt: runtime.next_run_at.map(Date.init(timeIntervalSince1970:)),
+            isContinuous: runtime.next_run_at == nil
+        )
+        observation.pid = runtime.pid
+        observation.ownerNote = "Supervisor component \(name)" + (runtime.pid.map { " · PID \($0)" } ?? "")
+        return observation
+    }
+
+    private func calendarStep(_ job: BrainLayerLaunchdJob, parent: BrainLayerLaunchdCommandResult,
+                              history: BrainBarCalendarHistory, next: Date?) -> BrainLayerLaunchdJobObservation {
+        guard parent.terminationStatus == 0 else {
+            return .stateOnly(.probeError("Maintenance calendar status unavailable"))
+        }
+        if let error = history.error { return .stateOnly(.probeError(error)) }
+        guard next != nil else { return .stateOnly(.probeError("Maintenance calendar schedule unavailable")) }
+        let name = job.launchdLabel.replacingOccurrences(of: "com.brainlayer.", with: "")
+        let run = history.runs[name]
+        let state: BrainLayerLaunchdLoadState
+        if let run, run.status == "failed" || run.status == "stopped" || (run.code != 0 && run.code != 75) {
+            state = .failed("\(job.title): calendar result \(run.status), exit \(run.code)")
+        } else { state = .loaded }
+        var observation = BrainLayerLaunchdJobObservation(
+            loadState: state, runs: run == nil ? 0 : nil, lastExitCode: run?.code,
+            lastRunAt: run?.at, nextRunAt: next, isContinuous: false
+        )
+        observation.calendarStartedAt = run?.startedAt
+        if let run, state == .loaded, run.code == 75 {
+            observation.calendarDisabled = run.startedAt == nil && calendarIsDisabled(job)
+            observation.calendarDeferralRecord = calendarAbort(job, run: run)
+        }
+        observation.ownerNote = "com.brainlayer.maintenance · " + (run.map { "last result: \($0.status)" }
+            ?? "Scheduled, not yet run under the supervisor")
+        return observation
+    }
+
+    private func calendarAbort(_ job: BrainLayerLaunchdJob, run: BrainBarCalendarHistory.Run) -> BrainLayerMaintenanceEvidence.RunRecord? {
+        guard run.startedAt != nil else { return nil } // disabled/window deferrals never spawned a child
+        let name = job.launchdLabel.replacingOccurrences(of: "com.brainlayer.", with: "")
+        let path = calendarLogsDirectory().appendingPathComponent("\(name).out.log")
+        guard BrainBarBackupSources.isRegularFile(path),
+              case let .read(data, stamp) = BrainBarStableFileReader.readTail(path, maxBytes: 64 * 1024),
+              stamp <= run.at.addingTimeInterval(BrainLayerMaintenanceExit.recordClockSlack),
+              let last = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last,
+              let row = try? JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any],
+              row["status"] as? String == "aborted", let reason = row["reason"] as? String else { return nil }
+        return .aborted(reason: reason, writtenAt: stamp) // verdict also checks the child's start time
+    }
+
+    private static func readCalendarLogsDirectory() -> URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let url = home.appendingPathComponent("Library/LaunchAgents/com.brainlayer.maintenance.plist")
+        if let data = try? Data(contentsOf: url),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let args = plist["ProgramArguments"] as? [String], let index = args.firstIndex(of: "--logs-dir"), index + 1 < args.count {
+            return URL(fileURLWithPath: args[index + 1])
+        }
+        return home.appendingPathComponent("Library/Logs/brainlayer")
     }
 
     private func integerLine(named key: String, in output: String) -> Int? {
@@ -592,7 +707,12 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         in directory: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents")
     ) -> DateComponents? {
-        let path = directory.appendingPathComponent("\(job.launchdLabel).plist")
+        readSchedule(label: job.launchdLabel, in: directory)
+    }
+
+    static func readSchedule(label: String, in directory: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/LaunchAgents")) -> DateComponents? {
+        let path = directory.appendingPathComponent("\(label).plist")
         guard let data = try? Data(contentsOf: path),
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let interval = plist["StartCalendarInterval"] as? [String: Int],
@@ -603,26 +723,9 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     }
 
     private static func run(_ command: [String]) -> BrainLayerLaunchdCommandResult {
-        guard let executable = command.first else {
-            return BrainLayerLaunchdCommandResult(terminationStatus: 1, output: "")
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = Array(command.dropFirst())
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            return BrainLayerLaunchdCommandResult(
-                terminationStatus: process.terminationStatus,
-                output: String(data: data, encoding: .utf8) ?? ""
-            )
-        } catch {
-            return BrainLayerLaunchdCommandResult(terminationStatus: 1, output: "")
-        }
+        let result = LaunchctlWatcherProcessProbe.run(command,
+            timeout: command.first == BrainBarSupervisorRuntime.cli ? 5 : 1)
+        return BrainLayerLaunchdCommandResult(terminationStatus: result.terminationStatus, output: result.output)
     }
 
 }

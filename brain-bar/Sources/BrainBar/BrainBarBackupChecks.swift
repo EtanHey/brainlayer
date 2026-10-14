@@ -28,13 +28,15 @@ struct BrainBarBackupChecks: Equatable, Sendable {
     /// `ObservabilityBackupStatus.attentionLine` chooses its line: a job alert first, then the first
     /// red check, then a red alert.
     let attentionSentence: String?
+    var scheduleUnknown = false
 
     static func derive(
         _ backups: ObservabilityDocument.Backups,
         now: Date,
-        locale: Locale = .current
+        locale: Locale = .current,
+        jobStatus: ObservabilityStatusLine? = nil
     ) -> Self {
-        let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale)
+        let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale, jobStatus: jobStatus)
         let rel = { (date: Date) in relative(date, now: now, locale: locale) }
 
         let upload: String = switch backups.lastVerifiedUpload {
@@ -47,7 +49,8 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         case let value?: "Saved \(rel(value.lastAt)), not verified"
         case nil: "No verified copy yet"
         }
-        let job: String = if backups.launchd?.bootstrapped == true { "Scheduled" }
+        let job: String = if let jobStatus { jobStatus.text }
+            else if backups.launchd?.bootstrapped == true { "Scheduled" }
             else if backups.launchd?.disabledDirPresent == true { "Paused by a safety stop" }
             else { "Not scheduled" }
         let threshold = backups.thresholdHours.map { "\(Int($0)) hours" }
@@ -76,11 +79,12 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             Check(id: "archives", title: "Verified archives, last 30 days", value: archives, tone: lines.archives.tone),
         ]
         let failing = checks.filter { $0.tone == .red }.count
-        let summary = switch failing {
+        let summary: String = if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"
+            : jobStatus?.text.hasPrefix("Deferred") == true ? "Deferred" : "Job schedule unknown" } else { switch failing {
         case 0: "All \(checks.count) checks pass"
         case 1: "1 of \(checks.count) checks needs attention"
         default: "\(failing) of \(checks.count) checks need attention"
-        }
+        } }
 
         let alert = alertText(backups.errorType, statusLine: lines.error)
         let alertTone = lines.error?.tone
@@ -90,8 +94,8 @@ struct BrainBarBackupChecks: Equatable, Sendable {
 
         return .init(
             summary: summary, checks: checks, alert: alert, alertTone: alertTone,
-            details: details(backups, lines: lines, locale: locale),
-            attentionSentence: attention
+            details: details(backups, lines: lines, locale: locale, jobStatus: jobStatus),
+            attentionSentence: attention, scheduleUnknown: jobStatus?.tone == .neutral
         )
     }
 
@@ -119,7 +123,8 @@ struct BrainBarBackupChecks: Equatable, Sendable {
     private static func details(
         _ backups: ObservabilityDocument.Backups,
         lines: ObservabilityBackupStatus,
-        locale: Locale
+        locale: Locale,
+        jobStatus: ObservabilityStatusLine?
     ) -> [Detail] {
         func exact(_ date: Date) -> String {
             date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))
@@ -137,7 +142,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         let jobState = if backups.launchd?.bootstrapped == true { "loaded" }
             else if backups.launchd?.disabledDirPresent == true { "not loaded · parked in .disabled-retention-P0" }
             else { "not loaded" }
-        rows.append(.init(label: "launchd job", value: "\(label) · \(jobState)"))
+        rows.append(.init(label: jobStatus == nil ? "launchd job" : "Job owner", value: jobStatus?.text ?? "\(label) · \(jobState)"))
         let threshold = backups.thresholdHours.map { " · threshold \(Int($0)) h" } ?? ""
         rows.append(.init(label: "Freshness", value: "\(backups.freshness ?? "unknown")\(threshold)"))
         rows.append(.init(label: "Retention invariant", value: backups.retentionInvariant ?? "unknown"))
@@ -176,7 +181,7 @@ struct BrainBarBackupChecksCard: View {
 
     var body: some View {
         let failing = checks.checks.contains { $0.tone == .red }
-        let verdictTone: ObservabilityStatusTone = failing ? .red : .green
+        let verdictTone: ObservabilityStatusTone = failing ? .red : checks.scheduleUnknown ? .neutral : .green
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Recovery checks").font(.system(size: 13, weight: .semibold))

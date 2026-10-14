@@ -45,18 +45,34 @@ struct LaunchctlWatcherProcessProbe: WatcherProcessProbing {
     private let label: String
     private let commandRunner: CommandRunner
     private let uidProvider: @Sendable () -> uid_t
+    private let ownership: @Sendable () -> BrainBarJobOwnership
 
     init(
         label: String = "com.brainlayer.watch",
-        commandRunner: @escaping CommandRunner = { LaunchctlWatcherProcessProbe.run($0) },
-        uidProvider: @escaping @Sendable () -> uid_t = getuid
+        commandRunner: @escaping CommandRunner = { LaunchctlWatcherProcessProbe.run($0, timeout: $0.first == BrainBarSupervisorRuntime.cli ? 5 : 1) },
+        uidProvider: @escaping @Sendable () -> uid_t = getuid,
+        ownership: @escaping @Sendable () -> BrainBarJobOwnership = { .read() }
     ) {
+        self.ownership = ownership
         self.label = label
         self.commandRunner = commandRunner
         self.uidProvider = uidProvider
     }
 
     func sample() -> WatcherProcessProbeResult {
+        switch ownership() {
+        case let .unknown(reason): return .ownerUnknown(reason)
+        case .supervisor:
+            let component = label == "com.brainlayer.hotlane-brainbar" ? "hotlane"
+                : label.replacingOccurrences(of: "com.brainlayer.", with: "")
+            let result = commandRunner([BrainBarSupervisorRuntime.cli, "jobs", "component", component, "status"])
+            guard result.terminationStatus == 0, let runtime = try? BrainBarSupervisorRuntime.decode(result.output)
+            else { return .ownerUnknown("Supervisor \(component) status is unavailable") }
+            if runtime.paused || !runtime.configured { return .absent }
+            if let pid = runtime.pid { return .running(pid: pid) }
+            return .absent
+        case .legacy: break
+        }
         let target = "gui/\(uidProvider())/\(label)"
         let result = commandRunner(["/bin/launchctl", "print", target])
         if result.terminationStatus == 0 {

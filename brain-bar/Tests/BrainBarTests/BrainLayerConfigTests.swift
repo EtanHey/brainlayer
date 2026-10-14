@@ -26,7 +26,8 @@ final class BrainLayerConfigTests: XCTestCase {
                     output: "Could not find service com.brainlayer.watch"
                 )
             },
-            uidProvider: { 501 }
+            uidProvider: { 501 },
+            ownership: { .legacy }
         )
         XCTAssertEqual(missing.sample()[.watch], .unloaded)
 
@@ -37,7 +38,8 @@ final class BrainLayerConfigTests: XCTestCase {
                     output: "operation timed out"
                 )
             },
-            uidProvider: { 501 }
+            uidProvider: { 501 },
+            ownership: { .legacy }
         )
         XCTAssertEqual(failed.sample()[.watch], .probeError("launchctl exited 1"))
     }

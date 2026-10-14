@@ -7,6 +7,37 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     let lastRunAt: Date?
     let nextRunAt: Date?
     let isContinuous: Bool
+    var pid: Int32? = nil
+    var ownership: BrainBarJobOwnership = .legacy
+    var ownerNote: String? = nil
+    var calendarStartedAt: Date? = nil
+    var calendarDisabled = false
+    var calendarDeferralRecord: BrainLayerMaintenanceEvidence.RunRecord? = nil
+
+    var backupScheduleLine: ObservabilityStatusLine? {
+        guard ownership != .legacy else { return nil }
+        if ownership == .supervisor, loadState == .loaded, lastExitCode == 75 {
+            if case let .deferred(reason) = calendarDeferralVerdict {
+                return .init(text: "Skipped — " + reason, tone: .neutral)
+            }
+            return .init(text: calendarStartedAt == nil ? "Deferred — not run; check its calendar window"
+                : "Deferred — exit 75; no verified deliberate deferral", tone: .neutral)
+        }
+        switch loadState {
+        case .loaded, .running:
+            return .init(text: ownerNote ?? "Maintenance calendar", tone: .green)
+        case let .ownerUnknown(reason), let .probeError(reason):
+            return .init(text: reason, tone: .neutral)
+        case let .failed(reason): return .init(text: reason, tone: .red)
+        case .paused: return .init(text: "Maintenance calendar paused", tone: .neutral)
+        case .unknown, .unloaded: return .init(text: "Maintenance calendar status unavailable", tone: .neutral)
+        }
+    }
+
+    var calendarDeferralVerdict: BrainLayerMaintenanceExit.Verdict {
+        if calendarDisabled { return .deferred("disabled") }
+        return BrainLayerMaintenanceExit.verdict(calendarDeferralRecord, lastRunAt: calendarStartedAt)
+    }
 
     static func stateOnly(_ state: BrainLayerLaunchdLoadState) -> Self {
         Self(
@@ -29,6 +60,7 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
     case unknown
     /// A maintenance safety gate deferred the last run (exit 75): the gate did its job. Neutral.
     case skipped
+    case deferred
 
     var title: String {
         switch self {
@@ -38,6 +70,7 @@ enum BrainLayerLaunchdGroupHealth: Equatable, Sendable {
         case .unhealthy: "Needs attention"
         case .unknown: "Status unknown"
         case .skipped: "Skipped"
+        case .deferred: "Deferred"
         }
     }
 }
@@ -235,9 +268,10 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         let watcherUnknown: String? = if case .unknown = ingestWatcher { ingestWatcher?.reasonText(now: now) } else { nil }
         // Exit 75 in Maintenance: Skipped only for a verified deferral; unknown or attention otherwise.
         var deferrals: [BrainLayerLaunchdJob: MaintenanceDeferral] = [:]
-        if self == .maintenance {
+        do {
             for job in jobs {
-                guard settings[job]?.enabled == true, let observation = observations[job], observation.loadState == .loaded,
+                guard let observation = observations[job], (self == .maintenance || observation.ownership == .supervisor),
+                      (settings[job]?.enabled == true || observation.ownership == .supervisor), observation.loadState == .loaded,
                       observation.lastExitCode == BrainLayerMaintenanceExit.deferred else { continue }
                 deferrals[job] = deferral(job, observation: observation, maintenance: maintenance, formatDate: formatDate, now: now)
             }
@@ -246,7 +280,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             // The unified watcher verdict already accounts for missing/error launchd evidence.
             if job == .watch, ingestWatcher != nil { return nil }
             // Ingest configuration is desired state; toggling it does not stop loaded jobs.
-            if self != .ingest, settings[job]?.enabled != true { return "\(job.humanGroupLabel) is disabled." }
+            if self != .ingest, observations[job]?.ownership == .legacy, settings[job]?.enabled != true { return "\(job.humanGroupLabel) is disabled." }
             guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
             switch observation.loadState {
             case .running:
@@ -255,7 +289,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                 if let code = observation.lastExitCode, code != 0 {
                     let when = observation.lastRunAt.map { " at \(formatDate($0))" } ?? ""
                     if let deferral = deferrals[job] {
-                        if case let .attention(text) = deferral { return text }
+                        if case let .attention(text) = deferral, observation.ownership != .supervisor { return text }
                         return nil
                     }
                     if self == .maintenance, code == BrainLayerMaintenanceExit.vacuumSkipped {
@@ -272,9 +306,19 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                 return nil // launchd resets run counters when a job is reloaded.
             case .unloaded:
                 return "\(job.humanGroupLabel) is unloaded."
+            case .ownerUnknown:
+                return nil
+            case let .failed(reason):
+                return reason
+            case .paused:
+                return "\(job.humanGroupLabel) is paused under the supervisor."
             case .unknown, .probeError:
                 return "\(job.humanGroupLabel) status is unavailable."
             }
+        }.first
+        let calendarAttention = jobs.compactMap { job -> String? in
+            guard observations[job]?.ownership == .supervisor, case let .attention(text) = deferrals[job] else { return nil }
+            return text
         }.first
         let reason = watcherAttention ?? jobReason
         let deferralUnknown = jobs.lazy.compactMap { job -> String? in
@@ -283,12 +327,17 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         let skips = jobs.compactMap { job -> String? in
             if case let .skipped(text) = deferrals[job] { text } else { nil }
         }
-        let unknownReason = watcherUnknown ?? deferralUnknown
+        let ownerUnknown = jobs.compactMap { job -> String? in
+            if case let .ownerUnknown(reason) = observations[job]?.loadState { return reason }
+            return nil
+        }.first
+        let unknownReason = ownerUnknown ?? watcherUnknown ?? deferralUnknown
         let awaitingRun = jobs.contains { job in
             guard let observation = observations[job] else { return false }
             return observation.loadState == .loaded && observation.runs == 0 && observation.lastExitCode == nil
         }
         let health: BrainLayerLaunchdGroupHealth = reason != nil ? .unhealthy
+            : calendarAttention != nil ? .deferred
             : unknownReason != nil ? .unknown
             : !skips.isEmpty ? .skipped
             : awaitingRun ? .awaitingRun : .healthy
@@ -300,14 +349,17 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
             return "\(job.humanGroupLabel) last run OK · "
                 + warnings.map(BrainLayerMaintenanceExit.humanWarning).joined(separator: " · ")
         }
+        let ownerNotes = jobs.compactMap { observations[$0]?.ownerNote }.reduce(into: [String]()) {
+            if !$0.contains($1) { $0.append($1) }
+        }
         let configuredOff = self != .ingest ? [] : jobs.filter { settings[$0]?.enabled == false }
         let configurationNote = configuredOff.isEmpty ? nil
             : "Configured OFF: \(configuredOff.map(\.humanGroupLabel).joined(separator: ", "))."
         return BrainLayerLaunchdGroupStatus(
             health: health,
-            attentionReason: reason ?? unknownReason ?? (skips.isEmpty ? nil : skips.joined(separator: " ")),
+            attentionReason: reason ?? calendarAttention ?? unknownReason ?? (skips.isEmpty ? nil : skips.joined(separator: " ")),
             lastRunText: jobs.map { job in
-                "\(job.humanGroupLabel) \(observations[job]?.lastRunAt.map(formatDate) ?? "No run recorded")"
+                "\(job.humanGroupLabel) \(observations[job]?.lastRunAt.map(formatDate) ?? (observations[job]?.ownership == .supervisor ? "Not yet run under the supervisor" : "No run recorded"))"
             }.joined(separator: " · "),
             nextRunText: jobs.map { job in
                 let observation = observations[job]
@@ -316,7 +368,7 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                     : observation?.nextRunAt.map(formatDate) ?? "Unavailable"
                 return "\(job.humanGroupLabel) \(value)"
             }.joined(separator: " · "),
-            note: configurationNote ?? (warningNotes.isEmpty ? nil : warningNotes.joined(separator: " · "))
+            note: configurationNote ?? (warningNotes.isEmpty ? (ownerNotes.isEmpty ? nil : ownerNotes.joined(separator: " · ")) : warningNotes.joined(separator: " · "))
         )
     }
 }
@@ -338,7 +390,8 @@ private extension BrainLayerLaunchdJobGroup {
     ) -> MaintenanceDeferral {
         let label = job.humanGroupLabel
         let when = observation.lastRunAt.map { " at \(formatDate($0))" } ?? ""
-        let verdict = BrainLayerMaintenanceExit.verdict(maintenance.runRecords[job], lastRunAt: observation.lastRunAt)
+        let verdict = observation.ownership == .supervisor ? observation.calendarDeferralVerdict
+            : BrainLayerMaintenanceExit.verdict(maintenance.runRecords[job], lastRunAt: observation.lastRunAt)
         if case let .failed(reason) = verdict {
             return .attention("\(label) last run exited 75\(when): \(reason)")
         }
@@ -360,7 +413,9 @@ private extension BrainLayerLaunchdJobGroup {
         }
         switch verdict {
         case let .unexplained(why):
-            return .unknown("\(label) exited 75\(when); reason unavailable (\(why)).")
+            return observation.ownership == .supervisor
+                ? .attention("\(label) deferred\(when); reason unavailable (\(why)).")
+                : .unknown("\(label) exited 75\(when); reason unavailable (\(why)).")
         case let .deferred(text):
             // Without the completion history, a weekly skip cannot be told apart from one that
             // hides a pass that stopped completing.
@@ -407,6 +462,12 @@ extension WatcherLaunchdEvidence {
             self = .notRunning("com.brainlayer.watch is loaded but not running")
         case .unloaded:
             self = .notRunning("com.brainlayer.watch is not loaded")
+        case let .ownerUnknown(detail):
+            self = .ownerUnknown(detail)
+        case .paused:
+            self = .notRunning("Supervisor watcher is paused")
+        case let .failed(detail):
+            self = .notRunning("Supervisor watcher failed: \(detail)")
         case let .probeError(detail):
             self = .unavailable(detail)
         case .unknown, nil:
@@ -420,7 +481,7 @@ extension WatcherLaunchdEvidence {
 /// "Healthy".
 struct BrainBarBackupsHealth: Equatable, Sendable {
     enum Badge: Equatable, Sendable {
-        case checking, healthy, awaitingRun, expiring, attention, unknown
+        case checking, healthy, awaitingRun, expiring, attention, unknown, skipped, deferred
 
         var title: String {
             switch self {
@@ -430,6 +491,8 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
             case .expiring: "Drive access expiring"
             case .attention: "Needs attention"
             case .unknown: "Status unknown"
+            case .skipped: "Skipped"
+            case .deferred: "Deferred"
             }
         }
     }
@@ -469,8 +532,9 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         case .checking: .init(badge: .checking, reason: nil)
         case .healthy: .init(badge: .healthy, reason: nil)
         case .awaitingRun: .init(badge: .awaitingRun, reason: nil)
-        // Unreachable for Backups (only the Maintenance group skips); a deferral is not a failure.
-        case .skipped: .init(badge: .healthy, reason: nil)
+        // A positively verified calendar gate is neutral across all job groups.
+        case .skipped: .init(badge: .skipped, reason: job.attentionReason)
+        case .deferred: .init(badge: .deferred, reason: job.attentionReason)
         case .unknown: .init(badge: .unknown, reason: job.attentionReason)
         case .unhealthy: .init(badge: .attention, reason: job.attentionReason)
         }

@@ -7,6 +7,29 @@ import Vision
 
 @MainActor
 enum BrainBarRenderHarness {
+    /// Uses the same off-screen AppKit bitmap and Vision inspection as the dashboard harness.
+    static func renderSettingsText(_ model: BrainBarSettingsViewModel, section: BrainBarSettingsSection,
+                                   directory: URL) throws -> String {
+        let host = NSHostingView(rootView: BrainBarSettingsView(viewModel: model, initialSection: section))
+        host.frame = NSRect(x: 0, y: 0, width: 1080, height: 1800)
+        host.layoutSubtreeIfNeeded()
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            throw Failure("Settings bitmap unavailable")
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]), png.count > 5000,
+              let emitted = NSBitmapImageRep(data: png), let image = emitted.cgImage else {
+            throw Failure("Settings render is empty")
+        }
+        try png.write(to: directory.appendingPathComponent("supervised-\(section.rawValue).png"))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        guard text.localizedCaseInsensitiveContains(section.title) else { throw Failure("Settings title did not render") }
+        return text
+    }
+
     private static let environmentVariable = "BRAINBAR_RENDER_ONLY"
     private static let sampleReceipts = BrainBarOperationReceipts()
     private static let breakpoints: [(name: String, width: CGFloat)] = [

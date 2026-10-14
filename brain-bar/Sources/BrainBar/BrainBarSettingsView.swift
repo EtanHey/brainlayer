@@ -287,20 +287,45 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     /// Advanced keeps its last observation on refresh, just like the group cards.
     func launchdStatusTitle(_ job: BrainLayerLaunchdJob) -> String {
-        hasCompletedLaunchdSample ? (config.launchdJobs[job]?.loadState.title ?? "Unknown") : "Checking…"
+        guard hasCompletedLaunchdSample else { return "Checking…" }
+        if let observation = launchdObservations[job], observation.ownership == .supervisor,
+           observation.loadState == .loaded, observation.lastExitCode == 75 {
+            return observation.backupScheduleLine?.text ?? "Needs attention"
+        }
+        let title = config.launchdJobs[job]?.loadState.title ?? "Unknown"
+        return title + (launchdObservations[job]?.ownerNote.map { " · " + $0 } ?? "")
+    }
+
+    var presentedBackupSchedules: [BrainBarBackupScheduleRow] {
+        let jobs: [(String, BrainLayerLaunchdJob)] = [("Database", .backupDaily),
+            ("Transcripts", .jsonlBackup), ("Nightly maintenance", .maintenanceNightly),
+            ("Weekly maintenance", .maintenanceWeekly)]
+        guard let owner = launchdObservations[.jsonlBackup]?.ownership, owner != .legacy else { return backupSchedules }
+        return jobs.map { title, job in
+            let observation = launchdObservations[job]
+            let cadence: String = switch owner {
+            case .supervisor: observation?.ownerNote ?? "Maintenance calendar status unavailable"
+            case let .unknown(reason): reason
+            case .legacy: ""
+            }
+            return BrainBarBackupScheduleRow(title: title, cadence: cadence,
+                lastRun: observation?.lastRunAt.map(DashboardMetricFormatter.jobDateTimeString) ?? "No calendar run recorded",
+                nextRun: observation?.nextRunAt.map(DashboardMetricFormatter.jobDateTimeString) ?? "Unavailable",
+                localCopy: backupSchedules.first { $0.title == title }?.localCopy)
+        }
     }
 
     var backupStatus: ObservabilityBackupStatus? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return ObservabilityPresentation.backupStatus(for: document.backups)
+        return ObservabilityPresentation.backupStatus(for: document.backups, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine)
     }
 
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
     var backupChecks: BrainBarBackupChecks? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return BrainBarBackupChecks.derive(document.backups, now: now())
+        return BrainBarBackupChecks.derive(document.backups, now: now(), jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine)
     }
 
     /// The Backups page's one verdict (#1029 review B1), from the same Drive presentation the card
@@ -373,6 +398,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
             value
         case let .readable(document):
             if document.backups.state == "measured" { nil }
+            else if document.backups.reason.localizedCaseInsensitiveContains("no backup or maintenance LaunchAgents"),
+                    let observation = launchdObservations[.jsonlBackup], observation.ownership != .legacy {
+                (observation.backupScheduleLine?.text ?? "Job owner unknown") + "; backup history has not been measured."
+            }
             else if document.backups.reason.isEmpty { "Backup status is unmeasurable." }
             else { "Backup status is unmeasurable — \(document.backups.reason)" }
         }
@@ -1025,10 +1054,10 @@ struct BrainBarSettingsView: View {
 
     @ViewBuilder
     private var backupSchedule: some View {
-        if !viewModel.backupSchedules.isEmpty {
+        if !viewModel.presentedBackupSchedules.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeading("Schedule")
-                ForEach(viewModel.backupSchedules) { row in
+                ForEach(viewModel.presentedBackupSchedules) { row in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(row.title).font(.system(size: 12, weight: .semibold))
@@ -1174,7 +1203,7 @@ private struct BrainBarJobGroupCard: View {
         switch health {
         case .checking: "clock"
         case .healthy: "checkmark.circle.fill"
-        case .awaitingRun: "clock.fill"
+        case .awaitingRun, .deferred: "clock.fill"
         case .unhealthy: "exclamationmark.triangle.fill"
         case .unknown: "questionmark.circle.fill"
         case .skipped: "forward.end.circle.fill"
@@ -1186,6 +1215,7 @@ private struct BrainBarJobGroupCard: View {
         case .healthy: BrainBarStateTheme.active.theme.swiftUIColor
         case .awaitingRun: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unhealthy: BrainBarStateTheme.error.theme.swiftUIColor
+        case .deferred: Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)
         case .checking, .unknown, .skipped: Color.brainBarTextMuted
         }
     }
@@ -1211,6 +1241,8 @@ private struct BrainBarJobGroupCard: View {
         case .expiring: ("clock.badge.exclamationmark.fill", Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
         case .attention: (Self.symbol(.unhealthy), Self.color(.unhealthy))
         case .unknown: (Self.symbol(.unknown), Self.color(.unknown))
+        case .skipped: (Self.symbol(.skipped), Self.color(.skipped))
+        case .deferred: (Self.symbol(.deferred), Self.color(.deferred))
         }
         return Badge(
             title: backupsHealth.badge.title, symbol: symbol, color: color,
@@ -1309,7 +1341,7 @@ private struct BrainBarJobToggle: View {
         case .loaded: BrainBarStateTheme.loading.theme.swiftUIColor
         case .unloaded: BrainBarStateTheme.idle.theme.swiftUIColor
         case .unknown: BrainBarStateTheme.degraded.theme.swiftUIColor
-        case .probeError: BrainBarStateTheme.degraded.theme.swiftUIColor
+        case .probeError, .ownerUnknown, .paused, .failed: BrainBarStateTheme.degraded.theme.swiftUIColor
         }
     }
 }

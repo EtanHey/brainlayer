@@ -46,7 +46,7 @@ struct HotlaneEmbeddingResidencyProbe: BrainBarEmbeddingResidencySampling {
             .running(pid: pid, residentBytes: residentBytes(pid))
         case .absent:
             .stopped
-        case .failure:
+        case .failure, .ownerUnknown:
             .unmeasurable
         }
     }

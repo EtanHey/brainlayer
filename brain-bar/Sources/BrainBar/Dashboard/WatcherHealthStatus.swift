@@ -30,6 +30,7 @@ enum WatcherLaunchdEvidence: Sendable, Equatable {
     case running
     case notRunning(String)
     case unavailable(String)
+    case ownerUnknown(String)
 
     /// The Dashboard's view: the launchctl process probe for `com.brainlayer.watch`.
     init(process: WatcherProcessProbeResult?) {
@@ -38,6 +39,8 @@ enum WatcherLaunchdEvidence: Sendable, Equatable {
             self = .running
         case .absent:
             self = .notRunning("launchd reports com.brainlayer.watch is not running")
+        case let .ownerUnknown(detail):
+            self = .ownerUnknown(detail)
         case let .failure(detail):
             self = .unavailable(detail)
         case nil:
@@ -72,6 +75,8 @@ enum WatcherHealthStatus: Sendable, Equatable {
 
     static func derive(launchd: WatcherLaunchdEvidence, file: WatcherHealthFileRead?, now: Date) -> Self {
         switch launchd {
+        case let .ownerUnknown(detail):
+            return .unknown(reason: detail)
         case let .notRunning(detail):
             // launchd is authoritative for "is the process there"; a fresh file cannot revive it.
             // launchd records no stop time. A heartbeat proves the watcher was alive AT that time,

@@ -124,7 +124,8 @@ final class BrainBarTruthFoundationTests: XCTestCase {
                     output: "state = running\npid = 4242\n"
                 )
             },
-            uidProvider: { 501 }
+            uidProvider: { 501 },
+            ownership: { .legacy }
         )
         XCTAssertEqual(running.sample(), .running(pid: 4242))
 
@@ -135,7 +136,8 @@ final class BrainBarTruthFoundationTests: XCTestCase {
                     output: "Could not find service com.brainlayer.watch"
                 )
             },
-            uidProvider: { 501 }
+            uidProvider: { 501 },
+            ownership: { .legacy }
         )
         XCTAssertEqual(absent.sample(), .absent)
 
@@ -146,7 +148,8 @@ final class BrainBarTruthFoundationTests: XCTestCase {
                     output: "operation timed out"
                 )
             },
-            uidProvider: { 501 }
+            uidProvider: { 501 },
+            ownership: { .legacy }
         )
         XCTAssertEqual(failed.sample(), .failure("operation timed out"))
     }

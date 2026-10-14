@@ -469,7 +469,8 @@ enum ObservabilityPresentation {
 
     static func backupStatus(
         for backups: ObservabilityDocument.Backups,
-        locale: Locale = .current
+        locale: Locale = .current,
+        jobStatus: ObservabilityStatusLine? = nil
     ) -> ObservabilityBackupStatus {
         let upload = backups.lastVerifiedUpload.map { value in
             ObservabilityStatusLine(
@@ -487,7 +488,9 @@ enum ObservabilityPresentation {
 
         let job: ObservabilityStatusLine
         let jobLabel = backups.launchd?.label ?? "com.brainlayer.jsonl-backup"
-        if backups.launchd?.bootstrapped == true {
+        if let jobStatus {
+            job = jobStatus
+        } else if backups.launchd?.bootstrapped == true {
             job = .init(text: "Transcript backup (\(jobLabel)): loaded", tone: .green)
         } else if backups.launchd?.disabledDirPresent == true {
             job = .init(text: "Transcript backup (\(jobLabel)): NOT loaded — parked in .disabled-retention-P0", tone: .red)
