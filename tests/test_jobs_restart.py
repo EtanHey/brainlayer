@@ -1,8 +1,10 @@
+import hashlib
 import json
 import plistlib
 import subprocess
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from brainlayer.cli import app
@@ -185,3 +187,150 @@ def test_opt_keg_python_command_verifies_without_mapped_extension(tmp_path: Path
     fake.ps_command = f"/Library/Frameworks/Python.framework/Versions/3.12/bin/python {opt}/bin/brainlayer watch\n"
     result = restart_loaded_jobs(tmp_path, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
     assert result["ok"] is True
+
+
+SUPERVISOR_SKIP = "supervisor-owned: keg changes go through install.sh consolidate"
+
+
+def _supervisor_home(tmp_path: Path, phase: str | None):
+    old_keg, current_keg, opt = _kegs(tmp_path)
+    home = tmp_path / "home"
+    agents = home / "Library/LaunchAgents"
+    agents.mkdir(parents=True)
+    for name in ("daemon", "maintenance"):
+        _plist(
+            agents, name, KeepAlive=True, ProgramArguments=[f"{opt}/libexec/venv/bin/python", "-m", "brainlayer", name]
+        )
+    journal = home / ".local/share/brainlayer/supervisor/migration.json"
+    if phase is not None:
+        journal.parent.mkdir(parents=True)
+        # Transaction-shaped receipt with raw readlink keg and hex-encoded plists.
+        payload = {
+            "phase": phase,
+            "keg": "../Cellar/brainlayer/1.5.35",
+            "published_files": {p.name: p.read_bytes().hex() for p in agents.glob("*.plist")},
+            "schema_version": 1,
+            "published_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in agents.glob("*.plist")},
+            "configuration_sha256": {},
+            "archive": str(agents / ".archive-20261014T173000Z-1234abcd"),
+            "group_custody": {},
+            "states": {
+                "com.brainlayer.watch": {
+                    "loaded": True,
+                    "disabled": False,
+                    "disabled_override": "enabled",
+                    "pid": 6537,
+                    "plist_present": True,
+                }
+            },
+            "components": {"com.brainlayer.watch": {"enabled": True, "plist": "com.brainlayer.watch.plist"}},
+            "manifest_bytes": "7b7d",
+            "manifest_sha256": "a" * 64,
+            "daemon_pinned": (agents / "com.brainlayer.daemon.plist").read_bytes().hex(),
+            "files": {
+                "com.brainlayer.watch.plist": plistlib.dumps(
+                    {
+                        "Label": "com.brainlayer.watch",
+                        "ProgramArguments": ["/tmp/BrainLayer Watcher", f"{opt}/bin/brainlayer", "watch"],
+                        "EnvironmentVariables": {"TEST_RECEIPT_PADDING": "x" * 60000},
+                    }
+                ).hex()
+            },
+        }
+        journal.write_text(json.dumps(payload))
+        journal.chmod(0o600)
+        assert journal.stat().st_size > 100000
+    fake = FakeCommands(old_keg, current_keg)
+    fake.pids.update(daemon=6538, maintenance=6539)
+    fake.kegs.update(daemon=old_keg, maintenance=old_keg)
+    return agents, journal, opt, fake
+
+
+@pytest.mark.parametrize("phase", ["migrating", "migrated", "reverting"])
+def test_consolidated_restart_skips_supervisors_without_mapping_or_kickstart(tmp_path: Path, phase: str) -> None:
+    agents, _, opt, fake = _supervisor_home(tmp_path, phase)
+
+    # Every supervisor print/map/restart is forbidden: consolidate owns all of it.
+    def refuse_commands(args):
+        raise AssertionError(f"supervisor must be skipped before command: {args}")
+
+    result = restart_loaded_jobs(agents, opt, command_runner=refuse_commands, uid=501, sleep_fn=lambda _: None)
+
+    assert result["ok"] is True
+    assert result["skipped"] == {f"com.brainlayer.{name}": SUPERVISOR_SKIP for name in ("daemon", "maintenance")}
+    assert result["restarted"] == [] and result["stale"] == {} and result["errors"] == {}
+
+
+@pytest.mark.parametrize("phase", [None, "reverted", "rolled_back"])
+def test_legacy_restart_behavior_remains_without_supervisor_ownership(tmp_path: Path, phase: str | None) -> None:
+    agents, _, opt, fake = _supervisor_home(tmp_path, phase)
+    result = restart_loaded_jobs(agents, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
+    assert result["ok"] is True
+    assert set(result["restarted"]) == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+    assert any(command[:3] == ["launchctl", "kickstart", "-k"] for command in fake.commands)
+
+
+@pytest.mark.parametrize("raw", ['{"phase":"future"}', "[]", "{", '{"phase":null}'])
+def test_unreadable_or_unknown_ownership_refuses_before_mutation(tmp_path: Path, raw: str) -> None:
+    agents, journal, opt, fake = _supervisor_home(tmp_path, "migrated")
+    journal.write_text(raw)
+    result = restart_loaded_jobs(agents, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
+    assert result["ok"] is False
+    assert "ownership" in result["errors"]
+    assert fake.commands == []
+
+
+def test_consolidated_skip_does_not_hide_other_job_failure(tmp_path: Path) -> None:
+    agents, _, opt, fake = _supervisor_home(tmp_path, "migrated")
+    _plist(agents, "watch", KeepAlive=True, ProgramArguments=[f"{opt}/bin/brainlayer", "watch"])
+
+    def denied_kickstart(args):
+        if args[:3] == ["launchctl", "kickstart", "-k"]:
+            return subprocess.CompletedProcess(args, 1, "", "denied")
+        return fake(args)
+
+    result = restart_loaded_jobs(agents, opt, command_runner=denied_kickstart, uid=501, sleep_fn=lambda _: None)
+    assert result["ok"] is False
+    assert result["skipped"]["com.brainlayer.daemon"] == SUPERVISOR_SKIP
+    assert "com.brainlayer.watch" in result["errors"]
+    assert not any("daemon" in command[-1] or "maintenance" in command[-1] for command in fake.commands)
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "hardlink", "public", "linked-parent"])
+def test_unsafe_receipt_custody_refuses_before_commands(tmp_path: Path, unsafe: str) -> None:
+    agents, journal, opt, fake = _supervisor_home(tmp_path, "migrated")
+    if unsafe == "public":
+        journal.chmod(0o644)
+    elif unsafe == "linked-parent":
+        moved = journal.parent.with_name("moved")
+        journal.parent.rename(moved)
+        journal.parent.symlink_to(moved, target_is_directory=True)
+    else:
+        moved = journal.with_name("saved.json")
+        journal.rename(moved)
+        if unsafe == "symlink":
+            journal.symlink_to(moved)
+        else:
+            journal.hardlink_to(moved)
+    result = restart_loaded_jobs(agents, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
+    assert result["ok"] is False and "ownership" in result["errors"]
+    assert fake.commands == []
+
+
+def test_journal_permission_error_is_not_absence(tmp_path: Path, monkeypatch) -> None:
+    import os
+
+    agents, journal, opt, fake = _supervisor_home(tmp_path, "migrated")
+    original = Path.lstat
+
+    def denied(path, *args, **kwargs):
+        if path == journal:
+            raise PermissionError("journal denied")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", denied)
+    # lexists collapses this same permission error to False.
+    monkeypatch.setattr(os.path, "lexists", lambda _: False)
+    result = restart_loaded_jobs(agents, opt, command_runner=fake, uid=501, sleep_fn=lambda _: None)
+    assert result["ok"] is False and "ownership" in result["errors"]
+    assert fake.commands == []
