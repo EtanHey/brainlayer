@@ -13,6 +13,7 @@ final class SparklineTooltipOpacityTests: XCTestCase {
         let layout = BrainBarDashboardLayout(containerSize: CGSize(width: 900, height: 900))
         XCTAssertTrue(layout.compactCards)
         let width = BrainBarIngestBandLayout.chartSizes(containerWidth: 900)[0].width
+        let pointerX = 40 + CGFloat(bucket) * (width - 50) / 9
         let lane = { (series: PipelineSeries) in
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -28,7 +29,7 @@ final class SparklineTooltipOpacityTests: XCTestCase {
                     metricDisclosure: "Window: Last 30m · Count: hovered value below · Unit: chunks · Clock: ingest time",
                     showsRestingAxes: true
                 ), accentColor: .systemGreen,
-                   previewHoveredBucket: series == hovered ? bucket : nil, previewHoverX: 0)
+                   previewHoveredBucket: series == hovered ? bucket : nil, previewHoverX: pointerX)
                     .frame(height: height)
             }
         }
@@ -55,8 +56,9 @@ final class SparklineTooltipOpacityTests: XCTestCase {
                         let chartSize = CGSize(width: width, height: height - 14)
                         let cardSize = SparklineTooltipPlacement.tooltipSize(in: chartSize, showsMetricDisclosure: true)
                         let anchorY = 10 + (chartSize.height - 20) * (1 - CGFloat(values[bucket]) / 90)
-                        let center = SparklineTooltipPlacement.position(near: CGPoint(x: 0, y: anchorY),
-                            anchorY: anchorY, hoveredX: 40 + CGFloat(bucket) * (width - 50) / 9,
+                        let pointerX = 40 + CGFloat(bucket) * (width - 50) / 9
+                        let center = SparklineTooltipPlacement.position(near: CGPoint(x: pointerX, y: anchorY),
+                            anchorY: anchorY, hoveredX: pointerX,
                             containerBounds: chartSize, tooltipSize: cardSize)
                         let row = hovered == .allCommits ? 0 : 1
                         let card = CGRect(x: (900 - width) / 2 + center.x - cardSize.width / 2,
