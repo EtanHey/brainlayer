@@ -51,10 +51,11 @@
 - Make supervisor recovery, timeout diagnostics, legacy OFF routing and source-only pre-push sweep selection fail visibly instead of silently dropping state or coverage.
 - Refuse unsafe/foreign transport receipts, preserve shutdown evidence on bounded SIGTERM/SIGINT, and ignore expired or previous-boot reconnect baselines without discarding valid request counters or incidents.
 - Treat operator backup folders as inert; only exact journaled migration archive names trigger missing-journal custody refusal.
+- Retry one search virtual-table constructor schema race (#1291).
 
 ### Changed
 - Run every migration/revert crash shard in a separate required CI job while retaining complete local pre-push coverage.
-- Ship the Python formula and BrainBar cask together; verify the installed keg before cask postflight restarts. Consolidation activation remains an explicit operator action.
+- Release process: ship the Python formula and BrainBar cask together, verifying the formula keg's signatures before installing the BrainBar cask. Consolidation activation remains an explicit operator action.
 
 ## [1.5.48] - 2026-10-06
 
