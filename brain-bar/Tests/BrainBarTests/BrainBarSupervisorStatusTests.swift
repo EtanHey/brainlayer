@@ -37,7 +37,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         let row: [String: Any] = ["schema_version": 1, "phase": "migrated", "components": [:],
             "files": ["com.brainlayer.watch.plist": payload, "com.brainlayer.drain.plist": payload],
             "states": [:], "keg": "../Cellar/brainlayer/fixture", "archive": "fixture/archive",
-            "group_custody": [:], "published_files": ["com.brainlayer.daemon.plist": payload,
+            "group_custody": [:], "published_files": ["fixture-supervisor.plist": payload,
                 "com.brainlayer.maintenance.plist": payload], "published_sha256": [:],
             "configuration_sha256": [:], "daemon_pinned": payload, "manifest_bytes": payload,
             "manifest_sha256": String(repeating: "0", count: 64)]
