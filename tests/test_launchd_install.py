@@ -76,7 +76,7 @@ def test_rollback_calls_pr_c_with_journal_path_without_forward_preflight(inputs,
     from brainlayer import launchd_consolidation, launchd_install
 
     calls = []
-    monkeypatch.setattr(launchd_consolidation, "revert", lambda **kw: calls.append(kw), raising=False)
+    monkeypatch.setattr(launchd_consolidation, "revert", lambda **kw: calls.append(kw) or {"phase": "reverted"})
     launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
     assert calls[0]["home"] == inputs["home"]
     assert calls[0]["journal"] == inputs["home"] / ".local/share/brainlayer/supervisor/migration.json"
@@ -85,20 +85,34 @@ def test_rollback_calls_pr_c_with_journal_path_without_forward_preflight(inputs,
 
 
 @pytest.mark.parametrize("action", ["watch", "all", "load", "unload", "remove", "fleet-watchdog-resume"])
-@pytest.mark.parametrize("phase", ["migrating", "migrated", "reverting", "complete", "unknown"])
-def test_legacy_shell_paths_refuse_when_supervisor_journal_exists(tmp_path, action, phase):
+@pytest.mark.parametrize("phase", ["migrating", "migrated", "reverting", "complete", "unknown", "missing"])
+def test_legacy_shell_paths_refuse_when_supervisor_journal_exists(tmp_path, action, phase, request):
     home = tmp_path / "home"
     journal = home / ".local/share/brainlayer/supervisor/migration.json"
-    journal.parent.mkdir(mode=0o700, parents=True)
-    journal.write_text(json.dumps({"phase": phase}))
-    journal.chmod(0o600)
+    if phase == "missing":
+        from tests.test_launchd_consolidation import Launchctl, invoke
+
+        fixture = request.getfixturevalue("setup")
+        runner = Launchctl()
+        migrated = invoke(fixture, runner)
+        journal.unlink()
+        watch = fixture[1] / "com.brainlayer.watch.plist"
+        watch.write_bytes((watch.parent / os.path.basename(migrated["archive"]) / watch.name).read_bytes())
+        assert runner.loaded == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+    else:
+        journal.parent.mkdir(mode=0o700, parents=True)
+        journal.write_text(json.dumps({"phase": phase}))
+        journal.chmod(0o600)
     fake = tmp_path / "bin"
     fake.mkdir()
     binary = fake / "brainlayer"
     binary.write_text("#!/bin/sh\nexit 0\n")
     binary.chmod(0o755)
+    (fake / "uname").write_text("#!/bin/sh\necho Linux\n")
+    (fake / "uname").chmod(0o755)
+    calls = tmp_path / "legacy-calls"
     launchctl = fake / "launchctl"
-    launchctl.write_text("#!/bin/sh\necho FORBIDDEN_LAUNCHCTL >&2\nexit 91\n")
+    launchctl.write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\necho FORBIDDEN_LAUNCHCTL >&2\nexit 91\n')
     launchctl.chmod(0o755)
     env = os.environ | {
         "HOME": str(home),
@@ -115,11 +129,15 @@ def test_legacy_shell_paths_refuse_when_supervisor_journal_exists(tmp_path, acti
     assert result.returncode != 0
     assert "supervisor" in result.stderr
     assert "FORBIDDEN_LAUNCHCTL" not in result.stderr
-    assert not (home / "Library/LaunchAgents").exists()
+    assert not calls.exists()
+    if phase == "missing":
+        assert "jobs.json" in result.stderr and "manual recovery" in result.stderr
+    else:
+        assert not (home / "Library/LaunchAgents").exists()
 
 
-@pytest.mark.parametrize("failed", [False, True])
-def test_wiring_uses_real_transaction_for_replay_restart_and_failure(inputs, monkeypatch, failed):
+@pytest.mark.parametrize("failed", [False, True, KeyboardInterrupt])
+def test_wiring_uses_real_transaction_for_replay_restart_and_failure(inputs, monkeypatch, capsys, failed):
     from brainlayer import launchd_consolidation, launchd_install
     from tests.test_launchd_consolidation import Launchctl
 
@@ -132,11 +150,28 @@ def test_wiring_uses_real_transaction_for_replay_restart_and_failure(inputs, mon
         path.write_bytes(raw)
     runner = Launchctl(fail="com.brainlayer.maintenance" if failed else "")
     inputs["run"] = runner
+    if failed is KeyboardInterrupt:
+
+        def interrupt(argv):
+            result = runner(argv)
+            if argv[1] == "bootstrap" and not getattr(runner, "interrupted", False):
+                runner.interrupted = True
+                raise KeyboardInterrupt
+            return result
+
+        inputs["run"] = interrupt
     if failed:
-        with pytest.raises(RuntimeError, match="original files/states restored"):
+        with pytest.raises(KeyboardInterrupt if failed is KeyboardInterrupt else RuntimeError):
             launchd_install.install(**inputs)
         assert runner.loaded == {"com.brainlayer.watch", "com.etanhey.brainlayer-fleet-watchdog"}
         assert not any(c[0] == "enable" for c in runner.calls)
+        runner.calls.clear()
+        receipt = inputs["home"] / ".local/share/brainlayer/supervisor/migration.json"
+        before = receipt.read_bytes()
+        monkeypatch.setattr(launchd_install, "command", runner)
+        launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+        assert capsys.readouterr().out.strip() == "nothing to roll back; legacy jobs own the install"
+        assert not runner.calls and receipt.read_bytes() == before
         return
     launchd_install.install(**inputs)
     runner.calls.clear()
@@ -292,7 +327,16 @@ def test_legacy_install_blocks_concurrent_consolidation_during_preflight(tmp_pat
     assert not journal.exists()
 
 
-@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_rollback_without_transaction_is_noop(inputs, monkeypatch, capsys):
+    from brainlayer import launchd_install
+
+    monkeypatch.setattr(launchd_install, "command", lambda argv: pytest.fail("unexpected launchctl"))
+    launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+    assert capsys.readouterr().out.strip() == "nothing to roll back; legacy jobs own the install"
+    assert not (inputs["home"] / ".local/share/brainlayer/supervisor/migration.json").exists()
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit, RuntimeError, ValueError, OSError])
 @pytest.mark.parametrize("action", ["consolidate", "consolidation-rollback"])
 @pytest.mark.parametrize("boundary", ["before_lock", "before_handoff", "mutating"])
 def test_interrupt_reports_truthful_recovery(inputs, monkeypatch, capsys, interruption, action, boundary):
@@ -303,7 +347,7 @@ def test_interrupt_reports_truthful_recovery(inputs, monkeypatch, capsys, interr
     @contextmanager
     def lock(home):
         if boundary == "before_lock":
-            raise interruption()
+            raise interruption("operator refusal")
         yield
 
     def interrupted(**kw):
@@ -311,7 +355,7 @@ def test_interrupt_reports_truthful_recovery(inputs, monkeypatch, capsys, interr
             receipt = inputs["home"] / ".local/share/brainlayer/supervisor/migration.json"
             receipt.parent.mkdir(mode=0o700, parents=True)
             receipt.write_text(json.dumps({"phase": "reverting" if action.endswith("rollback") else "migrating"}))
-        raise interruption()
+        raise interruption("operator refusal")
 
     monkeypatch.setattr(launchd_install, "installer_lock", lock)
     monkeypatch.setattr(launchd_install, "_install", interrupted)
@@ -332,7 +376,9 @@ def test_interrupt_reports_truthful_recovery(inputs, monkeypatch, capsys, interr
         launchd_install.main(args)
     assert stopped.value.code != 0
     out = capsys.readouterr()
-    if boundary == "before_lock":
+    if issubclass(interruption, Exception):
+        assert out.err.strip() == "operator refusal"
+    elif boundary == "before_lock":
         assert out.err.strip() == f"{action} interrupted before any changes; nothing was stopped; re-run {action}"
     else:
         assert "to finish" in out.err and "jobs are stopped" not in out.err

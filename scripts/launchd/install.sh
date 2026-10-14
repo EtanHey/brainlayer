@@ -280,6 +280,15 @@ with os.fdopen(fd, "rb") as stream:
                 echo "ERROR: supervisor migration owns or cannot verify these jobs; use consolidate or consolidation-rollback" >&2
                 exit 1
             fi
+        else
+            for artifact in "$HOME/.local/share/brainlayer/supervisor/jobs.json" \
+                "$HOME/Library/LaunchAgents"/com.brainlayer.{daemon,maintenance}{.plist,.plist.loaded-keg,.loaded-keg} \
+                "$HOME/Library/LaunchAgents"/.archive-*; do
+                if [ -e "$artifact" ] || [ -L "$artifact" ]; then
+                    echo "ERROR: missing migration journal with supervisor artifact $artifact; restore the journal for consolidation-rollback or use manual recovery" >&2
+                    exit 1
+                fi
+            done
         fi
         ;;
 esac

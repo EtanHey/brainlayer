@@ -122,7 +122,7 @@ def main(argv=None):
             if args.action == "consolidation-rollback":
                 from .launchd_consolidation import revert
 
-                revert(
+                outcome = revert(
                     home=args.home,
                     journal=args.home / ".local/share/brainlayer/supervisor/migration.json",
                     domain=args.domain,
@@ -146,10 +146,17 @@ def main(argv=None):
             message = "consolidate interrupted; re-run consolidate to finish or consolidation-rollback to back out"
         print(message, file=sys.stderr)
         raise SystemExit(1) from None
+    except Exception as refusal:
+        print(str(refusal), file=sys.stderr)
+        raise SystemExit(1) from None
     if args.action == "consolidate":
         print(f"{args.action}: {outcome['phase']}; restart fallback={outcome.get('restart_fallback')}")
     else:
-        print("consolidation-rollback: verified transaction finished")
+        print(
+            "nothing to roll back; legacy jobs own the install"
+            if outcome["phase"] in {"none", "rolled_back"}
+            else "consolidation-rollback: verified transaction finished"
+        )
 
 
 if __name__ == "__main__":
