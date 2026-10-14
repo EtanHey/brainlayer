@@ -132,3 +132,45 @@ def test_doctor_proxy_route_is_info_without_env_values(tmp_path: Path, monkeypat
     assert [(i.code, i.severity) for i in issues] == ([] if override else [("mcp_bridge_proxy_route", "info")])
     assert "private-front.sock" not in str(issues)
     assert "secret-value" not in str(issues)
+
+
+@pytest.mark.parametrize("shape", ["json", "zed", "toml"])
+@pytest.mark.parametrize(
+    "address",
+    [
+        "unix-connect:/tmp/brainbar.sock",
+        "UNIX:/tmp/brainbar.sock",
+        "UNIX-CLIENT:/tmp/brainbar.sock",
+        "UNIX-CONNECT:",
+        None,
+        "ambiguous",
+    ],
+)
+def test_doctor_flags_unparsed_owned_socat_without_secrets(tmp_path, shape, address):
+    import json
+
+    from brainlayer.doctor import _legacy_python_mcp_config_issues
+
+    args = ["STDIO"] + ([address] if address else [])
+    if address == "ambiguous":
+        args = ["STDIO", "UNIX-CONNECT:/tmp/a.sock", "UNIX-CONNECT:/tmp/b.sock"]
+    path = tmp_path / ("config.toml" if shape == "toml" else "mcp.json")
+    env = {"TOKEN": "private-value"}
+    server = {"command": "socat", "args": args, "env": env}
+    if shape == "zed":
+        server = {"command": {"path": "socat", "args": args, "env": env}}
+    if shape == "toml":
+        path.write_text(
+            '[mcp_servers.brainlayer]\ncommand="socat"\nargs='
+            + json.dumps(args)
+            + '\n[mcp_servers.brainlayer.env]\nTOKEN="private-value"\n'
+        )
+    else:
+        path.write_text(json.dumps({"mcpServers": {"brainlayer": server, "unowned": server}}))
+    issues = _legacy_python_mcp_config_issues([path])
+    unparsed = [i for i in issues if i.code == "mcp_socat_target_unparsed"]
+    assert len(unparsed) == 1
+    assert unparsed[0].severity == "warning"
+    assert str(path) in unparsed[0].message and "brainlayer" in unparsed[0].message
+    assert "single non-empty UNIX-CONNECT target" in unparsed[0].message
+    assert "private-value" not in str(issues)
