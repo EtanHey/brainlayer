@@ -76,7 +76,7 @@ final class BrainBarBackupChecksTests: XCTestCase {
 
     func test_the_raw_identifiers_live_in_technical_details_each_copyable() {
         let details = checks(backups()).details
-        XCTAssertEqual(details.first(where: { $0.label == "Transcript archive ID" })?.value, archiveID)
+        XCTAssertEqual(details.first(where: { $0.label == "Drive file ID — latest transcript archive" })?.value, archiveID)
         XCTAssertEqual(details.first(where: { $0.label == "Database copy file" })?.value, "2026-09-30.db.gz")
         XCTAssertEqual(details.first(where: { $0.label == "launchd job" })?.value, "\(launchdLabel) · loaded")
         XCTAssertEqual(details.first(where: { $0.label == "Retention invariant" })?.value, "PASS")

@@ -131,7 +131,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         }
         var rows: [Detail] = []
         if let upload = backups.lastVerifiedUpload {
-            rows.append(.init(label: "Transcript archive ID", value: upload.archiveId))
+            rows.append(.init(label: "Drive file ID — latest transcript archive", value: upload.archiveId))
             rows.append(.init(label: "Last transcript upload", value: exact(upload.at)))
         }
         if let snapshot = backups.dbSnapshot {
