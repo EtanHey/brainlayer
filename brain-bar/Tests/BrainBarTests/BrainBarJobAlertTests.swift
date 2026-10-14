@@ -404,6 +404,18 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         ))
     }
 
+    func test_transport_job_alert_is_visible_and_clears_on_verified_recovery() {
+        let reason = "BrainBar MCP transport: 3 dropped requests"
+        let badge = BadgeStatePresentation(badgeOn: true, reason: reason,
+            activeCodes: ["job_alert_mcp-transport"], activeMessages: [reason])
+        let live = badge.reconciled(with: BrainBarJobAlerts(active: ["mcp-transport": reason]))
+        XCTAssertTrue(live.badgeOn)
+        XCTAssertEqual(BrainBarStatusPopoverController.jobAlertKey(for: live), "mcp-transport")
+        XCTAssertEqual(live.reason, reason)
+        XCTAssertTrue(badge.reconciled(with: nil).badgeOn)
+        XCTAssertFalse(badge.reconciled(with: BrainBarJobAlerts(active: [:])).badgeOn)
+    }
+
     // MARK: B2
 
     /// Exactly Codex's fixture: job-alerts.json recovered to {} while badge-state.json still holds

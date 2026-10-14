@@ -6,12 +6,22 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
-SOCKET_MCP = {
-    "command": "socat",
-    "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
-}
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("brainlayer.setup._require_mcp_bridge", lambda command: None)
+    monkeypatch.setattr(
+        "brainlayer.setup.get_current_mcp_bridge_bin",
+        lambda: "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+    )
+
+
+BRIDGE_MCP = {"command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"}
+SOCKET_MCP = {"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}
 
 BRIDGE_VIA_BUN = {
     "command": "/Users/me/.bun/bin/bun",
@@ -45,14 +55,17 @@ def test_shape_matcher_flags_bridge_and_bun_not_only_literal_name():
     from brainlayer.mcp_socket_config import needs_socket_migration
 
     assert needs_socket_migration("brainlayer", {"command": "brainlayer-mcp"})
-    assert not needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
+    assert not needs_socket_migration(
+        "brainlayer", {"command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"}
+    )
+    assert needs_socket_migration("brainlayer", {"command": "brainlayer-mcp-stdio-bridge"})
     assert needs_socket_migration("brainlayer", BRIDGE_VIA_BUN)
     assert needs_socket_migration("brainlayer", CELLAR_BRIDGE_VIA_BUN)
-    assert not needs_socket_migration("brainlayer", SOCKET_MCP)
+    assert needs_socket_migration("brainlayer", SOCKET_MCP)
     assert not needs_socket_migration("other", {"command": "keep-me"})
 
 
-def test_setup_migrates_bridge_and_bun_shapes_to_socket(tmp_path: Path):
+def test_setup_migrates_bridge_and_bun_shapes_to_bridge(tmp_path: Path):
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     config_path = tmp_path / ".claude.json"
@@ -71,12 +84,12 @@ def test_setup_migrates_bridge_and_bun_shapes_to_socket(tmp_path: Path):
 
     assert migrate_legacy_mcp_configs([config_path]).changed == (config_path,)
     migrated = json.loads(config_path.read_text(encoding="utf-8"))
-    assert migrated["mcpServers"]["brainlayer"] == SOCKET_MCP
+    assert migrated["mcpServers"]["brainlayer"] == BRIDGE_MCP
     assert migrated["mcpServers"]["unrelated"] == {"command": "other-mcp"}
     assert migrate_legacy_mcp_configs([config_path]).changed == ()
 
 
-def test_setup_migrates_brainlayer_mcp_json_to_socket_with_backup(tmp_path: Path, monkeypatch):
+def test_setup_migrates_brainlayer_mcp_json_to_bridge_with_backup(tmp_path: Path, monkeypatch):
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     home = tmp_path / "home"
@@ -98,7 +111,7 @@ def test_setup_migrates_brainlayer_mcp_json_to_socket_with_backup(tmp_path: Path
     assert changed.changed == (config_path,)
     assert second.changed == ()
     migrated = json.loads(config_path.read_text(encoding="utf-8"))
-    assert migrated["mcpServers"]["brainlayer"] == SOCKET_MCP
+    assert migrated["mcpServers"]["brainlayer"] == BRIDGE_MCP
     assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
     backup_dir = home / ".local" / "share" / "brainlayer" / "config-backups"
     backups = list(backup_dir.glob(".claude.json.*.bak"))
@@ -117,7 +130,7 @@ def test_setup_tolerates_invalid_json_without_aborting(tmp_path: Path):
     changed = migrate_legacy_mcp_configs([bad, good])
     assert changed.changed == (good,)
     assert any(path == bad for path, _reason in changed.skipped)
-    assert json.loads(good.read_text())["mcpServers"]["brainlayer"] == SOCKET_MCP
+    assert json.loads(good.read_text())["mcpServers"]["brainlayer"] == BRIDGE_MCP
 
 
 def test_owned_paths_exclude_worktrees(tmp_path: Path):
@@ -178,12 +191,11 @@ def test_setup_cli_migrates_all_four_owned_shapes_under_temp_home(tmp_path: Path
     assert result.exit_code == 0, result.stdout
     assert "Migrated MCP config:" in result.stdout
 
-    assert json.loads(claude.read_text())["mcpServers"]["brainlayer"] == SOCKET_MCP
-    assert json.loads(cursor.read_text())["mcpServers"]["brainlayer"] == SOCKET_MCP
-    assert json.loads(gemini.read_text())["mcpServers"]["brainlayer"] == SOCKET_MCP
+    assert json.loads(claude.read_text())["mcpServers"]["brainlayer"] == BRIDGE_MCP
+    assert json.loads(cursor.read_text())["mcpServers"]["brainlayer"] == BRIDGE_MCP
+    assert json.loads(gemini.read_text())["mcpServers"]["brainlayer"] == BRIDGE_MCP
     codex_payload = tomllib.loads(codex.read_text(encoding="utf-8"))
-    assert codex_payload["mcp_servers"]["brainlayer"]["command"] == "socat"
-    assert codex_payload["mcp_servers"]["brainlayer"]["args"] == SOCKET_MCP["args"]
+    assert codex_payload["mcp_servers"]["brainlayer"] == BRIDGE_MCP
     assert codex_payload["mcp_servers"]["other"]["command"] == "keep-me"
 
 
@@ -201,7 +213,7 @@ def test_doctor_errors_on_codex_toml_bridge_shape(tmp_path: Path):
     assert len(issues) == 1
     assert issues[0].severity == "fatal"
     assert issues[0].code == "legacy_python_mcp_entrypoint"
-    assert "UNIX-CONNECT:/tmp/brainbar.sock" in (issues[0].details.get("fix") or "")
+    assert "brainlayer-mcp-stdio-bridge" in (issues[0].details.get("fix") or "")
 
 
 def test_doctor_errors_on_stale_python_mcp_entrypoint(tmp_path: Path):
@@ -216,7 +228,7 @@ def test_doctor_errors_on_stale_python_mcp_entrypoint(tmp_path: Path):
     assert len(issues) == 1
     assert issues[0].severity == "fatal"
     assert issues[0].code == "legacy_python_mcp_entrypoint"
-    assert "UNIX-CONNECT:/tmp/brainbar.sock" in (issues[0].details.get("fix") or "")
+    assert "brainlayer-mcp-stdio-bridge" in (issues[0].details.get("fix") or "")
 
 
 def test_doctor_run_fails_on_stale_mcp_entrypoint(tmp_path: Path):

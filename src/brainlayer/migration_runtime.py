@@ -27,6 +27,7 @@ class LaunchdRuntime:
         if not re.fullmatch(r"gui/[1-9][0-9]*", domain):
             raise ValueError("migration requires an explicit GUI domain")
         self.domain, self.run, self.alive, self.clock = domain, run, alive, clock
+        self.observed_pids = {}
 
     def _checked(self, action, target, *args):
         result = self.run(["launchctl", action, target, *map(str, args)])
@@ -42,11 +43,13 @@ class LaunchdRuntime:
     def stop(self, label, *, grace=30, expected=None):
         deadline = deadline_after(self.clock, grace) + 2
         state = self.observe(label)
+        pids = self.observed_pids.setdefault(label, set())
+        if state["pid"] is not None:
+            pids.add(state["pid"])
         if expected is not None and any(state[key] != expected[key] for key in state):
             raise RuntimeError(f"service changed since snapshot: {label}")
         if state["loaded"]:
             self._checked("bootout", f"{self.domain}/{label}")
-        pids = {state["pid"]} - {None}
         while True:
             current = self.observe(label)
             if current["pid"] is not None:

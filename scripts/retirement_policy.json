@@ -92,6 +92,14 @@
         "target": "self.client.request"
       }
     },
+    "077aa037a4f792a9d09fd672f8fe19d1fd582ad0ca6c16d6be891cded4d1561c": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. This reviewed change counts local connection/request/error events and atomically writes payload-free aggregate transport-health evidence at mode 0600; it adds no outbound MCP transport, TCP/cloud endpoint or model sender.",
+      "site": {
+        "body_sha256": "27f0e6ec2e0031c8b72190f32025489156259a8492b9c0456cf906b5de24c4b2",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
+      }
+    },
     "08812b9decf92405afe35f186f6b49f065c4ea36a62a40b64e46440bada87c3b": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -140,14 +148,6 @@
         "owner": "<module>.controls",
         "path": "scripts/retirement_probe.py",
         "target": "requests.Session().send"
-      }
-    },
-    "0e51ab70ae6658dc3aec80b0aff78357b0e9819ee23f8df097a28f2eb737ad6f": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "7310a83a0dff6ba4d424e81c676aab44c1fc2f8f1bfcb261745ff2a5d78c4520",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
@@ -2922,14 +2922,6 @@
         "target": "ctypes.byref"
       }
     },
-    "946c267aad430ab47a6d790e1ad8271bd16d88a8a794f932d3efdd7cf6465bdb": {
-      "non_cloud_purpose": "Exact native/shell/dashboard source binding from R7 baseline; changed bytes require classification and review",
-      "site": {
-        "body_sha256": "7310a83a0dff6ba4d424e81c676aab44c1fc2f8f1bfcb261745ff2a5d78c4520",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
-      }
-    },
     "94750005d4ab902ca2c076c64498d3bae1c308a331089e2419cbc0f4c925113d": {
       "non_cloud_purpose": "Retained media ingestion and local processing, not a cloud model sender",
       "site": {
@@ -4268,6 +4260,14 @@
         "target": "sqlite3.connect"
       }
     },
+    "ccb36172ffb46588bab78c7de4b093d8b31fa1062e761ceffbc2b0143447af89": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. This reviewed change counts local connection/request/error events and atomically writes payload-free aggregate transport-health evidence at mode 0600; it adds no outbound MCP transport, TCP/cloud endpoint or model sender.",
+      "site": {
+        "body_sha256": "27f0e6ec2e0031c8b72190f32025489156259a8492b9c0456cf906b5de24c4b2",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+      }
+    },
     "ccf853038cea4cb534da6182e5863bddb97fe6ca28802d9e99c679a78f2da44e": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_cleanup_dryrun.py <module>.main",
       "site": {
@@ -5114,6 +5114,16 @@
         "owner": "<module>._git_merged_head_sha",
         "path": "src/brainlayer/maintenance.py",
         "target": "subprocess.run"
+      }
+    },
+    "f812a936f606622dc89a55d99e9d89ef30fe9c8c3bfb10a9acb43cff75f292ea": {
+      "non_cloud_purpose": "Owner-only local AF_UNIX SupervisorCommands status callback passed to the migration readiness gate; parent 0700, endpoint 0600 and peer UID are checked before sending component status JSON. No TCP, remote endpoint or cloud/model sender.",
+      "site": {
+        "call_sha256": "530420bac71aa52a48e9644e3015a326af512238f1afcb22fe79c634039d8cfc",
+        "kind": "callable_reference",
+        "owner": "<module>._migrate.verify_daemon",
+        "path": "src/brainlayer/launchd_consolidation.py",
+        "target": "client.request"
       }
     },
     "fa3f5b16bf754ffb6681c1b70e3c8ac635902a35a1b96c60748e62969e1ad363": {

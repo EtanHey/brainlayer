@@ -31,15 +31,16 @@ Add to Claude Code (`~/.claude.json`):
 {
   "mcpServers": {
     "brainlayer": {
-      "command": "brainlayer-mcp-stdio-bridge"
+      "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge"
     }
   }
 }
 ```
 
 BrainBar must be running and owning `/tmp/brainbar.sock`. The bridge ships with the package and
-reconnects across BrainBar restarts. If you already have `socat`, the manual equivalent is
-`{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}` — see
+reconnects across BrainBar restarts. The legacy raw-socket form,
+`{"command": "socat", "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"]}`, exits on restart.
+Upgrade owned configs with `brainlayer setup --migrate-mcp` — see
 [MCP Config](mcp-config.md).
 
 Your agent now has persistent memory. Ask it:

@@ -129,6 +129,8 @@ final class BrainBarServer: @unchecked Sendable {
     private var databaseOpenInProgress = false
     private var instanceLock: BrainBarInstanceLock?
     private var daemonHeartbeatTimer: DispatchSourceTimer?
+    private var transportHealth: MCPTransportHealth?
+    private var transportHealthTimer: DispatchSourceTimer?
     private var backupToolCallInProgress = false
     private var deferredDisconnectedAgentIDs = Set<String>()
     var onDatabaseReady: (@Sendable (BrainDatabase) -> Void)?
@@ -154,8 +156,10 @@ final class BrainBarServer: @unchecked Sendable {
         /// The debug log path, tightened to 0600 at start even when the flag is
         /// off, because older builds left it 0644 with request bytes in it.
         let staleDebugLog: BrainBarLogFile?
+        let transportHealthPath: String?
+        let exportsTransportHealth: Bool
 
-        static let none = Diagnostics(debugLog: nil, lifecycleLog: nil, staleDebugLog: nil)
+        static let none = Diagnostics(debugLog: nil, lifecycleLog: nil, staleDebugLog: nil, transportHealthPath: nil, exportsTransportHealth: false)
 
         static func daemon(
             environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -165,7 +169,9 @@ final class BrainBarServer: @unchecked Sendable {
             Diagnostics(
                 debugLog: BrainBarLog.debugLogFile(environment: environment, path: debugLogPath),
                 lifecycleLog: BrainBarLog.lifecycleLogFile(path: lifecycleLogPath),
-                staleDebugLog: BrainBarLogFile(path: debugLogPath, maxBytes: BrainBarLog.debugLogMaxBytes)
+                staleDebugLog: BrainBarLogFile(path: debugLogPath, maxBytes: BrainBarLog.debugLogMaxBytes),
+                transportHealthPath: environment["BRAINLAYER_TRANSPORT_HEALTH_PATH"],
+                exportsTransportHealth: true
             )
         }
     }
@@ -198,6 +204,7 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     struct ClientState {
+        var pendingRequests = 0
         var source: DispatchSourceRead
         var framing: MCPFraming
         let paletteSession: MCPRouter.PaletteSession
@@ -397,6 +404,19 @@ final class BrainBarServer: @unchecked Sendable {
         }
         source.resume()
         listenSource = source
+        if diagnostics.exportsTransportHealth {
+            let path = diagnostics.transportHealthPath ?? URL(fileURLWithPath: dbPath)
+                .deletingLastPathComponent().appendingPathComponent("transport-health.json").path
+            transportHealth = MCPTransportHealth(path: path)
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now(), repeating: .seconds(5))
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                transportHealth?.publish(dbPath: dbPath, inFlight: clients.values.reduce(0) { $0 + $1.pendingRequests })
+            }
+            timer.resume()
+            transportHealthTimer = timer
+        }
 
         NSLog("[BrainBar] Server listening on %@", socketPath)
         Self.logger.notice("SERVER STARTED pid=\(getpid(), privacy: .public) socket=\(self.socketPath, privacy: .private)")
@@ -512,7 +532,11 @@ final class BrainBarServer: @unchecked Sendable {
 
     private func acceptClient() {
         let clientFD = accept(listenFD, nil, nil)
-        guard clientFD >= 0 else { return }
+        guard clientFD >= 0 else {
+            if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { transportHealth?.record(.acceptErrors) }
+            return
+        }
+        transportHealth?.record(.connectionsAccepted)
 
         let flags = fcntl(clientFD, F_GETFL)
         _ = fcntl(clientFD, F_SETFL, flags | O_NONBLOCK)
@@ -551,6 +575,7 @@ final class BrainBarServer: @unchecked Sendable {
             if n == -1, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR {
                 return
             }
+            if n < 0 { transportHealth?.record(.readErrors) }
             disconnectClient(fd: fd)
             return
         }
@@ -561,6 +586,12 @@ final class BrainBarServer: @unchecked Sendable {
         state.framing.append(incoming)
 
         let messages = state.framing.extractMessages()
+        // BrainBus opens a notification stream; it has no JSON-RPC answer lifecycle.
+        let requests = messages.filter {
+            $0["id"] != nil && !($0["id"] is NSNull) && $0["method"] as? String != "watch-brain-bus"
+        }.count
+        state.pendingRequests += requests
+        if requests > 0 { transportHealth?.record(.requestsReceived, count: requests) }
         // Detect framing mode from first message extraction
         if !messages.isEmpty {
             state.usesContentLengthFraming = state.framing.lastExtractUsedContentLength
@@ -724,7 +755,7 @@ final class BrainBarServer: @unchecked Sendable {
             data.append(0x0A) // trailing \n
             framed = data
         }
-        return framed.withUnsafeBytes { ptr in
+        let delivered = framed.withUnsafeBytes { ptr in
             var totalWritten = 0
             var eagainRetries = 0
             while totalWritten < framed.count {
@@ -734,6 +765,7 @@ final class BrainBarServer: @unchecked Sendable {
                         eagainRetries += 1
                         if eagainRetries > Self.maxWriteRetries {
                             NSLog("[BrainBar] ⚠️ Write stalled on fd %d after %d EAGAIN retries (%d ms) — disconnecting dead client", fd, eagainRetries, eagainRetries - 1)
+                            transportHealth?.record(.writeErrors)
                             disconnectClient(fd: fd)
                             return false
                         }
@@ -741,11 +773,13 @@ final class BrainBarServer: @unchecked Sendable {
                         continue
                     }
                     NSLog("[BrainBar] Write error on fd %d: errno %d", fd, errno)
+                    transportHealth?.record(.writeErrors)
                     disconnectClient(fd: fd)
                     return false
                 }
                 if n == 0 {
                     NSLog("[BrainBar] Write returned 0 on fd %d — peer closed", fd)
+                    transportHealth?.record(.writeErrors)
                     disconnectClient(fd: fd)
                     return false
                 }
@@ -754,6 +788,13 @@ final class BrainBarServer: @unchecked Sendable {
             }
             return true
         }
+        if delivered, response["id"] != nil, !(response["id"] is NSNull),
+           var state = clients[fd], state.pendingRequests > 0 {
+            state.pendingRequests -= 1
+            clients[fd] = state
+            transportHealth?.record(.requestsAnswered)
+        }
+        return delivered
     }
 
     private func writeFramedData(fd: Int32, data: Data) -> Bool {
@@ -766,14 +807,17 @@ final class BrainBarServer: @unchecked Sendable {
                     if errno == EAGAIN || errno == EWOULDBLOCK {
                         eagainRetries += 1
                         if eagainRetries > Self.maxWriteRetries {
+                            transportHealth?.record(.writeErrors)
                             return false
                         }
                         usleep(1000)
                         continue
                     }
+                    transportHealth?.record(.writeErrors)
                     return false
                 }
                 if n == 0 {
+                    transportHealth?.record(.writeErrors)
                     return false
                 }
                 totalWritten += n
@@ -1018,6 +1062,12 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func disconnectClient(fd: Int32) {
+        guard let state = clients[fd] else { return }
+        transportHealth?.record(.connectionsClosed)
+        if state.pendingRequests > 0 {
+            transportHealth?.record(.disconnectsWithInFlight)
+            transportHealth?.record(.requestsDropped, count: state.pendingRequests)
+        }
         if let subscriptionID = clients[fd]?.brainBusSubscriptionID {
             brainBus.unsubscribeSynchronously(subscriptionID)
         }
@@ -1042,6 +1092,8 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func cleanup() {
+        transportHealthTimer?.cancel()
+        transportHealthTimer = nil
         daemonHeartbeatTimer?.cancel()
         daemonHeartbeatTimer = nil
         databaseRetryWorkItem?.cancel()
@@ -1049,12 +1101,19 @@ final class BrainBarServer: @unchecked Sendable {
         listenSource?.cancel()
         listenSource = nil
         for (_, state) in clients {
+            transportHealth?.record(.connectionsClosed)
+            if state.pendingRequests > 0 {
+                transportHealth?.record(.disconnectsWithInFlight)
+                transportHealth?.record(.requestsDropped, count: state.pendingRequests)
+            }
             if let subscriptionID = state.brainBusSubscriptionID {
                 brainBus.unsubscribeSynchronously(subscriptionID)
             }
             state.source.cancel()
         }
         clients.removeAll()
+        transportHealth?.publish(dbPath: dbPath, inFlight: 0, stopped: true)
+        transportHealth = nil
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)
         // The backup runs off the request queue so protocol traffic stays live.

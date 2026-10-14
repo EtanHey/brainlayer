@@ -81,6 +81,21 @@ class InputRecorder:
         if in_section_inputs:
             self.section_inputs.append(item)
         return item
+    def file_snapshot(self, path: Path, *, status: str, metadata: Any = None, data: bytes | None = None) -> dict[str, Any]:
+        """Record an already-opened file without reopening or following its final link."""
+        absolute = path.expanduser().parent.resolve() / path.name
+        try:
+            displayed = str(absolute.relative_to(self.root)) if self.root is not None else str(absolute)
+        except ValueError:
+            displayed = str(absolute)
+        self.trace.append(displayed)
+        if status == "read" and metadata is not None and datetime.fromtimestamp(metadata.st_mtime, UTC) > self.now:
+            status = "future"
+        item = _input(displayed, status, _iso_utc(datetime.fromtimestamp(metadata.st_mtime, UTC)) if metadata else None,
+                      len(data) if data is not None else None,
+                      hashlib.sha256(data[:65_536]).hexdigest() if data is not None else None, 0)
+        self.section_inputs.append(item)
+        return item
     def write_trace(self) -> None:
         if self.trace_path is not None:
             self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,7 +203,7 @@ def _author_unknown(connection: sqlite3.Connection, columns: set[str], db_input:
                       "definition": "provenance_class = 'unknown', archived_at IS NULL"}
     return _measured(db_input, never_classified=never_fields, classified_unknown=unknown_fields,
                      census_2026_09_13=CENSUS_NOTE, trend_7d=trend, top_source_files=top_files)
-def build_document(*, env: Mapping[str, str] = os.environ) -> tuple[dict[str, Any], InputRecorder]:
+def build_document(*, env: Mapping[str, str] = os.environ, emit_alerts: bool = False) -> tuple[dict[str, Any], InputRecorder]:
     expected_root = env.get("BRAINLAYER_OBSERVABILITY_PRODUCER_ROOT")
     if expected_root and not Path(__file__).resolve().is_relative_to(Path(expected_root).resolve() / "src"):
         raise RuntimeError(f"observability_surface imported outside producer root: {Path(__file__).resolve()}")
@@ -197,10 +212,10 @@ def build_document(*, env: Mapping[str, str] = os.environ) -> tuple[dict[str, An
     trace_path = Path(env["BRAINLAYER_OBSERVABILITY_TRACE_PATH"]).expanduser() if env.get("BRAINLAYER_OBSERVABILITY_TRACE_PATH") else None
     recorder = InputRecorder(root=root, trace_path=trace_path, now=now)
     try:
-        return _build_document(env=env, now=now, recorder=recorder)
+        return _build_document(env=env, now=now, recorder=recorder, emit_alerts=emit_alerts)
     finally:
         recorder.write_trace()
-def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRecorder) -> tuple[dict[str, Any], InputRecorder]:
+def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRecorder, emit_alerts: bool = False) -> tuple[dict[str, Any], InputRecorder]:
     db_path = (Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path())
     connection: sqlite3.Connection | None = None
     db_status, db_rows, failure = "read", None, None
@@ -241,6 +256,13 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
     if connection is not None:
         connection.close()
     try:
+        from .observability_transport import build_transport_section, report_transport_alert
+        transport = build_transport_section(env=env, now=now, record_input=recorder)
+        if emit_alerts:
+            report_transport_alert(transport, env=env)
+    except Exception as exc:
+        transport = _builder_failure("transport", exc, db_input)
+    try:
         from .observability_backup import build_backups_section
 
         backups = build_backups_section(env=env, record_input=recorder, now=now)
@@ -255,12 +277,12 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
         }
     except Exception as exc:
         backups = _unmeasurable(f"backups raised {type(exc).__name__}: {exc}", db_input)
-    document = {"schema_version": 1, "generated_at": _iso_utc(now), "db_path": recorder.display_path(db_path),
+    document = {"schema_version": 2, "generated_at": _iso_utc(now), "db_path": recorder.display_path(db_path),
                 "window_hours": WINDOW_HOURS, "stores": stores, "emitters": emitters,
-                "author_unknown": author_unknown, "backups": backups}
+                "author_unknown": author_unknown, "backups": backups, "transport": transport}
     return document, recorder
 def write_document(*, env: Mapping[str, str] = os.environ, stdout: bool = False) -> dict[str, Any]:
-    document, _ = build_document(env=env)
+    document, _ = build_document(env=env, emit_alerts=not stdout)
     payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
     if stdout:
         print(payload, end="")

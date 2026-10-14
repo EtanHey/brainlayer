@@ -200,7 +200,7 @@ jobs:
           TRANSFORMERS_OFFLINE: "1"
         run: >
           python scripts/ci/run_with_deadline.py --seconds 1800 --label ci-unit --
-          pytest tests/ -v --tb=short --timeout=300 --timeout-method=thread -m "not integration and not live" -x
+          pytest tests/ -v --tb=short --timeout=300 --timeout-method=thread -m "not integration and not live and not crash_sweep" -x
           --ignore=tests/test_eval_framework.py
           --ignore=tests/test_follow_up_rewrite.py
           --ignore=tests/test_prompt_classification.py
@@ -232,6 +232,52 @@ jobs:
         run: >
           python scripts/ci/run_with_deadline.py --seconds 600 --label ci-registration --
           pytest tests/test_think_recall_integration.py::TestMCPToolCount -v --tb=short --timeout=300 --timeout-method=thread
+
+  crash-sweeps:
+    name: crash sweeps
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-crash-3.13-${{ hashFiles('pyproject.toml') }}
+          restore-keys: ${{ runner.os }}-pip-3.13-
+
+      - name: Install crash test dependencies
+        run: pip install -e ".[dev]" pytest-xdist
+
+      # Old py3.13 completion intervals: first migration 5.5–13.1s/shard,
+      # restart 10.6–20.1s, revert 6.9–18.5s. Observed maxima × all 128 shards
+      # estimate 2245s serial; 2400s bounds this gate independently, while
+      # xdist uses available CPUs. The unit job keeps its existing 1800s bound.
+      - name: Exhaustive crash sweeps
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: >
+          python scripts/ci/run_with_deadline.py --seconds 2400 --label ci-crash-sweeps --
+          pytest tests/ -v --tb=short --timeout=300 --timeout-method=thread -m crash_sweep
+          -n auto --durations=0 --junitxml="$RUNNER_TEMP/crash-sweeps.xml"
+
+      - name: Retain per-shard timings and complete coverage inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-sweep-results-python-3.13
+          path: ${{ runner.temp }}/crash-sweeps.xml
+          if-no-files-found: warn
 
   lint:
     runs-on: ubuntu-latest

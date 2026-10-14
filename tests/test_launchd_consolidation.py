@@ -127,14 +127,12 @@ def test_concurrent_migration_refuses_before_any_launchctl_mutation(setup):
     assert not runner.calls
 
 
-def test_failed_exit_confirmation_never_bootstraps_an_existing_writer(setup, monkeypatch):
-    from brainlayer import launchd_consolidation
+def test_failed_exit_confirmation_never_bootstraps_an_existing_writer(setup):
+    from tests.test_migration_runtime import Clock
 
-    ticks = iter([0])
-    monkeypatch.setattr(launchd_consolidation.time, "monotonic", lambda: next(ticks, 100))
     runner = Launchctl()
     with pytest.raises(RuntimeError):
-        invoke(setup, runner, alive=lambda pid: True)
+        invoke(setup, runner, alive=lambda pid: True, clock=Clock())
     assert not any(c[0] == "bootstrap" for c in runner.calls)
 
 
@@ -181,15 +179,34 @@ def test_disabled_new_daemon_refuses_before_stopping_running_legacy_jobs(setup):
     assert runner.loaded == {OLD, "com.etanhey.brainlayer-fleet-watchdog"}
 
 
-def test_loaded_plistless_owned_service_is_stopped_and_journaled(setup):
+@pytest.mark.parametrize("kind", ["missing", "override", "plist"])
+def test_non_revertible_loaded_preimage_refuses_before_mutation(setup, kind):
+    from brainlayer.consolidation_plan import snapshot_legacy
+
     runner = Launchctl()
-    orphan = "com.brainlayer.enrichment"
-    runner.loaded.add(orphan)
-    journal = invoke(setup, runner)
-    assert journal["states"][orphan]["loaded"] is True
-    assert journal["states"][orphan]["plist_present"] is False
-    assert ("bootout", f"{DOMAIN}/{orphan}") in runner.calls
-    assert orphan not in runner.loaded
+    missing_definition = kind == "missing"
+    label = (
+        "com.brainlayer.enrichment"
+        if missing_definition
+        else ("com.brainlayer.backup-daily" if kind == "plist" else OLD)
+    )
+    runner.loaded.add(label)
+    if kind == "override":
+        runner.disabled.add(label)
+    elif kind == "plist":
+        path = setup[1] / f"{label}.plist"
+        path.write_bytes(plistlib.dumps({"Label": label, "ProgramArguments": ["/bin/true"], "Disabled": True}))
+    preimage = snapshot_legacy(setup[1], setup[2], DOMAIN, runner)
+    assert preimage["states"][label]["loaded"] is True
+    assert preimage["states"][label]["plist_present"] is not missing_definition
+    before = {p.name: p.read_bytes() for p in setup[1].iterdir()}
+    runner.calls.clear()
+    with pytest.raises(RuntimeError, match="not revertible"):
+        invoke(setup, runner)
+    assert label in runner.loaded
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+    assert {p.name: p.read_bytes() for p in setup[1].iterdir()} == before
+    assert not (setup[0] / ".local/share/brainlayer/supervisor/migration.json").exists()
 
 
 def test_rollback_preserves_explicit_enabled_disabled_and_absent_overrides(setup):
@@ -271,7 +288,8 @@ def test_transaction_verifies_real_private_supervisor_and_reaps_owned_groups(sho
     body_error = None
     try:
         journal = invoke((home, agents, env), runner, verify=None, alive=lambda pid: pid != 4242 and pid_alive(pid))
-        assert journal["phase"] == "complete"
+        assert journal["phase"] == "migrated"
+        assert journal["group_custody"][NEW] == str(control)
         states = SupervisorCommands(control / "control.sock", runner).request()
         pids.extend(state["pid"] for state in states.values())
         assert len(pids) == 2 and all(pid_alive(pid) for pid in pids)
@@ -334,9 +352,10 @@ def test_same_keg_replay_does_not_mutate_launchd(setup):
 
 def test_keg_change_restarts_supervisor_without_legacy_revival(setup):
     runner = Launchctl()
-    invoke(setup, runner)
+    original = invoke(setup, runner)
     runner.calls.clear()
-    invoke(setup, runner, "keg2")
+    current = invoke(setup, runner, "keg2")
+    assert all(current[key] == original[key] for key in ("files", "states", "archive", "group_custody"))
     assert ("bootout", f"{DOMAIN}/{NEW}") in runner.calls
     assert not any(OLD in " ".join(c) for c in runner.calls if c[0] in {"enable", "bootstrap"})
     assert (setup[1] / f"{NEW}.plist.loaded-keg").read_text().strip() == "keg2"
@@ -448,20 +467,6 @@ def test_keg_replay_readiness_failure_verifies_recovery_before_claiming_restore(
     assert (setup[1] / f"{NEW}.plist.loaded-keg").read_bytes() == b"keg1\n"
 
 
-def test_plistless_loaded_service_failure_keeps_preimage_and_reports_incomplete(setup):
-    runner = Launchctl(fail="com.brainlayer.maintenance")
-    runner.loaded.add("com.brainlayer.enrichment")
-    with pytest.raises(RuntimeError, match="rollback incomplete.*no restorable"):
-        invoke(setup, runner)
-    receipt = setup[0] / ".local/share/brainlayer/supervisor/migration.json"
-    journal = json.loads(receipt.read_bytes())
-    assert journal["phase"] == "prepared"
-    assert journal["states"]["com.brainlayer.enrichment"]["loaded"] is True
-    assert journal["states"]["com.brainlayer.enrichment"]["plist_present"] is False
-    assert OLD not in runner.loaded  # Incomplete custody cannot authorize partial writer revival.
-    assert not ({NEW, "com.brainlayer.maintenance"} & runner.loaded)
-
-
 def test_archive_precedes_writer_bootout_after_revivers_quiesce(setup):
     class Ordered(Launchctl):
         def __call__(self, argv):
@@ -482,7 +487,7 @@ def test_restart_journal_is_incomplete_until_verification_and_markers(setup):
         def __call__(self, argv):
             if self.restarting and argv[1] == "bootout":
                 receipt = setup[0] / ".local/share/brainlayer/supervisor/migration.json"
-                assert json.loads(receipt.read_bytes())["phase"] == "restarting"
+                assert json.loads(receipt.read_bytes())["phase"] == "migrating"
             return super().__call__(argv)
 
     runner = Journalled()
@@ -496,19 +501,20 @@ def test_marker_fsync_failure_after_publication_restores_preimage(setup, monkeyp
 
     runner = Launchctl()
     invoke(setup, runner)
-    publish = module.write_launch_agent
+    update = module.update
     failed = False
 
-    def fail_after_publish(path, content):
+    def fail_after_publish(path, expected, content, archive, writer):
         nonlocal failed
-        publish(path, content)
-        if not failed and content == b"keg2\n":
+        update(path, expected, content, archive, writer)
+        if not failed and path.name == f"{NEW}.plist.loaded-keg" and content == b"keg2\n":
             failed = True
             raise OSError("injected post-publication fsync failure")
 
-    monkeypatch.setattr(module, "write_launch_agent", fail_after_publish)
+    monkeypatch.setattr(module, "update", fail_after_publish)
     with pytest.raises(RuntimeError, match="restored"):
         invoke(setup, runner, "keg2")
+    assert failed
     for label in (NEW, "com.brainlayer.maintenance"):
         assert (setup[1] / f"{label}.plist.loaded-keg").read_bytes() == b"keg1\n"
 
@@ -522,7 +528,7 @@ def test_first_completion_publication_failure_rolls_back_journal_and_runtime(set
     def fail_after_complete(path, expected, content, archive, publish):
         nonlocal failed
         update(path, expected, content, archive, publish)
-        if not failed and path.name == "migration.json" and json.loads(content)["phase"] == "complete":
+        if not failed and path.name == "migration.json" and json.loads(content)["phase"] == "migrated":
             failed = True
             raise OSError("post-publication sync failure")
 
@@ -531,7 +537,7 @@ def test_first_completion_publication_failure_rolls_back_journal_and_runtime(set
     with pytest.raises(RuntimeError, match="original files/states restored"):
         invoke(setup, runner)
     receipt = setup[0] / ".local/share/brainlayer/supervisor/migration.json"
-    assert json.loads(receipt.read_bytes())["phase"] == "rolled-back"
+    assert json.loads(receipt.read_bytes())["phase"] == "rolled_back"
     assert runner.loaded == {OLD, "com.etanhey.brainlayer-fleet-watchdog"}
 
 
@@ -595,7 +601,87 @@ def test_successful_rollback_is_retryable_without_overwriting_preimage(setup):
         invoke(setup, runner)
     receipt = setup[0] / ".local/share/brainlayer/supervisor/migration.json"
     before = receipt.read_bytes()
-    assert json.loads(before)["phase"] == "rolled-back"
-    assert invoke(setup, runner)["phase"] == "complete"
-    backups = [p.read_bytes() for p in setup[1].glob(".archive-*/migration.json.*")]
+    assert json.loads(before)["phase"] == "rolled_back"
+    assert invoke(setup, runner)["phase"] == "migrated"
+    backups = [p.read_bytes() for p in setup[1].glob(".archive-*/*-migration.json")]
     assert before in backups
+
+
+def test_replay_recovers_only_declared_direct_publication_staging(setup):
+    runner = Launchctl()
+    journal = invoke(setup, runner)
+    control = setup[0] / ".local/share/brainlayer/supervisor"
+    paths = [control / "migration.json", control / "jobs.json", setup[1] / f"{NEW}.plist.loaded-keg"]
+    stages = []
+    for index, path in enumerate(paths):
+        stage = path.parent / (".migration-" + f"{index + 1:032x}")
+        os.link(path, stage)
+        stages.append(stage)
+    runner.calls.clear()
+    assert invoke(setup, runner) == journal
+    assert all(not path.exists() for path in stages)
+    assert all(path.stat().st_nlink == 1 for path in paths)
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+def test_replay_uses_live_phase_not_a_newer_named_backup(setup):
+    runner = Launchctl()
+    journal = invoke(setup, runner)
+    archive = Path(journal["archive"])
+    fake = journal | {"phase": "migrating", "keg": "foreign"}
+    path = archive / ("29991231T235959Z-" + "9" * 20 + "-" + "a" * 32 + "-migration.json")
+    path.write_text(json.dumps(fake))
+    path.chmod(0o600)
+    runner.calls.clear()
+    assert invoke(setup, runner) == journal
+    assert all(call[0] in {"print", "print-disabled"} for call in runner.calls)
+
+
+def test_post_bootout_second_observation_blocks_a_late_writer(setup):
+    from tests.test_migration_runtime import Clock
+
+    class Late(Launchctl):
+        after_bootout = 0
+        stopped_old = False
+
+        def __call__(self, argv):
+            result = super().__call__(argv)
+            if argv[1] == "bootout" and argv[2].endswith("/" + OLD):
+                self.stopped_old = True
+            elif self.stopped_old and argv[1] == "print" and argv[2].endswith("/" + OLD):
+                self.after_bootout += 1
+                if self.after_bootout == 2:
+                    result.returncode, result.stdout, result.stderr = 0, "pid = 4343", ""
+            return result
+
+    runner = Late()
+    with pytest.raises(RuntimeError, match="rollback incomplete.*writer still lives"):
+        invoke(setup, runner, alive=lambda pid: pid == 4343, clock=Clock())
+    assert not any(call[0] == "bootstrap" and Path(call[2]).stem == NEW for call in runner.calls)
+
+
+def test_recorded_owned_group_blocks_restart_after_daemon_pid_exit(setup):
+    from brainlayer.supervisor_guard import boot_time, start_time
+    from tests.test_migration_runtime import Clock
+
+    class FastClock(Clock):
+        def sleep(self, delay):
+            self.now += 100
+
+    runner = Launchctl()
+    invoke(setup, runner)
+    control = setup[0] / ".local/share/brainlayer/supervisor"
+    child = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], start_new_session=True)
+    try:
+        groups = {str(child.pid): {"pgid": child.pid, "start_time": start_time(child.pid)}}
+        path = control / "groups.json"
+        path.write_text(json.dumps({"boot_time": boot_time(), "groups": groups}))
+        path.chmod(0o600)
+        runner.calls.clear()
+        with pytest.raises(RuntimeError, match="rollback incomplete.*custody"):
+            invoke(setup, runner, "keg2", clock=FastClock())
+        assert child.poll() is None
+        assert not any(call[0] == "bootstrap" for call in runner.calls)
+    finally:
+        child.terminate()
+        child.wait(timeout=5)

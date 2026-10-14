@@ -20,6 +20,16 @@ from typer.testing import CliRunner
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _declared_migration_bridge(request, monkeypatch):
+    if "mcp_migration" in request.node.name or "migrates_retired" in request.node.name:
+        monkeypatch.setattr("brainlayer.setup._require_mcp_bridge", lambda command: None)
+        monkeypatch.setattr(
+            "brainlayer.setup.get_current_mcp_bridge_bin",
+            lambda: "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+        )
+
+
 def _plist_args(name: str) -> list[str]:
     plist_path = REPO_ROOT / "scripts" / "launchd" / f"com.brainlayer.{name}.plist"
     return plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
@@ -664,7 +674,7 @@ def test_setup_rejects_relative_db_override(tmp_path: Path, monkeypatch) -> None
         )
 
 
-def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: Path, monkeypatch) -> None:
+def test_setup_migrates_retired_brainlayer_mcp_to_bridge_idempotently(tmp_path: Path, monkeypatch) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     home = tmp_path / "home"
@@ -694,8 +704,7 @@ def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: 
     assert migrated["theme"] == "dark"
     assert migrated["mcpServers"]["unrelated"] == original["mcpServers"]["unrelated"]
     assert migrated["mcpServers"]["brainlayer"] == {
-        "command": "socat",
-        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+        "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
         "disabled": True,
         "env": {"BRAINLAYER_MCP_SOCKET": "/tmp/brainbar.sock"},
         "timeout": 30,
@@ -703,15 +712,14 @@ def test_setup_migrates_retired_brainlayer_mcp_to_socket_idempotently(tmp_path: 
     assert list((home / ".local" / "share" / "brainlayer" / "config-backups").glob(".claude.json.*.bak"))
 
 
-def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> None:
+def test_setup_mcp_migration_leaves_bridge_form_untouched(tmp_path: Path) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     config_path = tmp_path / ".claude.json"
     original = {
         "mcpServers": {
             "brainlayer": {
-                "command": "socat",
-                "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+                "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
             }
         }
     }
@@ -725,6 +733,7 @@ def test_setup_mcp_migration_leaves_socket_form_untouched(tmp_path: Path) -> Non
 def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failure(tmp_path: Path, monkeypatch) -> None:
     import brainlayer.setup as setup_helpers
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config_path = tmp_path / ".claude.json"
     original = {
         "mcpServers": {
@@ -749,7 +758,7 @@ def test_setup_mcp_migration_preserves_original_and_cleans_temp_on_replace_failu
     assert not (tmp_path / f".{config_path.name}.{os.getpid()}.tmp").exists()
 
 
-def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path) -> None:
+def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path, monkeypatch) -> None:
     from brainlayer.setup import migrate_legacy_mcp_configs
 
     target = tmp_path / "dotfiles" / "claude.json"
@@ -767,6 +776,7 @@ def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path
         + "\n",
         encoding="utf-8",
     )
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     config_path = tmp_path / ".claude.json"
     config_path.symlink_to(target)
 
@@ -775,8 +785,7 @@ def test_setup_mcp_migration_preserves_symlink_and_updates_target(tmp_path: Path
     assert changed.changed == (config_path,)
     assert config_path.is_symlink()
     assert json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["brainlayer"] == {
-        "command": "socat",
-        "args": ["STDIO", "UNIX-CONNECT:/tmp/brainbar.sock"],
+        "command": "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
     }
 
 
@@ -842,25 +851,6 @@ print(json.dumps({"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "te
     bridge.chmod(0o755)
 
     assert verify_mcp_transport(bridge_command=str(bridge), timeout_seconds=2) == 1
-
-
-def test_mcp_bridge_resolution_uses_installed_brainlayer_sibling_when_path_is_empty(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from brainlayer.setup import get_current_mcp_bridge_bin
-
-    bin_dir = tmp_path / "Cellar" / "brainlayer" / "1.5.3" / "libexec" / "bin"
-    bin_dir.mkdir(parents=True)
-    brainlayer_bin = bin_dir / "brainlayer"
-    bridge_bin = bin_dir / "brainlayer-mcp-stdio-bridge"
-    brainlayer_bin.write_text("#!/bin/sh\n", encoding="utf-8")
-    bridge_bin.write_text("#!/bin/sh\n", encoding="utf-8")
-    brainlayer_bin.chmod(0o755)
-    bridge_bin.chmod(0o755)
-    monkeypatch.setattr(sys, "argv", [str(brainlayer_bin), "setup"])
-    monkeypatch.setenv("PATH", "")
-
-    assert get_current_mcp_bridge_bin() == str(bridge_bin)
 
 
 def test_verify_mcp_transport_fails_loudly_when_bridge_has_no_tools(tmp_path: Path) -> None:
@@ -1009,17 +999,22 @@ def test_setup_command_can_migrate_and_verify_mcp_transport(tmp_path: Path, monk
     from brainlayer.cli import app
     from brainlayer.setup import McpMigrationReport
 
+    monkeypatch.setattr(
+        setup_helpers,
+        "get_current_mcp_bridge_bin",
+        lambda: "/opt/homebrew/opt/brainlayer/bin/brainlayer-mcp-stdio-bridge",
+    )
     migrated_path = tmp_path / ".claude.json"
     calls: list[str] = []
     monkeypatch.setattr(
         setup_helpers,
         "migrate_legacy_mcp_configs",
-        lambda: calls.append("migrate") or McpMigrationReport(changed=(migrated_path,)),
+        lambda **kwargs: calls.append("migrate") or McpMigrationReport(changed=(migrated_path,)),
     )
     monkeypatch.setattr(
         setup_helpers,
         "verify_mcp_transport",
-        lambda: calls.append("verify") or 17,
+        lambda **kwargs: calls.append("verify") or 17,
     )
 
     result = CliRunner().invoke(

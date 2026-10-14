@@ -18,11 +18,17 @@ enum BrainBarDaemonMain {
         server.onDatabaseReady = { _ in
             NSLog("[BrainBarDaemon] Database ready")
         }
+        let termination = BrainBarTerminationSignals {
+            server.stop() // Synchronizes cleanup onto the server's request queue.
+            uiWatchdog.stop()
+        }
         server.start()
         NSLog("[BrainBarDaemon] Started on %@", BrainBarServer.defaultSocketPath())
         withExtendedLifetime(server) {
             withExtendedLifetime(uiWatchdog) {
-                RunLoop.main.run()
+                withExtendedLifetime(termination) {
+                    RunLoop.main.run()
+                }
             }
         }
     }
