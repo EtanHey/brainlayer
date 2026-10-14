@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 SWIFT_GATE_CONDITION = "needs.changes.outputs.brain_bar == 'true'"
+SWIFT_TEST_WRAPPER = "python3 Tests/BrainBarTests/Scripts/run_swift_tests.py"
 
 
 def _workflow_path() -> Path:
@@ -45,7 +49,7 @@ def _is_macos_job(job: Mapping) -> bool:
 
 def _step_runs_command_in_brain_bar(step: Mapping, command: str) -> bool:
     run = str(step.get("run", ""))
-    if command not in run:
+    if command not in run and not (command == "swift test" and SWIFT_TEST_WRAPPER in run):
         return False
     working_directory = str(step.get("working-directory", ""))
     return working_directory == "brain-bar" or "cd brain-bar" in run
@@ -109,6 +113,30 @@ def test_macos_swift_job_builds_and_tests_brain_bar_package():
     swift_job = _find_swift_job(workflow)
 
     assert swift_job is not None, "CI must include a macOS Swift job that builds and tests brain-bar"
+
+
+@pytest.mark.parametrize("swift_exit,leak,expected", [(0, False, 0), (7, False, 7), (0, True, 1)])
+def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, swift_exit, leak, expected):
+    path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
+    spec = importlib.util.spec_from_file_location("swift_fixture_gate", path)
+    wrapper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(wrapper)
+    calls = []
+
+    def run(command, *, env):
+        root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
+        assert root.is_absolute() and root.is_dir()
+        assert env["TMPDIR"] == str(root) + "/"
+        assert list(root.glob("brainbar-*")) == []
+        calls.append(command)
+        if leak:
+            (root / "brainbar-unremoved-fixture").write_text("owned test fixture")
+        return SimpleNamespace(returncode=swift_exit)
+
+    monkeypatch.setattr(wrapper.subprocess, "run", run)
+    monkeypatch.setattr(wrapper.sys, "argv", [str(path), "--filter", "FixtureTest"])
+    assert wrapper.main() == expected
+    assert calls == [["swift", "test", "--filter", "FixtureTest"]]
 
 
 def test_swift_job_runs_only_for_brain_bar_changes():
