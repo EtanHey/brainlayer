@@ -81,6 +81,13 @@ def migrate(*, home, **options):
         return _migrate(home=home, **options)
 
 
+def revert(home, journal, domain, run, **options):
+    """Public installer API for the separately implemented post-success revert."""
+    from .launchd_revert import revert as restore
+
+    return restore(home, journal, domain, run, **options)
+
+
 def _migrate(
     *, home, templates, env_file, python, keg, domain, run, alive=pid_alive, verify=None, clock=time, retry=None
 ):

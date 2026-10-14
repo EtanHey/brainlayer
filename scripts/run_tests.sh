@@ -181,6 +181,32 @@ map_changed_files_to_pytests() {
     changed_files_seen=1
     mapped=0
     case "$changed" in
+      src/brainlayer/launchd_consolidation.py|src/brainlayer/launchd_revert.py|src/brainlayer/migration_journal.py|src/brainlayer/migration_runtime.py|src/brainlayer/migration_custody.py)
+        # Either direction can break durable recovery. Require BOTH complete sweeps;
+        # a renamed/missing sibling must fall back to the full suite, never narrow.
+        migration_sweeps=(
+          "$TEST_ROOT/test_launchd_consolidation_recovery.py"
+          "$TEST_ROOT/test_launchd_revert_crash.py"
+        )
+        migration_sweeps_complete=1
+        for test_path in "${migration_sweeps[@]}"; do
+          if [ ! -f "$test_path" ]; then
+            migration_sweeps_complete=0
+            break
+          fi
+        done
+        if [ "$migration_sweeps_complete" -eq 1 ]; then
+          for test_path in "${migration_sweeps[@]}"; do
+            append_unique "$test_path"
+          done
+          # Retain the module's existing unit owner as well as the cross-module sweeps.
+          test_path="$TEST_ROOT/test_$(basename "$changed" .py).py"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+          fi
+          mapped=1
+        fi
+        ;;
       src/brainlayer/watcher.py)
         test_path="$TEST_ROOT/test_jsonl_watcher.py"
         if [ -f "$test_path" ]; then

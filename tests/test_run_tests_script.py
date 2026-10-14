@@ -465,6 +465,43 @@ def test_prepush_cache_does_not_skip_after_failure(tmp_path: Path) -> None:
     assert len(pytest_log.read_text().splitlines()) >= 2
 
 
+@pytest.mark.parametrize(
+    "module",
+    ("launchd_consolidation", "launchd_revert", "migration_journal", "migration_runtime", "migration_custody"),
+)
+@pytest.mark.parametrize("missing", (None, "test_launchd_consolidation_recovery.py", "test_launchd_revert_crash.py"))
+def test_changed_only_transaction_sources_require_both_complete_sweeps(tmp_path: Path, module, missing) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    suites = ("test_launchd_consolidation_recovery.py", "test_launchd_revert_crash.py")
+    for name in (*suites, f"test_{module}.py", "test_think_recall_integration.py"):
+        if name != missing:
+            (test_root / name).write_text("test placeholder\n")
+    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
+    env = _script_env()
+    env.update(
+        PATH=f"{tmp_path / 'bin'}:{env['PATH']}",
+        BRAINLAYER_TEST_ROOT=str(test_root),
+        BRAINLAYER_USE_UV="0",
+        BRAINLAYER_PREPUSH="1",
+        BRAINLAYER_PREPUSH_SCOPE="changed-only",
+        BRAINLAYER_CHANGED_FILES=f"src/brainlayer/{module}.py",
+        PYTEST_LOG=str(pytest_log),
+        BUN_LOG=str(bun_log),
+    )
+    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    unit = pytest_log.read_text().splitlines()[0]
+    assert "crash_sweep" not in unit  # The local marker expression must retain the sweeps.
+    if missing:
+        assert "falling back to full pytest unit suite" in result.stdout
+        assert f"{test_root}/ -v" in unit
+    else:
+        assert all(str(test_root / name) in unit for name in suites)
+        assert str(test_root / f"test_{module}.py") in unit
+        assert f"{test_root}/ -v" not in unit
+
+
 def test_changed_only_scope_maps_changed_source_to_targeted_tests(tmp_path: Path) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
