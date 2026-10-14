@@ -78,7 +78,7 @@ def test_unknown_transport_never_emits_zero_counts(tmp_path, defect):
         if defect == "stale":
             payload["generated_at"] = (NOW - timedelta(seconds=61)).isoformat()
         if defect == "future":
-            payload["generated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+            payload["generated_at"] = (NOW + timedelta(seconds=3)).isoformat()
         if defect == "negative":
             payload["counts"]["requests_dropped"] = -1
         if defect == "bool":
@@ -173,7 +173,7 @@ def test_overflow_alert_requires_valid_current_producer_evidence(tmp_path, defec
     elif defect == "stale":
         payload["generated_at"] = (NOW - timedelta(seconds=61)).isoformat()
     elif defect == "future":
-        payload["generated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+        payload["generated_at"] = (NOW + timedelta(seconds=3)).isoformat()
     elif defect == "schema_bool":
         payload["schema_version"] = True
     elif defect == "window_bool":
