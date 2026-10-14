@@ -81,7 +81,8 @@ class InputRecorder:
         if in_section_inputs:
             self.section_inputs.append(item)
         return item
-    def file_snapshot(self, path: Path, *, status: str, metadata: Any = None, data: bytes | None = None) -> dict[str, Any]:
+    def file_snapshot(self, path: Path, *, status: str, metadata: Any = None, data: bytes | None = None,
+                      observed_at: datetime | None = None, future_skew_seconds: float = 0) -> dict[str, Any]:
         """Record an already-opened file without reopening or following its final link."""
         absolute = path.expanduser().parent.resolve() / path.name
         try:
@@ -89,7 +90,7 @@ class InputRecorder:
         except ValueError:
             displayed = str(absolute)
         self.trace.append(displayed)
-        if status == "read" and metadata is not None and datetime.fromtimestamp(metadata.st_mtime, UTC) > self.now:
+        if status == "read" and metadata is not None and datetime.fromtimestamp(metadata.st_mtime, UTC) > (observed_at or self.now) + timedelta(seconds=future_skew_seconds):
             status = "future"
         item = _input(displayed, status, _iso_utc(datetime.fromtimestamp(metadata.st_mtime, UTC)) if metadata else None,
                       len(data) if data is not None else None,
@@ -257,7 +258,8 @@ def _build_document(*, env: Mapping[str, str], now: datetime, recorder: InputRec
         connection.close()
     try:
         from .observability_transport import build_transport_section, report_transport_alert
-        transport = build_transport_section(env=env, now=now, record_input=recorder)
+        # An explicit fixture clock stays frozen; live transport is sampled after its FD read.
+        transport = build_transport_section(env=env, now=now if env.get("BRAINLAYER_OBSERVABILITY_NOW") else None, record_input=recorder)
         if emit_alerts:
             report_transport_alert(transport, env=env)
     except Exception as exc:

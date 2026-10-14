@@ -50,7 +50,7 @@ def test_unknown_historical_evidence_never_clears_an_incident(tmp_path, defect):
     if defect == "foreign":
         old["db_path"] = str(tmp_path / "foreign.db")
     if defect == "future":
-        old["generated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+        old["generated_at"] = (NOW + timedelta(seconds=3)).isoformat()
     if defect == "negative":
         old["counts"]["requests_dropped"] = -1
     if defect == "bool":

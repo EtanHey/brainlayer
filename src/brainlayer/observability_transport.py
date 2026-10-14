@@ -28,6 +28,7 @@ COUNTS = (
 )
 IDENTITY_REASON = "no stable client identity on the socket (fd reuse; proxy pid)"
 WINDOW_SECONDS = 900
+FUTURE_SKEW_SECONDS = 2  # Bound wall-clock skew/whole-second producer timestamps; never waive staleness.
 MAXIMUM_BASELINE_AGE_SECONDS = 300  # Five grace periods, including KeepAlive relaunch.
 DISCARD_REASONS = (
     "baseline from a previous boot; reconnect deficit not measured",
@@ -101,7 +102,7 @@ def _frame(data: dict, *, db: Path, now: datetime, historical: bool = False) -> 
         raise ValueError("receipt belongs to a different database")
     generated, started = _time(data["generated_at"]), _time(data["producer_started_at"])
     age = (now - generated).total_seconds()
-    if started > generated or age < 0 or (not historical and age > 60):
+    if started > generated or age < -FUTURE_SKEW_SECONDS or (not historical and age > 60):
         raise ValueError("transport receipt is stale, future, or has invalid producer timestamps")
     if (
         type(data.get("window_seconds")) is not int
@@ -133,8 +134,8 @@ def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> d
             "previous socket recovery evidence unreadable: "
             + str(frame.get("reason", "") if isinstance(frame, dict) else "")
         )
-    if Path(frame["db_path"]).resolve() != db or not 0 <= (now - generated).total_seconds() <= 60:
-        raise ValueError("foreign or stale socket recovery evidence")
+    if Path(frame["db_path"]).resolve() != db or not -FUTURE_SKEW_SECONDS <= (now - generated).total_seconds() <= 60:
+        raise ValueError("foreign, stale, or future socket recovery evidence")
     severed = _time(frame["severed_at"])
     keys = (
         "minimum_connection_age_seconds",
@@ -168,7 +169,9 @@ def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> d
     return {k: frame[k] for k in keys}
 
 
-def build_transport_section(*, env: Mapping[str, str], now: datetime, record_input: InputRecorder) -> dict[str, Any]:
+def build_transport_section(
+    *, env: Mapping[str, str], now: datetime | None = None, record_input: InputRecorder
+) -> dict[str, Any]:
     raw_db = Path(env["BRAINLAYER_DB"]).expanduser() if env.get("BRAINLAYER_DB") else get_db_path()
     db = raw_db.resolve()
     path = Path(
@@ -177,6 +180,7 @@ def build_transport_section(*, env: Mapping[str, str], now: datetime, record_inp
     failures = (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError)
     try:
         raw, metadata = _read_receipt(path)
+        now = datetime.now(UTC) if now is None else now  # Capture immediately after the secure FD snapshot.
         data = json.loads(raw)
         if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
             raise ValueError("unsupported transport receipt")
@@ -194,7 +198,9 @@ def build_transport_section(*, env: Mapping[str, str], now: datetime, record_inp
                 ],
             }
         )
-    item = record_input.file_snapshot(path, status="read", metadata=metadata, data=raw)
+    item = record_input.file_snapshot(
+        path, status="read", metadata=metadata, data=raw, observed_at=now, future_skew_seconds=FUTURE_SKEW_SECONDS
+    )
     reconnect = None
 
     def unknown(reason: str, incident: dict | None = None, uncertain: bool = False) -> TransportSection:
@@ -211,7 +217,7 @@ def build_transport_section(*, env: Mapping[str, str], now: datetime, record_inp
         try:
             generated, started = _time(data["generated_at"]), _time(data["producer_started_at"])
             age = (now - generated).total_seconds()
-            if started > generated or not 0 <= age <= 60:
+            if started > generated or not -FUTURE_SKEW_SECONDS <= age <= 60:
                 raise ValueError("invalid overflow producer timestamps")
             if type(data.get("window_seconds")) is not int or data["window_seconds"] != WINDOW_SECONDS:
                 raise ValueError("invalid overflow observation window")
