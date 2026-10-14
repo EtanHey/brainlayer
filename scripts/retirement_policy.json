@@ -360,6 +360,16 @@
         "target": "self.request"
       }
     },
+    "173e9620a1d9550317249f865995fc7d46ed3819b212f22d00fb5005907734e9": {
+      "non_cloud_purpose": "Local launchctl argv supplied by the checked launchd migration/revert runtime; owned OS child is settled/reaped before recovery, or a CompletedProcess result container. No cloud/model subprocess or network sender.",
+      "site": {
+        "call_sha256": "87f1a663a74f3a171a3a95512c6099b90206a4432bbfeb510e1f9ed45e986911",
+        "kind": "child_process",
+        "owner": "<module>.command",
+        "path": "src/brainlayer/launchd_install.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "17830c2623b8b3dcb141cbdb24652abe46d89ba861c8aeacf9c2302be9abe990": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -1448,6 +1458,16 @@
         "target": "subprocess.run"
       }
     },
+    "4cb5e3b2d974e1c6603550f713aeb475fc6c76f4984f42475bc72cf33d3b7ac6": {
+      "non_cloud_purpose": "Local launchctl argv supplied by the checked launchd migration/revert runtime; owned OS child is settled/reaped before recovery, or a CompletedProcess result container. No cloud/model subprocess or network sender.",
+      "site": {
+        "call_sha256": "b046c8d7ddc102779d84f50d69427e3db20af8dc1f82066eb38bd5a8cf765a11",
+        "kind": "transport_call",
+        "owner": "<module>.command",
+        "path": "src/brainlayer/launchd_install.py",
+        "target": "subprocess.CompletedProcess"
+      }
+    },
     "4cfbbba044e834cd9083cbfff425d1a75e5e7edb974d52f5a83d54417641cc3c": {
       "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
       "site": {
@@ -2154,6 +2174,16 @@
         "body_sha256": "3f0f023889865000cfd6009c5b84f2eaeb7c36c8c8eb9f8dbcc401a57e0e0d91",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBarDaemon/HybridSearchHelperClient.swift"
+      }
+    },
+    "6ceb49a82a237e293bc1a3559fc6fae4ac19058408107d7693150962e2c8e420": {
+      "non_cloud_purpose": "Standard-library subprocess binding for local launchctl custody and fixed bash/plutil syntax preflight; no cloud/model client or network sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/launchd_install.py",
+        "target": "import subprocess"
       }
     },
     "6d59c1ba939a8c2949a0a4bef600091b2b9bbfa57d9b9cafc6a1b362f4194e3e": {
@@ -4070,6 +4100,16 @@
         "target": "subprocess.CompletedProcess"
       }
     },
+    "c38b0e75ee5d77871cf379320bc3d4d631e2ffc8adc011c2eacf60b2d1691a17": {
+      "non_cloud_purpose": "Local fixed-argv preflight only: /bin/bash -n parses helper bytes or /usr/bin/plutil -lint -- - parses rendered plist bytes; no helper execution, cloud/model process or network sender.",
+      "site": {
+        "call_sha256": "d8d7d710efd55046f3f9752b4899bd197de2136dd7300770973356af73e2c5d7",
+        "kind": "child_process",
+        "owner": "<module>._install",
+        "path": "src/brainlayer/launchd_install.py",
+        "target": "subprocess.run"
+      }
+    },
     "c3f31975fdedf30b5dd9253999a17e722206e3420e19e1403512910dc958d366": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/mcp/_shared.py <module>",
       "site": {
@@ -4774,6 +4814,16 @@
         "owner": "<module>.boot_time",
         "path": "src/brainlayer/supervisor_guard.py",
         "target": "ctypes.c_long"
+      }
+    },
+    "ed52536f264143b3bd634685719e06e0654bcc20dfe923522b5a13d783a3265f": {
+      "non_cloud_purpose": "Local fixed-argv preflight only: /bin/bash -n parses helper bytes or /usr/bin/plutil -lint -- - parses rendered plist bytes; no helper execution, cloud/model process or network sender.",
+      "site": {
+        "call_sha256": "be18d6f0689bc17c3d450fde79c310695321a8a203266888e1c17028b3ec0e8a",
+        "kind": "child_process",
+        "owner": "<module>._install",
+        "path": "src/brainlayer/launchd_install.py",
+        "target": "subprocess.run"
       }
     },
     "ed6b68f5900e0814dfc47d89e1b33fb9ebaa5bf0b7aa0721d78f9476f6f25c23": {

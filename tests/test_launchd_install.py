@@ -293,21 +293,49 @@ def test_legacy_install_blocks_concurrent_consolidation_during_preflight(tmp_pat
 
 
 @pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
-def test_revert_interrupt_reports_recovery_without_traceback(inputs, monkeypatch, capsys, interruption):
+@pytest.mark.parametrize("action", ["consolidate", "consolidation-rollback"])
+@pytest.mark.parametrize("boundary", ["before_lock", "before_handoff", "mutating"])
+def test_interrupt_reports_truthful_recovery(inputs, monkeypatch, capsys, interruption, action, boundary):
+    from contextlib import contextmanager
+
     from brainlayer import launchd_consolidation, launchd_install
 
+    @contextmanager
+    def lock(home):
+        if boundary == "before_lock":
+            raise interruption()
+        yield
+
     def interrupted(**kw):
+        if boundary == "mutating":
+            receipt = inputs["home"] / ".local/share/brainlayer/supervisor/migration.json"
+            receipt.parent.mkdir(mode=0o700, parents=True)
+            receipt.write_text(json.dumps({"phase": "reverting" if action.endswith("rollback") else "migrating"}))
         raise interruption()
 
-    monkeypatch.setattr(launchd_consolidation, "revert", interrupted, raising=False)
+    monkeypatch.setattr(launchd_install, "installer_lock", lock)
+    monkeypatch.setattr(launchd_install, "_install", interrupted)
+    monkeypatch.setattr(launchd_consolidation, "revert", interrupted)
+    args = [action, "--home", str(inputs["home"]), "--domain", DOMAIN]
+    if action == "consolidate":
+        args += [
+            "--templates",
+            str(inputs["templates"]),
+            "--env-file",
+            str(inputs["env_file"]),
+            "--python",
+            str(inputs["python"]),
+            "--keg",
+            inputs["keg"],
+        ]
     with pytest.raises(SystemExit) as stopped:
-        launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+        launchd_install.main(args)
     assert stopped.value.code != 0
     out = capsys.readouterr()
-    assert (
-        out.err.strip()
-        == "revert interrupted; supervisor and legacy jobs are stopped; re-run consolidation-rollback to finish"
-    )
+    if boundary == "before_lock":
+        assert out.err.strip() == f"{action} interrupted before any changes; nothing was stopped; re-run {action}"
+    else:
+        assert "to finish" in out.err and "jobs are stopped" not in out.err
     assert not out.out and "Traceback" not in out.err
 
 

@@ -132,6 +132,13 @@ if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
             break
         fi
     done
+    case "${1:-all}" in
+        consolidate|consolidation-rollback)
+            if [ -n "${BRAINLAYER_HOOK_PYTHON:-}" ]; then
+                PYTHON_BIN="$BRAINLAYER_HOOK_PYTHON"
+            fi
+            ;;
+    esac
     # Fail closed. Falling back to PATH here would re-open the exact hole this change closes: a keg
     # is present, so PATH's answer (framework python, a checkout .venv) is the wrong one by
     # definition, and baking it into a plist is what left eight M4 jobs unversioned. An explicit
@@ -238,6 +245,15 @@ case "$BRAINLAYER_INSTALL_ACTION" in
     *)
         launchd_install_usage
         exit 1
+        ;;
+esac
+
+case "$BRAINLAYER_INSTALL_ACTION" in
+    consolidate|consolidation-rollback)
+        if [ -z "$BRAINLAYER_KEG" ]; then
+            echo "ERROR: consolidation requires an identified keg for signature verification" >&2
+            exit 1
+        fi
         ;;
 esac
 

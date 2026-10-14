@@ -111,37 +111,45 @@ def main(argv=None):
     parser.add_argument("--python", type=Path)
     parser.add_argument("--keg")
     args = parser.parse_args(argv)
-    if args.action == "consolidation-rollback":
-        from .launchd_consolidation import revert  # PR-C; never substitute a legacy reinstall.
+    if args.action == "consolidate" and any(
+        value is None for value in (args.templates, args.env_file, args.python, args.keg)
+    ):
+        parser.error("consolidate requires --templates, --env-file, --python and --keg")
+    locked = False
+    try:
+        with installer_lock(args.home):
+            locked = True
+            if args.action == "consolidation-rollback":
+                from .launchd_consolidation import revert
 
-        try:
-            with installer_lock(args.home):
                 revert(
                     home=args.home,
                     journal=args.home / ".local/share/brainlayer/supervisor/migration.json",
                     domain=args.domain,
                     run=command,
                 )
-        except (KeyboardInterrupt, SystemExit):
-            print(
-                "revert interrupted; supervisor and legacy jobs are stopped; re-run consolidation-rollback to finish",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from None
-    else:
-        if any(value is None for value in (args.templates, args.env_file, args.python, args.keg)):
-            parser.error("consolidate requires --templates, --env-file, --python and --keg")
-        outcome = install(
-            home=args.home,
-            templates=args.templates,
-            env_file=args.env_file,
-            python=args.python,
-            keg=args.keg,
-            domain=args.domain,
-        )
+            else:
+                outcome = _install(
+                    home=args.home,
+                    templates=args.templates,
+                    env_file=args.env_file,
+                    python=args.python,
+                    keg=args.keg,
+                    domain=args.domain,
+                )
+    except (KeyboardInterrupt, SystemExit):
+        if not locked:
+            message = f"{args.action} interrupted before any changes; nothing was stopped; re-run {args.action}"
+        elif args.action == "consolidation-rollback":
+            message = "revert interrupted; re-run consolidation-rollback to finish"
+        else:
+            message = "consolidate interrupted; re-run consolidate to finish or consolidation-rollback to back out"
+        print(message, file=sys.stderr)
+        raise SystemExit(1) from None
+    if args.action == "consolidate":
         print(f"{args.action}: {outcome['phase']}; restart fallback={outcome.get('restart_fallback')}")
-        return
-    print(f"{args.action}: verified transaction finished")
+    else:
+        print("consolidation-rollback: verified transaction finished")
 
 
 if __name__ == "__main__":
