@@ -29,6 +29,10 @@ COUNTS = (
 IDENTITY_REASON = "no stable client identity on the socket (fd reuse; proxy pid)"
 WINDOW_SECONDS = 900
 MAXIMUM_BASELINE_AGE_SECONDS = 300  # Five grace periods, including KeepAlive relaunch.
+DISCARD_REASONS = (
+    "baseline from a previous boot; reconnect deficit not measured",
+    "baseline expired; reconnect deficit not measured",
+)
 
 
 def _read_receipt(path: Path) -> tuple[bytes, os.stat_result]:
@@ -122,6 +126,8 @@ def _frame(data: dict, *, db: Path, now: datetime, historical: bool = False) -> 
 
 def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> dict:
     generated, started = _time(parent["generated_at"]), _time(parent["producer_started_at"])
+    if isinstance(frame, dict) and frame.get("state") == "unmeasurable" and frame.get("reason") in DISCARD_REASONS:
+        return {"state": "unmeasurable", "reason": frame["reason"]}
     if not isinstance(frame, dict) or frame.get("state") != "measured" or frame.get("reason") != "":
         raise ValueError(
             "previous socket recovery evidence unreadable: "
@@ -130,15 +136,6 @@ def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> d
     if Path(frame["db_path"]).resolve() != db or not 0 <= (now - generated).total_seconds() <= 60:
         raise ValueError("foreign or stale socket recovery evidence")
     severed = _time(frame["severed_at"])
-    from .supervisor_guard import boot_time
-
-    stamp = frame.get("boot_time")
-    if not isinstance(stamp, str) or not stamp:
-        raise ValueError("socket recovery boot identity unreadable")
-    if stamp != boot_time():
-        raise ValueError("baseline from a previous boot; reconnect deficit not measured")
-    if (now - severed).total_seconds() > MAXIMUM_BASELINE_AGE_SECONDS:
-        raise ValueError("baseline expired; reconnect deficit not measured")
     keys = (
         "minimum_connection_age_seconds",
         "grace_seconds",
@@ -159,6 +156,15 @@ def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> d
         or frame[keys[2]] > (generated - started).total_seconds() + 1
     ):
         raise ValueError("invalid socket recovery observation window")
+    from .supervisor_guard import boot_time
+
+    stamp = frame.get("boot_time")
+    if not isinstance(stamp, str) or not stamp:
+        raise ValueError("socket recovery boot identity unreadable")
+    if stamp != boot_time():
+        return {"state": "unmeasurable", "reason": DISCARD_REASONS[0]}
+    if (now - severed).total_seconds() > MAXIMUM_BASELINE_AGE_SECONDS:
+        return {"state": "unmeasurable", "reason": DISCARD_REASONS[1]}
     return {k: frame[k] for k in keys}
 
 
@@ -270,6 +276,8 @@ def report_transport_alert(section: dict[str, Any], *, env: Mapping[str, str]) -
         return
     incident = getattr(section, "incident", None)
     reconnect = getattr(section, "reconnect", None)
+    if reconnect and reconnect.get("state") == "unmeasurable":
+        reconnect = None  # Intentional discard cannot suppress independent request evidence or clearing.
     if reconnect and reconnect["observed_seconds"] >= 60:
         deficit = reconnect["severed_persistent"] - reconnect["recovered_persistent"]
         # Allow two ordinary session departures; three sustained missing sockets

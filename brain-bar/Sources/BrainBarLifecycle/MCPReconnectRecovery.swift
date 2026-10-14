@@ -56,6 +56,10 @@ final class MCPReconnectRecovery {
     func publish(db: String, wall: Date, elapsed: Double, live: Int, stopped: Bool) -> Any {
         if let severedAt, wall.timeIntervalSince(severedAt) > Self.maximumBaselineAgeSeconds { discard("baseline expired; reconnect deficit not measured") }
         if discarded, stopped { discarded = false; reason = "" }
+        if discarded {
+            defer { discarded = false; reason = "" }
+            return ["state": "unmeasurable", "reason": reason]
+        }
         if unknown { return ["state": "unmeasurable", "reason": reason] }
         let observed = max(0, min(60, Int(elapsed)))
         // The tripwire allows two ordinary departures; don't accumulate them.

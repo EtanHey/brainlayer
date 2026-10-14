@@ -95,7 +95,7 @@ final class MCPReconnectRecoveryTests: XCTestCase {
         }
     }
     func testPreviousBootAndExpiredBaselineAreNonnumericAtExactBoundary() throws {
-        for (bootChanged, gap, measured) in [(true, 60.0, false), (false, 172800.0, false), (false, 300.0, true), (false, 301.0, false)] {
+        for (bootChanged, gap, measured) in [(true, 1.0, false), (false, 172800.0, false), (false, 300.0, true), (false, 301.0, false)] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: root) }
             let path = root.appendingPathComponent("transport.json"), db = root.appendingPathComponent("private.db").path
@@ -111,12 +111,30 @@ final class MCPReconnectRecoveryTests: XCTestCase {
             let next = MCPTransportHealth(path: path.path, now: { start.addingTimeInterval(gap + elapsed) }, uptime: { elapsed })
             next.publish(dbPath: db, inFlight: 0)
             raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
-            XCTAssertEqual(raw["state"] as? String, measured ? "measured" : "unmeasurable")
-            if !measured { XCTAssertNil(raw["counts"]); XCTAssertNil((raw["reconnect"] as? [String: Any])?["severed_persistent"]) }
+            XCTAssertEqual(raw["state"] as? String, "measured")
+            XCTAssertNotNil(raw["counts"])
+            if !measured { XCTAssertNil((raw["reconnect"] as? [String: Any])?["severed_persistent"]) }
             if measured {
                 elapsed = 1; next.publish(dbPath: db, inFlight: 0)
                 raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
-                XCTAssertNil(raw["counts"], "The consumer and running producer must expire the same boundary")
+                XCTAssertNotNil(raw["counts"], "Age-out cannot blind independent transport counters")
+                XCTAssertNil((raw["reconnect"] as? [String: Any])?["severed_persistent"])
+            }
+            elapsed = 86400; next.publish(dbPath: db, inFlight: 1)
+            raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            XCTAssertEqual(raw["state"] as? String, "measured"); XCTAssertNotNil(raw["counts"])
+            XCTAssertTrue(raw["reconnect"] is NSNull, "Intentional discard is published once")
+            next.record(.requestsDropped, count: 3); next.publish(dbPath: db, inFlight: 0)
+            raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            XCTAssertEqual(((raw["incident"] as? [String: Any])?["counts"] as? [String: Int])?["requests_dropped"], 3)
+            elapsed += 900; next.publish(dbPath: db, inFlight: 0)
+            raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            XCTAssertNotNil(raw["counts"]); XCTAssertTrue(raw["incident"] is NSNull)
+            if bootChanged {
+                for _ in 0...10_000 { next.record(.requestsReceived) }
+                next.publish(dbPath: db, inFlight: 0)
+                raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+                XCTAssertEqual(raw["reason"] as? String, "transport event buffer overflow")
             }
             let fresh = MCPTransportHealth(path: path.path, now: { start.addingTimeInterval(gap + elapsed) })
             fresh.publish(dbPath: db, inFlight: 0, stopped: true, persistentConnections: 12)

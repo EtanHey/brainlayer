@@ -63,10 +63,10 @@ def receipt(tmp_path, *, recovered=0, elapsed=60):
     return value, path, alerts, env
 
 
-def consume(value, path, env):
+def consume(value, path, env, *, now=NOW):
     path.write_text(json.dumps(value))
     path.chmod(0o600)
-    section = build_transport_section(env=env, now=NOW, record_input=InputRecorder(root=None, trace_path=None, now=NOW))
+    section = build_transport_section(env=env, now=now, record_input=InputRecorder(root=None, trace_path=None, now=now))
     report_transport_alert(section, env=env)
     return section
 
@@ -168,7 +168,31 @@ def test_boot_and_age_bound_prevent_false_reconnect_alert(tmp_path, boot, age, m
     value, path, alerts, env = receipt(tmp_path)
     value["reconnect"].update(boot_time=boot, severed_at=(NOW - timedelta(seconds=age)).isoformat())
     section = consume(value, path, env)
-    assert (section["state"] == "measured") == measured
+    assert (section["state"] == "measured") == isinstance(boot, str)
     assert (alerts.exists() and "did not recover" in alerts.read_text()) == measured
     if not measured:
-        assert "counts" not in section and section["reason"]
+        if isinstance(boot, str):
+            assert section["counts"]["requests_dropped"] == 0
+            assert section.reconnect["state"] == "unmeasurable" and "severed_persistent" not in section.reconnect
+        else:
+            assert "counts" not in section and section["reason"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "baseline from a previous boot; reconnect deficit not measured",
+        "baseline expired; reconnect deficit not measured",
+    ],
+)
+def test_discard_preserves_counters_drop_alert_and_clean_window(tmp_path, reason):
+    value, path, alerts, env = receipt(tmp_path)
+    value["reconnect"] = {"state": "unmeasurable", "reason": reason}
+    value["producer_started_at"] = NOW.isoformat()
+    for elapsed, drops in [(1, 0), (86400, 3), (87300, 0)]:
+        wall = NOW + timedelta(seconds=elapsed)
+        value.update(generated_at=wall.isoformat(), observed_seconds=min(elapsed, 900))
+        value["counts"]["requests_dropped"] = drops
+        section = consume(value, path, env, now=wall)
+        assert section["state"] == "measured" and section["counts"]["requests_dropped"] == drops
+        assert (alerts.exists() and "mcp-transport" in alerts.read_text()) == bool(drops)
