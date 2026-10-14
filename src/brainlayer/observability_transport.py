@@ -25,6 +25,12 @@ IDENTITY_REASON = "no stable client identity on the socket (fd reuse; proxy pid)
 WINDOW_SECONDS = 900
 
 
+class TransportSection(dict[str, Any]):
+    """Validated overflow evidence stays internal, outside the numeric JSON contract."""
+
+    overflow = False
+
+
 def build_transport_section(
     *, env: Mapping[str, str], now: datetime, record_input: Callable[..., dict]
 ) -> dict[str, Any]:
@@ -40,8 +46,6 @@ def build_transport_section(
         data = json.loads(path.read_text())
         if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
             raise ValueError("unsupported transport receipt")
-        if data.get("state") != "measured" or data.get("reason") != "":
-            raise ValueError("BrainBar transport evidence unavailable: " + str(data.get("reason") or "unknown state"))
         if Path(data["db_path"]).expanduser().resolve() != db:
             raise ValueError("receipt belongs to a different database")
         generated = datetime.fromisoformat(data["generated_at"].replace("Z", "+00:00"))
@@ -51,6 +55,15 @@ def build_transport_section(
         age = (now - generated.astimezone(UTC)).total_seconds()
         if not 0 <= age <= 60:
             raise ValueError("transport receipt is stale or from the future")
+        if type(data.get("window_seconds")) is not int or data["window_seconds"] != WINDOW_SECONDS:
+            raise ValueError("invalid transport observation window")
+        if data.get("state") == "unmeasurable" and data.get("reason") == "transport event buffer overflow":
+            item = record_input(path, status="read")
+            result = TransportSection({"state": "unmeasurable", "reason": data["reason"], "inputs": [item]})
+            result.overflow = item["status"] == "read"
+            return result
+        if data.get("state") != "measured" or data.get("reason") != "":
+            raise ValueError("BrainBar transport evidence unavailable: " + str(data.get("reason") or "unknown state"))
         if (
             data.get("window_seconds") != WINDOW_SECONDS
             or type(data["observed_seconds"]) is not int
@@ -94,6 +107,16 @@ def build_transport_section(
 
 def report_transport_alert(section: dict[str, Any], *, env: Mapping[str, str]) -> None:
     """Unknown or partial recovery must not clear a previously observed incident."""
+    if getattr(section, "overflow", False):
+        from .job_alerts import alert_path, report
+
+        db = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()
+        report(
+            "mcp-transport",
+            "BrainBar MCP transport: event buffer overflow; storm counts unmeasurable",
+            path=alert_path(env=env, db_path=db),
+        )
+        return
     if section["state"] != "measured":
         return
     counts = section["counts"]

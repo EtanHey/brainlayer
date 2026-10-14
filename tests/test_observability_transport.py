@@ -155,3 +155,40 @@ def test_default_receipt_path_matches_native_db_symlink_parent(tmp_path):
     )
     assert section["state"] == "measured"
     assert section["inputs"][0]["path"] == str(path)
+
+
+@pytest.mark.parametrize(
+    "defect", [None, "foreign", "stale", "future", "schema_bool", "window_bool", "timestamp", "state"]
+)
+def test_overflow_alert_requires_valid_current_producer_evidence(tmp_path, defect):
+    from brainlayer.observability_transport import report_transport_alert
+
+    path, db, payload = sample(tmp_path)
+    payload.update(state="unmeasurable", reason="transport event buffer overflow")
+    for key in ("counts", "observed_seconds", "in_flight_requests"):
+        del payload[key]
+    if defect == "foreign":
+        payload["db_path"] = str(tmp_path / "other.db")
+    elif defect == "stale":
+        payload["generated_at"] = (NOW - timedelta(seconds=61)).isoformat()
+    elif defect == "future":
+        payload["generated_at"] = (NOW + timedelta(seconds=1)).isoformat()
+    elif defect == "schema_bool":
+        payload["schema_version"] = True
+    elif defect == "window_bool":
+        payload["window_seconds"] = True
+    elif defect == "timestamp":
+        payload["producer_started_at"] = "invalid"
+    elif defect == "state":
+        payload["state"] = "measured"
+    path.write_text(json.dumps(payload))
+    os.utime(path, (NOW.timestamp(), NOW.timestamp()))
+    section = read(path, db)
+    assert section["state"] == "unmeasurable" and "counts" not in section
+    assert "overflow" not in json.loads(json.dumps(section))
+    alert = tmp_path / "alerts.json"
+    report_transport_alert(section, env={"BRAINLAYER_DB": str(db), "BRAINLAYER_JOB_ALERT_PATH": str(alert)})
+    if defect is None:
+        assert "buffer overflow" in json.loads(alert.read_text())["mcp-transport"]
+    else:
+        assert not alert.exists()
