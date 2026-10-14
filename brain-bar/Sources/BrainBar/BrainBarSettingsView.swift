@@ -11,6 +11,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published var jobAlertLogNote: BrainBarJobAlertLogNote?
     /// The Backups page's Technical details disclosure (E1); closed by default.
     @Published var backupDetailsExpanded = false
+    @Published private(set) var copiedTechnicalDetailID: String?
     @Published var isRefreshingLaunchdStatus = false
     /// A refresh retains its last completed sample; only a first read presents Checking.
     @Published private(set) var hasCompletedLaunchdSample: Bool
@@ -76,6 +77,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
     private var observabilityTask: Task<Void, Never>?
     private var embeddingSampleGeneration: UInt64 = 0
     private var launchdSampleGeneration: UInt64 = 0
+    private var copyFeedbackGeneration: UInt64 = 0
+    private let copyFeedbackScheduler: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void
 
     init(
         workspace: any BrainBarWorkspaceActing,
@@ -99,7 +102,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         watcherHealthRead: @escaping @Sendable (URL) -> WatcherHealthFileRead = { WatcherHealthReader.read(url: $0) },
         backupSources: BrainBarBackupSources? = nil,
         initialBackupSchedules: [BrainBarBackupScheduleRow] = [],
-        initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread
+        initialMaintenanceEvidence: BrainLayerMaintenanceEvidence = .unread,
+        copyFeedbackScheduler: @escaping @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+        }
     ) {
         self.store = store
         self.launchdStatusProvider = launchdStatusProvider
@@ -115,6 +121,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         watcherHealth = initialWatcherHealth
         self.backupSources = backupSources
         self.workspace = workspace
+        self.copyFeedbackScheduler = copyFeedbackScheduler
         backupSchedules = initialBackupSchedules
         maintenanceEvidence = initialMaintenanceEvidence
         observabilityResult = initialObservabilityResult ?? .unreadable("Backup status unavailable.")
@@ -390,6 +397,17 @@ final class BrainBarSettingsViewModel: ObservableObject {
     func copyConfigFilePath() { workspace.copy(store.configURL.path) }
     func revealConfigFile() { workspace.reveal(store.configURL) }
     func copyText(_ text: String) { workspace.copy(text) }
+
+    func copyTechnicalDetail(_ detail: BrainBarBackupChecks.Detail) {
+        workspace.copy(detail.value)
+        copiedTechnicalDetailID = detail.id
+        copyFeedbackGeneration &+= 1
+        let generation = copyFeedbackGeneration
+        copyFeedbackScheduler(1.5) { [weak self] in
+            guard let self, self.copyFeedbackGeneration == generation else { return }
+            self.copiedTechnicalDetailID = nil
+        }
+    }
 
     var backupStatusReason: String? {
         guard hasCompletedObservabilityRead else { return nil }
@@ -1102,7 +1120,8 @@ struct BrainBarSettingsView: View {
                 // The job alert has its own card at the top of the page; say it once.
                 hiddenAlert: viewModel.jobAlert,
                 detailsExpanded: $viewModel.backupDetailsExpanded,
-                copy: { viewModel.copyText($0) }
+                copiedDetailID: viewModel.copiedTechnicalDetailID,
+                copy: { viewModel.copyTechnicalDetail($0) }
             )
         } else if !viewModel.hasCompletedObservabilityRead {
             Label("Checking backup status…", systemImage: "clock")
