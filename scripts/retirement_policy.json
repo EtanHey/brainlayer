@@ -92,14 +92,6 @@
         "target": "self.client.request"
       }
     },
-    "077aa037a4f792a9d09fd672f8fe19d1fd582ad0ca6c16d6be891cded4d1561c": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. This reviewed change counts local connection/request/error events and atomically writes payload-free aggregate transport-health evidence at mode 0600; it adds no outbound MCP transport, TCP/cloud endpoint or model sender.",
-      "site": {
-        "body_sha256": "27f0e6ec2e0031c8b72190f32025489156259a8492b9c0456cf906b5de24c4b2",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
-      }
-    },
     "08812b9decf92405afe35f186f6b49f065c4ea36a62a40b64e46440bada87c3b": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -188,6 +180,14 @@
         "owner": "<module>",
         "path": "scripts/benchmark_runtime_store_open.py",
         "target": "import subprocess"
+      }
+    },
+    "0f41d4b704fe3fd54d04e6bae8fb0b45e40087a0f63d618721bf4c7b1b4238e0": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change records connection age and counts currently live age-qualified sockets for a payload-free restart-recovery baseline in the existing mode0600 sidecar; no client identity, initialization replay, outbound transport, TCP/cloud endpoint or model sender is added.",
+      "site": {
+        "body_sha256": "cbc88ea15447f6fc2de0f5815929d721c4fcc63a24945b6ec4d07f7833c643c0",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "0f53d8019026802bf33844914ede0017ed4a218d1cfd358249f189d1cd72f79b": {
@@ -2654,6 +2654,14 @@
         "target": "sqlite3.connect"
       }
     },
+    "8818085b89360764bcd1532654e841f3baf22feebb4f9f75710d19885d3220be": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change records connection age and counts currently live age-qualified sockets for a payload-free restart-recovery baseline in the existing mode0600 sidecar; no client identity, initialization replay, outbound transport, TCP/cloud endpoint or model sender is added.",
+      "site": {
+        "body_sha256": "cbc88ea15447f6fc2de0f5815929d721c4fcc63a24945b6ec4d07f7833c643c0",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
+      }
+    },
     "888b2fddabcaea9132e1e8d15d86c4cde6be134b0150f5e02c7b5e22f5618b91": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/launchd_primitive.py <module>._default_command_runner",
       "site": {
@@ -4258,14 +4266,6 @@
         "owner": "<module>._connect_readonly",
         "path": "src/brainlayer/kg_judge.py",
         "target": "sqlite3.connect"
-      }
-    },
-    "ccb36172ffb46588bab78c7de4b093d8b31fa1062e761ceffbc2b0143447af89": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. This reviewed change counts local connection/request/error events and atomically writes payload-free aggregate transport-health evidence at mode 0600; it adds no outbound MCP transport, TCP/cloud endpoint or model sender.",
-      "site": {
-        "body_sha256": "27f0e6ec2e0031c8b72190f32025489156259a8492b9c0456cf906b5de24c4b2",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
       }
     },
     "ccf853038cea4cb534da6182e5863bddb97fe6ca28802d9e99c679a78f2da44e": {

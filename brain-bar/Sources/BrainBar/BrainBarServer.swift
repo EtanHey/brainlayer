@@ -204,6 +204,7 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     struct ClientState {
+        let connectedAt = ProcessInfo.processInfo.systemUptime
         var pendingRequests = 0
         var source: DispatchSourceRead
         var framing: MCPFraming
@@ -412,7 +413,8 @@ final class BrainBarServer: @unchecked Sendable {
             timer.schedule(deadline: .now(), repeating: .seconds(5))
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
-                transportHealth?.publish(dbPath: dbPath, inFlight: clients.values.reduce(0) { $0 + $1.pendingRequests })
+                transportHealth?.publish(dbPath: dbPath, inFlight: clients.values.reduce(0) { $0 + $1.pendingRequests },
+                    persistentConnections: persistentConnectionCount)
             }
             timer.resume()
             transportHealthTimer = timer
@@ -1091,7 +1093,13 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
+    private var persistentConnectionCount: Int {
+        let now = ProcessInfo.processInfo.systemUptime
+        return clients.values.filter { now - $0.connectedAt >= MCPTransportHealth.minimumConnectionAgeSeconds }.count
+    }
+
     private func cleanup() {
+        let persistent = persistentConnectionCount
         transportHealthTimer?.cancel()
         transportHealthTimer = nil
         daemonHeartbeatTimer?.cancel()
@@ -1112,7 +1120,7 @@ final class BrainBarServer: @unchecked Sendable {
             state.source.cancel()
         }
         clients.removeAll()
-        transportHealth?.publish(dbPath: dbPath, inFlight: 0, stopped: true)
+        transportHealth?.publish(dbPath: dbPath, inFlight: 0, stopped: true, persistentConnections: persistent)
         transportHealth = nil
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)

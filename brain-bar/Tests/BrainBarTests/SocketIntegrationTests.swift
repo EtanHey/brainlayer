@@ -153,6 +153,35 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertEqual(result, 0, "Should connect to brainbar socket (errno: \(errno))")
     }
 
+    func testTwelveIdleClientsLatchAgeFilteredSeversWithoutDroppedRequests() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
+        let receipt = dir.appendingPathComponent("transport.json")
+        server.stop()
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db,
+            diagnostics: .daemon(environment: ["BRAINLAYER_TRANSPORT_HEALTH_PATH": receipt.path],
+                debugLogPath: dir.appendingPathComponent("debug.log").path,
+                lifecycleLogPath: dir.appendingPathComponent("lifecycle.log").path))
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath))
+        var clients: [Int32] = []
+        defer { for fd in clients { close(fd) } }
+        for _ in 0..<12 {
+            let fd = try connectClient(); clients.append(fd)
+            try initializeClient(fd: fd, name: "private-idle-recovery")
+        }
+        Thread.sleep(forTimeInterval: 10.1)
+        // This live short-lived connect-only probe must not enter the baseline.
+        let probe = try connectClient(); defer { close(probe) }
+        server.stop()
+        let stopped = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: receipt)) as? [String: Any])
+        XCTAssertTrue(stopped["incident"] is NSNull, "Idle severs have no failed-request episode")
+        let recovery = try XCTUnwrap(stopped["reconnect"] as? [String: Any], "Idle clients need independent aggregate evidence")
+        XCTAssertEqual(recovery["severed_persistent"] as? Int, 12)
+        XCTAssertEqual(recovery["recovered_persistent"] as? Int, 0)
+    }
+
     func testNativeServerPublishesTransportAnswersOnScratchPath() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
