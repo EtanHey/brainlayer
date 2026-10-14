@@ -118,6 +118,7 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 asyncio_mode = "auto"
 pythonpath = ["src"]
 markers = [
+    "crash_sweep: exhaustive migration/revert SIGKILL cuts (separate required CI gate; retained by local pre-push)",
     "retired_enrichment: retirement tests that forbid cloud-client construction and inet sends",
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
     "embedding_model: tests that deliberately load a real embedding model (deselected by scripts/run_tests.sh)",
