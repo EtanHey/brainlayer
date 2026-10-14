@@ -105,7 +105,8 @@ def test_doctor_checks_opt_target_is_executable_inside_keg(tmp_path, monkeypatch
     assert len(_legacy_python_mcp_config_issues([config])) == 1
     from brainlayer.setup import migrate_legacy_mcp_configs
 
-    config.write_text(json.dumps({"mcpServers": {"brainlayer": {"command": "socat"}}}))
+    server = {"command": "socat", "args": ["-", "UNIX-CONNECT:/tmp/brainbar.sock"]}
+    config.write_text(json.dumps({"mcpServers": {"brainlayer": server}}))
     before = config.read_bytes()
     with pytest.raises(FileNotFoundError):
         migrate_legacy_mcp_configs([config])

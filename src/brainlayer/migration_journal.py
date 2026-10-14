@@ -36,17 +36,21 @@ def _validate_directories(path, archive):
             raise ValueError("journal/archive directory custody refused")
 
 
-def recover_staging(path, archive):
+def recover_staging(path, archive, *, destinations=()):
     """Under migration_lock, remove owned staging; refuse ambiguous custody."""
-    _validate_directories(path, archive)
-    for parent in (path.parent, archive):
+    paths = tuple(dict.fromkeys((path, *destinations)))
+    for target in paths:
+        _validate_directories(target, archive)
+    names = "(?:" + "|".join(re.escape(target.name) for target in paths) + ")"
+    backup_name = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9]{20}-[a-f0-9]{32}-" + names)
+    for parent in dict.fromkeys((*[target.parent for target in paths], archive)):
         directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            backup_name = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9]{20}-[a-f0-9]{32}-" + re.escape(path.name))
+            live_names = {target.name for target in paths if target.parent == parent}
             entries = {
                 name: os.stat(name, dir_fd=directory, follow_symlinks=False)
                 for name in os.listdir(directory)
-                if _STAGING.fullmatch(name) or backup_name.fullmatch(name)
+                if _STAGING.fullmatch(name) or backup_name.fullmatch(name) or name in live_names
             }
             candidates = {name: info for name, info in entries.items() if _STAGING.fullmatch(name)}
             for name, info in candidates.items():
@@ -63,10 +67,7 @@ def recover_staging(path, archive):
                         for other, peer in entries.items()
                         if other != name
                         and (peer.st_dev, peer.st_ino) == (info.st_dev, info.st_ino)
-                        and (
-                            _STAGING.fullmatch(other)
-                            or re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9]{20}-[a-f0-9]{32}-" + re.escape(path.name), other)
-                        )
+                        and (_STAGING.fullmatch(other) or backup_name.fullmatch(other) or other in live_names)
                     ]
                     if len(peers) != 1:
                         raise ValueError("staging hardlink custody refused")
