@@ -75,7 +75,7 @@ final class MCPTransportHealthTests: XCTestCase {
         elapsed = 999
         next.publish(dbPath: db, inFlight: 0)
         let partial = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
-        XCTAssertNotNil(partial["incident"] as? [String: Any])
+        XCTAssertEqual(((partial["incident"] as? [String: Any])?["counts"] as? [String: Int])?["requests_dropped"], 3)
         elapsed = 1000
         next.publish(dbPath: db, inFlight: 0)
         let clean = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])

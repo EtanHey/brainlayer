@@ -7,7 +7,7 @@ public final class BrainBarTerminationSignals: @unchecked Sendable {
     public static let graceSeconds: TimeInterval = 1.5 // Below watchdog TERM→KILL (2s) and daemon ExitTimeOut (5s).
     private let queue = DispatchQueue(label: "com.brainlayer.brainbar.termination", qos: .userInitiated)
     private var sources: [DispatchSourceSignal] = []
-    private var stopping = false
+    private var stopping = false // Confined to queue; both signal sources share this serial queue.
 
     public init(shutdown: @escaping @Sendable () -> Void) {
         for number in [SIGTERM, SIGINT] {
