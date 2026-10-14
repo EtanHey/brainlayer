@@ -319,7 +319,7 @@ def test_framework_supervisor_requires_all_identity_evidence(supervisor_sample, 
     assert tick.actions == []
 
 
-def test_unmapped_resident_aborts_scan_before_later_healing(supervisor_sample):
+def test_unmapped_resident_keeps_critical_and_allows_later_healing(supervisor_sample):
     agents, opt, fake, *_ = supervisor_sample
     daemon = agents / "com.brainlayer.daemon.plist"
     document = plistlib.loads(daemon.read_bytes())
@@ -332,7 +332,73 @@ def test_unmapped_resident_aborts_scan_before_later_healing(supervisor_sample):
     prior = {"com.brainlayer.watch": {"runs": 1, "consecutive": 1}}
     tick = _tick(agents, opt, fake, prior, 0, uid=424242)
     assert tick.scan_error == "com.brainlayer.drain: keg mapping unavailable for pid 42"
-    assert tick.state == prior and tick.actions == []
-    assert not any(
+    assert tick.actions == ["kickstart:com.brainlayer.watch"]
+    assert tick.state["com.brainlayer.watch"]["attempts"] == 1
+    assert any(
         args[:2] == ["launchctl", "print"] and args[-1].endswith("com.brainlayer.watch") for args in fake.commands
+    )
+
+
+@pytest.mark.parametrize("unknown", ["drain", "zzz"])
+@pytest.mark.parametrize("heal", [False, True])
+def test_unmapped_resident_preserves_episodes_and_known_job_progress(tmp_path: Path, unknown: str, heal: bool):
+    old, current, opt = _setup(tmp_path, (unknown, {"KeepAlive": True}), ("watch", {"KeepAlive": True}))
+    fake = FakeCommands(current, old)
+    fake.runs.update({unknown: 7, "watch": 2})
+    fake.exit[unknown] = 0
+    fake.pid[unknown] = 42
+    fake.keg.clear()
+    fake.ps_command = "/fixture/framework/python -m brainlayer daemon"
+    label = f"com.brainlayer.{unknown}"
+    prior = {
+        label: {"runs": 6, "attempts": 2, "consecutive": 2, "next_retry_epoch": 900},
+        "com.brainlayer.watch": {"runs": 1, "consecutive": 1},
+    }
+    before = json.loads(json.dumps(prior))
+    tick = _tick(tmp_path, opt, fake, prior, 300, heal=heal, uid=424242)
+    assert tick.scan_error == f"{label}: keg mapping unavailable for pid 42"
+    assert tick.state[label] == before[label] and prior == before
+    assert tick.state["com.brainlayer.watch"]["runs"] == 2
+    assert tick.state["com.brainlayer.watch"]["attempts"] == int(heal)
+    assert tick.actions == (["kickstart:com.brainlayer.watch"] if heal else [])
+    kicks = [args[-1] for args in fake.commands if args[:3] == ["launchctl", "kickstart", "-k"]]
+    assert kicks == (["gui/424242/com.brainlayer.watch"] if heal else [])
+
+
+def test_multiple_unmapped_residents_keep_each_critical_and_escalation(tmp_path: Path):
+    old, current, opt = _setup(tmp_path, ("drain", {"KeepAlive": True}), ("watch", {"KeepAlive": True}))
+    fake = FakeCommands(current, old)
+    fake.pid["watch"] = 43
+    fake.keg.clear()
+    fake.ps_command = "/fixture/framework/python -m brainlayer daemon"
+    prior = {"com.brainlayer.watch": {"attempts": 3, "failed_heals": True, "reason": "existing failure"}}
+    tick = _tick(tmp_path, opt, fake, prior, 300)
+    assert tick.scan_error == (
+        "com.brainlayer.drain: keg mapping unavailable for pid 42; "
+        "com.brainlayer.watch: keg mapping unavailable for pid 43"
+    )
+    assert tick.state == prior and tick.actions == []
+    assert len(tick.escalations) == 1 and "existing failure" in tick.escalations[0]
+
+
+@pytest.mark.parametrize("refusal", ["current_keg", "disabled", "persisted", "plist"])
+def test_global_scan_refusals_still_prevent_healing(tmp_path: Path, refusal: str):
+    old, current, opt = _setup(tmp_path, ("drain", {"KeepAlive": True}))
+    fake = FakeCommands(current, old)
+    prior = {}
+    runner = fake
+    if refusal == "current_keg":
+        opt.unlink()
+    elif refusal == "disabled":
+
+        def runner(args):
+            return subprocess.CompletedProcess(args, 1, "", "disabled query failed")
+    elif refusal == "persisted":
+        prior = {"com.brainlayer.drain": {"attempts": "unknown"}}
+    else:
+        (tmp_path / "com.brainlayer.zzz.plist").write_bytes(b"malformed plist")
+    tick = scan_job_lifecycle(tmp_path, opt, prior, now_epoch=300, command_runner=runner, uid=424242)
+    assert tick.scan_error and tick.state == prior and tick.actions == []
+    assert not any(
+        args[:2] == ["launchctl", "print"] or args[:2] == ["launchctl", "kickstart"] for args in fake.commands
     )
