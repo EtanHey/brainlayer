@@ -161,7 +161,8 @@ struct BrainBarBackupChecksCard: View {
     /// An alert the page already shows elsewhere (the job-alert card); never repeated here.
     let hiddenAlert: String?
     @Binding var detailsExpanded: Bool
-    let copy: (String) -> Void
+    var copiedDetailID: String? = nil
+    let copy: (BrainBarBackupChecks.Detail) -> Void
 
     private static func color(_ tone: ObservabilityStatusTone) -> Color {
         switch tone {
@@ -238,6 +239,7 @@ struct BrainBarBackupChecksCard: View {
             if detailsExpanded {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(checks.details) { detail in
+                        let isCopied = copiedDetailID == detail.id
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Text(detail.label.uppercased())
                                 .font(.system(size: 9, weight: .bold))
@@ -250,11 +252,17 @@ struct BrainBarBackupChecksCard: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
-                            Button { copy(detail.value) } label: { Image(systemName: "doc.on.doc") }
+                            Button { copy(detail) } label: {
+                                if isCopied {
+                                    Label("Copied", systemImage: "checkmark")
+                                } else {
+                                    Image(systemName: "doc.on.doc")
+                                }
+                            }
                                 .buttonStyle(.borderless)
                                 .controlSize(.small)
-                                .help("Copy")
-                                .accessibilityLabel("Copy \(detail.label)")
+                                .help(isCopied ? "Copied" : "Copy")
+                                .accessibilityLabel("\(isCopied ? "Copied" : "Copy") \(detail.label)")
                         }
                     }
                 }
