@@ -92,14 +92,6 @@
         "target": "self.client.request"
       }
     },
-    "077aa037a4f792a9d09fd672f8fe19d1fd582ad0ca6c16d6be891cded4d1561c": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. This reviewed change counts local connection/request/error events and atomically writes payload-free aggregate transport-health evidence at mode 0600; it adds no outbound MCP transport, TCP/cloud endpoint or model sender.",
-      "site": {
-        "body_sha256": "27f0e6ec2e0031c8b72190f32025489156259a8492b9c0456cf906b5de24c4b2",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
-      }
-    },
     "08812b9decf92405afe35f186f6b49f065c4ea36a62a40b64e46440bada87c3b": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -3112,6 +3104,14 @@
         "target": "subprocess.run"
       }
     },
+    "9ddbf5601184ea1b2158d21f9174b78be4d20a513f1725bba07bf6360333d785": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change counts currently live age-qualified sockets for a payload-free restart baseline in the mode0600 sidecar. Constructor-injected transport time keeps default release clocks real; the approved private clock-file adapter is DEBUG-only and release CI proves absence and no runtime effect. No client identity, initialization replay, new outbound transport, TCP/cloud endpoint or model sender.",
+      "site": {
+        "body_sha256": "e558ca8c2fd3fe3eacfb3d16f6a74c514c98182e89d674c5c140cde36843ce94",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+      }
+    },
     "9e87eef5434c6c0016c89467c88999480208496d6a0062660b9441dde772329f": {
       "non_cloud_purpose": "Owner-only local Unix supervisor status and token-owned pause/resume for an inherited maintenance writer lease; subprocess only reads operator launchctl disabled state. No model sender.",
       "site": {
@@ -4260,14 +4260,6 @@
         "target": "sqlite3.connect"
       }
     },
-    "ccb36172ffb46588bab78c7de4b093d8b31fa1062e761ceffbc2b0143447af89": {
-      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. This reviewed change counts local connection/request/error events and atomically writes payload-free aggregate transport-health evidence at mode 0600; it adds no outbound MCP transport, TCP/cloud endpoint or model sender.",
-      "site": {
-        "body_sha256": "27f0e6ec2e0031c8b72190f32025489156259a8492b9c0456cf906b5de24c4b2",
-        "kind": "non_python_source",
-        "path": "brain-bar/Sources/BrainBar/BrainBarServer.swift"
-      }
-    },
     "ccf853038cea4cb534da6182e5863bddb97fe6ca28802d9e99c679a78f2da44e": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_cleanup_dryrun.py <module>.main",
       "site": {
@@ -4396,6 +4388,14 @@
         "owner": "<module>._git",
         "path": "scripts/ci_ratchet_table.py",
         "target": "subprocess.run"
+      }
+    },
+    "d49484651446d4a08e8968508741128efdcec79773e4bc0c9228bb856589cedb": {
+      "non_cloud_purpose": "Existing owner-only local AF_UNIX BrainBar server. The lead-ruled PR4 change counts currently live age-qualified sockets for a payload-free restart baseline in the mode0600 sidecar. Constructor-injected transport time keeps default release clocks real; the approved private clock-file adapter is DEBUG-only and release CI proves absence and no runtime effect. No client identity, initialization replay, new outbound transport, TCP/cloud endpoint or model sender.",
+      "site": {
+        "body_sha256": "e558ca8c2fd3fe3eacfb3d16f6a74c514c98182e89d674c5c140cde36843ce94",
+        "kind": "non_python_source",
+        "path": "brain-bar/Sources/BrainBarDaemon/BrainBarServer.swift"
       }
     },
     "d4de14cf71d304c604f13e2dfb94f500d3be6cf153c4a336d3da0e7990123c6d": {

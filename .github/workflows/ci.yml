@@ -62,7 +62,10 @@ jobs:
 
       - name: Build BrainBar
         if: needs.changes.outputs.brain_bar == 'true'
-        run: cd brain-bar && swift build -c release
+        run: |
+          cd brain-bar
+          swift build -c release
+          python3 Tests/BrainBarTests/Scripts/check_release_transport_clock.py
 
       - name: Test BrainBar
         if: needs.changes.outputs.brain_bar == 'true'

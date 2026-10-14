@@ -28,6 +28,11 @@ COUNTS = (
 )
 IDENTITY_REASON = "no stable client identity on the socket (fd reuse; proxy pid)"
 WINDOW_SECONDS = 900
+MAXIMUM_BASELINE_AGE_SECONDS = 300  # Five grace periods, including KeepAlive relaunch.
+DISCARD_REASONS = (
+    "baseline from a previous boot; reconnect deficit not measured",
+    "baseline expired; reconnect deficit not measured",
+)
 
 
 def _read_receipt(path: Path) -> tuple[bytes, os.stat_result]:
@@ -68,10 +73,18 @@ class TransportSection(dict[str, Any]):
 
     overflow = False
 
-    def __init__(self, value: dict, *, incident: dict | None = None, incident_unknown: bool = False):
+    def __init__(
+        self,
+        value: dict,
+        *,
+        incident: dict | None = None,
+        incident_unknown: bool = False,
+        reconnect: dict | None = None,
+    ):
         super().__init__(value)
         self.incident = incident
         self.incident_unknown = incident_unknown
+        self.reconnect = reconnect
 
 
 def _time(value: str) -> datetime:
@@ -111,6 +124,50 @@ def _frame(data: dict, *, db: Path, now: datetime, historical: bool = False) -> 
     return {k: data[k] for k in ("generated_at", "producer_started_at", "window_seconds", "observed_seconds", "counts")}
 
 
+def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> dict:
+    generated, started = _time(parent["generated_at"]), _time(parent["producer_started_at"])
+    if isinstance(frame, dict) and frame.get("state") == "unmeasurable" and frame.get("reason") in DISCARD_REASONS:
+        return {"state": "unmeasurable", "reason": frame["reason"]}
+    if not isinstance(frame, dict) or frame.get("state") != "measured" or frame.get("reason") != "":
+        raise ValueError(
+            "previous socket recovery evidence unreadable: "
+            + str(frame.get("reason", "") if isinstance(frame, dict) else "")
+        )
+    if Path(frame["db_path"]).resolve() != db or not 0 <= (now - generated).total_seconds() <= 60:
+        raise ValueError("foreign or stale socket recovery evidence")
+    severed = _time(frame["severed_at"])
+    keys = (
+        "minimum_connection_age_seconds",
+        "grace_seconds",
+        "observed_seconds",
+        "severed_persistent",
+        "recovered_persistent",
+    )
+    if any(type(frame.get(k)) is not int or frame[k] < 0 for k in keys):
+        raise ValueError("invalid socket recovery counts")
+    if (
+        frame[keys[0]] != 10
+        or frame[keys[1]] != 60
+        or not 0 <= frame[keys[2]] <= 60
+        or frame[keys[3]] == 0
+        or frame[keys[4]] > frame[keys[3]]
+        or started > generated
+        or severed > generated
+        or frame[keys[2]] > (generated - started).total_seconds() + 1
+    ):
+        raise ValueError("invalid socket recovery observation window")
+    from .supervisor_guard import boot_time
+
+    stamp = frame.get("boot_time")
+    if not isinstance(stamp, str) or not stamp:
+        raise ValueError("socket recovery boot identity unreadable")
+    if stamp != boot_time():
+        return {"state": "unmeasurable", "reason": DISCARD_REASONS[0]}
+    if (now - severed).total_seconds() > MAXIMUM_BASELINE_AGE_SECONDS:
+        return {"state": "unmeasurable", "reason": DISCARD_REASONS[1]}
+    return {k: frame[k] for k in keys}
+
+
 def build_transport_section(*, env: Mapping[str, str], now: datetime, record_input: InputRecorder) -> dict[str, Any]:
     raw_db = Path(env["BRAINLAYER_DB"]).expanduser() if env.get("BRAINLAYER_DB") else get_db_path()
     db = raw_db.resolve()
@@ -138,10 +195,14 @@ def build_transport_section(*, env: Mapping[str, str], now: datetime, record_inp
             }
         )
     item = record_input.file_snapshot(path, status="read", metadata=metadata, data=raw)
+    reconnect = None
 
     def unknown(reason: str, incident: dict | None = None, uncertain: bool = False) -> TransportSection:
         return TransportSection(
-            {"state": "unmeasurable", "reason": reason, "inputs": [item]}, incident=incident, incident_unknown=uncertain
+            {"state": "unmeasurable", "reason": reason, "inputs": [item]},
+            incident=incident,
+            incident_unknown=uncertain,
+            reconnect=reconnect,
         )
 
     if item["status"] != "read":
@@ -169,6 +230,11 @@ def build_transport_section(*, env: Mapping[str, str], now: datetime, record_inp
         except failures as exc:
             return unknown(f"historical transport episode unmeasurable: {exc}", uncertain=True)
     try:
+        if data.get("reconnect") is not None:
+            reconnect = _reconnect_frame(data["reconnect"], parent=data, db=db, now=now)
+    except failures as exc:
+        return unknown(f"socket recovery evidence unmeasurable: {exc}", incident=incident)
+    try:
         current = _frame(data, db=db, now=now)
     except failures as exc:
         return unknown(f"transport evidence unavailable: {exc}", incident=incident)
@@ -182,6 +248,7 @@ def build_transport_section(*, env: Mapping[str, str], now: datetime, record_inp
             "per_client_reconnects": {"state": "unmeasurable", "reason": IDENTITY_REASON, "inputs": [item]},
         },
         incident=incident,
+        reconnect=reconnect,
     )
 
 
@@ -208,6 +275,23 @@ def report_transport_alert(section: dict[str, Any], *, env: Mapping[str, str]) -
         )
         return
     incident = getattr(section, "incident", None)
+    reconnect = getattr(section, "reconnect", None)
+    if reconnect and reconnect.get("state") == "unmeasurable":
+        reconnect = None  # Intentional discard cannot suppress independent request evidence or clearing.
+    if reconnect and reconnect["observed_seconds"] >= 60:
+        deficit = reconnect["severed_persistent"] - reconnect["recovered_persistent"]
+        # Allow two ordinary session departures; three sustained missing sockets
+        # is an aggregate tripwire, never per-client attribution.
+        if deficit >= 3:
+            from .job_alerts import alert_path, report
+
+            db = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()
+            report(
+                "mcp-transport",
+                f"BrainBar MCP transport: {deficit} persistent connections did not recover after restart",
+                path=alert_path(env=env, db_path=db),
+            )
+            return
     if getattr(section, "incident_unknown", False) or (incident is None and section["state"] != "measured"):
         return
     counts = incident["counts"] if incident else section["counts"]
@@ -227,6 +311,8 @@ def report_transport_alert(section: dict[str, Any], *, env: Mapping[str, str]) -
         return
     if incident:
         reason = f"historical transport episode at {incident['generated_at']}: {reason}"
+    if reason is None and reconnect and reconnect["observed_seconds"] < 60:
+        return
     from .job_alerts import alert_path, report
 
     db = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()

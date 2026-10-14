@@ -47,7 +47,9 @@ public final class MCPTransportHealth {
     private var restored = false
     private var incident: Episode?
     private var incidentUnknown = false
+    private let reconnect = MCPReconnectRecovery()
     public static let windowSeconds: Double = 900
+    public static let minimumConnectionAgeSeconds: Double = 10
 
     public init(path: String, now: @escaping () -> Date = Date.init,
                 uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
@@ -79,6 +81,7 @@ public final class MCPTransportHealth {
                   identity.schema_version == 1, identity.db_path == db else {
                 throw CocoaError(.fileReadCorruptFile)
             }
+            reconnect.restore(value, db: db, wall: now())
             if let saved = value["incident"], !(saved is NSNull) {
                 let old = try Episode.parse(saved, db: db, now: now())
                 guard Self.failing(old.counts) else { throw CocoaError(.fileReadCorruptFile) }
@@ -89,10 +92,10 @@ public final class MCPTransportHealth {
                 if Self.failing(old.counts) { incident = old }
             }
         } catch TransportReceiptFile.Failure.missing { return }
-        catch { incidentUnknown = true }
+        catch { incidentUnknown = true; reconnect.refuse() }
     }
 
-    public func publish(dbPath: String, inFlight: Int, stopped: Bool = false) {
+    public func publish(dbPath: String, inFlight: Int, stopped: Bool = false, persistentConnections: Int = 0) {
         let instant = uptime()
         let wall = now()
         let db = URL(fileURLWithPath: dbPath).standardizedFileURL.resolvingSymlinksInPath().path
@@ -110,12 +113,15 @@ public final class MCPTransportHealth {
                   ["accept_errors", "read_errors", "write_errors"].allSatisfy({ counts[$0] == 0 }), !Self.failing(counts) {
             incident = nil; incidentUnknown = false
         }
-        let reason = stopped ? "BrainBar server stopped" : (incidentUnknown ? "previous transport receipt refused or unreadable" : (overflow ? "transport event buffer overflow" : ""))
+        let recovery = reconnect.publish(db: db, wall: wall, elapsed: instant - startedUptime,
+            live: persistentConnections, stopped: stopped)
+        let reason = stopped ? "BrainBar server stopped" : (reconnect.unknown ? reconnect.reason : (incidentUnknown ? "previous transport receipt refused or unreadable" : (overflow ? "transport event buffer overflow" : "")))
         var value: [String: Any] = ["schema_version": 1, "state": reason.isEmpty ? "measured" : "unmeasurable", "reason": reason,
             "db_path": db, "generated_at": ISO8601DateFormatter().string(from: wall),
             "producer_started_at": ISO8601DateFormatter().string(from: started), "window_seconds": Int(Self.windowSeconds)]
         value["incident"] = incident?.wire ?? (incidentUnknown ?
             ["state": "unmeasurable", "reason": "previous transport incident unreadable"] : NSNull())
+        value["reconnect"] = recovery
         if reason.isEmpty {
             value["counts"] = counts; value["observed_seconds"] = observed; value["in_flight_requests"] = inFlight
         }

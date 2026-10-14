@@ -130,6 +130,7 @@ final class BrainBarServer: @unchecked Sendable {
     private var instanceLock: BrainBarInstanceLock?
     private var daemonHeartbeatTimer: DispatchSourceTimer?
     private var transportHealth: MCPTransportHealth?
+    private let transportClock: MCPTransportClock
     private var transportHealthTimer: DispatchSourceTimer?
     private var backupToolCallInProgress = false
     private var deferredDisconnectedAgentIDs = Set<String>()
@@ -204,6 +205,7 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     struct ClientState {
+        let connectedAt: TimeInterval
         var pendingRequests = 0
         var source: DispatchSourceRead
         var framing: MCPFraming
@@ -232,7 +234,8 @@ final class BrainBarServer: @unchecked Sendable {
         enableHybridSearchHelper: Bool = true,
         databaseRecoveryPolicy: DatabaseRecoveryPolicy = DatabaseRecoveryPolicy(),
         instanceLockPath: String? = nil,
-        diagnostics: Diagnostics = .none
+        diagnostics: Diagnostics = .none,
+        transportClock: MCPTransportClock = MCPTransportClock()
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.dbPath = dbPath ?? Self.defaultDBPath()
@@ -242,6 +245,7 @@ final class BrainBarServer: @unchecked Sendable {
         self.databaseRecoveryPolicy = databaseRecoveryPolicy
         self.instanceLockPath = instanceLockPath ?? Self.defaultInstanceLockPath(socketPath: self.socketPath)
         self.diagnostics = diagnostics
+        self.transportClock = transportClock
         queue.setSpecific(key: Self.queueKey, value: queueID)
     }
 
@@ -407,12 +411,13 @@ final class BrainBarServer: @unchecked Sendable {
         if diagnostics.exportsTransportHealth {
             let path = diagnostics.transportHealthPath ?? URL(fileURLWithPath: dbPath)
                 .deletingLastPathComponent().appendingPathComponent("transport-health.json").path
-            transportHealth = MCPTransportHealth(path: path)
+            transportHealth = MCPTransportHealth(path: path, now: transportClock.now, uptime: transportClock.uptime)
             let timer = DispatchSource.makeTimerSource(queue: queue)
-            timer.schedule(deadline: .now(), repeating: .seconds(5))
+            timer.schedule(deadline: .now(), repeating: transportClock.publishInterval)
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
-                transportHealth?.publish(dbPath: dbPath, inFlight: clients.values.reduce(0) { $0 + $1.pendingRequests })
+                transportHealth?.publish(dbPath: dbPath, inFlight: clients.values.reduce(0) { $0 + $1.pendingRequests },
+                    persistentConnections: persistentConnectionCount)
             }
             timer.resume()
             transportHealthTimer = timer
@@ -557,6 +562,7 @@ final class BrainBarServer: @unchecked Sendable {
         readSource.resume()
 
         clients[clientFD] = ClientState(
+            connectedAt: transportClock.uptime(),
             source: readSource,
             framing: MCPFraming(),
             paletteSession: router.makePaletteSession()
@@ -1091,7 +1097,13 @@ final class BrainBarServer: @unchecked Sendable {
         }
     }
 
+    private var persistentConnectionCount: Int {
+        let now = transportClock.uptime()
+        return clients.values.filter { now - $0.connectedAt >= MCPTransportHealth.minimumConnectionAgeSeconds }.count
+    }
+
     private func cleanup() {
+        let persistent = persistentConnectionCount
         transportHealthTimer?.cancel()
         transportHealthTimer = nil
         daemonHeartbeatTimer?.cancel()
@@ -1112,7 +1124,7 @@ final class BrainBarServer: @unchecked Sendable {
             state.source.cancel()
         }
         clients.removeAll()
-        transportHealth?.publish(dbPath: dbPath, inFlight: 0, stopped: true)
+        transportHealth?.publish(dbPath: dbPath, inFlight: 0, stopped: true, persistentConnections: persistent)
         transportHealth = nil
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)

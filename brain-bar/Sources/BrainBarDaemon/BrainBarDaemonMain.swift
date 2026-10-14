@@ -10,7 +10,14 @@ enum BrainBarDaemonMain {
         // EnvironmentVariables, or `launchctl setenv` before a kickstart) turns
         // on /tmp/brainbar-debug.log. Without it the server writes only unified
         // logging and the lifecycle log.
-        let server = BrainBarServer(diagnostics: .daemon())
+        #if DEBUG
+        let clock: MCPTransportClock
+        do { clock = try MCPTransportClock.processFixture() }
+        catch { NSLog("[BrainBarDaemon] Private clock fixture refused"); Foundation.exit(1) }
+        #else
+        let clock = MCPTransportClock()
+        #endif
+        let server = BrainBarServer(diagnostics: .daemon(), transportClock: clock)
         server.onStartRejected = { reason in
             NSLog("[BrainBarDaemon] Startup rejected: %@", reason)
             Foundation.exit(1)
