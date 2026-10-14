@@ -216,6 +216,14 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     func testPrivateServerRestartRetainsAnUnconsumedFailureEpisode() throws {
+        try exerciseUnconsumedFailureEpisode(shutdown: false)
+    }
+
+    func testPrivateServerShutdownLatchesFinalInFlightDropsBeforeRestart() throws {
+        try exerciseUnconsumedFailureEpisode(shutdown: true)
+    }
+
+    private func exerciseUnconsumedFailureEpisode(shutdown: Bool) throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
@@ -229,6 +237,39 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertTrue(waitForSocket(at: testSocketPath))
         let client = try connectClient()
         try initializeClient(fd: client, name: "private-restart-control")
+        if shutdown {
+            // Two earlier drops are below threshold. Shutdown must supply the third.
+            for id in [291, 292] {
+                let prior = try connectClient()
+                let priorGate = SQLiteProgressGate()
+                let backupDone = DispatchSemaphore(value: 0)
+                server.onDeferredBackupResponseDropped = { _ in backupDone.signal() }
+                sqlite3_progress_handler(db.dbHandle, 1, blockSQLiteProgress, Unmanaged.passUnretained(priorGate).toOpaque())
+                defer {
+                    priorGate.release.signal()
+                    sqlite3_progress_handler(db.dbHandle, 0, nil, nil)
+                }
+                try sendMCPRequest(on: prior, request: ["jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": ["name": "brain_backup_vacuum_into", "arguments": ["target_path": dir.appendingPathComponent("prior-\(id).db").path]]])
+                XCTAssertEqual(priorGate.entered.wait(timeout: .now() + 2), .success)
+                close(prior)
+                let deadline = Date().addingTimeInterval(6)
+                var drops = 0
+                while Date() < deadline {
+                    if let data = try? Data(contentsOf: receipt),
+                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        drops = (value["counts"] as? [String: Int])?["requests_dropped"] ?? 0
+                        XCTAssertTrue(value["incident"] == nil || value["incident"] is NSNull, "Below-threshold drops must not latch")
+                    }
+                    if drops == id - 290 { break }
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+                XCTAssertEqual(drops, id - 290)
+                priorGate.release.signal()
+                XCTAssertEqual(backupDone.wait(timeout: .now() + 6), .success)
+            }
+            server.onDeferredBackupResponseDropped = nil
+        }
         let gate = SQLiteProgressGate()
         sqlite3_progress_handler(db.dbHandle, 1, blockSQLiteProgress, Unmanaged.passUnretained(gate).toOpaque())
         defer { sqlite3_progress_handler(db.dbHandle, 0, nil, nil) }
@@ -236,21 +277,44 @@ final class SocketIntegrationTests: XCTestCase {
         var batch = try MCPFraming.encode(["jsonrpc": "2.0", "id": 301, "method": "tools/call",
             "params": ["name": "brain_recall", "arguments": ["mode": "stats"]]])
         for id in [302, 303] { batch.append(try MCPFraming.encode(["jsonrpc": "2.0", "id": id, "method": "ping"])) }
+        if shutdown {
+            batch = try MCPFraming.encode(["jsonrpc": "2.0", "id": 301, "method": "tools/call",
+                "params": ["name": "brain_backup_vacuum_into", "arguments": ["target_path": dir.appendingPathComponent("backup.db").path]]])
+        }
         let written = batch.withUnsafeBytes { write(client, $0.baseAddress, batch.count) }
         XCTAssertEqual(written, batch.count)
         XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
-        close(client)
-        gate.release.signal()
+        let shutdownDone = DispatchSemaphore(value: 0)
+        if shutdown {
+            // Keep the peer open. Only server cleanup can drop these held requests.
+            let stoppingServer = server!
+            DispatchQueue.global().async { stoppingServer.stop(); shutdownDone.signal() }
+        } else {
+            close(client)
+            gate.release.signal()
+        }
         let deadline = Date().addingTimeInterval(6)
         var dropped = 0
         while Date() < deadline {
             if let data = try? Data(contentsOf: receipt),
-               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let counts = value["counts"] as? [String: Int] { dropped = counts["requests_dropped"] ?? 0 }
+               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let frame = shutdown ? value["incident"] as? [String: Any] : value
+                dropped = (frame?["counts"] as? [String: Int])?["requests_dropped"] ?? 0
+                if shutdown, dropped == 3 {
+                    XCTAssertEqual(value["reason"] as? String, "BrainBar server stopped")
+                    XCTAssertNil(value["counts"], "Stopped current evidence must remain nonnumeric")
+                    print("shutdown_transport_receipt=\(String(data: data, encoding: .utf8)!)")
+                }
+            }
             if dropped == 3 { break }
             Thread.sleep(forTimeInterval: 0.02)
         }
         XCTAssertEqual(dropped, 3, "The private server must first measure three real unanswered requests")
+        if shutdown {
+            gate.release.signal()
+            XCTAssertEqual(shutdownDone.wait(timeout: .now() + 6), .success)
+            close(client)
+        }
         server.stop()
         server.start()
         XCTAssertTrue(waitForSocket(at: testSocketPath))
@@ -265,6 +329,10 @@ final class SocketIntegrationTests: XCTestCase {
         let incident = try XCTUnwrap(restarted["incident"] as? [String: Any], "Restart before the Python poll must retain the episode")
         XCTAssertEqual((incident["counts"] as? [String: Int])?["requests_dropped"], 3)
         XCTAssertEqual(restarted["observed_seconds"] as? Int, 0)
+        if shutdown {
+            let wire = try JSONSerialization.data(withJSONObject: restarted, options: [.sortedKeys])
+            print("restarted_transport_receipt=\(String(data: wire, encoding: .utf8)!)")
+        }
     }
 
     // MARK: - MCP Initialize handshake
