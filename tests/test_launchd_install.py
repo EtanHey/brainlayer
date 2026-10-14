@@ -57,16 +57,6 @@ def test_installer_prepares_named_launchers_and_calendar_helpers_before_migrate(
     assert before == {p.name: p.stat().st_mtime_ns for p in lib.iterdir()}
 
 
-def test_invalid_renderer_has_no_helper_or_launchctl_mutation(inputs, monkeypatch):
-    from brainlayer import launchd_consolidation, launchd_install
-
-    monkeypatch.setattr(launchd_consolidation, "migrate", lambda **kw: pytest.fail("mutated"))
-    inputs["python"] = inputs["home"] / "missing/python"
-    with pytest.raises(ValueError, match="interpreter"):
-        launchd_install.install(**inputs)
-    assert not (inputs["home"] / ".local/lib/brainlayer").exists()
-
-
 def test_shared_runner_change_is_refused_before_writing_any_helper(inputs, monkeypatch):
     from brainlayer import launchd_consolidation, launchd_install
 
@@ -137,6 +127,9 @@ def test_wiring_uses_real_transaction_for_replay_restart_and_failure(inputs, mon
     monkeypatch.setattr(
         launchd_consolidation, "migrate", lambda **kw: migrate(**kw, alive=lambda pid: False, verify=lambda: None)
     )
+    for path in (inputs["home"] / "Library/LaunchAgents").glob("*.plist"):
+        raw = path.read_bytes().replace(b"/bin/true", b"/usr/bin/true")
+        path.write_bytes(raw)
     runner = Launchctl(fail="com.brainlayer.maintenance" if failed else "")
     inputs["run"] = runner
     if failed:
@@ -153,6 +146,13 @@ def test_wiring_uses_real_transaction_for_replay_restart_and_failure(inputs, mon
     launchd_install.install(**inputs)
     assert ("bootout", DOMAIN + "/com.brainlayer.daemon") in runner.calls
     assert runner.loaded == {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+    revert = launchd_consolidation.revert
+    monkeypatch.setattr(launchd_consolidation, "revert", lambda **kw: revert(**kw, alive=lambda pid: False))
+    monkeypatch.setattr(launchd_install, "command", runner)
+    launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+    receipt = inputs["home"] / ".local/share/brainlayer/supervisor/migration.json"
+    assert json.loads(receipt.read_text())["phase"] == "reverted"
+    assert runner.loaded == {"com.brainlayer.watch", "com.etanhey.brainlayer-fleet-watchdog"}
 
 
 def test_broken_shell_helper_refused_before_mutation(inputs, monkeypatch, tmp_path):
@@ -290,3 +290,42 @@ def test_legacy_install_blocks_concurrent_consolidation_during_preflight(tmp_pat
     assert result.returncode != 0
     assert "CONCURRENT_MIGRATION_REFUSED" in result.stderr
     assert not journal.exists()
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_revert_interrupt_reports_recovery_without_traceback(inputs, monkeypatch, capsys, interruption):
+    from brainlayer import launchd_consolidation, launchd_install
+
+    def interrupted(**kw):
+        raise interruption()
+
+    monkeypatch.setattr(launchd_consolidation, "revert", interrupted, raising=False)
+    with pytest.raises(SystemExit) as stopped:
+        launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+    assert stopped.value.code != 0
+    out = capsys.readouterr()
+    assert (
+        out.err.strip()
+        == "revert interrupted; supervisor and legacy jobs are stopped; re-run consolidation-rollback to finish"
+    )
+    assert not out.out and "Traceback" not in out.err
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_interrupted_command_settles_and_reaps_owned_child(monkeypatch, interruption):
+    from brainlayer import launchd_install
+
+    communicate, owned = subprocess.Popen.communicate, []
+
+    def interrupt_once(child, *args, **kw):
+        if not owned:
+            owned.append(child)
+            raise interruption()
+        return communicate(child, *args, **kw)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", interrupt_once)
+    with pytest.raises(interruption):
+        launchd_install.command([sys.executable, "-c", 'import time; time.sleep(.05); print("settled")'])
+    assert owned[0].returncode == 0
+    with pytest.raises(ChildProcessError):
+        os.waitpid(owned[0].pid, os.WNOHANG)

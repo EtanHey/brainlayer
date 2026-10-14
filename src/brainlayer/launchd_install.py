@@ -5,6 +5,7 @@ import fcntl
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,7 +33,18 @@ def installer_lock(home):
 
 
 def command(argv):
-    return subprocess.run(argv, capture_output=True, text=True, check=False)
+    with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
+        try:
+            stdout, stderr = child.communicate()
+        except (KeyboardInterrupt, SystemExit):
+            while True:
+                try:
+                    child.communicate()  # Settle the owned launchctl operation before rollback.
+                    break
+                except (KeyboardInterrupt, SystemExit):
+                    continue
+            raise
+        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
 
 
 def install(*, home, **options):
@@ -102,17 +114,24 @@ def main(argv=None):
     if args.action == "consolidation-rollback":
         from .launchd_consolidation import revert  # PR-C; never substitute a legacy reinstall.
 
-        with installer_lock(args.home):
-            revert(
-                home=args.home,
-                journal=args.home / ".local/share/brainlayer/supervisor/migration.json",
-                domain=args.domain,
-                run=command,
+        try:
+            with installer_lock(args.home):
+                revert(
+                    home=args.home,
+                    journal=args.home / ".local/share/brainlayer/supervisor/migration.json",
+                    domain=args.domain,
+                    run=command,
+                )
+        except (KeyboardInterrupt, SystemExit):
+            print(
+                "revert interrupted; supervisor and legacy jobs are stopped; re-run consolidation-rollback to finish",
+                file=sys.stderr,
             )
+            raise SystemExit(1) from None
     else:
         if any(value is None for value in (args.templates, args.env_file, args.python, args.keg)):
             parser.error("consolidate requires --templates, --env-file, --python and --keg")
-        install(
+        outcome = install(
             home=args.home,
             templates=args.templates,
             env_file=args.env_file,
@@ -120,6 +139,8 @@ def main(argv=None):
             keg=args.keg,
             domain=args.domain,
         )
+        print(f"{args.action}: {outcome['phase']}; restart fallback={outcome.get('restart_fallback')}")
+        return
     print(f"{args.action}: verified transaction finished")
 
 
