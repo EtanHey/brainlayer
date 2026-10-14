@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import plistlib
 import re
 import subprocess
@@ -16,6 +17,8 @@ from .retired_services import RETIRED_ENRICHMENT_LABELS
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 PID_RE = re.compile(r"(?m)^\s*pid\s*=\s*(\d+)\s*$")
 BACKUP_LABELS = {"com.brainlayer.backup-daily", "com.brainlayer.jsonl-backup"}
+SUPERVISOR_LABELS = {"com.brainlayer.daemon", "com.brainlayer.maintenance"}
+SUPERVISOR_SKIP = "supervisor-owned: keg changes go through install.sh consolidate"
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -92,6 +95,27 @@ def _runs_keg(plist: dict[str, Any], opt_path: Path, current_keg: Path) -> bool:
     return any(isinstance(argument, str) and argument.startswith(prefixes) for argument in arguments)
 
 
+def _supervisor_owned(plist_dir: Path) -> bool:
+    """Read phase under the LaunchAgents HOME; unknown ownership refuses restart."""
+    # Local import avoids consolidation_plan -> component_jobs -> jobs import cycle.
+    from .consolidation_plan import read_owned
+
+    journal = plist_dir.parent.parent / ".local/share/brainlayer/supervisor/migration.json"
+    try:
+        journal.lstat()
+    except FileNotFoundError:
+        return False
+    if journal.resolve() != journal.absolute() or journal.stat().st_mode & 0o077:
+        raise ValueError("migration journal custody refused")
+    document = json.loads(read_owned(journal))
+    phase = document.get("phase") if isinstance(document, dict) else None
+    if phase in ("migrating", "migrated", "reverting"):
+        return True
+    if phase in ("reverted", "rolled_back"):
+        return False
+    raise ValueError("unknown migration journal phase; operator reconciliation required")
+
+
 def restart_loaded_jobs(
     plist_dir: Path,
     opt_path: Path,
@@ -100,7 +124,7 @@ def restart_loaded_jobs(
     uid: int,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Kickstart loaded daemons, then verify every running job maps the current keg."""
+    """Restart and verify legacy jobs; consolidate owns supervisor keg changes."""
     current_keg = opt_path.resolve(strict=True)
     if current_keg.parent.name != "brainlayer" or current_keg.parent.parent.name != "Cellar":
         raise ValueError(f"opt path does not resolve to a BrainLayer Cellar keg: {opt_path}")
@@ -122,8 +146,19 @@ def restart_loaded_jobs(
         report["errors"]["discovery"] = str(exc)
         report["ok"] = False
         return report
+    try:
+        supervisor_owned = _supervisor_owned(plist_dir)
+    except (OSError, ValueError) as exc:
+        report["errors"]["ownership"] = str(exc)
+        report["ok"] = False
+        return report
     measured_jobs = 0
+    delegated_jobs = 0
     for label, plist in jobs:
+        if supervisor_owned and label in SUPERVISOR_LABELS:
+            report["skipped"][label] = SUPERVISOR_SKIP
+            delegated_jobs += 1
+            continue
         target = f"gui/{uid}/{label}"
         initial = command_runner(["launchctl", "print", target])
         if initial.returncode != 0:
@@ -185,7 +220,7 @@ def restart_loaded_jobs(
                     report["errors"][label] = "job did not reach a running pid before verification deadline"
             if attempt < 16:
                 sleep_fn(0.5)
-    if measured_jobs == 0:
+    if measured_jobs == 0 and delegated_jobs == 0:
         report["errors"]["selection"] = "no loaded BrainLayer keg jobs were measured"
     report["ok"] = not report["errors"] and not report["stale"]
     return report
