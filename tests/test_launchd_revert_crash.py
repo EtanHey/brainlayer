@@ -16,22 +16,30 @@ from tests.test_launchd_consolidation_recovery import PROBE as MIGRATE_PROBE
 from tests.test_launchd_consolidation_recovery import scratch
 from tests.test_launchd_revert import CALENDAR, FLEET
 
-REVERT_PROBE = MIGRATE_PROBE.replace(
-    "from brainlayer.launchd_consolidation import migrate", "from brainlayer.launchd_revert import revert"
-)
-REVERT_PROBE = REVERT_PROBE.replace(
-    'if "com.brainlayer.watch" in state["loaded"] and "com.brainlayer.daemon" in state["loaded"]:',
-    'if {"com.brainlayer.watch", "com.etanhey.brainlayer-fleet-watchdog"}.intersection(state["loaded"]) and {"com.brainlayer.daemon", "com.brainlayer.maintenance"}.intersection(state["loaded"]):',
-)
-start = REVERT_PROBE.index("result = migrate(")
-end = REVERT_PROBE.index("print(json.dumps", start)
-REVERT_PROBE = (
-    REVERT_PROBE[:start]
-    + """result = revert(home, home / ".local/share/brainlayer/supervisor/migration.json",
+IMPORT_ANCHOR = "from brainlayer.launchd_consolidation import migrate"
+OVERLAP_ANCHOR = 'if "com.brainlayer.watch" in state["loaded"] and "com.brainlayer.daemon" in state["loaded"]:'
+
+
+def revert_probe(migrate_probe):
+    for anchor in (IMPORT_ANCHOR, OVERLAP_ANCHOR):
+        if migrate_probe.count(anchor) != 1:
+            raise ValueError(f"probe anchor missing or duplicated: {anchor}")
+    code = migrate_probe.replace(IMPORT_ANCHOR, "from brainlayer.launchd_revert import revert")
+    code = code.replace(
+        OVERLAP_ANCHOR,
+        'if {"com.brainlayer.watch", "com.etanhey.brainlayer-fleet-watchdog"}.intersection(state["loaded"]) and {"com.brainlayer.daemon", "com.brainlayer.maintenance"}.intersection(state["loaded"]):',
+    )
+    start, end = code.index("result = migrate("), code.index("print(json.dumps")
+    return (
+        code[:start]
+        + """result = revert(home, home / ".local/share/brainlayer/supervisor/migration.json",
     "gui/424242", run, alive=lambda pid: False, clock=Clock())
 """
-    + REVERT_PROBE[end:]
-)
+        + code[end:]
+    )
+
+
+REVERT_PROBE = revert_probe(MIGRATE_PROBE)
 
 
 def probe(root, code, cut=0, *, context="baseline"):
@@ -44,11 +52,16 @@ def probe(root, code, cut=0, *, context="baseline"):
         )
     except subprocess.TimeoutExpired as error:
         receipt = root / "home/.local/share/brainlayer/supervisor/migration.json"
+        try:
+            journal = receipt.read_text()[-2000:]
+        except (OSError, UnicodeError) as missing:
+            journal = f"unreadable/missing: {type(missing).__name__}"
         pytest.fail(
-            f"revert {context} cut={cut} exceeded 30s; journal={receipt.read_text()[-2000:]}; stdout={error.stdout!r}; stderr={error.stderr!r}"
+            f"revert {context} cut={cut} exceeded 30s; journal={journal}; stdout={error.stdout!r}; stderr={error.stderr!r}"
         )
 
 
+@pytest.mark.crash_sweep
 @pytest.mark.parametrize("shard", range(64), ids=lambda shard: f"shard-{shard:02}")
 def test_revert_sigkill_every_os_launchctl_cut_then_rerun(tmp_path, shard):
     baseline_root = tmp_path / "baseline"
@@ -106,10 +119,12 @@ def test_revert_sigkill_every_os_launchctl_cut_then_rerun(tmp_path, shard):
     )
 
 
-def test_timeout_identifies_the_original_rerun_cut_and_streams(tmp_path, monkeypatch):
+@pytest.mark.parametrize("receipt_present", [True, False])
+def test_timeout_identifies_the_original_rerun_cut_and_streams(tmp_path, monkeypatch, receipt_present):
     receipt = tmp_path / "home/.local/share/brainlayer/supervisor/migration.json"
     receipt.parent.mkdir(parents=True)
-    receipt.write_text('{"phase":"reverting"}')
+    if receipt_present:
+        receipt.write_text('{"phase":"reverting"}')
 
     def timeout(argv, **kwargs):
         assert kwargs["timeout"] == 30
@@ -120,5 +135,11 @@ def test_timeout_identifies_the_original_rerun_cut_and_streams(tmp_path, monkeyp
         probe(tmp_path, REVERT_PROBE, context="rerun cut=612 after:os.link")
     assert all(
         detail in str(error.value)
-        for detail in ("rerun cut=612 after:os.link", "30s", "reverting", "partial stdout", "partial stderr")
+        for detail in (
+            "rerun cut=612 after:os.link",
+            "30s",
+            "reverting" if receipt_present else "missing",
+            "partial stdout",
+            "partial stderr",
+        )
     )

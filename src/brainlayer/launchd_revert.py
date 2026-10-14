@@ -166,13 +166,10 @@ def revert(home, journal, domain, run, *, alive=pid_alive, clock=time):
         current = {label: runtime.observe(label) for label in states}
         resumed = document.get("revert_bootstrap", {})
         for label in states.keys() - set(NEW):
-            if states[label]["loaded"]:
+            if states[label]["loaded"] and phase != "reverted" and not current[label]["loaded"]:
                 legacy_available(label)
             if current[label]["loaded"] and (
-                phase == "migrated"
-                or not states[label]["loaded"]
-                or label not in resumed
-                or resumed[label].get("pid") not in (None, current[label]["pid"])
+                phase == "migrated" or not states[label]["loaded"] or label not in resumed
             ):
                 raise RuntimeError(f"unowned legacy service prevents revert: {label}")
         if phase == "reverted":
@@ -233,15 +230,16 @@ def revert(home, journal, domain, run, *, alive=pid_alive, clock=time):
             loaded = runtime.observe(label)
             if loaded["loaded"]:
                 intent = document.get("revert_bootstrap", {}).get(label)
-                if not state["loaded"] or intent is None or intent.get("pid") not in (None, loaded["pid"]):
+                if not state["loaded"] or intent is None:
                     raise RuntimeError("unowned legacy service appeared during revert")
             elif state["loaded"]:
                 for replacement in NEW:
                     if runtime.observe(replacement)["loaded"]:
                         raise RuntimeError("replacement revived; refusing legacy bootstrap")
                     wait_custody(custody[replacement], clock=clock)
-                if any(alive(pid) for pid in runtime.observed_pids.get(label, set()) | ({state["pid"]} - {None})):
-                    raise RuntimeError("legacy writer still lives; refusing bootstrap")
+                # Migration already proved the snapshot generation exited. Its
+                # numeric PID can be unrelated now; only NEW generations and
+                # custody groups remain shutdown prerequisites for this revert.
                 legacy_available(label)
                 document.setdefault("revert_bootstrap", {})[label] = {"pid": None}
                 save()
