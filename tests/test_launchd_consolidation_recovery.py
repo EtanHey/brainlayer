@@ -537,6 +537,7 @@ def probe(root, keg, cut=0, *, context="baseline"):
         )
 
 
+@pytest.mark.crash_sweep
 @pytest.mark.parametrize("restart", [False, True], ids=["first-install", "keg-restart"])
 @pytest.mark.parametrize("shard", range(32), ids=lambda shard: f"shard-{shard:02}")
 def test_sigkill_every_os_and_launchctl_boundary_then_plain_rerun(tmp_path, restart, shard):

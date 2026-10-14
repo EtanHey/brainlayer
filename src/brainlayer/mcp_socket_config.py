@@ -91,7 +91,14 @@ def socat_socket_target(server: object) -> str | None:
         for a in args or []
         if isinstance(a, str) and a.startswith("UNIX-CONNECT:")
     ]
-    return targets[0] if len(targets) == 1 else None
+    return targets[0] if len(targets) == 1 and targets[0] else None
+
+
+def socat_socket_unparsed_reason(server: object) -> str | None:
+    """Refuse default-route substitution when an existing socat route is unknown."""
+    if mcp_command_basename(server) == "socat" and socat_socket_target(server) is None:
+        return "socat address is not a single non-empty UNIX-CONNECT target; entry not migrated"
+    return None
 
 
 def socat_socket_conflict(server: object) -> dict[str, str] | None:
@@ -214,6 +221,8 @@ def iter_toml_mcp_servers(payload: object) -> list[tuple[str, object]]:
 
 def socket_server_preserving(server: object, *, bridge_command: str | None = None) -> dict[str, Any]:
     """Bridge transport, keeping unrelated keys (disabled/env/timeout)."""
+    if reason := socat_socket_unparsed_reason(server):
+        raise ValueError(reason)
     preserved: dict[str, Any] = {}
     if isinstance(server, dict):
         drop_keys = {"command", "args", "path", *_HTTP_TRANSPORT_KEYS}

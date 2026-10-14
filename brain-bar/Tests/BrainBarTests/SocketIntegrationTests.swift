@@ -153,6 +153,68 @@ final class SocketIntegrationTests: XCTestCase {
         XCTAssertEqual(result, 0, "Should connect to brainbar socket (errno: \(errno))")
     }
 
+    func testNativeServerPublishesTransportAnswersOnScratchPath() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { server.stop(); try? FileManager.default.removeItem(at: dir) }
+        let receipt = dir.appendingPathComponent("transport.json")
+        server.stop()
+        server = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath, database: db,
+            diagnostics: .daemon(environment: ["BRAINLAYER_TRANSPORT_HEALTH_PATH": receipt.path],
+                debugLogPath: dir.appendingPathComponent("debug.log").path,
+                lifecycleLogPath: dir.appendingPathComponent("lifecycle.log").path))
+        server.start()
+        XCTAssertTrue(waitForSocket(at: testSocketPath))
+        let response = try sendMCPRequest(["jsonrpc": "2.0", "id": 91, "method": "ping"])
+        XCTAssertNotNil(response["result"])
+        let deadline = Date().addingTimeInterval(6)
+        var answers = 0
+        while Date() < deadline {
+            if let data = try? Data(contentsOf: receipt),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let counts = json["counts"] as? [String: Int] { answers = counts["requests_answered"] ?? 0 }
+            if answers > 0 { break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertEqual(answers, 1, "Actual native response must appear in the transport receipt")
+        let stream = try connectClient()
+        try sendMCPRequest(on: stream, request: ["jsonrpc": "2.0", "id": 93, "method": "watch-brain-bus"])
+        _ = try readMCPMessage(fd: stream)
+        close(stream) // A notification stream must not become a phantom unanswered request.
+        let progressGate = SQLiteProgressGate()
+        sqlite3_progress_handler(db.dbHandle, 1, blockSQLiteProgress, Unmanaged.passUnretained(progressGate).toOpaque())
+        defer { sqlite3_progress_handler(db.dbHandle, 0, nil, nil) }
+        defer { progressGate.release.signal(); server.stop() }
+        let fd = try connectClient()
+        try sendMCPRequest(on: fd, request: ["jsonrpc": "2.0", "id": 92, "method": "tools/call",
+            "params": ["name": "brain_backup_vacuum_into", "arguments": ["target_path": dir.appendingPathComponent("backup.db").path]]])
+        XCTAssertEqual(progressGate.entered.wait(timeout: .now() + 2), .success)
+        close(fd) // The server has received this request, but the backup has not answered it.
+        let dropDeadline = Date().addingTimeInterval(6)
+        var dropped = 0
+        var final: [String: Any] = [:]
+        while Date() < dropDeadline {
+            if let data = try? Data(contentsOf: receipt),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let counts = json["counts"] as? [String: Int] {
+                dropped = counts["requests_dropped"] ?? 0
+                final = json
+            }
+            if dropped > 0 { break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertEqual(dropped, 1)
+        let counts = try XCTUnwrap(final["counts"] as? [String: Int])
+        XCTAssertEqual(counts["disconnects_with_in_flight"], 1)
+        XCTAssertEqual(counts["requests_received"], 2)
+        XCTAssertEqual(counts["requests_answered"], 1)
+        XCTAssertEqual(final["in_flight_requests"] as? Int, 0)
+        let attributes = try FileManager.default.attributesOfItem(atPath: receipt.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertFalse(String(data: try Data(contentsOf: receipt), encoding: .utf8)!.contains("target_path"))
+
+    }
+
     // MARK: - MCP Initialize handshake
 
     func testMCPInitializeOverSocket() throws {

@@ -251,7 +251,8 @@ def test_trace_is_written_when_build_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     }
     trace_items = json.loads(trace.read_text())
     assert trace_items[0] == str(case["inputs"]["db"])
-    assert len(trace_items) == 5
+    assert len(trace_items) == 6
+    assert "db/transport-health.json" in trace_items
 
 
 def test_transitive_backup_import_failure_names_the_missing_dependency(
@@ -332,3 +333,51 @@ def test_cli_observability_stdout(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert json.loads(result.stdout)["stores"]["total_chunks"] == 0
     monkeypatch.setenv("BRAINLAYER_OBSERVABILITY_PRODUCER_ROOT", str(REPO.parent))
     assert CliRunner().invoke(app, ["observability", "--stdout"]).exit_code == 1
+
+
+def test_producer_v2_keeps_v1_sections_and_names_missing_transport(tmp_path: Path):
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    actual, _ = _run_case(case, tmp_path)
+    import jsonschema
+
+    schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text())
+    jsonschema.validate(actual, schema, format_checker=jsonschema.FormatChecker())
+    assert actual["schema_version"] == 2
+    assert actual["transport"]["state"] == "unmeasurable"
+    assert actual["transport"]["reason"]
+    assert "counts" not in actual["transport"]
+    expected = json.loads((FIXTURES / "golden/healthy-dev.json").read_text())
+    for section in OWNED_SECTIONS:
+        assert actual[section] == expected[section]
+
+
+@pytest.mark.parametrize("phase", ["build", "alert"])
+def test_transport_failure_still_writes_fresh_unmeasurable_document(tmp_path, monkeypatch, phase):
+    import brainlayer.observability_transport as transport
+    from brainlayer.observability_surface import write_document
+
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = _stage_db(case, tmp_path)
+    output = tmp_path / "observability.json"
+    output.write_text('{"stale": true}')
+
+    def fail(**kwargs):
+        raise PermissionError("private transport fixture denied")
+
+    if phase == "build":
+        monkeypatch.setattr(transport, "build_transport_section", fail)
+    else:
+        monkeypatch.setattr(transport, "report_transport_alert", lambda *args, **kwargs: fail())
+    document = write_document(
+        env={
+            "BRAINLAYER_DB": str(db),
+            "BRAINLAYER_OBSERVABILITY_PATH": str(output),
+            "BRAINLAYER_OBSERVABILITY_NOW": str(case["generated_at"]),
+        }
+    )
+    assert json.loads(output.read_text()) == document
+    assert document["schema_version"] == 2
+    assert document["transport"]["state"] == "unmeasurable"
+    assert "denied" in document["transport"]["reason"]
+    assert "counts" not in document["transport"]
+    assert document["stores"]["state"] == "measured"
