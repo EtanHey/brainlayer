@@ -94,4 +94,35 @@ final class MCPReconnectRecoveryTests: XCTestCase {
             XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("DO_NOT_COPY"))
         }
     }
+    func testPreviousBootAndExpiredBaselineAreNonnumericAtExactBoundary() throws {
+        for (bootChanged, gap, measured) in [(true, 60.0, false), (false, 172800.0, false), (false, 300.0, true), (false, 301.0, false)] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let path = root.appendingPathComponent("transport.json"), db = root.appendingPathComponent("private.db").path
+            let start = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+            MCPTransportHealth(path: path.path, now: { start }).publish(dbPath: db, inFlight: 0, stopped: true, persistentConnections: 12)
+            var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            var saved = try XCTUnwrap(raw["reconnect"] as? [String: Any])
+            XCTAssertNotNil(saved["boot_time"])
+            if bootChanged { saved["boot_time"] = "previous-boot" }
+            raw["reconnect"] = saved
+            try JSONSerialization.data(withJSONObject: raw).write(to: path)
+            var elapsed = 0.0
+            let next = MCPTransportHealth(path: path.path, now: { start.addingTimeInterval(gap + elapsed) }, uptime: { elapsed })
+            next.publish(dbPath: db, inFlight: 0)
+            raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            XCTAssertEqual(raw["state"] as? String, measured ? "measured" : "unmeasurable")
+            if !measured { XCTAssertNil(raw["counts"]); XCTAssertNil((raw["reconnect"] as? [String: Any])?["severed_persistent"]) }
+            if measured {
+                elapsed = 1; next.publish(dbPath: db, inFlight: 0)
+                raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+                XCTAssertNil(raw["counts"], "The consumer and running producer must expire the same boundary")
+            }
+            let fresh = MCPTransportHealth(path: path.path, now: { start.addingTimeInterval(gap + elapsed) })
+            fresh.publish(dbPath: db, inFlight: 0, stopped: true, persistentConnections: 12)
+            raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            XCTAssertEqual((raw["reconnect"] as? [String: Any])?["severed_persistent"] as? Int, 12, "Discarding stale evidence must allow a new shutdown baseline")
+        }
+    }
+
 }

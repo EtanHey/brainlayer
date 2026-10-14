@@ -28,6 +28,7 @@ COUNTS = (
 )
 IDENTITY_REASON = "no stable client identity on the socket (fd reuse; proxy pid)"
 WINDOW_SECONDS = 900
+MAXIMUM_BASELINE_AGE_SECONDS = 300  # Five grace periods, including KeepAlive relaunch.
 
 
 def _read_receipt(path: Path) -> tuple[bytes, os.stat_result]:
@@ -122,10 +123,22 @@ def _frame(data: dict, *, db: Path, now: datetime, historical: bool = False) -> 
 def _reconnect_frame(frame: dict, *, parent: dict, db: Path, now: datetime) -> dict:
     generated, started = _time(parent["generated_at"]), _time(parent["producer_started_at"])
     if not isinstance(frame, dict) or frame.get("state") != "measured" or frame.get("reason") != "":
-        raise ValueError("previous socket recovery evidence unreadable")
+        raise ValueError(
+            "previous socket recovery evidence unreadable: "
+            + str(frame.get("reason", "") if isinstance(frame, dict) else "")
+        )
     if Path(frame["db_path"]).resolve() != db or not 0 <= (now - generated).total_seconds() <= 60:
         raise ValueError("foreign or stale socket recovery evidence")
     severed = _time(frame["severed_at"])
+    from .supervisor_guard import boot_time
+
+    stamp = frame.get("boot_time")
+    if not isinstance(stamp, str) or not stamp:
+        raise ValueError("socket recovery boot identity unreadable")
+    if stamp != boot_time():
+        raise ValueError("baseline from a previous boot; reconnect deficit not measured")
+    if (now - severed).total_seconds() > MAXIMUM_BASELINE_AGE_SECONDS:
+        raise ValueError("baseline expired; reconnect deficit not measured")
     keys = (
         "minimum_connection_age_seconds",
         "grace_seconds",

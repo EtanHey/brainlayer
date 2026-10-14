@@ -115,7 +115,7 @@ public final class MCPTransportHealth {
         }
         let recovery = reconnect.publish(db: db, wall: wall, elapsed: instant - startedUptime,
             live: persistentConnections, stopped: stopped)
-        let reason = stopped ? "BrainBar server stopped" : (reconnect.unknown ? "previous socket recovery evidence unreadable" : (incidentUnknown ? "previous transport receipt refused or unreadable" : (overflow ? "transport event buffer overflow" : "")))
+        let reason = stopped ? "BrainBar server stopped" : (reconnect.unknown ? reconnect.reason : (incidentUnknown ? "previous transport receipt refused or unreadable" : (overflow ? "transport event buffer overflow" : "")))
         var value: [String: Any] = ["schema_version": 1, "state": reason.isEmpty ? "measured" : "unmeasurable", "reason": reason,
             "db_path": db, "generated_at": ISO8601DateFormatter().string(from: wall),
             "producer_started_at": ISO8601DateFormatter().string(from: started), "window_seconds": Int(Self.windowSeconds)]

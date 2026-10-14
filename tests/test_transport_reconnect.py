@@ -9,6 +9,12 @@ from brainlayer.job_alerts import report
 from brainlayer.observability_surface import InputRecorder
 from brainlayer.observability_transport import build_transport_section, report_transport_alert
 
+
+@pytest.fixture(autouse=True)
+def fixed_boot(monkeypatch):
+    monkeypatch.setattr("brainlayer.supervisor_guard.boot_time", lambda: "100:0")
+
+
 NOW = datetime(2030, 1, 1, tzinfo=UTC)
 
 
@@ -40,7 +46,8 @@ def receipt(tmp_path, *, recovered=0, elapsed=60):
             "state": "measured",
             "reason": "",
             "db_path": str(db),
-            "severed_at": (NOW - timedelta(seconds=901)).isoformat(),
+            "boot_time": "100:0",
+            "severed_at": (NOW - timedelta(seconds=60)).isoformat(),
             "minimum_connection_age_seconds": 10,
             "grace_seconds": 60,
             "observed_seconds": elapsed,
@@ -144,3 +151,24 @@ def test_unknown_recovery_does_not_hide_a_valid_historical_request_episode(tmp_p
     section = consume(value, path, env)
     assert section["state"] == "unmeasurable" and "counts" not in section
     assert "historical transport episode" in alerts.read_text()
+
+
+@pytest.mark.parametrize(
+    "boot,age,measured",
+    [
+        ("99:0", 60, False),
+        ("100:0", 172800, False),
+        ("100:0", 300, True),
+        ("100:0", 301, False),
+        (None, 60, False),
+        (True, 60, False),
+    ],
+)
+def test_boot_and_age_bound_prevent_false_reconnect_alert(tmp_path, boot, age, measured):
+    value, path, alerts, env = receipt(tmp_path)
+    value["reconnect"].update(boot_time=boot, severed_at=(NOW - timedelta(seconds=age)).isoformat())
+    section = consume(value, path, env)
+    assert (section["state"] == "measured") == measured
+    assert (alerts.exists() and "did not recover" in alerts.read_text()) == measured
+    if not measured:
+        assert "counts" not in section and section["reason"]
