@@ -6,7 +6,7 @@ import XCTest
 final class BrainBarSettingsSnapshotTests: XCTestCase {
     @MainActor
     func testSettingsViewRendersProviderJobsAndSaveTruthScenarios() throws {
-        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let tempRoot = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-settings-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempRoot) }
 
@@ -24,7 +24,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             initialObservabilityResult: ObservabilityReader.read(url: observabilityURL)
         )
         XCTAssertNotNil(providerViewModel.backupStatus, "The settings snapshot must render measured backup truth.")
-        try render(viewModel: providerViewModel, named: "provider-and-jobs")
+        try render(viewModel: providerViewModel, named: "provider-and-jobs", root: tempRoot)
 
         let savedViewModel = try makeViewModel(
             root: tempRoot,
@@ -32,7 +32,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             config: .defaultConfig
         )
         savedViewModel.setSystemEnabled(false)
-        try render(viewModel: savedViewModel, named: "saved-restart-needed")
+        try render(viewModel: savedViewModel, named: "saved-restart-needed", root: tempRoot)
 
         let probeErrorViewModel = try makeViewModel(
             root: tempRoot,
@@ -43,7 +43,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             probeErrorViewModel.config.launchdJobs[.watch]?.loadState,
             .probeError("launchctl exited 1")
         )
-        try render(viewModel: probeErrorViewModel, named: "launchctl-probe-error")
+        try render(viewModel: probeErrorViewModel, named: "launchctl-probe-error", root: tempRoot)
     }
 
     @MainActor
@@ -79,8 +79,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             ),
         ]
         let observations = name == "provider" ? activityFixture : [:]
-        return BrainBarSettingsViewModel(
-            store: store,
+        return BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: states),
             runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(
                 observation: .unknown("Active runtime configuration is not observable.")
@@ -94,7 +93,7 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
     }
 
     @MainActor
-    private func render(viewModel: BrainBarSettingsViewModel, named name: String) throws {
+    private func render(viewModel: BrainBarSettingsViewModel, named name: String, root: URL) throws {
         let view = NSHostingView(rootView: BrainBarSettingsView(viewModel: viewModel))
         view.frame = NSRect(x: 0, y: 0, width: 700, height: 1_080)
         view.layoutSubtreeIfNeeded()
@@ -110,24 +109,20 @@ final class BrainBarSettingsSnapshotTests: XCTestCase {
             return
         }
 
-        let url = screenshotURL(named: name)
+        let url = screenshotURL(named: name, root: root)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try png.write(to: url)
         XCTAssertGreaterThan(png.count, 1_000)
         XCTAssertGreaterThan(distinctSampledColorCount(in: bitmap), 8)
     }
 
-    private func screenshotURL(named name: String) -> URL {
+    private func screenshotURL(named name: String, root: URL) -> URL {
         if let override = ProcessInfo.processInfo.environment["BRAINBAR_SETTINGS_RENDER_DIR"],
            !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
                 .appendingPathComponent("settings-\(name).png")
         }
-        return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent(
-                "brainbar-p5-settings-renders-\(ProcessInfo.processInfo.processIdentifier)",
-                isDirectory: true
-            )
+        return root.appendingPathComponent("screenshots", isDirectory: true)
             .appendingPathComponent("settings-\(name).png")
     }
 

@@ -145,13 +145,12 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
 
     @MainActor
     func testViewModelShowsOnlyTheModelUntilTheFirstSampleThenTheSampledProcess() async throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-embedding-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(
                 state: .running(pid: 4242, residentBytes: 1_288_490_188)
@@ -178,15 +177,14 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
     func testEmbeddingRowsResolveWhileTheAllJobsLaunchdSweepIsStalled() async throws {
         // #974 review B1: the production all-jobs sweep has no deadline. A hung launchctl
         // for any job must not keep the hotlane rows pending or pinned to an old sample.
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-embedding-stall-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
         let stalled = StalledLaunchdStatusProvider()
         defer { stalled.release() }
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: stalled,
             embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(
                 state: .running(pid: 4242, residentBytes: 1_288_490_188)
@@ -211,15 +209,14 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
 
     @MainActor
     func testASlowerOlderEmbeddingSampleNeverOverwritesANewerOne() async throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-embedding-order-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
         let probe = GatedResidencyProbe(first: .running(pid: 1111, residentBytes: 1_024), then: .stopped)
         defer { probe.releaseFirst() }
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             embeddingResidencyProbe: probe,
             refreshStatusOnLoad: false
@@ -256,7 +253,7 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
 
     @MainActor
     func testAdvancedEmbeddingRowsRenderAtEveryWindowWidth() throws {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-embedding-render-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
@@ -266,8 +263,7 @@ final class BrainBarEmbeddingResidencyTests: XCTestCase {
             ("stopped", .stopped),
         ]
         for (name, state) in scenarios {
-            let viewModel = BrainBarSettingsViewModel(
-                store: store,
+            let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                 launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                 embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: state),
                 initialEmbeddingProcess: state,

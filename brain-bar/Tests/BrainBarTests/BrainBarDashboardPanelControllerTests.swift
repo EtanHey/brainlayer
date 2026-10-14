@@ -65,7 +65,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     }
 
     func testDashboardWindowUsesTheResizableWindowContract() {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         let window = controller.windowForTesting
 
         XCTAssertEqual(BrainBarDashboardPanelController.defaultSize, NSSize(width: 900, height: 640))
@@ -80,7 +80,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     }
 
     func testOpeningSettingsTwiceSelectsTheSameVisiblePanel() {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
         controller.statusItemButton = anchor
         defer { controller.dismiss() }
@@ -96,7 +96,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     }
 
     func testURLDestinationsShowSamePanelAndSelectRequestedSettingsSection() {
-        let controller = BrainBarDashboardPanelController(runtime: BrainBarRuntime())
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime())
         let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
         controller.statusItemButton = anchor
         defer {
@@ -130,7 +130,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     func testDashboardPanelKeepsRestingHeightWhenDetailsExpands() {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
 
@@ -146,7 +146,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     func testSignalCoverageKeepsFixedWindowHeightInBothDirections() {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         _ = controller.contentViewControllerForTesting.view
         controller.setDetailsExpandedForTesting(true)
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
@@ -168,7 +168,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
         for width: CGFloat in [760, 960, 1_280] {
-            let controller = BrainBarDashboardPanelController(runtime: runtime)
+            let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
             let panel = controller.windowForTesting
             panel.setFrame(NSRect(x: -2_000, y: -2_000, width: width, height: 640), display: false)
             controller.setDetailsExpandedForTesting(true)
@@ -234,7 +234,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         ]
         for width: CGFloat in [760, 960, 1_280] {
             for (name, runtime, setExpanded) in disclosures {
-                let controller = BrainBarDashboardPanelController(runtime: runtime)
+                let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
                 let panel = controller.windowForTesting
                 panel.setFrame(NSRect(x: -2_000, y: -2_000, width: width, height: 640), display: false)
                 setExpanded(controller, true)
@@ -268,7 +268,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     func testHideAndShowPreserveFrameAndScrollWhereverTheIconMoves() throws {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         let window = controller.windowForTesting
         let visible = NSScreen.screens.first?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_024, height: 768)
         let anchorWindow = NSWindow(
@@ -311,7 +311,7 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
     func testResizeDelegateOnlyClampsToTheMinimumAcrossRestingTransitions() {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        let controller = BrainBarDashboardPanelController(runtime: runtime)
+        let controller = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
         let window = controller.windowForTesting
         _ = controller.contentViewControllerForTesting.view
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))

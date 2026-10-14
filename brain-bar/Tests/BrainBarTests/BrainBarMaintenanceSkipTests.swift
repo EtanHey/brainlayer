@@ -529,8 +529,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
             "/d/maintenance.log": Data(#"{"ts": "2026-09-27T02:23:03+00:00", "mode": "full", "dry_run": false, "vacuum_after_bytes": 1}"#.utf8),
             "/logs/weekly.out.log": Data(#"{"reason": "\#(quietWindow)", "status": "aborted"}"#.utf8),
         ]
-        let viewModel = BrainBarSettingsViewModel(
-            store: BrainLayerConfigStore(configURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).env")),
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: BrainLayerConfigStore(configURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).env")),
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdObservations: [.maintenanceNightly: observation(exit: 0), .maintenanceWeekly: observation(exit: 75)],
             refreshStatusOnLoad: false,

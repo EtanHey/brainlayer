@@ -21,7 +21,7 @@ final class BrainDatabaseWindowedBucketsTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        tempDBPath = NSTemporaryDirectory() + "brainbar-windowed-buckets-\(UUID().uuidString).db"
+        tempDBPath = brainBarTestTemporaryPath() + "brainbar-windowed-buckets-\(UUID().uuidString).db"
         db = BrainDatabase(path: tempDBPath)
     }
 

@@ -3,7 +3,7 @@ import XCTest
 
 final class BrainBarOperationReceiptTests: XCTestCase {
     func testDaemonReceiptIsReadableBySeparateUIStore() throws {
-        let url = FileManager.default.temporaryDirectory
+        let url = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-receipts-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
         let daemon = BrainBarOperationReceipts(url: url)
@@ -44,8 +44,8 @@ final class BrainBarOperationReceiptTests: XCTestCase {
     }
 
     func testRouterPublishesSearchAndStoreReceipts() throws {
-        let dbPath = NSTemporaryDirectory() + "brainbar-receipt-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: dbPath) }
+        let dbPath = brainBarTestTemporaryPath() + "brainbar-receipt-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(dbPath) }
         let db = BrainDatabase(path: dbPath)
         defer { db.close() }
         let receipts = BrainBarOperationReceipts()
@@ -80,7 +80,7 @@ final class BrainBarOperationReceiptTests: XCTestCase {
     }
 
     func testDefaultRouterIsMemoryOnlyAndLeavesNoSidecar() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("brainbar-no-receipt-\(UUID().uuidString)")
+        let directory = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-no-receipt-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let dbPath = directory.appendingPathComponent("brainlayer.db").path
@@ -98,9 +98,9 @@ final class BrainBarOperationReceiptTests: XCTestCase {
     }
 
     func testSlowFailingReceiptWriteDoesNotBlockOrChangeMCPResponse() throws {
-        let dbPath = NSTemporaryDirectory() + "brainbar-slow-receipt-\(UUID().uuidString).db"
+        let dbPath = brainBarTestTemporaryPath() + "brainbar-slow-receipt-\(UUID().uuidString).db"
         let db = BrainDatabase(path: dbPath)
-        defer { db.close(); try? FileManager.default.removeItem(atPath: dbPath) }
+        defer { db.close(); removeBrainBarTestDatabase(dbPath) }
         let writerEntered = expectation(description: "writer entered")
         let responseReady = expectation(description: "MCP response ready")
         let release = DispatchSemaphore(value: 0)

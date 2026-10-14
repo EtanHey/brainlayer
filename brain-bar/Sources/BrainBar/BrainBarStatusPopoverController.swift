@@ -50,6 +50,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     let statusItemForTesting: any BrainBarStatusItem
     let contextMenuForTesting: NSMenu
 
+    private let workspace: any BrainBarWorkspaceActing
     private let runtime: BrainBarRuntime
     private let dashboardPanelController: BrainBarDashboardPanelController
     private let statusBar: any BrainBarStatusItemHosting
@@ -69,10 +70,12 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private let showLogItem = NSMenuItem(title: BrainBarStatusPopoverController.showLogTitle, action: nil, keyEquivalent: "")
 
     init(
+        workspace: any BrainBarWorkspaceActing,
         runtime: BrainBarRuntime,
         dashboardPanelController: BrainBarDashboardPanelController,
         statusBar: any BrainBarStatusItemHosting
     ) {
+        self.workspace = workspace
         self.runtime = runtime
         self.dashboardPanelController = dashboardPanelController
         self.statusBar = statusBar
@@ -345,7 +348,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         BrainBarJobAlerts.showLog(
             forKey: Self.jobAlertKey(for: badgePresentation),
             paths: .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath()),
-            workspace: BrainBarWorkspace()
+            workspace: workspace
         )
     }
 #endif

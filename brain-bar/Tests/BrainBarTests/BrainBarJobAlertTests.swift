@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class BrainBarJobAlertTests: XCTestCase {
     private let alert = "BrainLayer light maintenance failed; check the maintenance log"
-    private let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+    private let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
         .appendingPathComponent("brainbar-job-alert-\(UUID().uuidString)", isDirectory: true)
 
     override func setUpWithError() throws {
@@ -245,15 +245,14 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
     private let alert = "BrainLayer light maintenance failed; check the maintenance log"
 
     private func viewModel(_ result: ObservabilityReadResult) throws -> BrainBarSettingsViewModel {
-        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-job-alert-page-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
         let ok = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 1, lastExitCode: 0,
                                                  lastRunAt: Date(), nextRunAt: Date(), isContinuous: false)
-        return BrainBarSettingsViewModel(
-            store: store,
+        return BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdObservations: [.backupDaily: ok, .jsonlBackup: ok],
             refreshStatusOnLoad: false,
@@ -308,7 +307,7 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
 final class BrainBarJobAlertRoundOneTests: XCTestCase {
     private let alert = "BrainLayer light maintenance failed: post-maintenance search latency pathological"
     private let missing = "No maintenance log yet; it's written on the next run."
-    private let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+    private let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
         .appendingPathComponent("brainbar-job-alert-r1-\(UUID().uuidString)", isDirectory: true)
 
     private final class Recorder: BrainBarWorkspaceActing, @unchecked Sendable {
@@ -366,12 +365,9 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
         let workspace = Recorder()
-        let model = BrainBarSettingsViewModel(
-            store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+        let model = BrainBarSettingsViewModel(workspace: workspace, store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false, initialObservabilityResult: .readable(document()),
-            backupSources: BrainBarBackupSources(paths: paths, readFile: { _ in nil }, listDirectory: { _ in [] }, isRegularFile: { _ in false }),
-            workspace: workspace
-        )
+            backupSources: BrainBarBackupSources(paths: paths, readFile: { _ in nil }, listDirectory: { _ in [] }, isRegularFile: { _ in false }))
         XCTAssertNil(model.jobAlertLogMessage)
         model.showJobAlertLog()
         XCTAssertEqual(model.jobAlertLogMessage, missing)
@@ -479,7 +475,7 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
 final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
     private let first = "BrainLayer light maintenance failed: gate A"
     private let second = "BrainLayer full maintenance failed: gate B"
-    private let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+    private let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
         .appendingPathComponent("brainbar-job-alert-r1b-\(UUID().uuidString)", isDirectory: true)
 
     override func setUpWithError() throws {
@@ -511,8 +507,8 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
         let next = document(second)
-        let model = BrainBarSettingsViewModel(
-            store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+        let workspace = BrainBarRecordingWorkspace()
+        let model = BrainBarSettingsViewModel(workspace: workspace, store: store, launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false,
             observabilityURL: root.appendingPathComponent("observability.json"),
             initialObservabilityResult: .readable(document(first)),
@@ -523,6 +519,10 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         model.setObservabilityResultForTesting(.readable(document(first)))
         model.showJobAlertLog()
         XCTAssertEqual(model.jobAlertLogMessage, "No maintenance log yet; it's written on the next run.")
+        // Missing logs both reveal the existing folder and return a note. Before injection,
+        // this test reached Finder; teardown then removed the folder under the open window.
+        XCTAssertEqual(workspace.recorded.map(\.0), ["reveal"])
+        XCTAssertEqual(workspace.recorded.map(\.1), [root.appendingPathComponent("logs").path])
         model.setObservabilityResultForTesting(.readable(next))
         XCTAssertNil(model.jobAlertLogMessage, "a different alert must not inherit the old note")
     }
@@ -538,9 +538,8 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         let alertsURL = root.appendingPathComponent("job-alerts.json")
         try Data("{}".utf8).write(to: alertsURL)
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(runtime: runtime)
-        let status = BrainBarStatusPopoverController(
-            runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
         )
         defer { status.stop(); windowController.dismiss() }
         status.setBadgeForTesting(

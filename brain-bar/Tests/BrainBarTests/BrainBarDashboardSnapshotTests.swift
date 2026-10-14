@@ -352,7 +352,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             "Settings PNG render verification is display-dependent; set BRAINBAR_RENDER_IN_CI=1 to run in CI."
         )
 
-        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let tempRoot = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-render-settings-\(UUID().uuidString)", isDirectory: true)
         let configURL = tempRoot
             .appendingPathComponent(".config/brainlayer/brainlayer.env", isDirectory: false)
@@ -365,8 +365,7 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
         try store.save(config)
         defer { try? FileManager.default.removeItem(at: tempRoot) }
 
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [
                 .hotlane: .unloaded,
                 .drain: .running,

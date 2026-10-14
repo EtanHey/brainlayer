@@ -212,8 +212,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 let flow = DashboardFlowSummary.derive(
                     daemon: nil, stats: stats(replayDebt: 0, process: process, health: health), now: now
                 )
-                let viewModel = BrainBarSettingsViewModel(
-                    store: store,
+                let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
                     launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
                     initialLaunchdStates: [.watch: loadState, .index: .loaded],
                     refreshStatusOnLoad: false,
@@ -264,8 +263,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = BrainLayerConfigStore(configURL: directory.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdStates: [.watch: .running, .index: .loaded],
             refreshStatusOnLoad: false,
@@ -327,8 +325,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         let store = BrainLayerConfigStore(configURL: directory.appendingPathComponent("brainlayer.env"))
 
         // launchd says running, but the health file is missing: honest unknown, never "Watcher running".
-        let viewModel = BrainBarSettingsViewModel(
-            store: store,
+        let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [.watch: .running]),
             initialLaunchdStates: [.watch: .running],
             refreshStatusOnLoad: false,

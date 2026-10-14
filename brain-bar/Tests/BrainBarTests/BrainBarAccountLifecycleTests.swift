@@ -247,7 +247,7 @@ final class BrainBarAccountLifecycleTests: XCTestCase {
     }
 
     private func scratch() throws -> URL {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("brainbar-account-\(UUID().uuidString)")
+        let directory = brainBarTestTemporaryDirectory().appendingPathComponent("brainbar-account-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         return directory
     }

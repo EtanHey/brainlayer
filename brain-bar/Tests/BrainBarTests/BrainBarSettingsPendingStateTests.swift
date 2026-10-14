@@ -539,8 +539,7 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         config.launchdJobs[.watch]?.enabled = watchEnabled
         config.launchdJobs[.index]?.enabled = indexEnabled
         try store.save(config)
-        return (root, BrainBarSettingsViewModel(
-            store: store, launchdStatusProvider: launchd,
+        return (root, BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store, launchdStatusProvider: launchd,
             embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
             initialLaunchdStates: initialStates, refreshStatusOnLoad: refreshOnLoad,
             now: { now },

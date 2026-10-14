@@ -9,7 +9,7 @@ final class BrainBarOneWindowSidebarTests: XCTestCase {
     private func controller() -> BrainBarDashboardPanelController {
         let runtime = BrainBarRuntime()
         runtime.install(collector: BrainBarDashboardFixture.makeCollector(), database: nil)
-        return BrainBarDashboardPanelController(runtime: runtime)
+        return BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
     }
 
     func test_the_sidebar_is_dashboard_then_the_settings_sections() {

@@ -140,8 +140,8 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testResourcesListReturnsNoPreloadedResources() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-resources-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-resources-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -477,8 +477,8 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testBrainSearchDelegatesNormalQueriesToHybridHelper() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-helper-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-helper-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertChunk(
@@ -597,8 +597,8 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testBrainSearchHybridSuccessDoesNotPrependSwiftKGFacts() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-no-duplicate-kg-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-no-duplicate-kg-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertEntity(id: "entity-noa", type: "person", name: "Noa")
@@ -639,8 +639,8 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperFails() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-fallback-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertChunk(
@@ -677,8 +677,8 @@ final class MCPRouterTests: XCTestCase {
     }
 
     func testBrainSearchFallsBackToBrainBarDatabaseWhenHybridHelperReturnsEmptyResults() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-empty-fallback-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-empty-fallback-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertChunk(
@@ -715,8 +715,8 @@ No results found.
     }
 
     func testBrainStoreMCPResultIsPlainAndShowsTagsWithoutContent() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-store-output-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-store-output-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -754,8 +754,8 @@ No results found.
     }
 
     func testBrainSearchFallbackGatesSwiftKGFactsByDefault() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-fallback-kg-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertEntity(id: "entity-noa", type: "person", name: "Noa")
@@ -800,8 +800,8 @@ No results found.
     }
 
     func testBrainSearchFallbackMarksExpiredKGFactsInEntityHeader() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-expired-kg-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-fallback-expired-kg-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertEntity(id: "person-noa", type: "person", name: "Noa")
@@ -845,8 +845,8 @@ No results found.
     }
 
     func testBrainSearchFallbackMarksLapsedValidUntilWithoutExpiredStamp() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-fallback-lapsed-kg-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-fallback-lapsed-kg-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertEntity(id: "person-noa", type: "person", name: "Noa")
@@ -889,8 +889,8 @@ No results found.
     }
 
     func testReadToolsUseReadonlyReadDatabaseWhenWriteHandleIsUnavailable() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-read-db-routing-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-read-db-routing-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let setupDB = BrainDatabase(path: tempDB)
         try setupDB.insertChunk(
             id: "read-db-route-target",
@@ -952,8 +952,8 @@ No results found.
     }
 
     func testBrainExpandNeighbourIDsRoundTripWithoutPrefixCollisions() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-expand-ids-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-expand-ids-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let database = BrainDatabase(path: tempDB)
         defer { database.close() }
         let ids = ["0", "1", "2"].map { "rt-rollout--" + String(repeating: $0, count: 64) }
@@ -1001,8 +1001,8 @@ No results found.
     }
 
     func testBrainExpandReturnsFullTargetContentWhenSummaryExists() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-expand-full-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-expand-full-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1035,8 +1035,8 @@ No results found.
     }
 
     func testBrainStoreUsesServerSessionForExpandableOrderedContext() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-store-session-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-store-session-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1083,8 +1083,8 @@ No results found.
     /// It must run on the writable connection, not the read-only read handle —
     /// otherwise markDelivered fails with `SQLite step failed: 8` (SQLITE_READONLY).
     func testUnreadSearchUsesWritableConnectionForMarkDelivered() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-unread-route-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-unread-route-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let setupDB = BrainDatabase(path: tempDB)
         try setupDB.insertChunk(
             id: "unread-route-target",
@@ -1130,8 +1130,8 @@ No results found.
     }
 
     func testBrainSearchFallsBackToReadDatabaseWhenHybridHelperExceedsBudget() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-budget-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-budget-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let writeDB = BrainDatabase(path: tempDB)
         defer { writeDB.close() }
         try writeDB.insertChunk(
@@ -1170,8 +1170,8 @@ No results found.
     }
 
     func testBrainSearchDoesNotCallHybridHelperBeforeItIsReady() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-hybrid-not-ready-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-hybrid-not-ready-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertChunk(
@@ -1203,8 +1203,8 @@ No results found.
     }
 
     func testBrainSearchUnreadOnlyStaysOnBrainBarQueuePathWhenHybridHelperExists() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-unread-helper-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-unread-helper-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1246,9 +1246,9 @@ No results found.
     }
 
     func testBrainMaintenanceRebuildTrigramToolReturnsProgressMetadata() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-maintenance-\(UUID().uuidString).db"
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-maintenance-\(UUID().uuidString).db"
         defer {
-            try? FileManager.default.removeItem(atPath: tempDB)
+            removeBrainBarTestDatabase(tempDB)
             try? FileManager.default.removeItem(atPath: tempDB + "-wal")
             try? FileManager.default.removeItem(atPath: tempDB + "-shm")
         }
@@ -1284,9 +1284,9 @@ No results found.
     }
 
     func testBrainMaintenanceRebuildTrigramCancelReturnsBeforeSchemaWrites() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-maintenance-cancel-\(UUID().uuidString).db"
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-maintenance-cancel-\(UUID().uuidString).db"
         defer {
-            try? FileManager.default.removeItem(atPath: tempDB)
+            removeBrainBarTestDatabase(tempDB)
             try? FileManager.default.removeItem(atPath: tempDB + "-wal")
             try? FileManager.default.removeItem(atPath: tempDB + "-shm")
         }
@@ -1379,8 +1379,8 @@ No results found.
     }
 
     func testBrainDigestHandlerScopesChunkToProject() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-digest-scope-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-digest-scope-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try db.insertEntity(id: "project-brainlayer", type: "project", name: "BrainLayer")
@@ -1411,8 +1411,8 @@ No results found.
     }
 
     func testBrainDigestStoresTheFullInputContent() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-digest-full-content-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-digest-full-content-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1446,8 +1446,8 @@ No results found.
     }
 
     func testBrainDigestRejectsTruncatedStoredContent() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-digest-truncation-rejection-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-digest-truncation-rejection-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try sqliteExec(
@@ -1486,8 +1486,8 @@ No results found.
     }
 
     func testBrainDigestFailsClosedWhenStoredContentCannotBeRead() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-digest-unreadable-content-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-digest-unreadable-content-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try sqliteExec(
@@ -1523,8 +1523,8 @@ No results found.
     }
 
     func testBrainDigestRejectsEmbeddedNullSuffixInStoredContent() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-digest-null-suffix-rejection-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-digest-null-suffix-rejection-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
         try sqliteExec(
@@ -1640,8 +1640,8 @@ No results found.
     // MARK: - brain_search with filters (H3)
 
     func testBrainSearchPassesProjectFilter() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-filter-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-filter-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1672,8 +1672,8 @@ No results found.
     }
 
     func testBrainSearchFullDetailExposesChunkID() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-detail-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-detail-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1701,8 +1701,8 @@ No results found.
     }
 
     func testBrainSearchPassesImportanceMinFilter() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-imp-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-imp-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1733,8 +1733,8 @@ No results found.
     }
 
     func testBrainSearchPassesSourceFilter() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-source-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-source-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1762,8 +1762,8 @@ No results found.
     }
 
     func testBrainSearchSourceAllKeepsKGAugmentation() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-source-all-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-source-all-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1802,8 +1802,8 @@ No results found.
     }
 
     func testBrainEntityUsesPythonSimpleEntityStructure() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-entity-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-entity-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1839,8 +1839,8 @@ No results found.
     }
 
     func testBrainRecallStatsIncludesProjectAndTypeLists() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-stats-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-stats-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1869,8 +1869,8 @@ No results found.
     }
 
     func testBrainRecallRejectsUnsupportedModes() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-recall-rejected-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-recall-rejected-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let database = BrainDatabase(path: tempDB)
         defer { database.close() }
         let router = MCPRouter(profile: "full")
@@ -1887,8 +1887,8 @@ No results found.
     }
 
     func testBrainRecallWorkingModesPreserveResponseContracts() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-recall-fallback-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-recall-fallback-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1939,8 +1939,8 @@ No results found.
     }
 
     func testBrainRecallInjectionsReturnsRecentEvents() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-injections-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-injections-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -1975,8 +1975,8 @@ No results found.
     }
 
     func testBrainSearchUnreadOnlyFiltersAckedChunksByCursor() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-unread-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-unread-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -2017,8 +2017,8 @@ No results found.
     }
 
     func testBrainArchiveHidesChunkFromDefaultSearch() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-archive-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-archive-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -2054,8 +2054,8 @@ No results found.
     }
 
     func testBrainSupersedeHidesOldChunkAndKeepsReplacement() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-supersede-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-supersede-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 
@@ -2106,8 +2106,8 @@ No results found.
     }
 
     func testBrainGetPersonReturnsRelationsAndMemories() throws {
-        let tempDB = NSTemporaryDirectory() + "brainbar-person-\(UUID().uuidString).db"
-        defer { try? FileManager.default.removeItem(atPath: tempDB) }
+        let tempDB = brainBarTestTemporaryPath() + "brainbar-person-\(UUID().uuidString).db"
+        defer { removeBrainBarTestDatabase(tempDB) }
         let db = BrainDatabase(path: tempDB)
         defer { db.close() }
 

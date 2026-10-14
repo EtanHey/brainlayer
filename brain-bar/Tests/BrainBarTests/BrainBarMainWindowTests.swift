@@ -20,8 +20,7 @@ final class BrainBarMainWindowTests: XCTestCase {
         defaults: MemoryDefaults = MemoryDefaults(),
         screens: [NSRect] = BrainBarMainWindowTests.bigScreen
     ) -> BrainBarDashboardPanelController {
-        BrainBarDashboardPanelController(
-            runtime: BrainBarRuntime(),
+        BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: BrainBarRuntime(),
             frameStore: BrainBarWindowFrameStore(defaults: defaults, key: BrainBarDashboardPanelController.frameDefaultsKey),
             screenFrames: { screens }
         )
@@ -152,9 +151,8 @@ final class BrainBarMainWindowTests: XCTestCase {
 
     func test_the_status_item_opens_a_small_menu_like_voicebar() throws {
         let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
-        let windowController = BrainBarDashboardPanelController(runtime: runtime)
-        let status = BrainBarStatusPopoverController(
-            runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
+        let windowController = BrainBarDashboardPanelController(workspace: BrainBarRecordingWorkspace(), runtime: runtime)
+        let status = BrainBarStatusPopoverController(workspace: BrainBarRecordingWorkspace(), runtime: runtime, dashboardPanelController: windowController, statusBar: TestStatusItemHost()
         )
         defer { status.stop(); windowController.dismiss() }
 

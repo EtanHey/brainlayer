@@ -455,7 +455,7 @@ enum BrainBarOnePageTestFixture {
             object["generated_at"] = "not-a-date"
         }
 
-        let url = FileManager.default.temporaryDirectory
+        let url = brainBarTestTemporaryDirectory()
             .appendingPathComponent("brainbar-generated-at-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
         try JSONSerialization.data(withJSONObject: object).write(to: url)

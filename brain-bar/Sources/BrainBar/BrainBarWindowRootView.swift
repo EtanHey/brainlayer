@@ -6,18 +6,21 @@ struct BrainBarWindowRootView: View {
     static let defaultTab: BrainBarTab = .dashboard
 
     @ObservedObject var runtime: BrainBarRuntime
+    private let workspace: any BrainBarWorkspaceActing
     private let managesWindowFrame: Bool
     @ObservedObject private var panelState: BrainBarDashboardPanelState
 
     @StateObject private var windowObserver: BrainBarWindowObserver
 #if BRAINBAR_UI
-    private var settingsViewFactory: (String, Int, BrainBarSettingsNavigation) -> AnyView = {
-        AnyView(BrainBarSettingsView(databasePath: $0, activationRevision: $1, navigation: $2, showsSidebar: false))
-    }
+    private var settingsViewFactory: (String, Int, BrainBarSettingsNavigation) -> AnyView
 #endif
 
-    init(runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
+    init(workspace: any BrainBarWorkspaceActing, runtime: BrainBarRuntime, managesWindowFrame: Bool = true,
          panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()) {
+        self.workspace = workspace
+#if BRAINBAR_UI
+        settingsViewFactory = { AnyView(BrainBarSettingsView(workspace: workspace, databasePath: $0, activationRevision: $1, navigation: $2, showsSidebar: false)) }
+#endif
         self.runtime = runtime
         self.managesWindowFrame = managesWindowFrame
         self.panelState = panelState
@@ -27,10 +30,10 @@ struct BrainBarWindowRootView: View {
     }
 
 #if BRAINBAR_UI
-    init(runtime: BrainBarRuntime, managesWindowFrame: Bool,
+    init(workspace: any BrainBarWorkspaceActing, runtime: BrainBarRuntime, managesWindowFrame: Bool,
          panelState: BrainBarDashboardPanelState,
          settingsViewFactory: @escaping (String, Int, BrainBarSettingsNavigation) -> AnyView) {
-        self.init(runtime: runtime, managesWindowFrame: managesWindowFrame, panelState: panelState)
+        self.init(workspace: workspace, runtime: runtime, managesWindowFrame: managesWindowFrame, panelState: panelState)
         self.settingsViewFactory = settingsViewFactory
     }
 #endif
@@ -102,6 +105,7 @@ struct BrainBarWindowRootView: View {
         if let collector = runtime.collector {
             BrainBarDashboardContent(
                 collector: collector,
+                workspace: workspace,
                 hotkeyStatus: runtime.hotkeyStatus.statusLine,
                 dbPath: runtime.databasePath,
                 panelState: panelState
@@ -162,6 +166,7 @@ struct BrainBarQueueDirectionPresentation: Equatable {
 
 private struct BrainBarDashboardContent: View {
     @ObservedObject var collector: StatsCollector
+    let workspace: any BrainBarWorkspaceActing
     var receiptStore: BrainBarOperationReceipts = .shared
     @StateObject private var standalonePanelState = BrainBarDashboardPanelState()
     let hotkeyStatus: String
@@ -178,6 +183,7 @@ private struct BrainBarDashboardContent: View {
         } else {
             BrainBarDashboardView(
                 collector: collector,
+                workspace: workspace,
                 receiptStore: receiptStore,
                 hotkeyStatus: hotkeyStatus,
                 dbPath: dbPath,
@@ -831,6 +837,7 @@ private struct BrainBarAppControlMenu: View {
 
 private struct BrainBarDashboardView: View {
     @ObservedObject var collector: StatsCollector
+    let workspace: any BrainBarWorkspaceActing
     let receiptStore: BrainBarOperationReceipts
     let hotkeyStatus: String
     var dbPath: String? = nil
@@ -920,7 +927,7 @@ private struct BrainBarDashboardView: View {
     private func showJobAlertLog(_ alert: (text: String, reason: String, document: ObservabilityDocument)) {
         BrainBarJobAlerts.showLog(
             for: alert.document, paths: .live(databasePath: alert.document.dbPath),
-            workspace: BrainBarWorkspace(), panelState: panelState
+            workspace: workspace, panelState: panelState
         )
     }
 #endif
@@ -3187,6 +3194,7 @@ enum BrainBarDashboardPreview {
 
     static func make(
         collector: StatsCollector,
+        workspace: any BrainBarWorkspaceActing = BrainBarRecordingWorkspace(),
         receiptStore: BrainBarOperationReceipts = BrainBarOperationReceipts(),
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
@@ -3201,6 +3209,7 @@ enum BrainBarDashboardPreview {
                 BrainBarAppBackground()
                 BrainBarDashboardContent(
                     collector: collector,
+                    workspace: workspace,
                     receiptStore: receiptStore,
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
@@ -3241,8 +3250,7 @@ enum BrainBarUnifiedWindowPreview {
         panelState.select(BrainBarSidebarItem(section: section))
         let navigation = panelState.settingsNavigation
         return AnyView(
-            BrainBarWindowRootView(
-                runtime: runtime,
+            BrainBarWindowRootView(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
                 managesWindowFrame: false,
                 panelState: panelState,
                 settingsViewFactory: { _, _, _ in
