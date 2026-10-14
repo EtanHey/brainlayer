@@ -1,6 +1,10 @@
+import hashlib
+import json
 import plistlib
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from brainlayer.job_lifecycle_health import scan_job_lifecycle
 
@@ -52,7 +56,9 @@ def _setup(tmp_path: Path, *jobs: tuple[str, dict]) -> tuple[Path, Path, Path]:
 
 
 def _tick(tmp_path: Path, opt: Path, fake: FakeCommands, state: dict, now: int, **kwargs):
-    return scan_job_lifecycle(tmp_path, opt, state, now_epoch=now, command_runner=fake, uid=501, **kwargs)
+    return scan_job_lifecycle(
+        tmp_path, opt, state, now_epoch=now, command_runner=fake, uid=kwargs.pop("uid", 501), **kwargs
+    )
 
 
 def test_daemon_backoff_badge_and_recovery(tmp_path: Path) -> None:
@@ -169,3 +175,164 @@ def test_healthy_daemon_sample_resets_prior_crash_streak(tmp_path: Path) -> None
     assert failed.state["com.brainlayer.drain"]["consecutive"] == 1
     healthy = _tick(tmp_path, opt, fake, failed.state, 600)
     assert healthy.state["com.brainlayer.drain"]["consecutive"] == 0
+
+
+@pytest.fixture
+def supervisor_sample(tmp_path):
+    home = tmp_path / "home"
+    agents = home / "Library/LaunchAgents"
+    agents.mkdir(parents=True)
+    prefix = tmp_path / "opt/homebrew"
+    framework = prefix / (
+        "Cellar/python@3.13/3.13.16/Frameworks/Python.framework/Versions/3.13/"
+        "Resources/Python.app/Contents/MacOS/Python"
+    )
+    framework.parent.mkdir(parents=True)
+    framework.write_text("fixture interpreter, never executed")
+    launcher = framework.parents[4] / "bin/python3.13"
+    launcher.parent.mkdir()
+    launcher.write_text("fixture framework launcher, never executed")
+    kegs = [prefix / f"Cellar/brainlayer/{version}" for version in ("1.5.56", "1.5.57")]
+    for keg in kegs:
+        venv = keg / "libexec/venv"
+        (venv / "bin").mkdir(parents=True)
+        (venv / "bin/python").symlink_to(launcher)
+        (venv / "pyvenv.cfg").write_text(f"home = {framework.parent}\n")
+    opt = prefix / "opt/brainlayer"
+    opt.parent.mkdir(parents=True)
+    opt.symlink_to(kegs[1])
+    control = home / ".local/share/brainlayer/supervisor"
+    control.mkdir(parents=True)
+    manifest = control / "jobs.json"
+    manifest.write_text("{}\n")
+    args = [
+        str(home / ".local/lib/brainlayer/BrainLayer Daemon"),
+        str(opt / "libexec/venv/bin/python"),
+        "-m",
+        "brainlayer",
+        "daemon",
+        "--manifest",
+        str(manifest),
+    ]
+    definition = {"Label": "com.brainlayer.daemon", "ProgramArguments": args, "KeepAlive": True}
+    path = agents / "com.brainlayer.daemon.plist"
+    raw = plistlib.dumps(definition)
+    path.write_bytes(raw)
+    pinned = definition | {"ProgramArguments": [args[0], str(kegs[1] / "libexec/venv/bin/python"), *args[2:]]}
+    receipt = {
+        "phase": "migrated",
+        "keg": "../Cellar/brainlayer/1.5.57",
+        "daemon_pinned": plistlib.dumps(pinned).hex(),
+        "published_sha256": {path.name: hashlib.sha256(raw).hexdigest()},
+        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+    }
+    journal = control / "migration.json"
+    journal.write_text(json.dumps(receipt))
+    fake = FakeCommands(kegs[1], kegs[0])
+    fake.runs["daemon"], fake.exit["daemon"], fake.pid["daemon"] = 1, 0, 6538
+    fake.keg.clear()  # Real-shaped lsof output: no Cellar/brainlayer mappings.
+    fake.ps_command = f"{framework} -m brainlayer daemon --manifest {manifest}"
+    return agents, opt, fake, journal, receipt, kegs
+
+
+def test_framework_supervisor_with_no_mapped_keg_is_healthy(supervisor_sample):
+    agents, opt, fake, *_ = supervisor_sample
+    tick = _tick(agents, opt, fake, {}, 0, heal=False, uid=424242)
+    assert tick.scan_error is None
+    assert tick.state["com.brainlayer.daemon"]["consecutive"] == 0
+    assert tick.actions == []
+    assert ["lsof", "-p", "6538", "-Fn"] in fake.commands
+    assert ["ps", "-p", "6538", "-o", "command="] in fake.commands
+
+
+def test_framework_supervisor_recorded_old_keg_is_stale(supervisor_sample):
+    agents, opt, fake, journal, receipt, kegs = supervisor_sample
+    receipt["keg"] = "../Cellar/brainlayer/1.5.56"
+    pinned = plistlib.loads(bytes.fromhex(receipt["daemon_pinned"]))
+    pinned["ProgramArguments"][1] = str(kegs[0] / "libexec/venv/bin/python")
+    receipt["daemon_pinned"] = plistlib.dumps(pinned).hex()
+    journal.write_text(json.dumps(receipt))
+    tick = _tick(agents, opt, fake, {}, 0, heal=False, uid=424242)
+    assert tick.scan_error is None
+    assert tick.state["com.brainlayer.daemon"]["reason"] == f"stale keg for pid 6538: {kegs[0]}"
+    assert tick.actions == []
+
+
+@pytest.mark.parametrize(
+    "keg", ["../outside/1.5.57", "../Cellar/brainlayer/../../outside/1.5.57", "../Cellar/brainlayer/foreign"]
+)
+def test_relative_supervisor_keg_cannot_escape_cellar(supervisor_sample, keg):
+    agents, opt, fake, journal, receipt, _ = supervisor_sample
+    outside = opt.parents[1] / "outside/1.5.57"
+    outside.mkdir(parents=True)
+    (opt.resolve().parent / "foreign").symlink_to(outside)
+    # Keep the other identity evidence valid, so containment is the refusal.
+    pinned = plistlib.loads(bytes.fromhex(receipt["daemon_pinned"]))
+    python = outside / "libexec/venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(Path(pinned["ProgramArguments"][1]).resolve())
+    (python.parent.parent / "pyvenv.cfg").write_text("fixture venv\n")
+    pinned["ProgramArguments"][1] = str(python)
+    receipt["daemon_pinned"] = plistlib.dumps(pinned).hex()
+    receipt["keg"] = keg
+    journal.write_text(json.dumps(receipt))
+    tick = _tick(agents, opt, fake, {}, 0, heal=False, uid=424242)
+    assert tick.scan_error == "com.brainlayer.daemon: keg mapping unavailable for pid 6538"
+    assert tick.actions == []
+
+
+def test_non_keg_daemon_is_still_skipped(supervisor_sample):
+    agents, opt, fake, *_ = supervisor_sample
+    path = agents / "com.brainlayer.daemon.plist"
+    definition = plistlib.loads(path.read_bytes())
+    definition["ProgramArguments"][1] = "/Users/dev/brainlayer/.venv/bin/python"
+    path.write_bytes(plistlib.dumps(definition))
+    tick = _tick(agents, opt, fake, {}, 0, uid=424242)
+    assert tick.scan_error is None and tick.state == {} and tick.actions == []
+    assert fake.commands == [["launchctl", "print-disabled", "gui/424242"]]
+
+
+@pytest.mark.parametrize("broken", ["journal", "phase", "manifest", "plist", "process", "prefix", "argv"])
+def test_framework_supervisor_requires_all_identity_evidence(supervisor_sample, broken):
+    agents, opt, fake, journal, receipt, kegs = supervisor_sample
+    if broken == "journal":
+        journal.unlink()
+    elif broken == "phase":
+        receipt["phase"] = "migrating"
+        journal.write_text(json.dumps(receipt))
+    elif broken == "manifest":
+        (journal.parent / "jobs.json").write_text('{"foreign": true}')
+    elif broken == "plist":
+        receipt["published_sha256"]["com.brainlayer.daemon.plist"] = "0" * 64
+        journal.write_text(json.dumps(receipt))
+    elif broken == "process":
+        fake.ps_command = "/usr/bin/python3 -m brainlayer daemon --manifest " + str(journal.parent / "jobs.json")
+    elif broken == "argv":
+        fake.ps_command += " --unreviewed"
+    else:
+        pinned = plistlib.loads(bytes.fromhex(receipt["daemon_pinned"]))
+        pinned["ProgramArguments"][1] = str(kegs[0] / "libexec/venv/bin/python")
+        receipt["daemon_pinned"] = plistlib.dumps(pinned).hex()
+        journal.write_text(json.dumps(receipt))
+    tick = _tick(agents, opt, fake, {}, 0, uid=424242)
+    assert tick.scan_error == "com.brainlayer.daemon: keg mapping unavailable for pid 6538"
+    assert tick.actions == []
+
+
+def test_unmapped_resident_aborts_scan_before_later_healing(supervisor_sample):
+    agents, opt, fake, *_ = supervisor_sample
+    daemon = agents / "com.brainlayer.daemon.plist"
+    document = plistlib.loads(daemon.read_bytes())
+    document["Label"] = "com.brainlayer.drain"
+    (agents / "com.brainlayer.drain.plist").write_bytes(plistlib.dumps(document))
+    daemon.unlink()
+    watch = {"Label": "com.brainlayer.watch", "ProgramArguments": [str(opt / "bin/brainlayer"), "watch"]}
+    (agents / "com.brainlayer.watch.plist").write_bytes(plistlib.dumps(watch))
+    fake.runs["watch"] = 2
+    prior = {"com.brainlayer.watch": {"runs": 1, "consecutive": 1}}
+    tick = _tick(agents, opt, fake, prior, 0, uid=424242)
+    assert tick.scan_error == "com.brainlayer.drain: keg mapping unavailable for pid 42"
+    assert tick.state == prior and tick.actions == []
+    assert not any(
+        args[:2] == ["launchctl", "print"] and args[-1].endswith("com.brainlayer.watch") for args in fake.commands
+    )
