@@ -37,7 +37,7 @@ def _result(*issues: HealthIssue) -> HealthCheckResult:
 
 
 def _run_minimal_health_check(
-    tmp_path: Path, badge_state_path: Path, *, job_opt_path: Path | None = None
+    tmp_path: Path, badge_state_path: Path, *, job_opt_path: Path | None = None, heal: bool = False
 ) -> HealthCheckResult:
     db_path = tmp_path / "brainlayer.db"
     with sqlite3.connect(db_path) as connection:
@@ -66,6 +66,7 @@ def _run_minimal_health_check(
             state_path=tmp_path / "health-state.json",
             badge_state_path=badge_state_path,
             job_opt_path=job_opt_path,
+            heal=heal,
             source_jsonl_globs=[],
             queue_dir=tmp_path / "queue",
             offsets_path=tmp_path / "offsets.json",
@@ -328,3 +329,65 @@ def test_retired_service_json_codes_are_not_suppressible():
     unreleased = unreleased.split("\n## [", 1)[0]
     for code in [*compat["removed_codes"], *compat["renamed_codes"], *compat["renamed_codes"].values()]:
         assert f"`{code}`" in unreleased
+
+
+def test_partial_job_scan_keeps_critical_badge_and_persists_known_heal(tmp_path: Path, monkeypatch):
+    import plistlib
+
+    from brainlayer.job_lifecycle_health import scan_job_lifecycle
+
+    current = tmp_path / "Cellar/brainlayer/1.5.56"
+    current.mkdir(parents=True)
+    opt = tmp_path / "opt/brainlayer"
+    opt.parent.mkdir()
+    opt.symlink_to(current)
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    for name in ("aaa", "watch"):
+        (agents / f"com.brainlayer.{name}.plist").write_bytes(
+            plistlib.dumps({"Label": f"com.brainlayer.{name}", "ProgramArguments": [str(opt / "bin/brainlayer"), name]})
+        )
+    commands = []
+
+    def runner(args):
+        commands.append(args)
+        output = ""
+        if args[:2] == ["launchctl", "print"]:
+            output = (
+                "runs = 2\nlast exit code = 1\n"
+                if args[-1].endswith(".watch")
+                else "runs = 1\npid = 9\nlast exit code = 0\n"
+            )
+        elif args[0] == "lsof":
+            output = "n/usr/lib/libSystem.B.dylib\n"
+        elif args[0] == "ps":
+            output = "/fixture/framework/python -m brainlayer daemon"
+        else:
+            assert args[:2] in (["launchctl", "print-disabled"], ["launchctl", "kickstart"])
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    def scan(_plist_dir, _opt, previous, **kwargs):
+        return scan_job_lifecycle(agents, opt, previous, **{**kwargs, "command_runner": runner})
+
+    monkeypatch.setattr(health_check, "scan_job_lifecycle", scan)
+    state_path = tmp_path / "health-state.json"
+    unknown = {"runs": 1, "attempts": 2, "next_retry_epoch": 900}
+    state_path.write_text(
+        json.dumps(
+            {"job_lifecycle": {"com.brainlayer.aaa": unknown, "com.brainlayer.watch": {"runs": 1, "consecutive": 1}}}
+        )
+    )
+    badge_path = tmp_path / "badge-state.json"
+    result = _run_minimal_health_check(tmp_path, badge_path, job_opt_path=opt, heal=True)
+    issue = next(issue for issue in result.issues if issue.code == "job_scan_failed")
+    assert issue.severity == "critical" and "com.brainlayer.aaa" in issue.message
+    assert "kickstart:com.brainlayer.watch" in result.actions
+    saved = json.loads(state_path.read_text())["job_lifecycle"]
+    assert saved["com.brainlayer.aaa"] == unknown
+    assert saved["com.brainlayer.watch"]["attempts"] == 1
+    document = json.loads(badge_path.read_text())
+    assert document["alerts"]["badge_on"] is True
+    assert any(alert["code"] == "job_scan_failed" for alert in document["alerts"]["active"])
+    assert [args[-1] for args in commands if args[:2] == ["launchctl", "kickstart"]] == [
+        f"gui/{os.getuid()}/com.brainlayer.watch"
+    ]

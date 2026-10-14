@@ -181,6 +181,7 @@ def scan_job_lifecycle(
     disabled_listing = _output(disabled)
     state = {label: episode for label, episode in previous_state.items() if isinstance(episode, dict)}
     actions: list[str] = []
+    scan_errors: list[str] = []
     seen = set()
     for label, plist in jobs:
         seen.add(label)
@@ -219,7 +220,9 @@ def scan_job_lifecycle(
         if reason and reason.startswith("keg mapping unavailable"):
             if interval:
                 continue  # A running interval script may not have loaded a keg library yet.
-            return fail(f"{label}: {reason}")
+            # Preserve this uncertain episode without healing it; known jobs still progress.
+            scan_errors.append(f"{label}: {reason}")
+            continue
         if interval and reason and reason.startswith("stale keg"):
             # Defer counting until launchd reports a completed, advanced run.
             continue
@@ -261,4 +264,4 @@ def scan_job_lifecycle(
     for label in previous_state.keys() - seen:
         state.pop(label, None)
         actions.append(f"pruned:{label}")
-    return JobTick(state, actions, _escalations(state))
+    return JobTick(state, actions, _escalations(state), "; ".join(scan_errors) or None)
