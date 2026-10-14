@@ -132,7 +132,7 @@ if [ -n "$BRAINLAYER_KEG_STABLE" ]; then
             break
         fi
     done
-    case "${1:-all}" in
+    case "${1:-}" in
         consolidate|consolidation-rollback)
             if [ -n "${BRAINLAYER_HOOK_PYTHON:-}" ]; then
                 PYTHON_BIN="$BRAINLAYER_HOOK_PYTHON"
