@@ -39,6 +39,7 @@ enum WatcherProcessProbeResult: Sendable, Equatable {
     case running(pid: pid_t)
     case absent
     case failure(String)
+    case ownerUnknown(String)
 }
 
 /// Whether watcher-ingested chunks are landing. Flow only: whether the watcher is healthy is
@@ -57,7 +58,7 @@ enum WatcherFlowState: Sendable, Equatable {
         recentFlowReadable: Bool
     ) -> WatcherFlowState {
         switch process {
-        case .failure:
+        case .failure, .ownerUnknown:
             return .unknown
         case .absent:
             return .offline

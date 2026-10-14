@@ -157,7 +157,8 @@ final class BrainBarSettingsJobsTests: XCTestCase {
                     job == .maintenanceWeekly ? DateComponents(hour: 4, minute: 0, weekday: 1) : nil
             },
             calendar: calendar,
-            now: { now }
+            now: { now },
+            ownership: { .legacy }
         )
 
         let observation = try XCTUnwrap(provider.sampleActivity()[.index])
