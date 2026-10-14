@@ -28,6 +28,8 @@ WINDOW_SECONDS = 900
 class TransportSection(dict[str, Any]):
     """Internal validated episode accompanies the section, outside its JSON fields."""
 
+    overflow = False
+
     def __init__(self, value: dict, *, incident: dict | None = None, incident_unknown: bool = False):
         super().__init__(value)
         self.incident = incident
@@ -51,7 +53,8 @@ def _frame(data: dict, *, db: Path, now: datetime, historical: bool = False) -> 
     if started > generated or age < 0 or (not historical and age > 60):
         raise ValueError("transport receipt is stale, future, or has invalid producer timestamps")
     if (
-        data.get("window_seconds") != WINDOW_SECONDS
+        type(data.get("window_seconds")) is not int
+        or data["window_seconds"] != WINDOW_SECONDS
         or type(data["observed_seconds"]) is not int
         or not 0 <= data["observed_seconds"] <= WINDOW_SECONDS
     ):
@@ -104,6 +107,20 @@ def build_transport_section(
 
     if item["status"] != "read":
         return unknown("transport input status: " + item["status"])
+    if data.get("state") == "unmeasurable" and data.get("reason") == "transport event buffer overflow":
+        try:
+            generated, started = _time(data["generated_at"]), _time(data["producer_started_at"])
+            age = (now - generated).total_seconds()
+            if started > generated or not 0 <= age <= 60:
+                raise ValueError("invalid overflow producer timestamps")
+            if type(data.get("window_seconds")) is not int or data["window_seconds"] != WINDOW_SECONDS:
+                raise ValueError("invalid overflow observation window")
+            # Independent categorical evidence, even when older history is unreadable.
+            result = unknown(data["reason"])
+            result.overflow = True
+            return result
+        except failures:
+            pass  # Fall through to the ordinary unknown/history validation path.
     incident = None
     if data.get("incident") is not None:
         try:
@@ -141,6 +158,16 @@ def _failing(counts: dict) -> bool:
 
 def report_transport_alert(section: dict[str, Any], *, env: Mapping[str, str]) -> None:
     """Unknown or partial recovery must not clear a previously observed incident."""
+    if getattr(section, "overflow", False):
+        from .job_alerts import alert_path, report
+
+        db = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()
+        report(
+            "mcp-transport",
+            "BrainBar MCP transport: event buffer overflow; storm counts unmeasurable",
+            path=alert_path(env=env, db_path=db),
+        )
+        return
     incident = getattr(section, "incident", None)
     if getattr(section, "incident_unknown", False) or (incident is None and section["state"] != "measured"):
         return
