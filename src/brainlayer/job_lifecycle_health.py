@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import plistlib
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .consolidation_plan import read_owned
 from .jobs import _job_plists, _mapped_kegs, _pid, _runs_keg
 from .jobs import installed_opt_path as _installed_opt_path
 
@@ -39,8 +44,71 @@ def _output(result: Any) -> str:
     return str(getattr(result, "stdout", "") or "")
 
 
+def _supervisor_keg(command: str, plist: dict, plist_dir: Path, current_keg: Path, opt_path: Path) -> Path | None:
+    """Verify the migrated daemon's recorded venv, including macOS framework re-exec.
+
+    The transaction publishes the receipt only after the replacement is ready.
+    An opt symlink or a matching framework alone does not establish keg identity.
+    """
+    try:
+        control = plist_dir.parent.parent / ".local/share/brainlayer/supervisor"
+        manifest = control / "jobs.json"
+        journal = json.loads(read_owned(control / "migration.json"))
+        if journal["phase"] != "migrated":
+            return None
+        keg = Path(journal["keg"])
+        # install.sh journals readlink's target verbatim, relative to opt's parent.
+        keg = (keg if keg.is_absolute() else opt_path.parent / keg).resolve(strict=True)
+        if keg.parent != current_keg.parent:
+            return None
+        raw = read_owned(plist_dir / "com.brainlayer.daemon.plist")
+        if (
+            plistlib.loads(raw) != plist
+            or hashlib.sha256(raw).hexdigest() != journal["published_sha256"]["com.brainlayer.daemon.plist"]
+            or hashlib.sha256(read_owned(manifest)).hexdigest() != journal["manifest_sha256"]
+        ):
+            return None
+        pinned = plistlib.loads(bytes.fromhex(journal["daemon_pinned"]))
+        args, pinned_args = plist["ProgramArguments"], pinned["ProgramArguments"]
+        tail = ["-m", "brainlayer", "daemon", "--manifest", str(manifest)]
+        if (
+            pinned["Label"] != "com.brainlayer.daemon"
+            or len(args) != 7
+            or len(pinned_args) != 7
+            or args[2:] != tail
+            or pinned_args[2:] != tail
+        ):
+            return None
+        python = Path(pinned_args[1])
+        prefix = keg / "libexec/venv"
+        if python != prefix / "bin/python" or not (prefix / "pyvenv.cfg").is_file():
+            return None
+        launcher = python.resolve(strict=True)
+        if Path(args[1]).resolve(strict=True) != launcher:
+            return None
+        framework = launcher
+        if (
+            launcher.parent.name == "bin"
+            and launcher.parents[2].name == "Versions"
+            and launcher.parents[3].name == "Python.framework"
+        ):
+            # macOS's framework launcher execs Python.app; resolving its symlink
+            # alone still names bin/python3.x rather than the running executable.
+            framework = (launcher.parents[1] / "Resources/Python.app/Contents/MacOS/Python").resolve(strict=True)
+        if shlex.split(command) != [str(framework), *tail]:
+            return None
+        return keg
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None
+
+
 def _failure(
-    output: str, current_keg: Path, opt_path: Path, command_runner: CommandRunner
+    output: str,
+    current_keg: Path,
+    opt_path: Path,
+    command_runner: CommandRunner,
+    *,
+    supervisor_keg: Callable[[str], Path | None] | None = None,
 ) -> tuple[str | None, int | None]:
     exit_match = EXIT_RE.search(output)
     last_exit = int(exit_match.group(1)) if exit_match else None
@@ -54,6 +122,11 @@ def _failure(
                 arg.startswith((f"{opt_path}/", f"{current_keg}/")) for arg in _output(command).split()
             ):
                 return None, last_exit
+            if _code(command) == 0 and supervisor_keg is not None:
+                if (recorded := supervisor_keg(_output(command))) is not None:
+                    if recorded == current_keg:
+                        return None, last_exit
+                    return f"stale keg for pid {pid}: {recorded}", last_exit
         if error or not mapped:
             return f"keg mapping unavailable for pid {pid}", last_exit
         return f"stale keg for pid {pid}: {', '.join(sorted(map(str, mapped)))}", last_exit
@@ -134,7 +207,15 @@ def scan_job_lifecycle(
         prior = previous_state.get(label, {})
         prior_runs = prior.get("runs")
         advanced = prior_runs is not None and runs > prior_runs
-        reason, last_exit = _failure(_output(printed), current_keg, opt_path, command_runner)
+        reason, last_exit = _failure(
+            _output(printed),
+            current_keg,
+            opt_path,
+            command_runner,
+            supervisor_keg=(lambda command: _supervisor_keg(command, plist, plist_dir, current_keg, opt_path))
+            if label == "com.brainlayer.daemon"
+            else None,
+        )
         if reason and reason.startswith("keg mapping unavailable"):
             if interval:
                 continue  # A running interval script may not have loaded a keg library yet.
