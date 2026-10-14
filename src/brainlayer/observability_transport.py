@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .paths import get_db_path
+
+if TYPE_CHECKING:
+    from .observability_surface import InputRecorder
 
 COUNTS = (
     "connections_accepted",
@@ -23,6 +28,39 @@ COUNTS = (
 )
 IDENTITY_REASON = "no stable client identity on the socket (fd reuse; proxy pid)"
 WINDOW_SECONDS = 900
+
+
+def _read_receipt(path: Path) -> tuple[bytes, os.stat_result]:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+
+        def validate() -> os.stat_result:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_nlink != 1
+            ):
+                raise ValueError(
+                    "transport receipt must be a single-link regular file owned by this uid with mode 0600"
+                )
+            return info
+
+        info = validate()
+        if info.st_size > 65_536:
+            raise ValueError("receipt exceeds 64 KiB")
+        data = bytearray()
+        while len(data) <= 65_536:
+            chunk = os.read(fd, 65_537 - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > 65_536:
+            raise ValueError("receipt exceeds 64 KiB")
+        return bytes(data), validate()
+    finally:
+        os.close(fd)
 
 
 class TransportSection(dict[str, Any]):
@@ -73,9 +111,7 @@ def _frame(data: dict, *, db: Path, now: datetime, historical: bool = False) -> 
     return {k: data[k] for k in ("generated_at", "producer_started_at", "window_seconds", "observed_seconds", "counts")}
 
 
-def build_transport_section(
-    *, env: Mapping[str, str], now: datetime, record_input: Callable[..., dict]
-) -> dict[str, Any]:
+def build_transport_section(*, env: Mapping[str, str], now: datetime, record_input: InputRecorder) -> dict[str, Any]:
     raw_db = Path(env["BRAINLAYER_DB"]).expanduser() if env.get("BRAINLAYER_DB") else get_db_path()
     db = raw_db.resolve()
     path = Path(
@@ -83,9 +119,8 @@ def build_transport_section(
     ).expanduser()
     failures = (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError)
     try:
-        if path.stat().st_size > 65_536:
-            raise ValueError("receipt exceeds 64 KiB")
-        data = json.loads(path.read_text())
+        raw, metadata = _read_receipt(path)
+        data = json.loads(raw)
         if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
             raise ValueError("unsupported transport receipt")
         if Path(data["db_path"]).expanduser().resolve() != db:
@@ -95,10 +130,14 @@ def build_transport_section(
             {
                 "state": "unmeasurable",
                 "reason": f"transport evidence unavailable: {exc}",
-                "inputs": [record_input(path, status="missing" if not path.exists() else "malformed")],
+                "inputs": [
+                    record_input.file_snapshot(
+                        path, status="missing" if isinstance(exc, FileNotFoundError) else "malformed"
+                    )
+                ],
             }
         )
-    item = record_input(path)
+    item = record_input.file_snapshot(path, status="read", metadata=metadata, data=raw)
 
     def unknown(reason: str, incident: dict | None = None, uncertain: bool = False) -> TransportSection:
         return TransportSection(

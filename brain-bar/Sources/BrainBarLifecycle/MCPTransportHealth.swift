@@ -72,11 +72,8 @@ public final class MCPTransportHealth {
     private func restore(db: String) {
         guard !restored else { return }
         restored = true
-        guard FileManager.default.fileExists(atPath: path) else { return }
         do {
-            let size = (try FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0
-            guard size <= 65_536 else { throw CocoaError(.fileReadCorruptFile) }
-            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            let data = try TransportReceiptFile.read(path)
             let identity = try JSONDecoder().decode(Identity.self, from: data)
             guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   identity.schema_version == 1, identity.db_path == db else {
@@ -91,7 +88,8 @@ public final class MCPTransportHealth {
                 let old = try Episode.parse(value, db: db, now: now())
                 if Self.failing(old.counts) { incident = old }
             }
-        } catch { incidentUnknown = true }
+        } catch TransportReceiptFile.Failure.missing { return }
+        catch { incidentUnknown = true }
     }
 
     public func publish(dbPath: String, inFlight: Int, stopped: Bool = false) {
@@ -112,7 +110,7 @@ public final class MCPTransportHealth {
                   ["accept_errors", "read_errors", "write_errors"].allSatisfy({ counts[$0] == 0 }), !Self.failing(counts) {
             incident = nil; incidentUnknown = false
         }
-        let reason = stopped ? "BrainBar server stopped" : (overflow ? "transport event buffer overflow" : "")
+        let reason = stopped ? "BrainBar server stopped" : (incidentUnknown ? "previous transport receipt refused or unreadable" : (overflow ? "transport event buffer overflow" : ""))
         var value: [String: Any] = ["schema_version": 1, "state": reason.isEmpty ? "measured" : "unmeasurable", "reason": reason,
             "db_path": db, "generated_at": ISO8601DateFormatter().string(from: wall),
             "producer_started_at": ISO8601DateFormatter().string(from: started), "window_seconds": Int(Self.windowSeconds)]

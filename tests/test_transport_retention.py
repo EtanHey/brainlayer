@@ -81,3 +81,43 @@ def test_confirmed_clean_window_and_no_episode_clear_the_alert(tmp_path):
     report("mcp-transport", "existing incident", path=alert, notify=lambda _: None)
     report_transport_alert(read(path, db), env={"BRAINLAYER_DB": str(db), "BRAINLAYER_JOB_ALERT_PATH": str(alert)})
     assert json.loads(alert.read_text()) == {}
+
+
+@pytest.mark.parametrize("defect", ["symlink", "hardlink", "loose_mode", "foreign_owner"])
+def test_unsafe_receipt_cannot_create_or_clear_an_alert(tmp_path, monkeypatch, defect):
+    path, db, payload = sample(tmp_path, drops=3)
+    if defect == "symlink":
+        target = tmp_path / "elsewhere.json"
+        path.rename(target)
+        path.symlink_to(target)
+    elif defect == "hardlink":
+        os.link(path, tmp_path / "second-link.json")
+    elif defect == "loose_mode":
+        path.chmod(0o644)
+    else:
+        actual_uid = os.getuid()
+        monkeypatch.setattr(os, "getuid", lambda: actual_uid + 1)
+    section = read(path, db)
+    assert section["state"] == "unmeasurable" and section["reason"]
+    assert "counts" not in section and section.incident is None
+    assert section["inputs"][0]["sha256_first_64kb"] is None, "Refused evidence must not be reopened for provenance"
+    alert = tmp_path / "alerts.json"
+    env = {"BRAINLAYER_DB": str(db), "BRAINLAYER_JOB_ALERT_PATH": str(alert)}
+    report_transport_alert(section, env=env)
+    assert not alert.exists()
+    report("mcp-transport", "existing incident", path=alert, notify=lambda _: None)
+    report_transport_alert(section, env=env)
+    assert json.loads(alert.read_text())["mcp-transport"] == "existing incident"
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+def test_nonregular_receipts_are_refused_before_reading(tmp_path, kind):
+    path, db, _ = sample(tmp_path)
+    path.unlink()
+    if kind == "directory":
+        path.mkdir()
+    else:
+        os.mkfifo(path, 0o600)
+    section = read(path, db)
+    assert section["state"] == "unmeasurable" and "regular file" in section["reason"]
+    assert section["inputs"][0]["sha256_first_64kb"] is None

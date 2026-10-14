@@ -81,6 +81,21 @@ class InputRecorder:
         if in_section_inputs:
             self.section_inputs.append(item)
         return item
+    def file_snapshot(self, path: Path, *, status: str, metadata: Any = None, data: bytes | None = None) -> dict[str, Any]:
+        """Record an already-opened file without reopening or following its final link."""
+        absolute = path.expanduser().parent.resolve() / path.name
+        try:
+            displayed = str(absolute.relative_to(self.root)) if self.root is not None else str(absolute)
+        except ValueError:
+            displayed = str(absolute)
+        self.trace.append(displayed)
+        if status == "read" and metadata is not None and datetime.fromtimestamp(metadata.st_mtime, UTC) > self.now:
+            status = "future"
+        item = _input(displayed, status, _iso_utc(datetime.fromtimestamp(metadata.st_mtime, UTC)) if metadata else None,
+                      len(data) if data is not None else None,
+                      hashlib.sha256(data[:65_536]).hexdigest() if data is not None else None, 0)
+        self.section_inputs.append(item)
+        return item
     def write_trace(self) -> None:
         if self.trace_path is not None:
             self.trace_path.parent.mkdir(parents=True, exist_ok=True)
