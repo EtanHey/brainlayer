@@ -268,8 +268,8 @@ enum ObservabilityReader {
         do {
             let data = try Data(contentsOf: url)
             let envelope = try JSONDecoder().decode(SchemaEnvelope.self, from: data)
-            guard envelope.schemaVersion == 1 else {
-                return .unreadable("Unsupported schema_version \(envelope.schemaVersion); expected 1.")
+            guard [1, 2].contains(envelope.schemaVersion) else {
+                return .unreadable("Unsupported schema_version \(envelope.schemaVersion); expected 1 or 2.")
             }
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -282,7 +282,7 @@ enum ObservabilityReader {
             }
             let document = try decoder.decode(ObservabilityDocument.self, from: data)
             guard document.windowHours == 24, !document.dbPath.isEmpty else {
-                return .unreadable("Observability schema v1 root fields are invalid.")
+                return .unreadable("Observability root fields are invalid.")
             }
             return .readable(document)
         } catch {

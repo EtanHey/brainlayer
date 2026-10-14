@@ -266,12 +266,25 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("observability-schema-mismatch-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        try Data("{\"schema_version\":2}".utf8).write(to: url)
+        try Data("{\"schema_version\":3}".utf8).write(to: url)
 
         guard case let .unreadable(reason) = ObservabilityReader.read(url: url) else {
             return XCTFail("Expected schema mismatch to be unreadable")
         }
-        XCTAssertTrue(reason.contains("schema_version 2"))
+        XCTAssertTrue(reason.contains("schema_version 3"))
+    }
+
+    func testV2ReadsWithoutChangingV1Cards() throws {
+        let fixture = Bundle.module.url(forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures")!
+        var value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        value["schema_version"] = 2
+        value["transport"] = ["state": "unmeasurable", "reason": "missing receipt", "inputs": []]
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("observability-v2-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try JSONSerialization.data(withJSONObject: value).write(to: url)
+        guard case let .readable(document) = ObservabilityReader.read(url: url) else { return XCTFail("v2 must decode") }
+        XCTAssertEqual(document.schemaVersion, 2)
+        XCTAssertNotNil(document.backups.dbSnapshot)
     }
 
     func testPathIsBesideDatabaseUnlessOverridden() {
