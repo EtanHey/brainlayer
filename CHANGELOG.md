@@ -39,6 +39,23 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.55] - 2026-10-14
+
+### Added
+- Supervisor and maintenance calendar launchers with shared process custody, watchdog health adapters, maintenance leases and component-aware CLI/jobs actions.
+- Durable LaunchAgent consolidation and post-success revert, including archived preimages, disabled/load-state preservation, interrupted-transaction recovery and explicit installer activation/rollback commands.
+- BrainBar transport counters, schema-v2 observability, historical failure latching and reconnect-deficit alerts for persistent clients left behind after restart.
+
+### Fixed
+- Pin legacy MCP/socat configurations to the reconnecting stdio bridge while preserving direct routes; report unsafe or foreign bridge targets.
+- Make supervisor recovery, timeout diagnostics, legacy OFF routing and source-only pre-push sweep selection fail visibly instead of silently dropping state or coverage.
+- Refuse unsafe/foreign transport receipts, preserve shutdown evidence on bounded SIGTERM/SIGINT, and ignore expired or previous-boot reconnect baselines without discarding valid request counters or incidents.
+- Treat operator backup folders as inert; only exact journaled migration archive names trigger missing-journal custody refusal.
+
+### Changed
+- Run every migration/revert crash shard in a separate required CI job while retaining complete local pre-push coverage.
+- Ship the Python formula and BrainBar cask together; verify the installed keg before cask postflight restarts. Consolidation activation remains an explicit operator action.
+
 ## [1.5.48] - 2026-10-06
 
 ### Fixed
