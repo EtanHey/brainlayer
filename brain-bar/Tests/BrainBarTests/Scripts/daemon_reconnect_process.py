@@ -114,7 +114,7 @@ try:
                 assert "result" in json.loads(wire.readline())
         else:
             child = subprocess.Popen(
-                ["/usr/bin/env", "python3", "-m", "brainlayer.mcp_stdio_bridge"],
+                ["/usr/bin/env", "python3", "-S", "-m", "brainlayer.mcp_stdio_bridge"],
                 env=bridge_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -153,9 +153,9 @@ try:
     consumer = """import json, os
 from pathlib import Path
 from datetime import UTC, datetime
-from brainlayer.observability_surface import InputRecorder
+from types import SimpleNamespace
 from brainlayer.observability_transport import build_transport_section, report_transport_alert
-s=build_transport_section(env=os.environ, now=datetime.now(UTC), record_input=InputRecorder(root=None,trace_path=None,now=datetime.now(UTC)))
+s=build_transport_section(env=os.environ, now=datetime.now(UTC), record_input=SimpleNamespace(file_snapshot=lambda path,**snapshot:{"path":str(path),"status":snapshot["status"]}))
 report_transport_alert(s,env=os.environ)
 p=Path(os.environ['BRAINLAYER_JOB_ALERT_PATH'])
 print(json.dumps({'state':s['state'],'alerts':json.loads(p.read_text()) if p.exists() else {}}))
@@ -167,7 +167,9 @@ print(json.dumps({'state':s['state'],'alerts':json.loads(p.read_text()) if p.exi
         "BRAINLAYER_JOB_ALERT_PATH": str(root / "alerts.json"),
     }
     result = json.loads(
-        subprocess.check_output(["/usr/bin/env", "python3", "-c", consumer], env=alerts_env, text=True, timeout=10)
+        subprocess.check_output(
+            ["/usr/bin/env", "python3", "-S", "-c", consumer], env=alerts_env, text=True, timeout=10
+        )
     )
     assert result["state"] == "measured", result
     if mode == "DEAD":
