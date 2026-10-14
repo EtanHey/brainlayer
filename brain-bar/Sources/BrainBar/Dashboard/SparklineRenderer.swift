@@ -503,6 +503,7 @@ struct SparklineChart: View {
                     .transition(.opacity)
             } else {
                 chartBody
+                    .zIndex(hoveredBucket == nil ? 0 : 1)
             }
 
             if !compact {
@@ -911,20 +912,31 @@ struct SparklineChart: View {
     @ViewBuilder
     private func sparklineTooltip(forBucket bucket: Int, size: CGSize) -> some View {
         let rows = tooltipRows(forBucket: bucket)
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(presentation.bucketRecencyLabel(for: bucket))
+        let compactLayout = size.height < SparklineTooltipPlacement.standardHeight(
+            seriesCount: rows.count, showsMetricDisclosure: presentation.metricDisclosure != nil
+        )
+        VStack(alignment: .leading, spacing: compactLayout ? 3 : 8) {
+            if compactLayout {
+                Text("\(presentation.bucketRecencyLabel(for: bucket)) · \(presentation.bucketLabel(for: bucket))")
                     .font(.system(size: 11, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextPrimary)
-                Text("\(presentation.relativeBucketLabel(for: bucket)) · \(presentation.bucketLabel(for: bucket))")
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
+                    .lineLimit(1)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(presentation.bucketRecencyLabel(for: bucket))
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.brainBarTextPrimary)
+                    Text("\(presentation.relativeBucketLabel(for: bucket)) · \(presentation.bucketLabel(for: bucket))")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
+                }
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .lineLimit(1)
-            .fixedSize(horizontal: false, vertical: true)
 
-            if let metricDisclosure = presentation.metricDisclosure {
+            if let metricDisclosure = presentation.metricDisclosure, !compactLayout {
                 Text(metricDisclosure)
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(Color.brainBarTextSecondary.opacity(0.82))
@@ -937,7 +949,7 @@ struct SparklineChart: View {
                     .fill(Color.brainBarBorderSoft)
                     .frame(height: 1)
                     .padding(.horizontal, 2)
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: compactLayout ? 2 : 5) {
                     ForEach(rows, id: \.role) { row in
                         HStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -958,7 +970,7 @@ struct SparklineChart: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.vertical, compactLayout ? 4 : 9)
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -1191,17 +1203,26 @@ enum SparklineTooltipPlacement {
     private static let dividerBlock: CGFloat = 14
     private static let rowHeight: CGFloat = 16
 
+    static func standardHeight(seriesCount: Int, showsMetricDisclosure: Bool) -> CGFloat {
+        let rows = max(seriesCount, 0)
+        let rowsBlock = rows > 0 ? dividerBlock + CGFloat(rows) * rowHeight : 0
+        let disclosureBlock = showsMetricDisclosure ? metricDisclosureHeight : 0
+        return verticalPadding * 2 + headerHeight + disclosureBlock + rowsBlock
+    }
+
     static func tooltipSize(
         in containerSize: CGSize,
         seriesCount: Int = 1,
         showsMetricDisclosure: Bool = false
     ) -> CGSize {
         let availableWidth = max(containerSize.width - margin * 2, minimumWidth)
+        let availableHeight = max(containerSize.height - margin, 1)
         let rows = max(seriesCount, 0)
-        let rowsBlock = rows > 0 ? dividerBlock + CGFloat(rows) * rowHeight : 0
-        let disclosureBlock = showsMetricDisclosure ? metricDisclosureHeight : 0
-        let height = verticalPadding * 2 + headerHeight + disclosureBlock + rowsBlock
-        let availableHeight = max(containerSize.height - margin * 2, height)
+        let fullHeight = standardHeight(seriesCount: rows, showsMetricDisclosure: showsMetricDisclosure)
+        // Short plots use one timestamp line, no disclosure paragraph, and tighter spacing.
+        // Keep every series value while fitting inside the plot instead of overpainting a lane.
+        let compactRows = rows > 0 ? 7 + CGFloat(rows) * 14 + CGFloat(rows - 1) * 2 : 0
+        let height = fullHeight <= availableHeight ? fullHeight : 8 + 16 + compactRows
         return CGSize(width: min(preferredWidth, availableWidth),
                       height: min(height, availableHeight))
     }
