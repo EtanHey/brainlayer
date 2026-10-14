@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 
 import pytest
 
@@ -105,9 +106,6 @@ def test_legacy_shell_paths_refuse_when_supervisor_journal_exists(tmp_path, acti
         journal.chmod(0o600)
     fake = tmp_path / "bin"
     fake.mkdir()
-    binary = fake / "brainlayer"
-    binary.write_text("#!/bin/sh\nexit 0\n")
-    binary.chmod(0o755)
     (fake / "uname").write_text("#!/bin/sh\necho Linux\n")
     (fake / "uname").chmod(0o755)
     calls = tmp_path / "legacy-calls"
@@ -116,7 +114,7 @@ def test_legacy_shell_paths_refuse_when_supervisor_journal_exists(tmp_path, acti
     launchctl.chmod(0o755)
     env = os.environ | {
         "HOME": str(home),
-        "BRAINLAYER_BIN": str(binary),
+        "BRAINLAYER_BIN": "/usr/bin/true",
         "PATH": str(fake) + ":/usr/bin:/bin",
         "PYTHON_BIN": sys.executable,
     }
@@ -208,8 +206,6 @@ def test_broken_shell_helper_refused_before_mutation(inputs, monkeypatch, tmp_pa
 @pytest.mark.parametrize("phase", ["reverted", "rolled_back"])
 @pytest.mark.parametrize("busy", [False, True])
 def test_legacy_shell_path_reopens_after_journaled_return(tmp_path, phase, busy):
-    from contextlib import nullcontext
-
     from brainlayer.migration_custody import migration_lock
 
     home = tmp_path / "home"
@@ -327,13 +323,39 @@ def test_legacy_install_blocks_concurrent_consolidation_during_preflight(tmp_pat
     assert not journal.exists()
 
 
-def test_rollback_without_transaction_is_noop(inputs, monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "archive,blocked",
+    [
+        (None, False),
+        (".archive-2026-10-12", False),
+        ("resource-guard-archive", False),
+        (".archive-20261014T074500Z-abcdef12", True),
+    ],
+)
+def test_rollback_without_transaction_is_noop(inputs, monkeypatch, capsys, archive, blocked):
     from brainlayer import launchd_install
 
+    if archive:
+        folder = inputs["home"] / "Library/LaunchAgents" / archive
+        folder.mkdir()
+        (folder / "watch.plist.bak").write_bytes(b"operator backup")
     monkeypatch.setattr(launchd_install, "command", lambda argv: pytest.fail("unexpected launchctl"))
-    launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
-    assert capsys.readouterr().out.strip() == "nothing to roll back; legacy jobs own the install"
+    args = ["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN]
+    with pytest.raises(SystemExit, match="1") if blocked else nullcontext():
+        launchd_install.main(args)
+    output = capsys.readouterr()
+    expected = "nothing to roll back; legacy jobs own the install"
+    assert archive in output.err if blocked else output.out.strip() == expected
     assert not (inputs["home"] / ".local/share/brainlayer/supervisor/migration.json").exists()
+    if archive:
+        assert (folder / "watch.plist.bak").read_bytes() == b"operator backup"
+
+
+def test_archive_pattern_matches_pr_b_in_bash_and_python():
+    pattern = r"\.archive-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
+    assert f"BRAINLAYER_ARCHIVE_PATTERN='^{pattern}$'" in (ROOT / "scripts/launchd/install.sh").read_text()
+    for module, variable in [("launchd_revert", "p"), ("launchd_consolidation", "archive")]:
+        assert f're.fullmatch(r"{pattern}", {variable}.name)' in (ROOT / f"src/brainlayer/{module}.py").read_text()
 
 
 @pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit, RuntimeError, ValueError, OSError])

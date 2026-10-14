@@ -281,9 +281,13 @@ with os.fdopen(fd, "rb") as stream:
                 exit 1
             fi
         else
+            BRAINLAYER_ARCHIVE_PATTERN='^\.archive-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$'
             for artifact in "$HOME/.local/share/brainlayer/supervisor/jobs.json" \
                 "$HOME/Library/LaunchAgents"/com.brainlayer.{daemon,maintenance}{.plist,.plist.loaded-keg,.loaded-keg} \
                 "$HOME/Library/LaunchAgents"/.archive-*; do
+                if [[ "${artifact##*/}" == .archive-* ]] && ! [[ "${artifact##*/}" =~ $BRAINLAYER_ARCHIVE_PATTERN ]]; then
+                    continue
+                fi
                 if [ -e "$artifact" ] || [ -L "$artifact" ]; then
                     echo "ERROR: missing migration journal with supervisor artifact $artifact; restore the journal for consolidation-rollback or use manual recovery" >&2
                     exit 1
