@@ -135,6 +135,9 @@ class SupervisorCommands:
         if command not in {"launchctl", "kill"}:
             return self.fallback(args)
         label = Path(args[-1]).name.removesuffix(".plist")
+        if command == "launchctl" and args[1:2] == ["kickstart"] and label == "com.brainlayer.daemon":
+            # Managed healers must not kill their parent before saving retry state.
+            return result(127, error="parent supervisor restart refused; use install.sh consolidate")
         if label in ARCHIVED:
             return result(1, error=f"archived/retired label: {label}")
         if args[:2] != ["launchctl", "print-disabled"] and label not in self.aliases and command != "kill":
