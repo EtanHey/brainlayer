@@ -65,6 +65,33 @@ def test_health_heal_is_component_scoped_and_keeps_alerts(backend, tmp_path, mon
     assert not any(a[0] == "launchctl" and a[1] != "print-disabled" for a in commands)
 
 
+@pytest.mark.parametrize("program", ["launchctl", "/bin/launchctl"])
+@pytest.mark.parametrize("options", [[], ["-k"], ["-kp"]])
+def test_managed_healer_cannot_kickstart_parent_supervisor(backend, program, options):
+    client, _, request, initial, commands, _ = backend
+    result = client([program, "kickstart", *options, f"gui/{os.getuid()}/com.brainlayer.daemon"])
+    assert result.returncode != 0 and "parent supervisor" in result.stderr
+    assert commands == []  # Never escape to the real launchctl runner.
+    current = request()["components"]
+    assert all(current[name]["pid"] == value["pid"] for name, value in initial.items())
+
+
+def test_parent_restart_refusal_survives_control_outage_and_keeps_unmanaged_jobs(tmp_path):
+    commands = []
+
+    def fallback(args):
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    client = SupervisorCommands(tmp_path / "missing.sock", fallback)
+    client.control_error = "supervisor control unavailable"
+    assert client(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.daemon"]).returncode != 0
+    assert commands == []
+    app = ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.brainlayer.brainbar"]
+    assert client(app).returncode == 0
+    assert commands == [app]
+
+
 @pytest.mark.parametrize("gate", ["pause", "daemon-pause", "corrupt", "null", "operator", "unknown", "off"])
 def test_stop_signals_block_heals_and_bootstrap(backend, gate):
     client, path, request, initial, commands, disabled = backend
