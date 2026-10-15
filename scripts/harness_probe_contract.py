@@ -5,7 +5,8 @@ import os
 import tomllib
 from pathlib import Path
 
-HARNESSES = ("claude", "codex-cli", "codex-app", "cursor", "gemini", "agy", "t3")
+# Etan 2026-10-16, harness-probe-rulings-1.md ruling 1: agy is the Google harness.
+HARNESSES = ("claude", "codex-cli", "codex-app", "cursor", "agy", "t3")
 QUERY = "BrainLayer harness convergence probe"
 # These surfaces need their own session-launch adapter; CLI success cannot stand in.
 MANUAL = {
