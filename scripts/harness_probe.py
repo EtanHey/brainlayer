@@ -291,7 +291,20 @@ def main():
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--ingest-timeout", type=float, default=120)
     parser.add_argument("--output", type=Path, required=True, help="New private directory for receipts")
+    parser.add_argument(
+        "--aqua", action="store_true", help="Use a temporary job in this user's existing macOS GUI session"
+    )
     args = parser.parse_args()
+    from harness_probe_aqua import launch, require_aqua
+
+    require_aqua()
+    if args.aqua:
+        return launch(
+            Path(__file__),
+            [a for a in sys.argv[1:] if a != "--aqua"],
+            args.output,
+            len(args.harnesses) * (args.timeout + args.ingest_timeout + 45) + 30,
+        )
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
     metadata = {
         "host": socket.gethostname(),
@@ -305,6 +318,7 @@ def main():
                 Path(__file__).with_name("harness_probe_contract.py"),
                 Path(__file__).with_name("harness_probe_native.py"),
                 Path(__file__).with_name("harness_probe_t3.py"),
+                Path(__file__).with_name("harness_probe_aqua.py"),
             )
             if p.exists()
         },
@@ -323,8 +337,12 @@ def main():
     print(table(rows))
     if set(args.harnesses) != set(HARNESSES) or len(args.harnesses) != len(HARNESSES):
         print("PARTIAL RUN: not a release receipt (all harnesses required).")
-        return 1
-    return exit_code(rows)
+        code = 1
+    else:
+        code = exit_code(rows)
+    if os.environ.get("BRAINLAYER_HARNESS_AQUA_REQUIRED") == "1":
+        (args.output / "aqua-exit.json").write_text(json.dumps({"exit_code": code}))
+    return code
 
 
 if __name__ == "__main__":

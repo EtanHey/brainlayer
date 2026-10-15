@@ -48,3 +48,15 @@ An agy row is admitted only with an existing unexpired CLI bearer file (at least
 remaining). Missing/expired/unverifiable credentials produce `FAIL(auth)` before spawning agy;
 the probe never refreshes, logs in, unlocks a keychain, or starts OAuth. A failed SSH credential
 path does not establish that the GUI user is signed out.
+
+
+For a macOS run launched over SSH, use `--aqua`. A unique temporary one-shot LaunchAgent runs
+the probe in the existing `gui/<uid>` session. The child verifies `launchctl managername` is Aqua
+before any harness starts; the parent waits for its terminal receipt and removes only that job.
+No unlock, sign-in, persistent LaunchAgent installation or existing service restart occurs.
+Receipts include the GUI job identity and private parent/child logs.
+
+Claude's session grants only the already authorized `mcp__brainlayer__brain_search` and
+`mcp__brainlayer__brain_store` tools. Cursor receives workspace trust for the chosen probe
+directory; use the probe's own scratch directory. These do not replace real user MCP configs
+or select a Cursor model, and do not bypass general tool permissions.

@@ -222,6 +222,16 @@
         "target": "subprocess.Popen"
       }
     },
+    "0ffee37201c9d5c77843b6ae6349e1c569e3460128deeca108ed5499c8abe3a0": {
+      "non_cloud_purpose": "Operator-only macOS probe job management via local /bin/launchctl bootstrap/print/bootout for one random own-label job in the existing gui UID domain. No production service restart, password, keychain unlock, login, model API or Internet transport. Site: <module> import subprocess.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_aqua.py",
+        "target": "import subprocess"
+      }
+    },
     "1009187960a9ac692d7b39b187d199ebd847a7fede3c7c43f34c1d6480f5c12b": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_guard.py <module>.arm importlib.import_module.",
       "site": {
@@ -250,6 +260,16 @@
         "owner": "<module>._ReadOnlyPromotionStore.__init__",
         "path": "src/brainlayer/kg_promotion.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "1339e7e76a70f2ac20093b86e49903c8e65989238b4114d56f60a1ab6e5fa4cb": {
+      "non_cloud_purpose": "Operator-only macOS probe job management via local /bin/launchctl bootstrap/print/bootout for one random own-label job in the existing gui UID domain. No production service restart, password, keychain unlock, login, model API or Internet transport. Site: <module>.run subprocess.run.",
+      "site": {
+        "call_sha256": "08de253869211a34f550e2c471bf487bd772d02eacfc6b97dbc0889e8893e361",
+        "kind": "child_process",
+        "owner": "<module>.run",
+        "path": "scripts/harness_probe_aqua.py",
+        "target": "subprocess.run"
       }
     },
     "1343d9c6397cf178c891dfe9799aee09d20625afb231787803bf8b0f89fdaa72": {
