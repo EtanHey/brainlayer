@@ -97,6 +97,11 @@ def parse_calls(output):
             continue
         if not isinstance(event, dict):
             continue
+        step = event.get("step_update", {})
+        if step.get("tool_name") == "call_mcp_tool" and step.get("state") in ("DONE", "ERROR"):
+            info = step.get("tool_info", {})
+            params = info.get("parameters", {})
+            add(params.get("ToolName"), params.get("Arguments"), info.get("output"), step.get("state") == "DONE")
         item = event.get("item", {})
         if event.get("type") == "item.completed" and item.get("type") == "mcp_tool_call":
             add(item.get("tool"), item.get("arguments"), item.get("result"), item.get("status") == "completed")
@@ -194,6 +199,8 @@ def session_id(output):
         except ValueError:
             continue
         if isinstance(event, dict):
+            if event.get("event") == "init":
+                return event.get("conversation_id")
             if event.get("type") == "thread.started":
                 return event.get("thread_id")
             if event.get("type") in ("system", "init") and event.get("session_id"):

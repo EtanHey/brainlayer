@@ -153,3 +153,22 @@ def test_cursor_native_mcp_completion():
         },
     }
     assert load().parse_calls(json.dumps(event)) == [{"tool": "brain_store", "args": {"content": "hp123"}, "ok": True}]
+
+
+def test_agy_completed_search_and_permission_denied_store():
+    events = [
+        {
+            "event": "step_update",
+            "step_update": {
+                "state": state,
+                "tool_name": "call_mcp_tool",
+                "tool_info": {
+                    "parameters": {"ToolName": tool, "Arguments": {"query": "probe"}},
+                    "output": output,
+                },
+            },
+        }
+        for state, tool, output in [("DONE", "brain_search", "results"), ("ERROR", "brain_store", None)]
+    ]
+    calls = load().parse_calls("\n".join(map(json.dumps, events)))
+    assert [(c["tool"], c["ok"]) for c in calls] == [("brain_search", True), ("brain_store", False)]
