@@ -39,6 +39,30 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.57] - 2026-10-15
+
+### Fixed
+- Installing or upgrading the BrainBar cask no longer force-kills the freshly started BrainBar app and daemon (EtanHey/homebrew-layers#123).
+- Keep native tests from opening Finder or using the real desktop workspace (#1305).
+- Recognize the consolidated supervisor in health checks; keep critical warnings while allowing known jobs to retain their restart limits and recovery progress (#1306, #1312).
+- Show the supervisor's running, scheduled and failed jobs accurately in BrainBar (#1307).
+- Keep chart tooltips inside compact cards without covering the next section (#1309).
+- Skip supervisor-owned jobs during bulk restarts so package upgrades use the consolidation path (#1310).
+- Show a brief Copied confirmation for Technical details (#1311).
+- Identify the latest verified transcript archive as its Drive file ID (#1313).
+
+### Changed
+- Share dependency downloads across regression jobs while keeping installations and checks independent (#1308).
+- Release the BrainLayer formula and BrainBar cask together.
+
+## [1.5.56] - 2026-10-14
+
+### Fixed
+- Keep transport counts and alerts measurable when a receipt updates during a slow health scan (#1303).
+
+### Changed
+- Formula-only release; BrainBar remains at 1.5.55.
+
 ## [1.5.55] - 2026-10-14
 
 ### Added
