@@ -47,6 +47,15 @@ def test_unavailable_app_surface_has_no_cli_substitution(monkeypatch, tmp_path):
     module = load(monkeypatch)
     from types import SimpleNamespace
 
+    monkeypatch.setattr(module.shutil, "which", lambda _: None)
     row = module.probe("codex-app", SimpleNamespace(output=tmp_path))
     assert row["status"] == "FAIL"
-    assert "app-thread adapter" in row["reason"]
+    assert "executable missing" in row["reason"]
+
+
+def test_all_required_harnesses_may_run_in_any_order(monkeypatch, tmp_path):
+    module = load(monkeypatch)
+    names = list(reversed(module.HARNESSES))
+    monkeypatch.setattr(sys, "argv", ["probe", "--output", str(tmp_path / "receipt"), "--harnesses", *names])
+    monkeypatch.setattr(module, "probe", lambda name, *a: {"harness": name, "status": "PASS"})
+    assert module.main() == 0
