@@ -97,6 +97,12 @@ def _supervisor_keg(command: str, plist: dict, plist_dir: Path, current_keg: Pat
             framework = (launcher.parents[1] / "Resources/Python.app/Contents/MacOS/Python").resolve(strict=True)
         if shlex.split(command) != [str(framework), *tail]:
             return None
+        if keg != current_keg and Path(args[1]) != python:
+            # An opt flip leaves the old receipt behind. Both venvs can share
+            # this executable, so the receipt cannot identify the running keg.
+            # A false stale verdict lets a RunAtLoad healer restart its parent
+            # before persisting backoff, repeating at every supervisor launch.
+            return None
         return keg
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return None

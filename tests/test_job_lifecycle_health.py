@@ -245,17 +245,37 @@ def test_framework_supervisor_with_no_mapped_keg_is_healthy(supervisor_sample):
     assert ["ps", "-p", "6538", "-o", "command="] in fake.commands
 
 
-def test_framework_supervisor_recorded_old_keg_is_stale(supervisor_sample):
+def test_framework_supervisor_mapped_old_keg_is_stale(supervisor_sample):
     agents, opt, fake, journal, receipt, kegs = supervisor_sample
     receipt["keg"] = "../Cellar/brainlayer/1.5.56"
     pinned = plistlib.loads(bytes.fromhex(receipt["daemon_pinned"]))
     pinned["ProgramArguments"][1] = str(kegs[0] / "libexec/venv/bin/python")
     receipt["daemon_pinned"] = plistlib.dumps(pinned).hex()
     journal.write_text(json.dumps(receipt))
+    fake.keg[6538] = kegs[0]  # Actual mapped old code remains affirmative evidence.
     tick = _tick(agents, opt, fake, {}, 0, heal=False, uid=424242)
     assert tick.scan_error is None
     assert tick.state["com.brainlayer.daemon"]["reason"] == f"stale keg for pid 6538: {kegs[0]}"
     assert tick.actions == []
+
+
+@pytest.mark.parametrize("heal", [False, True])
+def test_moved_opt_cannot_prove_framework_supervisor_is_stale(supervisor_sample, heal):
+    agents, opt, fake, journal, receipt, kegs = supervisor_sample
+    receipt["keg"] = "../Cellar/brainlayer/1.5.56"
+    pinned = plistlib.loads(bytes.fromhex(receipt["daemon_pinned"]))
+    pinned["ProgramArguments"][1] = str(kegs[0] / "libexec/venv/bin/python")
+    receipt["daemon_pinned"] = plistlib.dumps(pinned).hex()
+    journal.write_text(json.dumps(receipt))
+    # Both venvs resolve to the same framework executable. This exact observation
+    # describes BOTH the old process and a replacement already running the new keg.
+    prior = {"com.brainlayer.daemon": {"runs": 1, "attempts": 0}}
+    for now in (0, 1, 2):
+        tick = _tick(agents, opt, fake, prior, now, uid=424242, heal=heal)
+        assert tick.actions == []
+        assert tick.scan_error == "com.brainlayer.daemon: keg mapping unavailable for pid 6538"
+        assert tick.state == prior
+    assert not any(args[:2] == ["launchctl", "kickstart"] for args in fake.commands)
 
 
 @pytest.mark.parametrize(
