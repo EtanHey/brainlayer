@@ -10,6 +10,8 @@ on:
       - "!v1.5.53"
       # Python-only transport clock fix: retain the installed BrainBar 1.5.55.
       - "!v1.5.56"
+      # Formula-only supervisor loop fix: retain BrainBar 1.5.57.
+      - "!v1.5.58"
 
 permissions:
   contents: write
