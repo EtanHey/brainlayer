@@ -223,7 +223,7 @@ def probe(harness, args):
                 if harness == "agy":
                     from harness_probe_native import agy_auth_flow
 
-                    if agy_auth_flow(stdout_path.read_text() + stderr_path.read_text()):
+                    if agy_auth_flow(stderr_path.read_text(), stdout_path.read_text()):
                         auth_blocked = True
                         break
                 transports.extend(observe(proc.pid))
@@ -243,7 +243,7 @@ def probe(harness, args):
     if harness == "agy":
         from harness_probe_native import agy_auth_flow
 
-        if auth_blocked or agy_auth_flow(output + stderr_path.read_text()):
+        if auth_blocked or agy_auth_flow(stderr_path.read_text(), output):
             row.update(status="FAIL", reason="FAIL(auth): own agy child stopped on auth-flow output; no code relayed")
             row["legs"]["ingest"] = "NOT_APPLICABLE"
             row["seconds"] = round(time.monotonic() - started, 2)

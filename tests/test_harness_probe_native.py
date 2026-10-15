@@ -210,3 +210,11 @@ def test_agy_deadline_never_signals_an_exited_child(monkeypatch):
     child.returncode = 0
     callbacks[0]()
     assert killed == [(1234, module.signal.SIGTERM)]
+
+
+def test_agy_advertised_browser_tool_is_not_authentication_flow(monkeypatch):
+    module = load(monkeypatch)
+    inventory = json.dumps({"event": "init", "init": {"tools": ["open_browser_url"]}})
+    assert not module.agy_auth_flow("", inventory)
+    assert not module.agy_auth_flow("", inventory[:-3])
+    assert module.agy_auth_flow("", json.dumps({"event": "authentication_required"}))

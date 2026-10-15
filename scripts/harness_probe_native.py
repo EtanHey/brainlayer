@@ -33,11 +33,25 @@ def agy_auth_error(home):
     return None
 
 
-def agy_auth_flow(output):
+def agy_auth_flow(diagnostics, events=""):
+    # Headless auth prompts are diagnostics. An init tool list (open_browser_url)
+    # and returned search content are data, never evidence that login was started.
+    for line in events.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        if value.get("event") in ("auth", "auth_required", "authentication", "authentication_required"):
+            return True
+        result = value.get("result")
+        if value.get("event") == "result" and isinstance(result, dict):
+            diagnostics += "\n" + str(result.get("error", ""))
     return bool(
         re.search(
             r"accounts\.google\.com|oauth2?/|authorization code|device.code|open.{0,40}browser|browser.{0,40}sign.in",
-            output,
+            diagnostics,
             re.IGNORECASE,
         )
     )
