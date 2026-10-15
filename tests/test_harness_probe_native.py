@@ -15,13 +15,31 @@ def load(monkeypatch):
     return module
 
 
-def test_agy_missing_and_expired_tokens_fail_without_process(monkeypatch, tmp_path):
+def test_agy_keyring_metadata_checks_presence_without_reading_secret(monkeypatch, tmp_path):
     module = load(monkeypatch)
-    assert "missing" in module.agy_auth_error(tmp_path)
-    p = tmp_path / ".gemini/antigravity-cli/antigravity-oauth-token"
-    p.parent.mkdir(parents=True)
-    p.write_text(json.dumps({"token": {"expiry": "2000-01-01T00:00:00Z", "access_token": "fixture"}}))
-    assert "expired" in module.agy_auth_error(tmp_path)
+    from types import SimpleNamespace
+
+    calls = []
+
+    def metadata(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(module, "subprocess", SimpleNamespace(run=metadata, DEVNULL=-3))
+    assert module.agy_auth_error(tmp_path) is None
+    assert calls == [
+        (
+            ["/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity"],
+            {"stdout": module.subprocess.DEVNULL, "stderr": module.subprocess.DEVNULL, "timeout": 5},
+        )
+    ]
+
+
+def test_agy_auth_flow_output_is_detected_without_returning_codes(monkeypatch):
+    module = load(monkeypatch)
+    assert module.agy_auth_flow("Open your browser to sign in: https://accounts.google.com/o/oauth2/auth?code=private")
+    assert module.agy_auth_flow("Please enter the authorization code")
+    assert not module.agy_auth_flow('{"type":"result","text":"probe completed"}')
 
 
 def test_native_app_mcp_items_become_existing_contract_events(monkeypatch):
@@ -58,6 +76,9 @@ def test_missing_agy_credentials_never_launch_cli_or_auth(monkeypatch, tmp_path)
     import harness_probe
 
     monkeypatch.setattr(module.Path, "home", lambda: tmp_path)
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
     monkeypatch.setattr(
         harness_probe.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not start auth"))
     )
@@ -129,3 +150,63 @@ def test_app_failure_interrupts_only_its_own_turn(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="fixture"):
         module.app_probe("probe", module.time.monotonic() + 5)
     assert called[-1] == ("turn/interrupt", {"threadId": "fresh", "turnId": "own-turn"})
+
+
+def test_agy_auth_flow_stops_only_owned_child_before_verification(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import harness_probe
+    import harness_probe_native
+
+    monkeypatch.setattr(harness_probe_native, "agy_auth_error", lambda _: None)
+    monkeypatch.setattr(harness_probe.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(harness_probe.shutil, "which", lambda _: "/installed/agy")
+    killed = []
+
+    class Child:
+        pid = 424242
+        returncode = None
+
+        def __init__(self, *a, **kw):
+            kw["stderr"].write("Please enter the authorization code: private-fixture")
+            kw["stderr"].flush()
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, **kw):
+            self.returncode = -15
+
+    monkeypatch.setattr(harness_probe.subprocess, "Popen", Child)
+    monkeypatch.setattr(harness_probe.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(harness_probe, "observe", lambda _: (_ for _ in ()).throw(AssertionError("must stop first")))
+    monkeypatch.setattr(harness_probe, "Bridge", lambda: (_ for _ in ()).throw(AssertionError("must not verify")))
+    row = harness_probe.probe("agy", SimpleNamespace(output=tmp_path, timeout=1))
+    assert killed == [(424242, harness_probe.signal.SIGTERM)]
+    assert row["status"] == "FAIL" and "FAIL(auth)" in row["reason"]
+    assert "private-fixture" not in json.dumps(row)
+
+
+def test_agy_deadline_never_signals_an_exited_child(monkeypatch):
+    from types import SimpleNamespace
+
+    module = load(monkeypatch)
+    callbacks, killed = [], []
+    child = SimpleNamespace(pid=1234, returncode=None)
+    child.poll = lambda: child.returncode
+
+    class Timer:
+        def __init__(self, seconds, callback):
+            assert seconds == 30
+            callbacks.append(callback)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(module.threading, "Timer", Timer)
+    monkeypatch.setattr(module.os, "killpg", lambda *args: killed.append(args))
+    module.agy_deadline(child, 30)
+    callbacks[0]()
+    child.returncode = 0
+    callbacks[0]()
+    assert killed == [(1234, module.signal.SIGTERM)]

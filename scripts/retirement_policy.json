@@ -1280,6 +1280,16 @@
         "target": "import subprocess"
       }
     },
+    "3e093841fd15a11ce9817bab5ea795efbf8ec22041a47fd5b35f40f9b4002835": {
+      "non_cloud_purpose": "Inspect only macOS generic-password item metadata for the existing agy OS-keyring service gemini/account antigravity. security is invoked without -w; no credential value, unlock, auth flow or cloud request.",
+      "site": {
+        "call_sha256": "26d9107e0b5782a4df2db375d27298c174be7464670a750355bc35ef119ab27d",
+        "kind": "child_process",
+        "owner": "<module>.agy_auth_error",
+        "path": "scripts/harness_probe_native.py",
+        "target": "subprocess.run"
+      }
+    },
     "3f6b2413a51f5ce41ba4ba9a57b93a327537f217453b58a316a49f2d78082e91": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/maintenance.py <module>._process_command_line",
       "site": {
@@ -1838,6 +1848,16 @@
         "owner": "<module>._installed_package_root",
         "path": "src/brainlayer/import_sweep.py",
         "target": "importlib.util.find_spec"
+      }
+    },
+    "5d77ee6c396a2eaf7db34365345ffa92a6f0dcfb5600fc1ad2cdd1afae9a3c43": {
+      "non_cloud_purpose": "Import subprocess only for bounded local macOS security metadata-presence check, discarding stdout/stderr; never reads keyring secret or starts authentication.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_native.py",
+        "target": "import subprocess"
       }
     },
     "5de05ca5f77b450fa9a13bf0198d3f929f4a7061db76d3c08bb391c937d9b008": {
@@ -2524,6 +2544,16 @@
         "owner": "<module>.main",
         "path": "hooks/brainbar-postcompact.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "77938f041d921232f6d3bd8d370804fe14ffa1e8835f5e685b6b4bb9cd3496da": {
+      "non_cloud_purpose": "Local subprocess metadata-check error reference; a failed or timed-out macOS keyring presence check refuses the operator agy probe before CLI spawn.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.agy_auth_error",
+        "path": "scripts/harness_probe_native.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "79343417b0e866f661f3af1d34d5a944d56b914d837f420253db5afe270724b4": {
