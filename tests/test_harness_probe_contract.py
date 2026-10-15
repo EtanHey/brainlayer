@@ -172,3 +172,8 @@ def test_agy_completed_search_and_permission_denied_store():
     ]
     calls = load().parse_calls("\n".join(map(json.dumps, events)))
     assert [(c["tool"], c["ok"]) for c in calls] == [("brain_search", True), ("brain_store", False)]
+
+
+def test_etan_20261016_google_harness_ruling():
+    assert "gemini" not in load().HARNESSES
+    assert "agy" in load().HARNESSES
