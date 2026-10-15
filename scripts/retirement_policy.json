@@ -142,6 +142,16 @@
         "target": "requests.Session().send"
       }
     },
+    "0d7e89af6f62a00ebad507484b106a79557fd3caef904abc09e8c79b916aa1ef": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.rpc self.send.",
+      "site": {
+        "call_sha256": "162d156f235bc8682e6a64fbdc22197603f1dc7e6dc4802bb3be0648fd9aab9e",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.rpc",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.send"
+      }
+    },
     "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_launchctl",
       "site": {
@@ -292,6 +302,16 @@
         "target": "subprocess.TimeoutExpired"
       }
     },
+    "15816167f48167296c1dc7f854eb26050816435c92fdb0e49c5f116de9672482": {
+      "non_cloud_purpose": "Local hostname receipt metadata only; this script does not create an Internet socket. Site: <module>.main socket.gethostname.",
+      "site": {
+        "call_sha256": "dc241d885f02620d9fa68fb341d2984f8278500d6bb8af85e997242a75ad2650",
+        "kind": "transport_call",
+        "owner": "<module>.main",
+        "path": "scripts/harness_probe.py",
+        "target": "socket.gethostname"
+      }
+    },
     "15890b091768ecc1b679b56e711988d0d1cdc4453936901faf0ebb6b0af9d956": {
       "non_cloud_purpose": "Private retirement build/probe/validation harness; positive controls are blocked before sending",
       "site": {
@@ -420,6 +440,16 @@
         "owner": "<module>.get_contact_info",
         "path": "src/brainlayer/pipeline/extract_whatsapp.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module> import subprocess.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "import subprocess"
       }
     },
     "1a75b46eeb3d83b4068042dc19f7a1dc74ba77aae4e41476409f901f455ce48c": {
@@ -802,6 +832,16 @@
         "target": "self.client.request"
       }
     },
+    "2d515c2d25b1d3643d1e36aba483b7150018d4ac8dd42a4f1e6a4b0f5c959d7a": {
+      "non_cloud_purpose": "Separate installed BrainLayer stdio bridge verifier pinned to local /tmp/brainbar.sock, with inherited front override removed; no cloud model endpoint. Site: <module>.Bridge.__enter__ subprocess.Popen.",
+      "site": {
+        "call_sha256": "0e51257a4090c7372e69c4e4d7e80a85cc10244449909d7dfd67160b977d771c",
+        "kind": "child_process",
+        "owner": "<module>.Bridge.__enter__",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "2d59cd22d1a8ba719145c15300e8f4c51b9e58cdaf48fce5f78c59b232418e7f": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -840,6 +880,16 @@
         "owner": "<module>.native_probe",
         "path": "scripts/retirement_native.py",
         "target": "subprocess.check_output"
+      }
+    },
+    "2e4cfe2a85cb4417a45b8f96e8202a5864e99213819042eb3f00d55b9b7d333b": {
+      "non_cloud_purpose": "Subprocess timeout/error class reference for bounded own-process cleanup and explicit failed receipts; no transport invocation. Site: <module>.probe subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.probe",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "2e4f722d3b12ffd96339d0c8edd4af13b26b6719ea3a92e8fe72cbf4f43266de": {
@@ -952,6 +1002,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "335cd717d2aebd362c11f84f60018df75422d26cec8870cfaf5681a888a0a7c5": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.probe urllib.parse.urlsplit.",
+      "site": {
+        "call_sha256": "d18427acea0ab9c2aa198daaa1771e3ffce2d6540c9e9caa6dd0b53e01ddccbe",
+        "kind": "transport_call",
+        "owner": "<module>.probe",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "urllib.parse.urlsplit"
+      }
+    },
     "3403b97ffe1d6cb21815a23d45af4ad3832d0760438138e1e138617f8a35d22f": {
       "non_cloud_purpose": "Owned local process-group shutdown and Popen type metadata; no subprocess is launched here.",
       "site": {
@@ -1050,6 +1110,16 @@
         "owner": "<module>",
         "path": "scripts/cleanup_stale_mcp.py",
         "target": "import subprocess"
+      }
+    },
+    "37ccc0b02edc87e12f4a5d9bc2018776d4ba0a966024c8b1f60f86bfc11f40a5": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module> from urllib.parse import urlsplit.",
+      "site": {
+        "call_sha256": "7f6d2de520ba06bee6c9a0ce4b82e28e111014f95ae8adfe098303d46ce04b21",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "from urllib.parse import urlsplit"
       }
     },
     "37dfc7d84db570735ab747c4b9942decbe0d1d1d23133dd2caa4833dac68e90b": {
@@ -1278,6 +1348,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/jsonl_backup.py",
         "target": "import subprocess"
+      }
+    },
+    "431ea6d453fcb4a4ec255722c8a222f9edf855dad1f9aea46c33e9deeb520e1b": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.sock.sendall.",
+      "site": {
+        "call_sha256": "0f8c1d2df1f5f42ff3fd05e251bf6164079287ac12f1fa0f62da883f4639b070",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.sock.sendall"
       }
     },
     "43c057d267648450e9b65487a26f50e101500e4094a49caea04268afef937bc1": {
@@ -1990,6 +2070,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "667aae2571b6b2b7689a7e097e87c52e8393d96a0708b27754837761ba8d0517": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.sock.connect.",
+      "site": {
+        "call_sha256": "49cdd42e99e04b0c975587ad944a1ff3aae50bc9fe88562da8b88f98282648fe",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.sock.connect"
+      }
+    },
     "667d6a0e016ac6dc464c2d7af4c61b0217f29fcae144bc2a17b4730257ccba46": {
       "non_cloud_purpose": "Existing Phoenix tracing/retrieval evaluation REST request/error metadata; no generative model request. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._get_json urllib.request.Request.",
       "site": {
@@ -2286,6 +2376,16 @@
         "path": "brain-bar/Sources/BrainBarDaemon/BrainBusClient.swift"
       }
     },
+    "7000b1aac5396c337df05ca3ffdf0a27e49df836f2693add674f75bbf49a09bf": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.send.",
+      "site": {
+        "call_sha256": "c0227e2b2c1c0d7368594fbb63dd299f8d52cd3b1b4d37344c0da570e9526d30",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.send"
+      }
+    },
     "70dcf37790eb4d67348add2269c6c27bd00e4bf683b628752f003734060fe5f1": {
       "non_cloud_purpose": "Owner-only local supervisor component status through the existing validated AF_UNIX client; no MCP, TCP, cloud or model sender. Component CLI retains legacy launchd evidence until archival.",
       "site": {
@@ -2354,6 +2454,16 @@
         "owner": "<module>.main.fallback",
         "path": "src/brainlayer/supervisor_adapters.py",
         "target": "subprocess.run"
+      }
+    },
+    "73fcb756fecd81b9d587edaee05d7fcb87a8d4bbceb1b23747427be2d11ba6d2": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.ExistingMCP.__enter__ subprocess.Popen.",
+      "site": {
+        "call_sha256": "b7a22c014efa5395de74cebb380cc029804da4af16f49f07a9f1f7fe4fda16e1",
+        "kind": "child_process",
+        "owner": "<module>.ExistingMCP.__enter__",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "subprocess.Popen"
       }
     },
     "74563270e37006eea02ed62be590a39293649192fd4ba074925cca91df51ce88": {
@@ -2546,6 +2656,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "82a1a243a54ad83580d2c44c99867aee6f5930a253271e4ddd5d3dda6883ba13": {
+      "non_cloud_purpose": "Subprocess timeout/error class reference for bounded own-process cleanup and explicit failed receipts; no transport invocation. Site: <module>.Bridge.__exit__ subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>.Bridge.__exit__",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "82bc6bba3e265d016166f33ed43cce08dd2c340fe04ca0c0a95abfb7a1ff5006": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/health_check.py <module>.send_brainbar_search_canary",
       "site": {
@@ -2624,6 +2744,16 @@
         "owner": "<module>._connect_readonly",
         "path": "src/brainlayer/eval/enrichment_quality_benchmark.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "86b13036cc704cafd0f931ef35785bce17d2d4c56d1a2e36e190ff2b6d7d17d7": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.recv self.send.",
+      "site": {
+        "call_sha256": "62dad8aaf472ef528c6f9eba8547273bfa6d1290f705e72be405baa7a4a6c048",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.recv",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.send"
       }
     },
     "86d3fbc65f2b9765d76b14f567e431efa467e979468aa60f838e4882ac198e3f": {
@@ -3062,6 +3192,16 @@
         "owner": "<module>",
         "path": "scripts/check_tracked_privacy_exports.py",
         "target": "import subprocess"
+      }
+    },
+    "998258738d22d54d33466257cfd22e0a19b0ee9a0a97092dd7661c956373d5b3": {
+      "non_cloud_purpose": "Bounded local ps/lsof/git metadata commands for host, process ancestry, Unix peer and checkout evidence; no network/model command is passed here. Site: <module>.run subprocess.run.",
+      "site": {
+        "call_sha256": "6886d0b69345de067cd5342d560bb2a6f3ee90f6e2e193faeb4ca2525632e0a8",
+        "kind": "child_process",
+        "owner": "<module>.run",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.run"
       }
     },
     "999a0a5c6d4d3a42eb85c8fcad01356d992f81338f313d248706fdf0c66732cc": {
@@ -3590,6 +3730,16 @@
         "target": "socket.socket"
       }
     },
+    "afcf69a0db034c7efcdd9f1f4594f1aa93a2e5208761e44acd0fd89770f5f0f4": {
+      "non_cloud_purpose": "Local hostname receipt metadata only; this script does not create an Internet socket. Site: <module> import socket.",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe.py",
+        "target": "import socket"
+      }
+    },
     "affd2a68152d18f159ec6021317a20097fe47be71eff6ed74daabfba0efe1293": {
       "non_cloud_purpose": "Imports subprocess only for local Swift compilation, private native fixture execution, and local Git identity reads; no model/cloud sender.",
       "site": {
@@ -4010,6 +4160,16 @@
         "target": "subprocess.run"
       }
     },
+    "be0cfbf3ac134cc7e7f27d063e886856cf414e5408d0f31ea193d86bd1e7e9ed": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ socket.socket.",
+      "site": {
+        "call_sha256": "348853ff4c5107ccf7ef14601fc59c57454375ed005641dd708141afebfaa32b",
+        "kind": "transport_call",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "socket.socket"
+      }
+    },
     "be2e7bf812f360e6552d1d7ec3ba7c5f5ab9cca8fc768123fbb94c51734e56db": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
       "site": {
@@ -4068,6 +4228,16 @@
         "owner": "<module>._ollama_generate",
         "path": "src/brainlayer/pipeline/longitudinal_analyzer.py",
         "target": "import requests"
+      }
+    },
+    "c1e66ea9e601f63e9f7322179155ab8df3e2a2f267451dc0463ae8cb7fe42e9b": {
+      "non_cloud_purpose": "Operator-only external harness launch plus bounded local process/socket metadata and local BrainBar bridge verification. External harness inference is explicit, not a BrainLayer-owned model backend. Site: <module> import subprocess.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe.py",
+        "target": "import subprocess"
       }
     },
     "c1f80533f56ae61fe18f4fa0e540a9d026fff6070250af5c29b0fc97aa95957d": {
@@ -4330,6 +4500,16 @@
         "target": "socket.socket()"
       }
     },
+    "cdfe5c11f6da451ddc989eaaff761118b743cfcefa612782606c143296578cc4": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe.py <module>.probe subprocess.Popen.",
+      "site": {
+        "call_sha256": "9be8791e04f3e1330f6f30dc0fbaca5107220eb38252b669a6560e39c741716b",
+        "kind": "child_process",
+        "owner": "<module>.probe",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "cf2412ae297c17775143acee0b8828f2284f8680b545dd61da273e5d4bf3a62b": {
       "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/backup_retention_invariant.py <module>._upload_requests_md5 urllib.parse.parse_qs.",
       "site": {
@@ -4496,6 +4676,16 @@
         "owner": "<module>.retag_t3_app_chunks",
         "path": "scripts/retag_t3_app_provenance.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "d8c6c3c6bbf4ff3cda4c515faca0befb16770e253d3d552114106c373ea8a040": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module> import socket.",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_native.py",
+        "target": "import socket"
       }
     },
     "d9b55af618c33228420b271c253ad481da96c4baeaee04d48e5a56cce546bd4a": {
@@ -4746,6 +4936,26 @@
         "target": "subprocess.run"
       }
     },
+    "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.send self.sock.sendall.",
+      "site": {
+        "call_sha256": "c76e8f72eecb1c6223b6dfa1d54992e2079ac0de872947891b553b8f224194b8",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.send",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.sock.sendall"
+      }
+    },
+    "e9cff9602db67d7b7552cfcc036a66bd39f037039a13edb2ca632d5de2479f92": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.native_id sqlite3.connect.",
+      "site": {
+        "call_sha256": "1c88b9ba20fc5b782bdd5d4c262de6d41fde97d8442a4d89bfb0592c8bce7a54",
+        "kind": "generic_send",
+        "owner": "<module>.native_id",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "ea84f6d1cecc87fe4a368e41e5b4c5888161fb0999d8042713f13d95772f6e66": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/kg_flag_batch.py <module>.main",
       "site": {
@@ -4944,6 +5154,16 @@
         "owner": "<module>.WriteQueue.submit",
         "path": "src/brainlayer/pipeline/write_queue.py",
         "target": "self._queue.put"
+      }
+    },
+    "f114c810c3abbfa9b7d8f599cee0506ef362e962557c625fe032dee6a9974e44": {
+      "non_cloud_purpose": "Subprocess timeout/error class reference for bounded own-process cleanup and explicit failed receipts; no transport invocation. Site: <module>.main subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.main",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "f11e39e6966ddcbb9df3d7a5816b5a98c51c8b3ac69a41ffb5b9e6bb5cfe2724": {

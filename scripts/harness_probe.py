@@ -205,7 +205,12 @@ def probe(harness, args):
     stdout_path, stderr_path = args.output / f"{harness}.stdout.jsonl", args.output / f"{harness}.stderr"
     with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
         # Keep HOME, MCP config, auth, hooks and model selection intact.
-        proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True)
+        env = dict(os.environ)
+        if harness in ("codex-app", "t3"):
+            env["BRAINLAYER_NATIVE_PROBE_TIMEOUT"] = str(max(1, args.timeout - 15))
+        proc = subprocess.Popen(
+            cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True, env=env
+        )
         deadline = time.monotonic() + args.timeout
         try:
             while proc.poll() is None and time.monotonic() < deadline:
@@ -299,6 +304,7 @@ def main():
                 Path(__file__),
                 Path(__file__).with_name("harness_probe_contract.py"),
                 Path(__file__).with_name("harness_probe_native.py"),
+                Path(__file__).with_name("harness_probe_t3.py"),
             )
             if p.exists()
         },

@@ -27,11 +27,17 @@ per Etan's 2026-10-16 harness ruling 1 (`harness-probe-rulings-1.md`); agy is th
 Antigravity/agy has no BrainLayer watcher adapter; its ingest is explicitly
 NOT_APPLICABLE. Codex app and T3 remain separate required rows. Codex app connects by WebSocket to the existing
 app daemon Unix control socket, without starting/restarting a daemon or changing MCP settings.
-T3 still fails until its native adapter lands. CLI success cannot substitute.
-The narrow T3 adapter is an authenticated command to the existing running server's
-`orchestration.dispatchCommand` / `thread.turn.start`, retaining its real provider config and
-observing the resulting tool events and projected transcript. Do not start another T3 server or
-mint auth to get a green row. Codex app needs a fresh app thread and native tool-event evidence.
+T3 uses the existing installed `~/.t3/bin/t3 acp-mcp-bridge` only when the invoking
+agent already has `T3_ACP_MCP_ENDPOINT` and `T3_ACP_MCP_AUTHORIZATION`. The endpoint must match
+the local installed runtime port. It launches a fresh scratch thread, reads native dynamic-tool
+events and binds the exact T3 thread to its strong Codex provider reference before checking the
+Codex JSONL marker. Other T3 providers' transcript bindings are not supported by this adapter.
+No server starts and no token is minted or extracted. Missing context yields `FAIL(auth)`.
+A connected T3 MCP tool in Codex does not imply these environment variables reach its shell:
+the measured Codex-backed T3 shell lacked both. Such a run remains FAIL; native connector
+observations may be attached as diagnostics but cannot replace a complete script receipt.
+Native adapters reserve 15 seconds within the outer timeout for their own-turn cleanup.
+CLI success cannot substitute for app or T3 proof.
 
 Offline contracts run in normal Python CI and the changed-file pre-push gate. The live portion
 requires each operator's authenticated harnesses and BrainBar, unavailable on GitHub-hosted CI;
