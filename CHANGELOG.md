@@ -46,7 +46,7 @@
 - Prevent supervisor-owned health checks from kickstarting their parent, preserving failed-heal attempts and retry backoff (#1317).
 
 ### Changed
-- Require calendar idle before a formula upgrade, immediate consolidation afterward, and verification before the cask; document the expected warning and prior-keg rollback if the supervisor loops.
+- Require calendar idle before a formula upgrade, immediate consolidation afterward, and verification before the cask; document the expected warning and prior-keg rollback if the supervisor loops (#1318).
 - Formula-only release; BrainBar remains at 1.5.57.
 
 ## [1.5.57] - 2026-10-15
