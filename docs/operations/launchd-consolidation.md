@@ -36,7 +36,7 @@ Activation requires review, merged prerequisites and real serving/sleep-wake pro
    /opt/homebrew/opt/brainlayer/libexec/venv/bin/python scripts/harness_probe.py --output "$HOME/harness-probe-$(date -u +%Y%m%dT%H%M%SZ)"
    ```
 
-   Require exit 0 and all seven rows PASS. Any FAIL, missing harness, missing app/T3 adapter,
+   Require exit 0 and all six required rows PASS. Any FAIL, missing harness, missing app/T3 adapter,
    partial selection, or missing ingest proof blocks the cask and the convergence claim. Preserve
    the private `results.json` and `table.md` in the release receipt; never publish raw harness logs.
    Run first on the MBP, then over `ssh m1` in that user's normal login environment. This runs fresh

@@ -22,9 +22,9 @@ bridge finding the tagged unique nonce, observed child bridge/socket transport, 
 transcript marker found in that fresh session's JSONL. Config inventory is diagnostic, not proof
 of effective precedence. Stores use project `brainlayer`, tag `harness-probe`, importance 1.
 
-Claude, Codex and Cursor use the watcher JSONL roots. Gemini's default watcher root is
-`~/.gemini/sessions`; if its real CLI transcript lands elsewhere, report FAIL rather than assuming
-that root is wired. Antigravity/agy has no BrainLayer watcher adapter; its ingest is explicitly
+Claude, Codex and Cursor use the watcher JSONL roots. Gemini CLI is out of convergence scope
+per Etan's 2026-10-16 harness ruling 1 (`harness-probe-rulings-1.md`); agy is the Google harness.
+Antigravity/agy has no BrainLayer watcher adapter; its ingest is explicitly
 NOT_APPLICABLE. Codex app and T3 remain separate required rows: the current script fails those
 rows until a native session-launch/evidence adapter exists. CLI success cannot substitute.
 The narrow T3 adapter is an authenticated command to the existing running server's
