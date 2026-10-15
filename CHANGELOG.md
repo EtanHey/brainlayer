@@ -39,6 +39,16 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.58] - 2026-10-15
+
+### Fixed
+- Avoid supervisor restart loops during formula upgrades when the migration receipt still names the previous keg; uncertain process identity stays critical and does not authorize a restart (#1316).
+- Prevent supervisor-owned health checks from kickstarting their parent, preserving failed-heal attempts and retry backoff (#1317).
+
+### Changed
+- Require calendar idle before a formula upgrade, immediate consolidation afterward, and verification before the cask; document the expected warning and prior-keg rollback if the supervisor loops (#1318).
+- Formula-only release; BrainBar remains at 1.5.57.
+
 ## [1.5.57] - 2026-10-15
 
 ### Fixed
