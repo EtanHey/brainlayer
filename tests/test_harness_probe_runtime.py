@@ -50,3 +50,17 @@ def test_unavailable_app_surface_has_no_cli_substitution(monkeypatch, tmp_path):
     row = module.probe("codex-app", SimpleNamespace(output=tmp_path))
     assert row["status"] == "FAIL"
     assert "app-thread adapter" in row["reason"]
+
+
+def test_descendant_bridge_on_foreign_unix_socket_is_not_brainbar(monkeypatch):
+    module = load(monkeypatch)
+
+    def run(argv):
+        if argv[:2] == ["ps", "-axo"]:
+            return "100 1 codex\n101 100 Python\n"
+        if argv[0] == "ps":
+            return "/keg/bin/brainlayer-mcp-stdio-bridge" if argv[2] == "101" else "codex"
+        return "Python 101 user 3u unix 0xabc 0t0 ->0xdef\nOther 7 user 5u unix 0xdef 0t0 /tmp/other.sock\n"
+
+    monkeypatch.setattr(module, "run", run)
+    assert module.observe(100) == []
