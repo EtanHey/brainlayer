@@ -39,6 +39,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.59] - 2026-10-16
+
+### Fixed
+- Let formula-upgrade consolidation proceed when the idle calendar has an empty custody journal with a drifted boot timestamp, while retaining custody locks and nonempty-record checks (#1320).
+- Show the underlying cause when consolidation fails, alongside the rollback result (#1320).
+- Isolate harness-probe configuration fixtures from the caller's ambient CODEX_HOME (#1324).
+- Require both harness runtime test companions before narrowing test scope, and accept transport proof only for the canonical BrainBar socket (#1331).
+
+### Changed
+- Add a required live harness-probe deploy gate and release-receipt evidence for search, store, refind, ingest, and transport (#1322).
+- Exercise the existing Codex app context and guard agy probes against authentication flows (#1323).
+- Run T3 probes through an existing authenticated MCP caller context (#1327).
+- Formula-only release; BrainBar remains at 1.5.57.
+
 ## [1.5.58] - 2026-10-15
 
 ### Fixed
