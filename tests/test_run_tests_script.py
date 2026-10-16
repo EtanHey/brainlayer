@@ -1995,16 +1995,20 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_e
     assert "PREPUSH=1" in env_log.read_text()
 
 
-def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: Path) -> None:
+@pytest.mark.parametrize("script", ["harness_probe", "harness_probe_native", "harness_probe_t3", "harness_probe_aqua"])
+@pytest.mark.parametrize("missing", ["contract", "runtime", "native", "t3", "aqua"])
+def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: Path, script, missing) -> None:
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    (test_root / "test_harness_probe_contract.py").write_text("test placeholder\n")
+    for companion in ("contract", "runtime", "native", "t3", "aqua"):
+        if companion != missing:
+            (test_root / f"test_harness_probe_{companion}.py").write_text("test placeholder\n")
     env, pytest_log = _cli_root_env(tmp_path, test_root)
-    env["BRAINLAYER_CHANGED_FILES"] = "scripts/harness_probe.py"
+    env["BRAINLAYER_CHANGED_FILES"] = f"scripts/{script}.py"
 
     result = _run_cli_root_script(env)
 
     assert result.returncode == 0, result.stdout
     assert "falling back to full pytest unit suite" in result.stdout
-    assert "unmapped: scripts/harness_probe.py" in result.stdout
+    assert f"unmapped: scripts/{script}.py" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()

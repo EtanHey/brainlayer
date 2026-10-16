@@ -55,6 +55,9 @@ the probe in the existing `gui/<uid>` session. The child verifies `launchctl man
 before any harness starts; the parent waits for its terminal receipt and removes only that job.
 No unlock, sign-in, persistent LaunchAgent installation or existing service restart occurs.
 Receipts include the GUI job identity and private parent/child logs.
+For `--aqua`, create an owned 0700 parent directory for `--output` first. Shared or
+more-permissive parents are rejected; ancestors must be owned by the user or root
+and not writable by others, except for sticky directories.
 
 Claude's session grants only the already authorized `mcp__brainlayer__brain_search` and
 `mcp__brainlayer__brain_store` tools. Cursor receives workspace trust for the chosen probe
