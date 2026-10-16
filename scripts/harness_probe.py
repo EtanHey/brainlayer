@@ -237,6 +237,11 @@ def probe(harness, args):
             row["configs"] = discover_configs(harness, Path.home(), cwd)
         # Keep HOME, MCP config, auth, hooks and model selection intact.
         env = dict(os.environ)
+        if harness == "codex-cli":
+            # This is a native standalone Codex CLI session; do not inherit a
+            # T3 caller's attribution override or its transcript will be
+            # conservatively deferred as an unlinked T3 projection.
+            env.pop("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)
         if harness != "t3":
             for name in ("T3_ACP_MCP_ENDPOINT", "T3_ACP_MCP_AUTHORIZATION"):
                 env.pop(name, None)
