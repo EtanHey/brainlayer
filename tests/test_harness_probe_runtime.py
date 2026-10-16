@@ -173,3 +173,17 @@ def test_native_helper_gets_cleanup_margin_and_receipt_hash(monkeypatch, tmp_pat
     monkeypatch.setattr(module, "probe", lambda *a: {"harness": "codex-app", "status": "FAIL"})
     module.main()
     assert "harness_probe_t3.py" in json.loads((out / "run.json").read_text())["script_sha256"]
+
+
+def test_descendant_bridge_on_foreign_unix_socket_is_not_brainbar(monkeypatch):
+    module = load(monkeypatch)
+
+    def run(argv):
+        if argv[:2] == ["ps", "-axo"]:
+            return "100 1 codex\n101 100 Python\n"
+        if argv[0] == "ps":
+            return "/keg/bin/brainlayer-mcp-stdio-bridge" if argv[2] == "101" else "codex"
+        return "Python 101 user 3u unix 0xabc 0t0 ->0xdef\nOther 7 user 5u unix 0xdef 0t0 /tmp/other.sock\n"
+
+    monkeypatch.setattr(module, "run", run)
+    assert module.observe(100) == []

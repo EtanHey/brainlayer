@@ -73,6 +73,66 @@ def test_shared_runner_change_is_refused_before_writing_any_helper(inputs, monke
     assert runner.read_bytes() == b"foreign runner\n"
 
 
+@pytest.mark.parametrize(
+    "cause", ["supervisor custody identity refused", "launchctl bootstrap failed for gui/424242: 5"]
+)
+def test_main_reports_keg_restart_cause_after_successful_rollback(inputs, monkeypatch, capsys, cause):
+    from brainlayer import launchd_install
+
+    def fail(**options):
+        try:
+            raise RuntimeError(cause)
+        except RuntimeError as failure:
+            raise RuntimeError("keg restart failed; markers/journal and supervisor readiness restored") from failure
+
+    monkeypatch.setattr(launchd_install, "_install", fail)
+    with pytest.raises(SystemExit) as stopped:
+        launchd_install.main(
+            [
+                "consolidate",
+                "--home",
+                str(inputs["home"]),
+                "--domain",
+                DOMAIN,
+                "--templates",
+                str(inputs["templates"]),
+                "--env-file",
+                str(inputs["env_file"]),
+                "--python",
+                str(inputs["python"]),
+                "--keg",
+                "../Cellar/brainlayer/1.5.58",
+            ]
+        )
+    assert stopped.value.code == 1
+    error = capsys.readouterr().err
+    assert "markers/journal and supervisor readiness restored" in error
+    assert f"Caused by: {cause}" in error
+    assert "Traceback" not in error
+
+
+def test_rollback_reports_nested_causes_once_even_with_a_cycle(inputs, monkeypatch, capsys):
+    from brainlayer import launchd_consolidation, launchd_install
+
+    outer = RuntimeError("rollback incomplete")
+    middle = RuntimeError("readiness failed")
+    root = RuntimeError("control socket unavailable")
+    outer.__cause__, middle.__cause__, root.__cause__ = middle, root, outer
+
+    def fail(**options):
+        raise outer
+
+    monkeypatch.setattr(launchd_consolidation, "revert", fail)
+    with pytest.raises(SystemExit) as stopped:
+        launchd_install.main(["consolidation-rollback", "--home", str(inputs["home"]), "--domain", DOMAIN])
+    assert stopped.value.code == 1
+    assert capsys.readouterr().err.splitlines() == [
+        "rollback incomplete",
+        "Caused by: readiness failed",
+        "Caused by: control socket unavailable",
+    ]
+
+
 def test_rollback_calls_pr_c_with_journal_path_without_forward_preflight(inputs, monkeypatch):
     from brainlayer import launchd_consolidation, launchd_install
 

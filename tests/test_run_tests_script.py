@@ -1993,3 +1993,18 @@ def test_pre_push_heavy_suite_contract(tmp_path: Path, helper_mode: str, suite_e
     )
     assert all(f"{key}=<unset>" in env_log.read_text() for key in git_keys)
     assert "PREPUSH=1" in env_log.read_text()
+
+
+def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: Path) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    (test_root / "test_harness_probe_contract.py").write_text("test placeholder\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = "scripts/harness_probe.py"
+
+    result = _run_cli_root_script(env)
+
+    assert result.returncode == 0, result.stdout
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert "unmapped: scripts/harness_probe.py" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text()

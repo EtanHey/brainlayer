@@ -16,7 +16,8 @@ def load():
     return module
 
 
-def test_config_inventory_redacts_environment_and_tracks_project_overlay(tmp_path):
+def test_config_inventory_redacts_environment_and_tracks_project_overlay(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
     home, cwd = tmp_path / "home", tmp_path / "repo"
     (home / ".codex").mkdir(parents=True)
     cwd.mkdir()
@@ -30,7 +31,8 @@ def test_config_inventory_redacts_environment_and_tracks_project_overlay(tmp_pat
     assert load().discover_configs("claude", home, cwd)[-1]["command"] == "local"
 
 
-def test_invalid_config_is_visible(tmp_path):
+def test_invalid_config_is_visible(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".codex/config.toml").write_text("broken [")
     assert "error" in load().discover_configs("codex-cli", tmp_path, tmp_path)[0]

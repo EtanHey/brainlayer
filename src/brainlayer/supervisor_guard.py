@@ -130,10 +130,11 @@ async def stop_group(process: subprocess.Popen, grace: float, shutdown_budget):
 
 
 class Custody:
-    """The guard inherits this lock, keeping restart out until orphan cleanup ends."""
+    """The guard inherits this lock until orphan cleanup ends. Probes can disable journal reset."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, reset_previous_boot=True):
         self.directory, self.fd = directory, None
+        self.reset_previous_boot = reset_previous_boot
         self.journal = directory / "groups.json"
         self.groups: dict = {}
         self.boot = boot_time()
@@ -157,7 +158,7 @@ class Custody:
             if self.journal.exists():
                 document = json.loads(self.journal.read_text())
                 self.groups = document.get("groups", document)  # Legacy journals still get birth checks.
-                if "boot_time" in document and document["boot_time"] != self.boot:
+                if self.reset_previous_boot and "boot_time" in document and document["boot_time"] != self.boot:
                     self.groups = {}
                     self._save()  # Rewrite previous-boot custody before any spawn.
             return self

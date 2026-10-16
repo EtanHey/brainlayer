@@ -49,13 +49,16 @@ def wait_custody(directory, *, clock=time, grace=30):
         raise ValueError("linked supervisor custody refused")
     deadline = deadline_after(clock, grace) + 2
     while True:
-        journal = directory / "groups.json"
-        if os.path.lexists(journal):
-            document = json.loads(read_owned(journal))
-            if journal.stat().st_mode & 0o077 or document.get("boot_time", boot_time()) != boot_time():
-                raise RuntimeError("supervisor custody identity refused")
         try:
-            with Custody(directory) as custody:
+            # Inspect under the kernel lock without clearing previous-boot groups.
+            with Custody(directory, reset_previous_boot=False) as custody:
+                journal = directory / "groups.json"
+                if os.path.lexists(journal):
+                    document = json.loads(read_owned(journal))
+                    if journal.stat().st_mode & 0o077 or (
+                        document.get("boot_time", boot_time()) != boot_time() and document.get("groups") != {}
+                    ):
+                        raise RuntimeError("supervisor custody identity refused")
                 live = False
                 for key, item in custody.groups.items():
                     pgid, birth = item["pgid"], item["start_time"]
