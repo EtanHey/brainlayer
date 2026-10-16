@@ -221,6 +221,7 @@ def probe(harness, args):
         row.update(status="FAIL", reason="Harness executable missing", seconds=0)
         return row
     transports = []
+    auth_blocked = False
     stdout_path, stderr_path = args.output / f"{harness}.stdout.jsonl", args.output / f"{harness}.stderr"
     with (
         stdout_path.open("w") as stdout,
@@ -245,11 +246,24 @@ def probe(harness, args):
             cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True, env=env, cwd=cwd
         )
         deadline = time.monotonic() + args.timeout
+        auth_timer = None
+        if harness == "agy":
+            from harness_probe_native import agy_deadline
+
+            auth_timer = agy_deadline(proc, args.timeout)
         try:
             while proc.poll() is None and time.monotonic() < deadline:
+                if harness == "agy":
+                    from harness_probe_native import agy_auth_flow
+
+                    if agy_auth_flow(stderr_path.read_text(), stdout_path.read_text()):
+                        auth_blocked = True
+                        break
                 transports.extend(observe(proc.pid))
                 time.sleep(1)
         finally:
+            if auth_timer:
+                auth_timer.cancel()
             if proc.poll() is None:
                 # This is our new session group, never a pattern matching kill.
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -259,6 +273,14 @@ def probe(harness, args):
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait(timeout=5)
     output = stdout_path.read_text()
+    if harness == "agy":
+        from harness_probe_native import agy_auth_flow
+
+        if auth_blocked or agy_auth_flow(stderr_path.read_text(), output):
+            row.update(status="FAIL", reason="FAIL(auth): own agy child stopped on auth-flow output; no code relayed")
+            row["legs"]["ingest"] = "NOT_APPLICABLE"
+            row["seconds"] = round(time.monotonic() - started, 2)
+            return row
     for line in output.splitlines():
         try:
             native_event = json.loads(line)

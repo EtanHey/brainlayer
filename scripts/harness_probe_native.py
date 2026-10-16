@@ -4,29 +4,73 @@ import base64
 import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import struct
+import subprocess
 import sys
+import threading
 import time
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from harness_probe import observe
 
 
 def agy_auth_error(home):
-    path = home / ".gemini/antigravity-cli/antigravity-oauth-token"
-    if not path.is_file():
-        return "FAIL(auth): existing agy CLI credential file missing; no login attempted"
+    """macOS agy uses this OS-keyring item; inspect metadata only, never its value."""
     try:
-        token = json.loads(path.read_text())["token"]
-        expiry = datetime.fromisoformat(token["expiry"].replace("Z", "+00:00"))
-        if not token.get("access_token") or expiry <= datetime.now(timezone.utc) + timedelta(minutes=5):
-            return "FAIL(auth): existing agy CLI bearer expired/near expiry; no refresh or login attempted"
-    except (OSError, ValueError, KeyError, TypeError):
-        return "FAIL(auth): existing agy credential cannot be verified; no login attempted"
+        found = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", "gemini", "-a", "antigravity"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "FAIL(auth): agy keyring metadata unavailable; no CLI or login attempted"
+    if found.returncode:
+        return "FAIL(auth): agy keyring entry not found; no CLI or login attempted"
     return None
+
+
+def agy_auth_flow(diagnostics, events=""):
+    # Headless auth prompts are diagnostics. An init tool list (open_browser_url)
+    # and returned search content are data, never evidence that login was started.
+    for line in events.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        if value.get("event") in ("auth", "auth_required", "authentication", "authentication_required"):
+            return True
+        result = value.get("result")
+        if value.get("event") == "result" and isinstance(result, dict):
+            diagnostics += "\n" + str(result.get("error", ""))
+    return bool(
+        re.search(
+            r"accounts\.google\.com|oauth2?/|authorization code|device.code|open.{0,40}browser|browser.{0,40}sign.in",
+            diagnostics,
+            re.IGNORECASE,
+        )
+    )
+
+
+def agy_deadline(proc, seconds):
+    """A blocked metadata sampler cannot extend the launched child's deadline."""
+
+    def stop():
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+    timer = threading.Timer(seconds, stop)
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def event(item):
