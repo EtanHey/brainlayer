@@ -89,3 +89,17 @@ def test_failed_bootstrap_never_boots_out_an_existing_job(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="bootstrap refused"):
         module.launch(SCRIPTS / "harness_probe.py", [], tmp_path / "out", 1)
     assert [a[1] for a in calls] == ["bootstrap"]
+
+
+@pytest.mark.parametrize("private_child", [False, True])
+def test_aqua_refuses_shared_receipt_parent(monkeypatch, tmp_path, private_child):
+    module = load(monkeypatch)
+    parent = tmp_path / "shared"
+    parent.mkdir()
+    parent.chmod(0o777)
+    if private_child:
+        parent = parent / "private"
+        parent.mkdir(mode=0o700)
+    monkeypatch.setattr(module, "run", lambda *_: pytest.fail("unsafe receipt parent reached launchctl"))
+    with pytest.raises(RuntimeError, match="Unsafe Aqua receipt parent"):
+        module.launch(SCRIPTS / "harness_probe.py", [], parent / "receipt", 5)
