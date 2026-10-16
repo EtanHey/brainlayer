@@ -2080,6 +2080,16 @@
         "target": "subprocess.check_output"
       }
     },
+    "6512dc7e2f2ea2c69d7ba067ca0db43314949c134d94416f8542da99e5f3d2b1": {
+      "non_cloud_purpose": "Local current-user process-table query for the Codex App (`pgrep -x -U <uid> Codex`) to distinguish an absent app from a running app with a missing control socket; it never launches Codex or contacts a network/model provider.",
+      "site": {
+        "call_sha256": "efbd127b18ab9e19fe8abc48b81a4b94df9e4b8923d96df8ee520e92cdd72eac",
+        "kind": "child_process",
+        "owner": "<module>.codex_app_running",
+        "path": "scripts/harness_probe_native.py",
+        "target": "subprocess.run"
+      }
+    },
     "65b50f41df46124c85d1ba93a33e64e845927e9d62b571eaae05f5f8f937f2f4": {
       "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.Session.",
       "site": {
@@ -4726,6 +4736,16 @@
         "owner": "<module>",
         "path": "scripts/harness_probe_native.py",
         "target": "import socket"
+      }
+    },
+    "d96c889adfe7312245aab3a1e9a2d5b4ada8a073764625f362237514ecdbea73": {
+      "non_cloud_purpose": "Local exception classification for the bounded Codex App process-presence query; subprocess errors become a harness diagnostic and do not trigger another process or network/model request.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.codex_app_running",
+        "path": "scripts/harness_probe_native.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "d9b55af618c33228420b271c253ad481da96c4baeaee04d48e5a56cce546bd4a": {
