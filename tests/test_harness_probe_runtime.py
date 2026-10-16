@@ -188,6 +188,49 @@ def test_codex_app_running_without_socket_remains_failure(monkeypatch, tmp_path)
     assert "exit 1" in row["reason"]
 
 
+@pytest.mark.parametrize(("harness", "remove_override"), [("codex-cli", True), ("claude", False)])
+def test_only_codex_cli_child_clears_t3_internal_originator_override(monkeypatch, tmp_path, harness, remove_override):
+    module = load(monkeypatch)
+    monkeypatch.setenv("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "T3 Code")
+    monkeypatch.setenv("CODEX_ORIGINATOR", "preserve-this-attribution")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-auth-value")
+    monkeypatch.setattr(module.shutil, "which", lambda _: f"/installed/{harness}")
+    captured = {}
+
+    class Proc:
+        pid = 123
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def spawn(*_args, **kwargs):
+        captured.update(kwargs)
+        kwargs["stdout"].write("")
+        return Proc()
+
+    class Bridge:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def search(self, *_args, **_kwargs):
+            return {}
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    monkeypatch.setattr(module, "Bridge", Bridge)
+    module.probe(harness, SimpleNamespace(output=tmp_path, timeout=5, ingest_timeout=0))
+
+    child_env = captured["env"]
+    assert ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE" not in child_env) is remove_override
+    assert child_env["CODEX_ORIGINATOR"] == "preserve-this-attribution"
+    assert child_env["CODEX_HOME"] == str(tmp_path / "codex-home")
+    assert child_env["OPENAI_API_KEY"] == "synthetic-test-auth-value"
+
+
 def test_all_required_harnesses_may_run_in_any_order(monkeypatch, tmp_path):
     module = load(monkeypatch)
     names = list(reversed(module.HARNESSES))
