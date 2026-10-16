@@ -78,7 +78,7 @@ def observe(pid):
             fields = line.split()
             if len(fields) >= 8 and fields[1] == str(p):
                 endpoint = address_paths.get(fields[-1].removeprefix("->"), fields[-1])
-                if endpoint.startswith("/"):
+                if endpoint == "/tmp/brainbar.sock":
                     evidence.append({"pid": p, "command": argv, "socket": endpoint})
     return evidence
 
