@@ -22,16 +22,6 @@
         "target": "socket.socket"
       }
     },
-    "00eb6c0fe6e4c1a1bc558155004be4d1cf46c887182b72c674dd08dd3aedb26e": {
-      "non_cloud_purpose": "Operator-invoked live harness connectivity probe, outside BrainLayer production model inference. Launches an external authenticated agent CLI with its real user config; that external harness may call its model provider. Explicitly required by the 2026-10-16 convergence lane, never a BrainLayer enrichment/cloud-model backend. Site: <module>.probe subprocess.Popen.",
-      "site": {
-        "call_sha256": "b94465f5a13f16ed3a3dec00f34d0ab9c94ba6903e0e0fcafa29588551ac078a",
-        "kind": "child_process",
-        "owner": "<module>.probe",
-        "path": "scripts/harness_probe.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "01de005383a5bd942b899fd451e09bd0823f07d3dcf4c79d42972baa46be07a6": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -450,6 +440,16 @@
         "owner": "<module>.get_contact_info",
         "path": "src/brainlayer/pipeline/extract_whatsapp.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "1a5301f219bb9cd40dea485d1b3cb7ddb83c801a5c5615d9cb7a06b49db8bb03": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module> import subprocess.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "import subprocess"
       }
     },
     "1a75b46eeb3d83b4068042dc19f7a1dc74ba77aae4e41476409f901f455ce48c": {
@@ -1002,6 +1002,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "335cd717d2aebd362c11f84f60018df75422d26cec8870cfaf5681a888a0a7c5": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.probe urllib.parse.urlsplit.",
+      "site": {
+        "call_sha256": "d18427acea0ab9c2aa198daaa1771e3ffce2d6540c9e9caa6dd0b53e01ddccbe",
+        "kind": "transport_call",
+        "owner": "<module>.probe",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "urllib.parse.urlsplit"
+      }
+    },
     "3403b97ffe1d6cb21815a23d45af4ad3832d0760438138e1e138617f8a35d22f": {
       "non_cloud_purpose": "Owned local process-group shutdown and Popen type metadata; no subprocess is launched here.",
       "site": {
@@ -1100,6 +1110,16 @@
         "owner": "<module>",
         "path": "scripts/cleanup_stale_mcp.py",
         "target": "import subprocess"
+      }
+    },
+    "37ccc0b02edc87e12f4a5d9bc2018776d4ba0a966024c8b1f60f86bfc11f40a5": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module> from urllib.parse import urlsplit.",
+      "site": {
+        "call_sha256": "7f6d2de520ba06bee6c9a0ce4b82e28e111014f95ae8adfe098303d46ce04b21",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "from urllib.parse import urlsplit"
       }
     },
     "37dfc7d84db570735ab747c4b9942decbe0d1d1d23133dd2caa4833dac68e90b": {
@@ -2434,6 +2454,16 @@
         "owner": "<module>.main.fallback",
         "path": "src/brainlayer/supervisor_adapters.py",
         "target": "subprocess.run"
+      }
+    },
+    "73fcb756fecd81b9d587edaee05d7fcb87a8d4bbceb1b23747427be2d11ba6d2": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.ExistingMCP.__enter__ subprocess.Popen.",
+      "site": {
+        "call_sha256": "b7a22c014efa5395de74cebb380cc029804da4af16f49f07a9f1f7fe4fda16e1",
+        "kind": "child_process",
+        "owner": "<module>.ExistingMCP.__enter__",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "subprocess.Popen"
       }
     },
     "74563270e37006eea02ed62be590a39293649192fd4ba074925cca91df51ce88": {
@@ -4470,6 +4500,16 @@
         "target": "socket.socket()"
       }
     },
+    "cdfe5c11f6da451ddc989eaaff761118b743cfcefa612782606c143296578cc4": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe.py <module>.probe subprocess.Popen.",
+      "site": {
+        "call_sha256": "9be8791e04f3e1330f6f30dc0fbaca5107220eb38252b669a6560e39c741716b",
+        "kind": "child_process",
+        "owner": "<module>.probe",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "cf2412ae297c17775143acee0b8828f2284f8680b545dd61da273e5d4bf3a62b": {
       "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/backup_retention_invariant.py <module>._upload_requests_md5 urllib.parse.parse_qs.",
       "site": {
@@ -4904,6 +4944,16 @@
         "owner": "<module>.AppSocket.send",
         "path": "scripts/harness_probe_native.py",
         "target": "self.sock.sendall"
+      }
+    },
+    "e9cff9602db67d7b7552cfcc036a66bd39f037039a13edb2ca632d5de2479f92": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.native_id sqlite3.connect.",
+      "site": {
+        "call_sha256": "1c88b9ba20fc5b782bdd5d4c262de6d41fde97d8442a4d89bfb0592c8bce7a54",
+        "kind": "generic_send",
+        "owner": "<module>.native_id",
+        "path": "scripts/harness_probe_t3.py",
+        "target": "sqlite3.connect"
       }
     },
     "ea84f6d1cecc87fe4a368e41e5b4c5888161fb0999d8042713f13d95772f6e66": {

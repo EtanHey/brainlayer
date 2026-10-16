@@ -187,7 +187,9 @@ def main():
     deadline = time.monotonic() + float(os.environ.get("BRAINLAYER_NATIVE_PROBE_TIMEOUT", "150"))
     if harness == "codex-app":
         return app_probe(prompt, deadline)
-    raise RuntimeError("T3 native adapter follows in the next stack; no server or token created")
+    from harness_probe_t3 import probe
+
+    return probe(prompt, deadline)
 
 
 if __name__ == "__main__":
