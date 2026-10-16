@@ -413,7 +413,22 @@ map_changed_files_to_pytests() {
           append_unique "$TEST_ROOT/test_harness_probe_contract.py"
           append_unique "$TEST_ROOT/test_harness_probe_runtime.py"
           mapped=1
+          for rel in test_harness_probe_native.py test_harness_probe_t3.py test_harness_probe_aqua.py; do
+            test_path="$TEST_ROOT/$rel"
+            if [ -f "$test_path" ]; then
+              append_unique "$test_path"
+            fi
+          done
         fi
+        ;;
+      scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
+        for rel in test_harness_probe_contract.py test_harness_probe_runtime.py test_harness_probe_native.py test_harness_probe_t3.py test_harness_probe_aqua.py; do
+          test_path="$TEST_ROOT/$rel"
+          if [ -f "$test_path" ]; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
         ;;
       scripts/harness_probe_contract.py)
         test_path="$TEST_ROOT/test_harness_probe_contract.py"
@@ -452,7 +467,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/harness_probe_contract.py|scripts/harness_probe.py)
+        src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;

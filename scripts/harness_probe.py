@@ -23,7 +23,6 @@ from pathlib import Path
 
 from harness_probe_contract import (
     HARNESSES,
-    MANUAL,
     QUERY,
     command,
     discover_configs,
@@ -181,21 +180,57 @@ def probe(harness, args):
         "legs": {},
         "transport": "NOT_PROVEN",
     }
+    if harness == "agy":
+        from harness_probe_native import agy_auth_error
+
+        auth_error = agy_auth_error(Path.home())
+        if auth_error:
+            row.update(status="FAIL", reason=auth_error, seconds=0)
+            row["legs"]["ingest"] = "NOT_APPLICABLE"
+            return row
+    if harness == "t3" and not all(os.environ.get(k) for k in ("T3_ACP_MCP_ENDPOINT", "T3_ACP_MCP_AUTHORIZATION")):
+        row.update(
+            status="FAIL",
+            reason="FAIL(auth): existing T3 agent MCP session credentials unavailable; no token minted",
+            seconds=0,
+        )
+        return row
     cmd = command(harness, prompt)
+    if harness in ("codex-app", "t3"):
+        cmd = [sys.executable, str(Path(__file__).with_name("harness_probe_native.py")), harness, prompt]
     if not cmd or not shutil.which(cmd[0]):
-        row.update(status="FAIL", reason=MANUAL.get(harness, "Harness executable missing"), seconds=0)
+        row.update(status="FAIL", reason="Harness executable missing", seconds=0)
         return row
     transports = []
+    auth_blocked = False
     stdout_path, stderr_path = args.output / f"{harness}.stdout.jsonl", args.output / f"{harness}.stderr"
     with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
         # Keep HOME, MCP config, auth, hooks and model selection intact.
-        proc = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True)
+        env = dict(os.environ)
+        if harness in ("codex-app", "t3"):
+            env["BRAINLAYER_NATIVE_PROBE_TIMEOUT"] = str(max(1, args.timeout - 15))
+        proc = subprocess.Popen(
+            cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True, env=env
+        )
         deadline = time.monotonic() + args.timeout
+        auth_timer = None
+        if harness == "agy":
+            from harness_probe_native import agy_deadline
+
+            auth_timer = agy_deadline(proc, args.timeout)
         try:
             while proc.poll() is None and time.monotonic() < deadline:
+                if harness == "agy":
+                    from harness_probe_native import agy_auth_flow
+
+                    if agy_auth_flow(stderr_path.read_text(), stdout_path.read_text()):
+                        auth_blocked = True
+                        break
                 transports.extend(observe(proc.pid))
                 time.sleep(1)
         finally:
+            if auth_timer:
+                auth_timer.cancel()
             if proc.poll() is None:
                 # This is our new session group, never a pattern matching kill.
                 os.killpg(proc.pid, signal.SIGTERM)
@@ -205,6 +240,21 @@ def probe(harness, args):
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait(timeout=5)
     output = stdout_path.read_text()
+    if harness == "agy":
+        from harness_probe_native import agy_auth_flow
+
+        if auth_blocked or agy_auth_flow(stderr_path.read_text(), output):
+            row.update(status="FAIL", reason="FAIL(auth): own agy child stopped on auth-flow output; no code relayed")
+            row["legs"]["ingest"] = "NOT_APPLICABLE"
+            row["seconds"] = round(time.monotonic() - started, 2)
+            return row
+    for line in output.splitlines():
+        try:
+            native_event = json.loads(line)
+            if native_event.get("type") == "harness.transport":
+                transports.extend(native_event["evidence"])
+        except (ValueError, AttributeError):
+            pass
     calls = parse_calls(output)
     row["session_id"] = session_id(output)
     legs = row["legs"]
@@ -263,7 +313,20 @@ def main():
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--ingest-timeout", type=float, default=120)
     parser.add_argument("--output", type=Path, required=True, help="New private directory for receipts")
+    parser.add_argument(
+        "--aqua", action="store_true", help="Use a temporary job in this user's existing macOS GUI session"
+    )
     args = parser.parse_args()
+    from harness_probe_aqua import launch, require_aqua
+
+    require_aqua()
+    if args.aqua:
+        return launch(
+            Path(__file__),
+            [a for a in sys.argv[1:] if a != "--aqua"],
+            args.output,
+            len(args.harnesses) * (args.timeout + args.ingest_timeout + 45) + 30,
+        )
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
     metadata = {
         "host": socket.gethostname(),
@@ -272,7 +335,14 @@ def main():
         "commit": run(["git", "rev-parse", "HEAD"]).strip(),
         "script_sha256": {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in (Path(__file__), Path(__file__).with_name("harness_probe_contract.py"))
+            for p in (
+                Path(__file__),
+                Path(__file__).with_name("harness_probe_contract.py"),
+                Path(__file__).with_name("harness_probe_native.py"),
+                Path(__file__).with_name("harness_probe_t3.py"),
+                Path(__file__).with_name("harness_probe_aqua.py"),
+            )
+            if p.exists()
         },
     }
     (args.output / "run.json").write_text(json.dumps(metadata, indent=2))
@@ -287,10 +357,14 @@ def main():
         (args.output / "table.md").write_text(table(rows) + "\n")
         print(table(rows[-1:]), flush=True)
     print(table(rows))
-    if tuple(args.harnesses) != HARNESSES:
+    if set(args.harnesses) != set(HARNESSES) or len(args.harnesses) != len(HARNESSES):
         print("PARTIAL RUN: not a release receipt (all harnesses required).")
-        return 1
-    return exit_code(rows)
+        code = 1
+    else:
+        code = exit_code(rows)
+    if os.environ.get("BRAINLAYER_HARNESS_AQUA_REQUIRED") == "1":
+        (args.output / "aqua-exit.json").write_text(json.dumps({"exit_code": code}))
+    return code
 
 
 if __name__ == "__main__":

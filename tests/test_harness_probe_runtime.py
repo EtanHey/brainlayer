@@ -47,9 +47,60 @@ def test_unavailable_app_surface_has_no_cli_substitution(monkeypatch, tmp_path):
     module = load(monkeypatch)
     from types import SimpleNamespace
 
+    monkeypatch.setattr(module.shutil, "which", lambda _: None)
     row = module.probe("codex-app", SimpleNamespace(output=tmp_path))
     assert row["status"] == "FAIL"
-    assert "app-thread adapter" in row["reason"]
+    assert "executable missing" in row["reason"]
+
+
+def test_all_required_harnesses_may_run_in_any_order(monkeypatch, tmp_path):
+    module = load(monkeypatch)
+    names = list(reversed(module.HARNESSES))
+    monkeypatch.setattr(sys, "argv", ["probe", "--output", str(tmp_path / "receipt"), "--harnesses", *names])
+    monkeypatch.setattr(module, "probe", lambda name, *a: {"harness": name, "status": "PASS"})
+    assert module.main() == 0
+
+
+def test_native_helper_gets_cleanup_margin_and_receipt_hash(monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    module = load(monkeypatch)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/python")
+    captured = {}
+
+    class Proc:
+        pid = 1
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def spawn(*a, **kw):
+        captured.update(kw)
+        return Proc()
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+
+    class Bridge:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def search(self, *a, **kw):
+            return {}
+
+    monkeypatch.setattr(module, "Bridge", Bridge)
+    module.probe("codex-app", SimpleNamespace(output=tmp_path, timeout=60, ingest_timeout=0))
+    assert captured["env"]["BRAINLAYER_NATIVE_PROBE_TIMEOUT"] == "45"
+    monkeypatch.setattr(module, "run", lambda *_: "fixture-head")
+    out = tmp_path / "run"
+    monkeypatch.setattr(sys, "argv", ["probe", "--output", str(out), "--harnesses", "codex-app"])
+    monkeypatch.setattr(module, "probe", lambda *a: {"harness": "codex-app", "status": "FAIL"})
+    module.main()
+    assert "harness_probe_t3.py" in json.loads((out / "run.json").read_text())["script_sha256"]
 
 
 def test_descendant_bridge_on_foreign_unix_socket_is_not_brainbar(monkeypatch):
