@@ -17,9 +17,18 @@ MANUAL = {
 
 def command(harness, prompt):
     return {
-        "claude": ["claude", "-p", "--verbose", "--output-format", "stream-json", prompt],
+        "claude": [
+            "claude",
+            "-p",
+            prompt,
+            "--verbose",
+            "--output-format",
+            "stream-json",
+            "--allowedTools",
+            "mcp__brainlayer__brain_search,mcp__brainlayer__brain_store",
+        ],
         "codex-cli": ["codex", "exec", "--json", prompt],
-        "cursor": ["cursor-agent", "-p", "--output-format", "stream-json", prompt],
+        "cursor": ["cursor-agent", "-p", "--trust", "--output-format", "stream-json", prompt],
         "gemini": ["gemini", "-p", prompt, "--output-format", "stream-json"],
         "agy": ["agy", "-p", prompt, "--output-format", "stream-json"],
     }.get(harness)
