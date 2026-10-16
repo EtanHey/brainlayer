@@ -281,7 +281,15 @@ def main():
         print(f"Probing {harness}...", flush=True)
         try:
             rows.append(probe(harness, args))
-        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        except (
+            OSError,
+            RuntimeError,
+            subprocess.SubprocessError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+        ) as exc:
             rows.append({"harness": harness, "status": "FAIL", "reason": type(exc).__name__})
         (args.output / "results.json").write_text(json.dumps(rows, indent=2))
         (args.output / "table.md").write_text(table(rows) + "\n")

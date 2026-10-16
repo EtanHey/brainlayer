@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
@@ -50,3 +52,28 @@ def test_unavailable_app_surface_has_no_cli_substitution(monkeypatch, tmp_path):
     row = module.probe("codex-app", SimpleNamespace(output=tmp_path))
     assert row["status"] == "FAIL"
     assert "app-thread adapter" in row["reason"]
+
+
+@pytest.mark.parametrize("error", [ValueError, KeyError, TypeError, AttributeError])
+def test_bad_harness_data_keeps_failure_row_and_continues(monkeypatch, tmp_path, error):
+    import json
+
+    module = load(monkeypatch)
+    output = tmp_path / "receipt"
+    monkeypatch.setattr(sys, "argv", ["probe", "--output", str(output), "--harnesses", "claude", "codex-cli"])
+    monkeypatch.setattr(module, "run", lambda _: "fixture-head")
+    called = []
+
+    def probe(harness, args):
+        called.append(harness)
+        if harness == "claude":
+            raise error("private malformed payload")
+        return {"harness": harness, "status": "PASS"}
+
+    monkeypatch.setattr(module, "probe", probe)
+    assert module.main() == 1
+    assert called == ["claude", "codex-cli"]
+    rows = json.loads((output / "results.json").read_text())
+    assert rows[0] == {"harness": "claude", "status": "FAIL", "reason": error.__name__}
+    assert rows[1]["harness"] == "codex-cli"
+    assert "private malformed payload" not in (output / "table.md").read_text()
