@@ -25,8 +25,9 @@ of effective precedence. Stores use project `brainlayer`, tag `harness-probe`, i
 Claude, Codex and Cursor use the watcher JSONL roots. Gemini CLI is out of convergence scope
 per Etan's 2026-10-16 harness ruling 1 (`harness-probe-rulings-1.md`); agy is the Google harness.
 Antigravity/agy has no BrainLayer watcher adapter; its ingest is explicitly
-NOT_APPLICABLE. Codex app and T3 remain separate required rows: the current script fails those
-rows until a native session-launch/evidence adapter exists. CLI success cannot substitute.
+NOT_APPLICABLE. Codex app and T3 remain separate required rows. Codex app connects by WebSocket to the existing
+app daemon Unix control socket, without starting/restarting a daemon or changing MCP settings.
+T3 still fails until its native adapter lands. CLI success cannot substitute.
 The narrow T3 adapter is an authenticated command to the existing running server's
 `orchestration.dispatchCommand` / `thread.turn.start`, retaining its real provider config and
 observing the resulting tool events and projected transcript. Do not start another T3 server or
@@ -36,3 +37,8 @@ Offline contracts run in normal Python CI and the changed-file pre-push gate. Th
 requires each operator's authenticated harnesses and BrainBar, unavailable on GitHub-hosted CI;
 the required operator deploy gate above is its closest gate. A unit-suite PASS is not live proof.
 Any FAIL exits nonzero; partial selections also exit nonzero and cannot serve as release receipts.
+
+An agy row is admitted only with an existing unexpired CLI bearer file (at least five minutes
+remaining). Missing/expired/unverifiable credentials produce `FAIL(auth)` before spawning agy;
+the probe never refreshes, logs in, unlocks a keychain, or starts OAuth. A failed SSH credential
+path does not establish that the GUI user is signed out.

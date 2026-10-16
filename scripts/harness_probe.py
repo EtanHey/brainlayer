@@ -23,7 +23,6 @@ from pathlib import Path
 
 from harness_probe_contract import (
     HARNESSES,
-    MANUAL,
     QUERY,
     command,
     discover_configs,
@@ -181,9 +180,26 @@ def probe(harness, args):
         "legs": {},
         "transport": "NOT_PROVEN",
     }
+    if harness == "agy":
+        from harness_probe_native import agy_auth_error
+
+        auth_error = agy_auth_error(Path.home())
+        if auth_error:
+            row.update(status="FAIL", reason=auth_error, seconds=0)
+            row["legs"]["ingest"] = "NOT_APPLICABLE"
+            return row
+    if harness == "t3" and not all(os.environ.get(k) for k in ("T3_ACP_MCP_ENDPOINT", "T3_ACP_MCP_AUTHORIZATION")):
+        row.update(
+            status="FAIL",
+            reason="FAIL(auth): existing T3 agent MCP session credentials unavailable; no token minted",
+            seconds=0,
+        )
+        return row
     cmd = command(harness, prompt)
+    if harness in ("codex-app", "t3"):
+        cmd = [sys.executable, str(Path(__file__).with_name("harness_probe_native.py")), harness, prompt]
     if not cmd or not shutil.which(cmd[0]):
-        row.update(status="FAIL", reason=MANUAL.get(harness, "Harness executable missing"), seconds=0)
+        row.update(status="FAIL", reason="Harness executable missing", seconds=0)
         return row
     transports = []
     stdout_path, stderr_path = args.output / f"{harness}.stdout.jsonl", args.output / f"{harness}.stderr"
@@ -205,6 +221,13 @@ def probe(harness, args):
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait(timeout=5)
     output = stdout_path.read_text()
+    for line in output.splitlines():
+        try:
+            native_event = json.loads(line)
+            if native_event.get("type") == "harness.transport":
+                transports.extend(native_event["evidence"])
+        except (ValueError, AttributeError):
+            pass
     calls = parse_calls(output)
     row["session_id"] = session_id(output)
     legs = row["legs"]
@@ -272,7 +295,12 @@ def main():
         "commit": run(["git", "rev-parse", "HEAD"]).strip(),
         "script_sha256": {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in (Path(__file__), Path(__file__).with_name("harness_probe_contract.py"))
+            for p in (
+                Path(__file__),
+                Path(__file__).with_name("harness_probe_contract.py"),
+                Path(__file__).with_name("harness_probe_native.py"),
+            )
+            if p.exists()
         },
     }
     (args.output / "run.json").write_text(json.dumps(metadata, indent=2))
@@ -287,7 +315,7 @@ def main():
         (args.output / "table.md").write_text(table(rows) + "\n")
         print(table(rows[-1:]), flush=True)
     print(table(rows))
-    if tuple(args.harnesses) != HARNESSES:
+    if set(args.harnesses) != set(HARNESSES) or len(args.harnesses) != len(HARNESSES):
         print("PARTIAL RUN: not a release receipt (all harnesses required).")
         return 1
     return exit_code(rows)

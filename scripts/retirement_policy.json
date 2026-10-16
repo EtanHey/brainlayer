@@ -152,6 +152,16 @@
         "target": "requests.Session().send"
       }
     },
+    "0d7e89af6f62a00ebad507484b106a79557fd3caef904abc09e8c79b916aa1ef": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.rpc self.send.",
+      "site": {
+        "call_sha256": "162d156f235bc8682e6a64fbdc22197603f1dc7e6dc4802bb3be0648fd9aab9e",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.rpc",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.send"
+      }
+    },
     "0e8c13e6830758247d49a3f3c1336f20000b2a1d2e5c2c95f5c12619d07c412c": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_launchctl",
       "site": {
@@ -1320,6 +1330,16 @@
         "target": "import subprocess"
       }
     },
+    "431ea6d453fcb4a4ec255722c8a222f9edf855dad1f9aea46c33e9deeb520e1b": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.sock.sendall.",
+      "site": {
+        "call_sha256": "0f8c1d2df1f5f42ff3fd05e251bf6164079287ac12f1fa0f62da883f4639b070",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.sock.sendall"
+      }
+    },
     "43c057d267648450e9b65487a26f50e101500e4094a49caea04268afef937bc1": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_source.py <module>.python_findings importlib.util.resolve_name.",
       "site": {
@@ -2030,6 +2050,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "667aae2571b6b2b7689a7e097e87c52e8393d96a0708b27754837761ba8d0517": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.sock.connect.",
+      "site": {
+        "call_sha256": "49cdd42e99e04b0c975587ad944a1ff3aae50bc9fe88562da8b88f98282648fe",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.sock.connect"
+      }
+    },
     "667d6a0e016ac6dc464c2d7af4c61b0217f29fcae144bc2a17b4730257ccba46": {
       "non_cloud_purpose": "Existing Phoenix tracing/retrieval evaluation REST request/error metadata; no generative model request. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._get_json urllib.request.Request.",
       "site": {
@@ -2324,6 +2354,16 @@
         "body_sha256": "1894168298f47563bb47c74859867da43642f11bae3b5944d92c15ed6a85ffe7",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBarDaemon/BrainBusClient.swift"
+      }
+    },
+    "7000b1aac5396c337df05ca3ffdf0a27e49df836f2693add674f75bbf49a09bf": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.send.",
+      "site": {
+        "call_sha256": "c0227e2b2c1c0d7368594fbb63dd299f8d52cd3b1b4d37344c0da570e9526d30",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.send"
       }
     },
     "70dcf37790eb4d67348add2269c6c27bd00e4bf683b628752f003734060fe5f1": {
@@ -2674,6 +2714,16 @@
         "owner": "<module>._connect_readonly",
         "path": "src/brainlayer/eval/enrichment_quality_benchmark.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "86b13036cc704cafd0f931ef35785bce17d2d4c56d1a2e36e190ff2b6d7d17d7": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.recv self.send.",
+      "site": {
+        "call_sha256": "62dad8aaf472ef528c6f9eba8547273bfa6d1290f705e72be405baa7a4a6c048",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.recv",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.send"
       }
     },
     "86d3fbc65f2b9765d76b14f567e431efa467e979468aa60f838e4882ac198e3f": {
@@ -4080,6 +4130,16 @@
         "target": "subprocess.run"
       }
     },
+    "be0cfbf3ac134cc7e7f27d063e886856cf414e5408d0f31ea193d86bd1e7e9ed": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ socket.socket.",
+      "site": {
+        "call_sha256": "348853ff4c5107ccf7ef14601fc59c57454375ed005641dd708141afebfaa32b",
+        "kind": "transport_call",
+        "owner": "<module>.AppSocket.__init__",
+        "path": "scripts/harness_probe_native.py",
+        "target": "socket.socket"
+      }
+    },
     "be2e7bf812f360e6552d1d7ec3ba7c5f5ab9cca8fc768123fbb94c51734e56db": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/setup.py <module>.verify_mcp_transport",
       "site": {
@@ -4578,6 +4638,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "d8c6c3c6bbf4ff3cda4c515faca0befb16770e253d3d552114106c373ea8a040": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module> import socket.",
+      "site": {
+        "call_sha256": "9df267ed6eef4f61eaaffaebdf9ac9fe93bcf6d1aab9647b1fd045430624c91e",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "scripts/harness_probe_native.py",
+        "target": "import socket"
+      }
+    },
     "d9b55af618c33228420b271c253ad481da96c4baeaee04d48e5a56cce546bd4a": {
       "non_cloud_purpose": "Existing local Python import/resource metadata or on-disk session-harvest application; no model SDK factory. Site: src/brainlayer/pipeline/style_embed.py <module> importlib.util.find_spec.",
       "site": {
@@ -4824,6 +4894,16 @@
         "owner": "<module>._detect_git_sha",
         "path": "src/brainlayer/index_completeness.py",
         "target": "subprocess.run"
+      }
+    },
+    "e99e49be5ae8608284a32a6996ca8c6f830a95fc18d4d96051a562828dc9689e": {
+      "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.send self.sock.sendall.",
+      "site": {
+        "call_sha256": "c76e8f72eecb1c6223b6dfa1d54992e2079ac0de872947891b553b8f224194b8",
+        "kind": "generic_send",
+        "owner": "<module>.AppSocket.send",
+        "path": "scripts/harness_probe_native.py",
+        "target": "self.sock.sendall"
       }
     },
     "ea84f6d1cecc87fe4a368e41e5b4c5888161fb0999d8042713f13d95772f6e66": {
