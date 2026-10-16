@@ -14,7 +14,7 @@ from pathlib import Path
 def run(argv):
     result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
     if result.returncode:
-        raise RuntimeError("Aqua job command failed: " + result.stderr.strip())
+        raise RuntimeError("Aqua job command failed")
     return result.stdout.strip()
 
 
@@ -23,7 +23,7 @@ def require_aqua():
         raise RuntimeError("Probe requires verified Aqua context; no harness launched")
 
 
-def launch(script, argv, output, timeout):
+def launch(script, argv, output, timeout, *, harnesses=()):
     """Bootstrap a unique one-shot job; tear down only that exact job on exit."""
     label = "com.brainlayer.harness-probe-" + uuid.uuid4().hex
     target = f"gui/{os.getuid()}/{label}"
@@ -47,6 +47,9 @@ def launch(script, argv, output, timeout):
             "StandardOutPath": str(work / "stdout"),
             "StandardErrorPath": str(work / "stderr"),
         }
+        for name in ("T3_ACP_MCP_ENDPOINT", "T3_ACP_MCP_AUTHORIZATION"):
+            if "t3" in harnesses and os.environ.get(name):
+                spec["EnvironmentVariables"][name] = os.environ[name]
         plist = work / "probe.plist"
         plist.write_bytes(plistlib.dumps(spec))
         plist.chmod(0o600)

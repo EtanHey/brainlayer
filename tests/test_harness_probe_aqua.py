@@ -38,17 +38,27 @@ def test_required_gui_context_refuses_before_any_harness(monkeypatch, manager):
         module.require_aqua()
 
 
-def test_owned_job_cleans_up_exact_label_after_terminal_receipt(monkeypatch, tmp_path):
+@pytest.mark.parametrize("harnesses", [("cursor",), ("t3",)])
+def test_owned_job_cleans_up_exact_label_after_terminal_receipt(monkeypatch, tmp_path, harnesses):
     module = load(monkeypatch)
     output = tmp_path / "receipt"
-    calls = []
+    calls, private = [], []
+    caller = {"T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:1/mcp", "T3_ACP_MCP_AUTHORIZATION": "synthetic-secret"}
+    for key, value in {**caller, "UNRELATED_SECRET": "must-not-forward"}.items():
+        monkeypatch.setenv(key, value)
 
     def run(argv):
         calls.append(argv)
         if argv[1] == "bootstrap":
             import plistlib
 
-            spec = plistlib.loads(Path(argv[-1]).read_bytes())
+            plist = Path(argv[-1])
+            private.append(plist)
+            assert plist.stat().st_mode & 0o777 == 0o600 and plist.parent.stat().st_mode & 0o777 == 0o700
+            spec = plistlib.loads(plist.read_bytes())
+            env = spec["EnvironmentVariables"]
+            assert "UNRELATED_SECRET" not in env
+            assert {k: env[k] for k in caller if k in env} == (caller if "t3" in harnesses else {})
             assert spec["LimitLoadToSessionType"] == "Aqua"
             assert spec["KeepAlive"] is False
             assert spec["EnvironmentVariables"]["BRAINLAYER_HARNESS_AQUA_REQUIRED"] == "1"
@@ -59,11 +69,12 @@ def test_owned_job_cleans_up_exact_label_after_terminal_receipt(monkeypatch, tmp
         return ""
 
     monkeypatch.setattr(module, "run", run)
-    assert module.launch(SCRIPTS / "harness_probe.py", ["--output", str(output)], output, 5) == 1
+    assert module.launch(SCRIPTS / "harness_probe.py", ["--output", str(output)], output, 5, harnesses=harnesses) == 1
     assert calls[-1][1] == "bootout"
     assert calls[-1][2].startswith("gui/")
     assert "/com.brainlayer.harness-probe-" in calls[-1][2]
     assert (output / "aqua-launch.json").is_file()
+    assert not private[0].exists() and all("synthetic-secret" not in p.read_text() for p in output.iterdir())
 
 
 def test_failed_bootstrap_never_boots_out_an_existing_job(monkeypatch, tmp_path):

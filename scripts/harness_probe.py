@@ -9,15 +9,19 @@ import argparse
 import hashlib
 import json
 import os
+import pwd
 import re
 import selectors
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -160,6 +164,21 @@ class Bridge:
             self.proc.wait(timeout=3)
 
 
+def cursor_scratch_parent():
+    """Anchor trust outside caller cwd/HOME/temp overrides; never repair unsafe state."""
+    uid = os.getuid()
+    home = Path(pwd.getpwuid(uid).pw_dir)
+    info = home.lstat()
+    if not home.is_absolute() or not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+        raise RuntimeError("Unsafe probe scratch account home")
+    parent = home / ".brainlayer-harness-probe"
+    parent.mkdir(mode=0o700, exist_ok=True)
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o700:
+        raise RuntimeError("Unsafe probe scratch parent")
+    return parent
+
+
 def probe(harness, args):
     started = time.monotonic()
     nonce, ingest_nonce = "hp" + uuid.uuid4().hex, "hi" + uuid.uuid4().hex
@@ -203,13 +222,27 @@ def probe(harness, args):
         return row
     transports = []
     stdout_path, stderr_path = args.output / f"{harness}.stdout.jsonl", args.output / f"{harness}.stderr"
-    with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+    with (
+        stdout_path.open("w") as stdout,
+        stderr_path.open("w") as stderr,
+        (
+            tempfile.TemporaryDirectory(prefix="brainlayer-harness-", dir=cursor_scratch_parent())
+            if harness == "cursor"
+            else nullcontext(None)
+        ) as scratch,
+    ):
+        cwd = Path(scratch) if harness == "cursor" else None
+        if cwd is not None:
+            row["configs"] = discover_configs(harness, Path.home(), cwd)
         # Keep HOME, MCP config, auth, hooks and model selection intact.
         env = dict(os.environ)
+        if harness != "t3":
+            for name in ("T3_ACP_MCP_ENDPOINT", "T3_ACP_MCP_AUTHORIZATION"):
+                env.pop(name, None)
         if harness in ("codex-app", "t3"):
             env["BRAINLAYER_NATIVE_PROBE_TIMEOUT"] = str(max(1, args.timeout - 15))
         proc = subprocess.Popen(
-            cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True, env=env
+            cmd, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, start_new_session=True, env=env, cwd=cwd
         )
         deadline = time.monotonic() + args.timeout
         try:
@@ -304,6 +337,7 @@ def main():
             [a for a in sys.argv[1:] if a != "--aqua"],
             args.output,
             len(args.harnesses) * (args.timeout + args.ingest_timeout + 45) + 30,
+            harnesses=args.harnesses,
         )
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
     metadata = {
