@@ -1,5 +1,6 @@
 """Run one probe job in the existing macOS GUI domain; never unlock or sign in."""
 
+import argparse
 import json
 import os
 import plistlib
@@ -28,23 +29,33 @@ def launch(script, argv, output, timeout, *, harnesses=()):
     """Bootstrap a unique one-shot job; tear down only that exact job on exit."""
     label = "com.brainlayer.harness-probe-" + uuid.uuid4().hex
     target = f"gui/{os.getuid()}/{label}"
-    output = output.resolve()
-    if output.exists():
-        raise RuntimeError("Probe output already exists")
-    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    for parent in (output.parent, *output.parent.parents):
-        info = parent.lstat()
+    output = output.absolute()
+    for parent in reversed((output.parent, *output.parent.parents)):
+        try:
+            info = parent.lstat()
+        except FileNotFoundError:
+            parent.mkdir(mode=0o700)
+            info = parent.lstat()
         unsafe = not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.getuid())
         shared = info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX
         if unsafe or shared:
             raise RuntimeError("Unsafe Aqua receipt parent")
         if parent == output.parent and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
             raise RuntimeError("Unsafe Aqua receipt parent")
+    if output.is_symlink():
+        raise RuntimeError("Unsafe Aqua receipt parent")
+    if output.exists():
+        raise RuntimeError("Probe output already exists")
+    output = output.resolve()
+    output_option = argparse.ArgumentParser(add_help=False)
+    output_option.add_argument("--output")
+    _, child_argv = output_option.parse_known_args(argv)
+    child_argv += ["--output", str(output)]
     with tempfile.TemporaryDirectory(prefix=".harness-aqua-", dir=output.parent) as work:
         work = Path(work)
         spec = {
             "Label": label,
-            "ProgramArguments": [sys.executable, str(script.resolve()), *argv],
+            "ProgramArguments": [sys.executable, str(script.resolve()), *child_argv],
             "WorkingDirectory": str(Path.cwd()),
             "RunAtLoad": True,
             "KeepAlive": False,
