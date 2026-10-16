@@ -408,7 +408,14 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
-      scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py)
+      scripts/harness_probe.py)
+        if [ -f "$TEST_ROOT/test_harness_probe_contract.py" ] && [ -f "$TEST_ROOT/test_harness_probe_runtime.py" ]; then
+          append_unique "$TEST_ROOT/test_harness_probe_contract.py"
+          append_unique "$TEST_ROOT/test_harness_probe_runtime.py"
+          mapped=1
+        fi
+        ;;
+      scripts/harness_probe_native.py|scripts/harness_probe_t3.py)
         for rel in test_harness_probe_contract.py test_harness_probe_runtime.py test_harness_probe_native.py test_harness_probe_t3.py; do
           test_path="$TEST_ROOT/$rel"
           if [ -f "$test_path" ]; then
