@@ -1,12 +1,23 @@
 """The live gate's observer may attribute only the spawned harness's descendants."""
 
 import importlib.util
+import os
+import pwd
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+
+
+@pytest.fixture(autouse=True)
+def account_home(monkeypatch, tmp_path):
+    home = tmp_path / "account-home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setattr(pwd, "getpwuid", lambda _: SimpleNamespace(pw_dir=str(home)))
+    return home
 
 
 def load(monkeypatch):
@@ -15,6 +26,54 @@ def load(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("temp_parent", ["caller", "hostile"])
+def test_cursor_scratch_ignores_caller_temp_parent(monkeypatch, tmp_path, account_home, temp_parent):
+    module = load(monkeypatch)
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    hostile.chmod(0o777)
+    monkeypatch.chdir(caller)
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(name, str(caller if temp_parent == "caller" else hostile))
+    monkeypatch.setenv("HOME", str(caller))
+    monkeypatch.setattr(module.tempfile, "tempdir", None)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/cursor-agent")
+    captured = []
+
+    def spawn(*args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        captured.append(cwd)
+        assert cwd.parent == account_home / ".brainlayer-harness-probe"
+        for path in (cwd, cwd.parent):
+            info = path.lstat()
+            assert info.st_uid == os.getuid() and info.st_mode & 0o777 == 0o700
+            assert not path.is_symlink()
+        assert not list(cwd.iterdir())
+        raise RuntimeError("test stopped before launch")
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    with pytest.raises(RuntimeError, match="test stopped before launch"):
+        module.probe("cursor", SimpleNamespace(output=tmp_path, timeout=60, ingest_timeout=0))
+    assert captured and not captured[0].exists()
+
+
+@pytest.mark.parametrize("unsafe", ["writable", "symlink"])
+def test_cursor_refuses_hostile_private_parent(monkeypatch, tmp_path, account_home, unsafe):
+    module = load(monkeypatch)
+    parent = account_home / ".brainlayer-harness-probe"
+    if unsafe == "symlink":
+        parent.symlink_to(tmp_path, target_is_directory=True)
+    else:
+        parent.mkdir(mode=0o700)
+        parent.chmod(0o777)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/cursor-agent")
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **kw: pytest.fail("unsafe parent launched Cursor"))
+    with pytest.raises(RuntimeError, match="Unsafe probe scratch"):
+        module.probe("cursor", SimpleNamespace(output=tmp_path, timeout=60, ingest_timeout=0))
 
 
 def test_unix_peer_address_resolves_only_descendant_bridge(monkeypatch):

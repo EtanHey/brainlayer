@@ -9,16 +9,19 @@ import argparse
 import hashlib
 import json
 import os
+import pwd
 import re
 import selectors
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -161,6 +164,21 @@ class Bridge:
             self.proc.wait(timeout=3)
 
 
+def cursor_scratch_parent():
+    """Anchor trust outside caller cwd/HOME/temp overrides; never repair unsafe state."""
+    uid = os.getuid()
+    home = Path(pwd.getpwuid(uid).pw_dir)
+    info = home.lstat()
+    if not home.is_absolute() or not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+        raise RuntimeError("Unsafe probe scratch account home")
+    parent = home / ".brainlayer-harness-probe"
+    parent.mkdir(mode=0o700, exist_ok=True)
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or stat.S_IMODE(info.st_mode) != 0o700:
+        raise RuntimeError("Unsafe probe scratch parent")
+    return parent
+
+
 def probe(harness, args):
     started = time.monotonic()
     nonce, ingest_nonce = "hp" + uuid.uuid4().hex, "hi" + uuid.uuid4().hex
@@ -207,7 +225,11 @@ def probe(harness, args):
     with (
         stdout_path.open("w") as stdout,
         stderr_path.open("w") as stderr,
-        tempfile.TemporaryDirectory(prefix="brainlayer-harness-") as scratch,
+        (
+            tempfile.TemporaryDirectory(prefix="brainlayer-harness-", dir=cursor_scratch_parent())
+            if harness == "cursor"
+            else nullcontext(None)
+        ) as scratch,
     ):
         cwd = Path(scratch) if harness == "cursor" else None
         if cwd is not None:
