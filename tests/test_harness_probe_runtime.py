@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
@@ -61,11 +63,14 @@ def test_all_required_harnesses_may_run_in_any_order(monkeypatch, tmp_path):
     assert module.main() == 0
 
 
-def test_native_helper_gets_cleanup_margin_and_receipt_hash(monkeypatch, tmp_path):
+@pytest.mark.parametrize("harness", ["codex-app", "cursor"])
+def test_native_helper_gets_cleanup_margin_and_receipt_hash(monkeypatch, tmp_path, harness):
     import json
+    import os
     from types import SimpleNamespace
 
     module = load(monkeypatch)
+    monkeypatch.setenv("T3_ACP_MCP_AUTHORIZATION", "synthetic-secret")
     monkeypatch.setattr(module.shutil, "which", lambda _: "/python")
     captured = {}
 
@@ -77,6 +82,10 @@ def test_native_helper_gets_cleanup_margin_and_receipt_hash(monkeypatch, tmp_pat
             return 0
 
     def spawn(*a, **kw):
+        if harness == "cursor":
+            cwd = Path(kw["cwd"])
+            assert "--trust" in a[0] and cwd != Path.cwd() and not list(cwd.iterdir())
+            assert cwd.stat().st_uid == os.getuid() and cwd.stat().st_mode & 0o777 == 0o700
         captured.update(kw)
         return Proc()
 
@@ -93,8 +102,12 @@ def test_native_helper_gets_cleanup_margin_and_receipt_hash(monkeypatch, tmp_pat
             return {}
 
     monkeypatch.setattr(module, "Bridge", Bridge)
-    module.probe("codex-app", SimpleNamespace(output=tmp_path, timeout=60, ingest_timeout=0))
-    assert captured["env"]["BRAINLAYER_NATIVE_PROBE_TIMEOUT"] == "45"
+    module.probe(harness, SimpleNamespace(output=tmp_path, timeout=60, ingest_timeout=0))
+    if harness == "cursor":
+        assert not Path(captured["cwd"]).exists()
+        assert "T3_ACP_MCP_AUTHORIZATION" not in captured["env"]
+    else:
+        assert captured["env"]["BRAINLAYER_NATIVE_PROBE_TIMEOUT"] == "45"
     monkeypatch.setattr(module, "run", lambda *_: "fixture-head")
     out = tmp_path / "run"
     monkeypatch.setattr(sys, "argv", ["probe", "--output", str(out), "--harnesses", "codex-app"])

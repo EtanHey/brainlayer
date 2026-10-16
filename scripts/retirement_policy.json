@@ -4520,16 +4520,6 @@
         "target": "socket.socket()"
       }
     },
-    "cdfe5c11f6da451ddc989eaaff761118b743cfcefa612782606c143296578cc4": {
-      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe.py <module>.probe subprocess.Popen.",
-      "site": {
-        "call_sha256": "9be8791e04f3e1330f6f30dc0fbaca5107220eb38252b669a6560e39c741716b",
-        "kind": "child_process",
-        "owner": "<module>.probe",
-        "path": "scripts/harness_probe.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "cf2412ae297c17775143acee0b8828f2284f8680b545dd61da273e5d4bf3a62b": {
       "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/backup_retention_invariant.py <module>._upload_requests_md5 urllib.parse.parse_qs.",
       "site": {
@@ -4904,6 +4894,16 @@
         "owner": "<module>._get_ssl_context",
         "path": "scripts/index_youtube.py",
         "target": "ssl.create_default_context"
+      }
+    },
+    "e59802ebbba82aa4ef6282b9bf5cdcaf0274fa7d01ac04d98d2d03aa3270446e": {
+      "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe.py <module>.probe subprocess.Popen.",
+      "site": {
+        "call_sha256": "2a41e617af54e053aeb0d466bc1a100d6841db1d1bd3f1e0218e35bfded1c4a4",
+        "kind": "child_process",
+        "owner": "<module>.probe",
+        "path": "scripts/harness_probe.py",
+        "target": "subprocess.Popen"
       }
     },
     "e5e8028f85119139fa276395b4258dd799409f3924fbc88982b2168985dce3c3": {
