@@ -278,6 +278,22 @@ def probe(harness, args):
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait(timeout=5)
     output = stdout_path.read_text()
+    for line in output.splitlines():
+        try:
+            native_event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(native_event, dict):
+            continue
+        if harness == "codex-app" and native_event.get("type") == "harness.skip" and proc.returncode == 0:
+            row.update(
+                status="SKIP",
+                reason=native_event.get("reason", "Codex App probe precondition unavailable"),
+                exit_code=proc.returncode,
+                legs={"search": "SKIPPED", "store": "SKIPPED", "refound": "SKIPPED", "ingest": "SKIPPED"},
+                seconds=round(time.monotonic() - started, 2),
+            )
+            return row
     if harness == "agy":
         from harness_probe_native import agy_auth_flow
 

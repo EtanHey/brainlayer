@@ -112,6 +112,52 @@ def test_app_socket_handles_ping_and_fragmented_json_without_real_socket(monkeyp
     assert bytes(c ^ mask[i % 4] for i, c in enumerate(pong[6:])) == b"ping"
 
 
+def test_missing_app_socket_skips_only_when_codex_app_is_not_running(monkeypatch, tmp_path):
+    from io import StringIO
+
+    import pytest
+
+    module = load(monkeypatch)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.setattr(module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(module, "codex_app_running", lambda: False)
+    output = StringIO()
+    monkeypatch.setattr(module.sys, "stdout", output)
+
+    assert module.app_probe("probe", module.time.monotonic() + 5) == 0
+    assert json.loads(output.getvalue()) == {
+        "type": "harness.skip",
+        "reason": "Codex App is not running; existing app context is unavailable",
+    }
+
+    monkeypatch.setattr(module, "codex_app_running", lambda: True)
+    with pytest.raises(RuntimeError, match="control socket missing"):
+        module.app_probe("probe", module.time.monotonic() + 5)
+
+
+def test_codex_app_process_check_fails_closed(monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    module = load(monkeypatch)
+    outcomes = iter((0, 1, 2))
+    calls = []
+
+    def pgrep(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=next(outcomes))
+
+    monkeypatch.setattr(module.subprocess, "run", pgrep)
+    assert module.codex_app_running() is True
+    assert module.codex_app_running() is False
+    with pytest.raises(RuntimeError, match="Could not determine"):
+        module.codex_app_running()
+    assert all(argv == ["pgrep", "-x", "-U", str(module.os.getuid()), "Codex"] for argv, _ in calls)
+    assert all(kwargs["stdout"] == module.subprocess.DEVNULL for _, kwargs in calls)
+    assert all(kwargs["stderr"] == module.subprocess.DEVNULL for _, kwargs in calls)
+
+
 def test_app_failure_interrupts_only_its_own_turn(monkeypatch, tmp_path):
     import pytest
 

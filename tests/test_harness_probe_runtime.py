@@ -114,6 +114,80 @@ def test_unavailable_app_surface_has_no_cli_substitution(monkeypatch, tmp_path):
     assert "executable missing" in row["reason"]
 
 
+def test_codex_app_skip_event_does_not_run_bridge_verification(monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    module = load(monkeypatch)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/python")
+
+    class Proc:
+        pid = 123
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def spawn(*args, **kwargs):
+        kwargs["stdout"].write("[]\n")
+        kwargs["stdout"].write(
+            json.dumps(
+                {
+                    "type": "harness.skip",
+                    "reason": "Codex App is not running; existing app context is unavailable",
+                }
+            )
+            + "\n"
+        )
+        return Proc()
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    monkeypatch.setattr(module, "Bridge", lambda: pytest.fail("skip must not verify a bridge"))
+    row = module.probe("codex-app", SimpleNamespace(output=tmp_path, timeout=5, ingest_timeout=0))
+    assert row["status"] == "SKIP"
+    assert row["reason"] == "Codex App is not running; existing app context is unavailable"
+    assert row["exit_code"] == 0
+    assert row["legs"] == {"search": "SKIPPED", "store": "SKIPPED", "refound": "SKIPPED", "ingest": "SKIPPED"}
+    assert module.exit_code([row]) == 1
+
+
+def test_codex_app_running_without_socket_remains_failure(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    module = load(monkeypatch)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/python")
+
+    class Proc:
+        pid = 123
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+    def spawn(*args, **kwargs):
+        kwargs["stdout"].write("")
+        kwargs["stderr"].write("Existing app daemon control socket missing; no server started\n")
+        return Proc()
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+
+    class Bridge:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def search(self, *_args, **_kwargs):
+            return {}
+
+    monkeypatch.setattr(module, "Bridge", Bridge)
+    row = module.probe("codex-app", SimpleNamespace(output=tmp_path, timeout=5, ingest_timeout=0))
+    assert row["status"] == "FAIL"
+    assert row["exit_code"] == 1
+    assert "exit 1" in row["reason"]
+
+
 @pytest.mark.parametrize(("harness", "remove_override"), [("codex-cli", True), ("claude", False)])
 def test_only_codex_cli_child_clears_t3_internal_originator_override(monkeypatch, tmp_path, harness, remove_override):
     module = load(monkeypatch)

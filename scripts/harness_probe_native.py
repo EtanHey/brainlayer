@@ -17,6 +17,24 @@ from pathlib import Path
 from harness_probe import observe
 
 
+def codex_app_running():
+    """Check only the current user's process table; never start the app."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "-U", str(os.getuid()), "Codex"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError("Could not determine whether Codex App is running") from exc
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise RuntimeError("Could not determine whether Codex App is running")
+
+
 def agy_auth_error(home):
     """macOS agy uses this OS-keyring item; inspect metadata only, never its value."""
     try:
@@ -194,6 +212,17 @@ def app_probe(prompt, deadline):
     home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     sock = home / "app-server-control/app-server-control.sock"
     if not sock.is_socket():
+        if not codex_app_running():
+            print(
+                json.dumps(
+                    {
+                        "type": "harness.skip",
+                        "reason": "Codex App is not running; existing app context is unavailable",
+                    }
+                ),
+                flush=True,
+            )
+            return 0
         raise RuntimeError("Existing app daemon control socket missing; no server started")
     record = json.loads((home / "app-server-daemon/daemon.pid").read_text())
     root = record["pid"]
