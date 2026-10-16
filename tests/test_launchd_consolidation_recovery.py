@@ -21,6 +21,98 @@ FLEET = "com.etanhey.brainlayer-fleet-watchdog"
 CALENDAR = "com.brainlayer.maintenance"
 
 
+@pytest.mark.parametrize("pinned", [False, True], ids=["opt-plist", "fallback-pinned-plist"])
+def test_keg_restart_accepts_idle_empty_calendar_with_older_boot_stamp(setup, monkeypatch, pinned):
+    from brainlayer import launchd_consolidation as migration
+    from brainlayer import supervisor_guard
+
+    monkeypatch.setattr(migration, "boot_time", lambda: "1791800119:895228")
+    monkeypatch.setattr(supervisor_guard, "boot_time", lambda: "1791800119:895228")
+    runner = Launchctl()
+    previous = invoke(setup, runner)
+    home, agents, _ = setup
+    control = home / ".local/share/brainlayer/supervisor"
+    calendar = control / "calendar"
+    calendar.mkdir(mode=0o700, exist_ok=True)
+    groups = calendar / "groups.json"
+    groups.write_text(json.dumps({"boot_time": "1791800119:947167", "groups": {}}))
+    groups.chmod(0o600)
+    if pinned:
+        daemon = agents / f"{NEW}.plist"
+        raw = bytes.fromhex(previous["daemon_pinned"])
+        daemon.write_bytes(raw)
+        previous["published_files"][daemon.name] = raw.hex()
+        previous["published_sha256"][daemon.name] = hashlib.sha256(raw).hexdigest()
+        (control / "migration.json").write_text(json.dumps(previous))
+    runner.calls.clear()
+    result = invoke(setup, runner, "keg2")
+    assert result["phase"] == "migrated" and result["keg"] == "keg2"
+    assert runner.loaded == {NEW, CALENDAR}
+    assert not any(call[0] == "kickstart" for call in runner.calls)
+    assert json.loads(groups.read_text()) == {"boot_time": "1791800119:947167", "groups": {}}
+
+
+@pytest.mark.parametrize("groups", [{"52": {"pgid": 52, "start_time": "older"}}, None, []])
+def test_custody_refuses_nonempty_or_malformed_previous_boot_without_rewriting(tmp_path, groups):
+    from brainlayer.launchd_consolidation import wait_custody
+
+    tmp_path.chmod(0o700)
+    journal = tmp_path / "groups.json"
+    raw = json.dumps({"boot_time": "previous-boot", "groups": groups}).encode()
+    journal.write_bytes(raw)
+    journal.chmod(0o600)
+    with pytest.raises(RuntimeError, match="custody identity refused"):
+        wait_custody(tmp_path)
+    assert journal.read_bytes() == raw
+
+
+def test_custody_validates_journal_written_while_waiting_for_lock(tmp_path, monkeypatch):
+    from brainlayer import supervisor_guard
+    from brainlayer.launchd_consolidation import wait_custody
+
+    tmp_path.chmod(0o700)
+    journal = tmp_path / "groups.json"
+    journal.write_text(json.dumps({"boot_time": "previous-boot", "groups": {}}))
+    journal.chmod(0o600)
+    replacement = json.dumps({"boot_time": "previous-boot", "groups": {"52": {"pgid": 52, "start_time": "older"}}})
+    flock = supervisor_guard.fcntl.flock
+
+    def replace_after_lock(fd, operation):
+        flock(fd, operation)
+        journal.write_text(replacement)
+
+    monkeypatch.setattr(supervisor_guard.fcntl, "flock", replace_after_lock)
+    with pytest.raises(RuntimeError, match="custody identity refused"):
+        wait_custody(tmp_path)
+    assert journal.read_text() == replacement
+
+
+def test_empty_previous_boot_custody_waits_for_real_kernel_lock(tmp_path):
+    from brainlayer.launchd_consolidation import wait_custody
+    from brainlayer.supervisor_guard import Custody
+
+    class Clock:
+        now = 0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, delay):
+            self.now += delay
+
+    tmp_path.chmod(0o700)
+    with Custody(tmp_path):
+        journal = tmp_path / "groups.json"
+        raw = json.dumps({"boot_time": "previous-boot", "groups": {}}).encode()
+        journal.write_bytes(raw)
+        journal.chmod(0o600)
+        with pytest.raises(RuntimeError, match="custody did not exit"):
+            wait_custody(tmp_path, clock=Clock(), grace=0)
+        assert journal.read_bytes() == raw
+    wait_custody(tmp_path)
+    assert journal.read_bytes() == raw
+
+
 @pytest.mark.parametrize("restart", [False, True])
 @pytest.mark.parametrize("failure", [KeyboardInterrupt, SystemExit, GeneratorExit])
 @pytest.mark.parametrize("after_bootstrap", [False, True])

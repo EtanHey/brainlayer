@@ -148,6 +148,12 @@ def main(argv=None):
         raise SystemExit(1) from None
     except Exception as refusal:
         print(str(refusal), file=sys.stderr)
+        seen = {id(refusal)}
+        cause = refusal.__cause__
+        while cause is not None and id(cause) not in seen:
+            print(f"Caused by: {cause}", file=sys.stderr)
+            seen.add(id(cause))
+            cause = cause.__cause__
         raise SystemExit(1) from None
     if args.action == "consolidate":
         print(f"{args.action}: {outcome['phase']}; restart fallback={outcome.get('restart_fallback')}")
