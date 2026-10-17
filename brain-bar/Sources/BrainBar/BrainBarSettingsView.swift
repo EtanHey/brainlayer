@@ -241,9 +241,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
             switch status.health {
             case .unhealthy, .unknown, .deferred:
                 return status.attentionReason ?? "\(group.title): \(status.health.title)."
-            case .checking:
-                return "\(group.title): checking job health."
-            case .healthy, .awaitingRun, .skipped:
+            case .checking, .healthy, .awaitingRun, .skipped:
                 return nil
             }
         }
@@ -886,7 +884,7 @@ struct BrainBarSettingsView: View {
         .background(Color.brainBarBackgroundBase)
         .foregroundStyle(Color.brainBarTextPrimary)
         .environment(\.colorScheme, .dark)
-        .onChange(of: activationRevision) { _, _ in
+        .onChange(of: activationRevision, initial: true) { _, _ in
             _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
             viewModel.refreshLaunchdStatus()
             viewModel.refreshObservabilityStatus()

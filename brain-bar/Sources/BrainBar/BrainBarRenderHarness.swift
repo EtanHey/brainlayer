@@ -113,6 +113,12 @@ enum BrainBarRenderHarness {
         init(_ message: String) { errorDescription = message }
     }
 
+    private struct JobHealthQAProvider: BrainLayerLaunchdStatusSampling {
+        let observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+        func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] { observations.mapValues(\.loadState) }
+        func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] { observations }
+    }
+
     /// Real on-screen production views with synthetic job evidence. Runs before App.main,
     /// so no AppDelegate, daemon, hotkey, canonical DB or supervisor is started.
     private static func runJobHealthQAIfRequested() {
@@ -158,14 +164,18 @@ enum BrainBarRenderHarness {
                     ownership: .supervisor)
             }
             let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                launchdStatusProvider: JobHealthQAProvider(observations: observations),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
                 initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)),
                 initialMaintenanceEvidence: .init(weeklyCompletion: .completed(now), runRecords: [:]))
             let reasons = model.dashboardJobAttentionReasons
             let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
+            let panelState = BrainBarDashboardPanelState()
+            panelState.attentionExpanded = true
             let dashboard = BrainBarDashboardPreview.make(collector: collector,
                 observabilityResult: BrainBarDashboardFixture.readableObservabilityResult, now: now,
-                jobAttentionReasons: reasons)
+                panelState: panelState, jobAttentionReasons: reasons)
             NSApplication.shared.setActivationPolicy(.regular)
             let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1100, height: 760),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
