@@ -2,7 +2,7 @@
 """BrainLayer SessionStart cleanup hook — runs on every new Claude Code session.
 
 Performs two maintenance tasks:
-  1. Stops verified, explicitly recorded MCP children after they become orphaned
+  1. Reconciles owned MCP records and reports orphan candidates without signalling
   2. Checkpoints the WAL if it exceeds WAL_THRESHOLD_MB
 
 Output: brief status line to stdout (injected as Claude context).
@@ -10,9 +10,10 @@ Target: <1s total.
 """
 
 import ctypes
+import errno
 import json
+import logging
 import os
-import signal
 import sqlite3
 import stat
 import struct
@@ -36,32 +37,19 @@ def get_db_path():
     return None
 
 
-def parse_etime(etime_str):
-    """Parse ps etime (DD-HH:MM:SS / HH:MM:SS / MM:SS) to seconds."""
-    days = 0
-    if "-" in etime_str:
-        day_part, etime_str = etime_str.split("-", 1)
-        days = int(day_part)
-    parts = etime_str.split(":")
-    if len(parts) == 3:
-        h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
-    elif len(parts) == 2:
-        h, m, s = 0, int(parts[0]), int(parts[1])
-    else:
-        return 0
-    return days * 86400 + h * 3600 + m * 60 + s
-
-
 def _process_identity(pid):
-    """Read executable, parent and microsecond birth from the kernel, never argv."""
+    """Kernel identity; None means unknown, ProcessLookupError proves absence."""
     if type(pid) is not int or pid <= 1:
         return None
     try:
         if sys.platform == "darwin":
-            lib = ctypes.CDLL("/usr/lib/libproc.dylib")
+            lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
             info = ctypes.create_string_buffer(136)  # proc_bsdinfo (sys/proc_info.h)
             path = ctypes.create_string_buffer(4096)
+            ctypes.set_errno(0)
             if lib.proc_pidinfo(pid, 3, 0, info, len(info)) != len(info):
+                if ctypes.get_errno() == errno.ESRCH:
+                    raise ProcessLookupError(errno.ESRCH, "process absent")
                 return None
             if struct.unpack_from("I", info.raw, 4)[0] == 5:  # SZOMB
                 return None
@@ -72,7 +60,10 @@ def _process_identity(pid):
             executable = os.fsdecode(path.value)
         elif sys.platform == "linux":
             root = Path(f"/proc/{pid}")
-            fields = (root / "stat").read_text().rsplit(")", 1)[1].split()
+            try:
+                fields = (root / "stat").read_text().rsplit(")", 1)[1].split()
+            except FileNotFoundError as error:
+                raise ProcessLookupError(errno.ESRCH, "process absent") from error
             if fields[0] == "Z":
                 return None
             ppid, uid = int(fields[1]), root.stat().st_uid
@@ -82,6 +73,8 @@ def _process_identity(pid):
         else:
             return None
         return dict(pid=pid, ppid=ppid, uid=uid, start=start, executable=executable)
+    except ProcessLookupError:
+        raise
     except (OSError, ValueError, IndexError):
         return None
 
@@ -99,22 +92,33 @@ def _ownership_directory(create=False):
 
 def record_owned_child(pid):
     """Record only a direct child of this hook; never adopt an existing seat."""
-    child = _process_identity(pid)
+    try:
+        child = _process_identity(pid)
+    except OSError:
+        return False
     if not child or child["ppid"] != os.getpid() or child["uid"] != os.getuid():
         return False
     try:
         directory = _ownership_directory(create=True)
         try:
             fd = os.open(f"{pid}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-            with os.fdopen(fd, "w") as output:
-                json.dump(child, output)
-                output.flush()
-                os.fsync(output.fileno())
+            try:
+                with os.fdopen(fd, "w") as output:
+                    json.dump(child, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except BaseException:
+                # Only remove a file this call exclusively created, never a prior record.
+                try:
+                    os.unlink(f"{pid}.json", dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                raise
         finally:
             os.close(directory)
         return True
-    except OSError:
-        return False  # Failed registration never authorizes cleanup.
+    except (OSError, ValueError, TypeError):
+        return False  # Failed registration leaves no partial ownership record.
 
 
 def start_owned_mcp(argv):
@@ -129,12 +133,12 @@ def start_owned_mcp(argv):
 
 
 def cleanup_stale_mcp():
-    """Stop only recorded, identity-matching orphans. No record means no scan."""
+    """Reconcile records and return the number of owned orphan candidates. Never signal."""
     try:
         directory = _ownership_directory()
     except OSError:
         return 0
-    killed = 0
+    candidates = 0
     try:
         for name in os.listdir(directory):
             if not name.endswith(".json"):
@@ -157,21 +161,34 @@ def cleanup_stale_mcp():
                 pid = saved.get("pid")
                 if type(pid) is not int or pid <= 1 or name != f"{pid}.json":
                     continue
-                current = _process_identity(pid)
-                if not current or current["ppid"] != 1 or current["uid"] != os.getuid():
-                    continue  # Attached Codex/T3/Cursor/test children stay alive at any age.
-                if any(current[key] != saved.get(key) for key in ("pid", "uid", "start", "executable")):
+                if (
+                    saved.get("uid") != os.getuid()
+                    or not isinstance(saved.get("start"), str)
+                    or not saved["start"]
+                    or not isinstance(saved.get("executable"), str)
+                ):
                     continue
-                if _process_identity(pid) != current:
-                    continue  # Revalidate birth, executable and orphan state before TERM.
-                os.kill(pid, signal.SIGTERM)
-                killed += 1
-                os.unlink(name, dir_fd=directory)
+                try:
+                    current = _process_identity(pid)
+                except ProcessLookupError:
+                    os.unlink(name, dir_fd=directory)
+                    continue
+                if current is None:
+                    continue  # Unreadable identity is not evidence of absence.
+                if current["start"] != saved["start"]:
+                    os.unlink(name, dir_fd=directory)
+                    continue  # Retire stale ownership so this PID can register again.
+                if current["ppid"] != 1 or current["uid"] != saved["uid"]:
+                    continue
+                if current["executable"] != saved["executable"]:
+                    continue
+                logging.getLogger(__name__).warning("Owned orphan MCP candidate pid=%d; no signal sent", pid)
+                candidates += 1
             except (OSError, ValueError, TypeError):
                 continue
     finally:
         os.close(directory)
-    return killed
+    return candidates
 
 
 def wal_checkpoint():
@@ -210,10 +227,10 @@ def main():
     start = time.monotonic()
     messages = []
 
-    # 1. Cleanup stale MCP processes
-    killed = cleanup_stale_mcp()
-    if killed:
-        messages.append(f"Cleaned {killed} stale MCP process{'es' if killed != 1 else ''}")
+    # 1. Reconcile records; orphan candidates are reported, never signalled.
+    candidates = cleanup_stale_mcp()
+    if candidates:
+        messages.append(f"Observed {candidates} owned orphan MCP candidates; no signals sent")
 
     # 2. WAL checkpoint (if needed)
     if (time.monotonic() - start) < 0.8:  # time budget

@@ -392,7 +392,6 @@ class TestSessionCleanupHook:
         assert hasattr(mod, "wal_checkpoint")
         assert hasattr(mod, "main")
 
-    def test_hook_parse_etime(self):
+    def test_hook_has_no_legacy_age_selector(self):
         mod = self._load_hook()
-        assert mod.parse_etime("1-02:30:00") == 95400
-        assert mod.parse_etime("05:30") == 330
+        assert not hasattr(mod, "parse_etime")

@@ -1,9 +1,10 @@
-"""Signals are intercepted except for the hook's explicitly spawned scratch child."""
+"""Record reconciliation must never signal any process."""
 
+import ast
+import errno
 import importlib.util
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -20,6 +21,12 @@ def hook(monkeypatch, tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     monkeypatch.setattr(mod, "OWNERSHIP_DIR", tmp_path / "owners", raising=False)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("session cleanup must never send signals")
+
+    monkeypatch.setattr(mod.os, "kill", forbidden)
+    monkeypatch.setattr(mod.os, "killpg", forbidden)
     return mod
 
 
@@ -72,12 +79,71 @@ def test_record_does_not_authorize_changed_or_attached_process(hook, monkeypatch
     assert sends == []
 
 
-def test_identity_revalidated_immediately_before_signal(hook, monkeypatch):
-    record(hook, identity())
-    snapshots = iter([identity(), identity(start="reused")])
-    monkeypatch.setattr(hook, "_process_identity", lambda pid: next(snapshots))
-    monkeypatch.setattr(hook.os, "kill", lambda *args: pytest.fail("reused PID signalled"))
+def test_live_owned_orphan_is_logged_without_signal(hook, monkeypatch, caplog):
+    path = record(hook, identity())
+    monkeypatch.setattr(hook, "_process_identity", lambda pid: identity())
+    assert hook.cleanup_stale_mcp() == 1
+    assert path.exists()
+    assert "901" in caplog.text
+    assert "no signal" in caplog.text
+
+
+def test_no_signal_calls_exist_in_hook(hook):
+    tree = ast.parse(HOOK.read_text())
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr in {"kill", "killpg", "terminate", "send_signal"}
+        for node in ast.walk(tree)
+    )
+
+
+@pytest.mark.parametrize("state", ["absent", "changed-birth"])
+def test_stale_record_removed_and_pid_can_register_again(hook, monkeypatch, state):
+    path = record(hook, identity())
+
+    def current(pid):
+        if state == "absent":
+            raise ProcessLookupError(errno.ESRCH, "gone")
+        return identity(start="new-birth")
+
+    monkeypatch.setattr(hook, "_process_identity", current)
     assert hook.cleanup_stale_mcp() == 0
+    assert not path.exists()
+    monkeypatch.setattr(hook, "_process_identity", lambda pid: identity(ppid=os.getpid(), start="new-birth"))
+    assert hook.record_owned_child(901) is True
+
+
+@pytest.mark.parametrize("state", ["unknown", "permission"])
+def test_unknown_process_identity_preserves_record(hook, monkeypatch, state):
+    path = record(hook, identity())
+
+    def current(pid):
+        if state == "permission":
+            raise PermissionError(errno.EPERM, "not proof of absence")
+        return None
+
+    monkeypatch.setattr(hook, "_process_identity", current)
+    assert hook.cleanup_stale_mcp() == 0
+    assert path.exists()
+
+
+@pytest.mark.parametrize("operation", ["fsync", "dump"])
+def test_failed_registration_removes_its_partial_record(hook, monkeypatch, operation):
+    monkeypatch.setattr(hook, "_process_identity", lambda pid: identity(ppid=os.getpid()))
+
+    def failed(*args, **kwargs):
+        raise OSError("injected registration failure")
+
+    monkeypatch.setattr(hook.os if operation == "fsync" else hook.json, operation, failed)
+    assert hook.record_owned_child(901) is False
+    assert not (hook.OWNERSHIP_DIR / "901.json").exists()
+
+
+def test_failed_registration_does_not_remove_an_existing_record(hook, monkeypatch):
+    path = record(hook, identity())
+    before = path.read_bytes()
+    monkeypatch.setattr(hook, "_process_identity", lambda pid: identity(ppid=os.getpid()))
+    assert hook.record_owned_child(901) is False
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("unsafe", ["malformed", "symlink", "public"])
@@ -101,34 +167,49 @@ def test_cannot_adopt_foreign_process(hook, monkeypatch):
     assert not hook.OWNERSHIP_DIR.exists()
 
 
-def test_hook_spawned_orphan_is_terminated(hook, tmp_path):
+def test_hook_spawned_orphan_exits_naturally_without_signals(hook):
     # The helper imports the real hook and launches its own child. After the helper
-    # exits, only that recorded child can receive a real signal from cleanup.
+    # exits, cleanup reports it and the child expires naturally, without signals.
     helper = """import importlib.util, pathlib, sys
 spec = importlib.util.spec_from_file_location('cleanup', sys.argv[1])
 hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
 hook.OWNERSHIP_DIR = pathlib.Path(sys.argv[2])
-p = hook.start_owned_mcp(['/bin/sleep', '30'])
+p = hook.start_owned_mcp(['/bin/sleep', '1'])
 print(p.pid, flush=True)
 """
     launched = subprocess.run(
         [sys.executable, "-c", helper, str(HOOK), str(hook.OWNERSHIP_DIR)], check=True, text=True, capture_output=True
     )
     pid = int(launched.stdout.strip())
-    saved = json.loads((hook.OWNERSHIP_DIR / f"{pid}.json").read_text())
-    try:
-        deadline = time.monotonic() + 3
-        while (current := hook._process_identity(pid)) and current["ppid"] != 1:
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        assert current is not None
-        assert hook.cleanup_stale_mcp() == 1
-        deadline = time.monotonic() + 3
-        while hook._process_identity(pid) is not None:
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-    finally:
-        # Never signal a PID whose current birth differs from this test's child.
-        actual = hook._process_identity(pid)
-        if actual and all(actual[key] == saved[key] for key in ("pid", "uid", "start", "executable")):
-            os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 3
+    while (current := hook._process_identity(pid)) and current["ppid"] != 1:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    assert current is not None
+    assert hook.cleanup_stale_mcp() == 1
+    assert hook._process_identity(pid) is not None
+    while True:
+        try:
+            if hook._process_identity(pid) is None:
+                break
+        except ProcessLookupError:
+            break
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("error", [errno.ESRCH, errno.EPERM, errno.EINVAL])
+def test_darwin_only_esrch_proves_absence(hook, monkeypatch, error):
+    from types import SimpleNamespace
+
+    def failed(*args):
+        hook.ctypes.set_errno(error)
+        return 0
+
+    monkeypatch.setattr(hook, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(hook.ctypes, "CDLL", lambda *args, **kwargs: SimpleNamespace(proc_pidinfo=failed))
+    if error == errno.ESRCH:
+        with pytest.raises(ProcessLookupError):
+            hook._process_identity(901)
+    else:
+        assert hook._process_identity(901) is None

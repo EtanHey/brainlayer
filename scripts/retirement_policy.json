@@ -102,16 +102,6 @@
         "target": "import ssl"
       }
     },
-    "089a8eb598e6acb7363a5217478ca92a4337b39fb5bc4655509f53fb9d4083aa": {
-      "non_cloud_purpose": "Read-only Darwin libproc kernel process birth/parent/UID/executable identity for fail-closed owned-child cleanup; no model API or network transport.",
-      "site": {
-        "call_sha256": "f0039d7e1aecd275445d53ccb4f04939a5dc089d35d5757dc3eb6953a0057f65",
-        "kind": "dynamic_code_or_import",
-        "owner": "<module>._process_identity",
-        "path": "hooks/session-cleanup.py",
-        "target": "ctypes.CDLL"
-      }
-    },
     "0ab7f79347ca25c3b4dba2b5e569eb33f51ac2b6cd02f060dc1761724f78eb1b": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>.send_brainbar_search_canary socket.socket.",
       "site": {
@@ -2626,6 +2616,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "7bf79d53ef27f44b14c53c0db81654c5fddc2899cdd9f048fef2df47af3e902c": {
+      "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "7d586f3e7e97e739f34db5656a6f775f925856c1ab0beaafe16d63b9aa618ab6": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/launchd_primitive.py <module>",
       "site": {
@@ -2784,6 +2784,16 @@
         "owner": "<module>.match_session_to_plan",
         "path": "src/brainlayer/pipeline/plan_linking.py",
         "target": "session.get"
+      }
+    },
+    "85bbee5e82d8e076fc5fc0bae895df84e6233cfd0829e1205b2a3f5f10b82aa7": {
+      "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
+      "site": {
+        "call_sha256": "00bdfee16be0c5560e1431a166d6d5e8fbd176e1bc66a646408c1fcebebe16e7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.CDLL"
       }
     },
     "85edf7ad1310157f713eeb2171a1a59a83cc18f78801dcc3f647d755219665f7": {
@@ -3928,6 +3938,16 @@
         "owner": "<module>.check_mcp",
         "path": "scripts/sprint_gate.py",
         "target": "client.request"
+      }
+    },
+    "b3d3d76fb3bb61559f94de302d991371ec0d8e6400f2a8ac96f081bde71ccd76": {
+      "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
+      "site": {
+        "call_sha256": "a193054982dec76866734ed885d369a96b077cfe1d00402ebbe226d9959b594a",
+        "kind": "transport_call",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.set_errno"
       }
     },
     "b40a92458cc40955f678415e6c70bd1fd40ffa80868aed7437cabf0d7382111d": {

@@ -2,8 +2,9 @@
 
 Status: source fix; installation is a separate post-merge action owned by orc.
 
-`hooks/session-cleanup.py` no longer discovers kill targets by process-command
-substrings or elapsed age. A socket path in argv cannot establish ownership.
+`hooks/session-cleanup.py` never sends signals. It only reconciles its private
+ownership records and logs still-live orphan candidates. A socket path in argv
+cannot establish ownership; there is no command-substring or age sweep.
 With no ownership directory/records, cleanup returns zero without inspecting the
 process table. WAL checkpoint behavior is unchanged.
 
@@ -11,17 +12,26 @@ The optional `start_owned_mcp([absolute_executable, ...])` launch helper records
 only its direct child, with PID, UID, kernel birth identity and executable path.
 Records live in `~/.local/state/brainlayer/session-cleanup-owned/` (0700 directory,
 0600 regular files). Registration cannot adopt an unrelated process. A failed
-registration leaves the caller its process handle but grants no cleanup rights.
+registration removes the partial record (including fsync/write failures) and
+leaves the caller its process handle. An existing record is never removed by a
+failed exclusive-create attempt.
 SessionStart currently launches no MCPs, so existing Claude, Codex, T3, Cursor,
 VoiceLayer fixture and socat processes are deliberately never adopted.
 
-Cleanup requires PPID 1 plus the recorded executable, UID and birth identity,
-revalidated immediately before TERM. It ignores attached processes regardless of
-age, unsafe/symlinked/malformed records, reused PIDs, changed executables,
-zombies and unavailable identities. Darwin uses libproc microsecond birth time
-and executable identity; Linux uses procfs birth ticks plus boot ID. Unsupported
-platforms cannot authorize a signal. The same-user private record is the trust
-boundary; there is no atomic birth-bound signal primitive around `os.kill`.
+Reconciliation removes a record only when kernel inspection proves the process
+absent (`ESRCH` on Darwin or a missing process stat file on Linux), or its kernel
+birth identity differs from the record. A changed executable alone is not proof
+of a changed birth. Permission failures, unreadable identities and zombies leave
+records intact. Unsafe/symlinked/malformed records are ignored.
+
+A matching PID, UID, executable and birth with PPID 1 is logged as an owned orphan
+candidate and its record is retained. No process is stopped, even a verified
+orphan. Darwin cannot bind a numeric signal atomically to birth identity, so an
+extra identity check cannot close the PID-reuse race. Etan's MCP connection rule
+outranks orphan cleanup; a leaked orphan is preferable to a disconnected seat.
+
+Follow-up row **SC-OWN-PARENT-EXIT**: make bridges exit when their parent dies.
+This orphan-prevention work needs a separate PR and is not implemented here.
 
 ## Read-only impact receipt
 
