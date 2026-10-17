@@ -3685,8 +3685,11 @@ def index_fast(
     """Index using new fast sqlite-vec backend."""
     watchdog = None
     checkpoint = None
+    calendar = os.environ.get("BRAINLAYER_LAUNCHD_SERVICE") == "index"
     try:
         from contextlib import ExitStack
+
+        import apsw
 
         from ..index_new import index_chunks_to_sqlite
         from ..index_watchdog import IndexWatchdog
@@ -3694,7 +3697,7 @@ def index_fast(
         from ..pipeline.classify import classify_content
         from ..pipeline.extract import parse_jsonl
         from ..runtime_store import ReadonlyStore, open_writer_store
-        from ..vector_store import IndexDeadlineExceeded
+        from ..vector_store import IndexDeadlineExceeded, WriterInUseError, temporary_write_busy_timeout_ms
 
         if not source.exists():
             rprint(f"[bold red]Error:[/] Source directory not found: {source}")
@@ -3703,7 +3706,6 @@ def index_fast(
         start_time = time.time()
         start_monotonic = time.monotonic()
         max_runtime_s = _index_max_runtime_s()
-        calendar = os.environ.get("BRAINLAYER_LAUNCHD_SERVICE") == "index"
         if calendar:
             max_runtime_s = _calendar_index_budget_s()
             if max_runtime_s <= 0:
@@ -3761,6 +3763,10 @@ def index_fast(
             rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
 
             watchdog.set_phase("open_store")
+            if calendar:
+                # Reuse the resident writer's bounded SQLite coordination. Keep
+                # retries within this pass, then yield without discarding progress.
+                stack.enter_context(temporary_write_busy_timeout_ms(1000, deadline=deadline_monotonic))
             # sqlite3_interrupt is the only lever that reaches the inner statements FTS5 and
             # vec0 drive; apsw documents calling it from another thread as safe. The hook hands
             # it over BEFORE the schema probe runs, so open_store -- which has no cap of its
@@ -3883,6 +3889,30 @@ def index_fast(
     except typer.Exit:
         raise
     except Exception as e:
+        if calendar and isinstance(e, (apsw.BusyError, WriterInUseError)):
+            # The busy context also raises BusyError when its deadline runs out.
+            # A zero-progress runtime cap must remain a failure, not a deferral.
+            if (
+                total_chunks == 0
+                and watchdog is not None
+                and (watchdog.expired or time.monotonic() >= watchdog.deadline_monotonic)
+            ):
+                raise _exit_on_index_deadline(
+                    e,
+                    watchdog=watchdog,
+                    max_runtime_s=max_runtime_s,
+                    start_monotonic=start_monotonic,
+                    committed_chunks=0,
+                    files_completed=files_completed,
+                    current_file=current_file,
+                    checkpoint=checkpoint,
+                ) from e
+            rprint(
+                "[yellow]INDEX_DEFERRED resident_writer_busy[/] "
+                f"committed_chunks={total_chunks} files_completed={files_completed} "
+                f"cause={type(e).__name__}"
+            )
+            raise typer.Exit(75) from e
         # An expired watchdog means the cap is part of the story -- but NOT that this
         # exception is the cap. An interrupt we asked for is; a schema mismatch, an I/O error
         # or an OOM during the unwind is a real failure that happens to land late, and
