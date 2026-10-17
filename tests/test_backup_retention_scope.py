@@ -5,7 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from brainlayer import backup_daily as b, observability_backup
+from brainlayer import backup_daily as b
+from brainlayer import observability_backup
 from tests.test_backup_daily import _stub_verified_backup_run
 from tests.test_backup_machine_identity import _drive_fixture
 
