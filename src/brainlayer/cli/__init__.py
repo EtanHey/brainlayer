@@ -148,9 +148,11 @@ class _CalendarIndexCheckpoint:
         self.files = {}
         if self.path.exists() and not force:
             saved = json.loads(self.path.read_text())
-            if saved.get("version") != 1 or not isinstance(saved.get("files"), dict):
+            if saved.get("version") not in {1, 2} or not isinstance(saved.get("files"), dict):
                 raise ValueError("invalid calendar index checkpoint")
-            if saved.get("database") == self.database:
+            # v1 could outlive NORMAL-mode WAL commits. Replay those inputs once;
+            # only v2 entries are published after durable calendar commits.
+            if saved.get("version") == 2 and saved.get("database") == self.database:
                 self.files = saved["files"]
                 for entry in self.files.values():
                     if (
@@ -162,7 +164,7 @@ class _CalendarIndexCheckpoint:
                         raise ValueError("invalid calendar index checkpoint entry")
         from ..drive_credentials import _atomic_write
 
-        _atomic_write(self.path, dict(version=1, database=self.database, files=self.files))
+        _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
 
     @staticmethod
     def signature(path: Path) -> list[int]:
@@ -180,7 +182,7 @@ class _CalendarIndexCheckpoint:
         if self.signature(path) != signature:
             return
         self.files[str(path.resolve())] = dict(signature=signature, next_chunk=next_chunk, done=done)
-        _atomic_write(self.path, dict(version=1, database=self.database, files=self.files))
+        _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
 
 
 @app.command("observability")
@@ -3774,6 +3776,13 @@ def index_fast(
             runtime_store = stack.enter_context(
                 open_writer_store(get_db_path(), on_connection=_attach_interrupt(watchdog))
             )
+            if calendar:
+                # The sidecar may survive a host crash. Commit its rows durably
+                # BEFORE publishing a skip offset: EXTRA equals FULL in WAL and
+                # also syncs the rollback-journal directory in DELETE mode.
+                # Connection-local, so resident/interactive writers retain their policy.
+                runtime_store.conn.execute("PRAGMA synchronous = EXTRA")
+                runtime_store.conn.execute("PRAGMA fullfsync = ON")
             progress = stack.enter_context(
                 Progress(
                     SpinnerColumn(),

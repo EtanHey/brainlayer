@@ -29,6 +29,8 @@ def prepare(tmp_path, monkeypatch, *, chunks=1):
     )
 
     class Store:
+        conn = SimpleNamespace(execute=lambda sql: None)
+
         def __enter__(self):
             return self
 
