@@ -8,15 +8,21 @@ cannot establish ownership; there is no command-substring or age sweep.
 With no ownership directory/records, cleanup returns zero without inspecting the
 process table. WAL checkpoint behavior is unchanged.
 
-The optional `start_owned_mcp([absolute_executable, ...])` launch helper records
-only its direct child, with PID, UID, kernel birth identity and executable path.
-Records live in `~/.local/state/brainlayer/session-cleanup-owned/` (0700 directory,
-0600 regular files). Registration cannot adopt an unrelated process. A failed
-registration removes the partial record (including fsync/write failures) and
-leaves the caller its process handle. An existing record is never removed by a
-failed exclusive-create attempt.
-SessionStart currently launches no MCPs, so existing Claude, Codex, T3, Cursor,
-VoiceLayer fixture and socat processes are deliberately never adopted.
+SessionStart launches no MCPs. The unused optional launcher and its `subprocess`
+import have been removed; the hook has no process-launch capability. A tracked
+repository search found no importers and only the former orphan-test caller.
+The test now starts its own scratch child and calls `record_owned_child(pid)`.
+That retained utility registers only the caller's direct child, with PID, UID,
+kernel birth identity and executable path. Records live in
+`~/.local/state/brainlayer/session-cleanup-owned/` (0700 directory, 0600 regular
+files). Failed registration removes its partial record, including fsync/write
+failures; failed exclusive creation preserves a pre-existing record. Existing
+Claude, Codex, T3, Cursor, VoiceLayer fixture and socat processes are never adopted.
+
+The AST regression guard applies scope-free prohibitions: forbidden process/signal
+module imports; any identifier, attribute or import alias containing `kill`
+(case-insensitive); and `os` process-launch attributes. It resolves no scopes and
+has no launch-helper exception. The guard checks the hook, not the test harness.
 
 Reconciliation removes a record only when kernel inspection proves the process
 absent (`ESRCH` on Darwin or a missing process stat file on Linux), or its kernel
