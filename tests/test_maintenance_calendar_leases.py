@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from brainlayer.maintenance_calendar import Step, run_calendar
+from tests.calendar_watch_readiness import wait_for_calendar_watch
 from tests.test_maintenance_control import control, native  # noqa: F401
 from tests.test_service_supervisor import eventually, exists
 
@@ -102,7 +103,7 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
             return False
 
         eventually(dead)
-        eventually(lambda: bool(query()["components"]["watch"]["pid"]))
+        wait_for_calendar_watch(query, path)
     finally:
         if parent.poll() is None:
             parent.kill()
