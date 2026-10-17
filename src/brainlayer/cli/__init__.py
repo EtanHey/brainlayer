@@ -125,6 +125,64 @@ def _index_max_runtime_s() -> float:
     return value
 
 
+def _calendar_index_budget_s(now: datetime | None = None) -> float:
+    """Calendar passes cannot inherit an old four-hour cap or occupy 04:00–06:00."""
+    now = now or datetime.now().astimezone()
+    if 4 <= now.hour < 6:
+        return 0.0
+    budget = min(_index_max_runtime_s(), 1800.0)
+    if now.hour < 4:
+        cutoff = now.replace(hour=4, minute=0, second=0, microsecond=0)
+        budget = min(budget, max(0.0, (cutoff - now).total_seconds() - 60))
+    return budget
+
+
+class _CalendarIndexCheckpoint:
+    """Only advance after a committed batch; replay an interrupted batch safely."""
+
+    def __init__(self, db: Path, source: Path, project: str | None, force: bool):
+        identity = hashlib.sha256(f"{db.resolve()}\0{source.resolve()}\0{project}".encode()).hexdigest()[:16]
+        self.path = db.parent / f"index-checkpoint-{identity}.json"
+        stat = db.stat()
+        self.database = [stat.st_dev, stat.st_ino]
+        self.files = {}
+        if self.path.exists() and not force:
+            saved = json.loads(self.path.read_text())
+            if saved.get("version") != 1 or not isinstance(saved.get("files"), dict):
+                raise ValueError("invalid calendar index checkpoint")
+            if saved.get("database") == self.database:
+                self.files = saved["files"]
+                for entry in self.files.values():
+                    if (
+                        not isinstance(entry, dict)
+                        or type(entry.get("next_chunk")) is not int
+                        or entry["next_chunk"] < 0
+                        or type(entry.get("done")) is not bool
+                    ):
+                        raise ValueError("invalid calendar index checkpoint entry")
+        from ..drive_credentials import _atomic_write
+
+        _atomic_write(self.path, dict(version=1, database=self.database, files=self.files))
+
+    @staticmethod
+    def signature(path: Path) -> list[int]:
+        stat = path.stat()
+        return [stat.st_ino, stat.st_size, stat.st_mtime_ns]
+
+    def entry(self, path: Path, signature: list[int]) -> dict:
+        saved = self.files.get(str(path.resolve()), {})
+        return saved if saved.get("signature") == signature else {}
+
+    def save(self, path: Path, signature: list[int], next_chunk: int, *, done: bool = False):
+        from ..drive_credentials import _atomic_write
+
+        # A source changed during parsing/writing must be replayed, never marked complete.
+        if self.signature(path) != signature:
+            return
+        self.files[str(path.resolve())] = dict(signature=signature, next_chunk=next_chunk, done=done)
+        _atomic_write(self.path, dict(version=1, database=self.database, files=self.files))
+
+
 @app.command("observability")
 def observability_command(
     write: bool = typer.Option(False, "--write", help="Write observability.json beside the resolved database."),
@@ -3569,6 +3627,7 @@ def _exit_on_index_deadline(
     files_completed: int,
     current_file: Path | None,
     unwind_error: str | None = None,
+    checkpoint: _CalendarIndexCheckpoint | None = None,
 ) -> typer.Exit:
     """Emit the cap alarm once and return the Exit the caller should raise.
 
@@ -3578,7 +3637,15 @@ def _exit_on_index_deadline(
     """
     from ..alarm import build_alarm, emit_alarm
 
-    if watchdog is not None and getattr(watchdog, "alarm_emitted", False):
+    if checkpoint is not None and committed_chunks > 0 and _looks_like_watchdog_interrupt(cause):
+        rprint(
+            "[bold yellow]INDEX_CHECKPOINTED[/] status=checkpointed "
+            f"committed_chunks={committed_chunks} files_completed={files_completed} "
+            f"checkpoint={checkpoint.path}"
+        )
+        return typer.Exit(0)
+
+    if checkpoint is None and watchdog is not None and getattr(watchdog, "alarm_emitted", False):
         rprint(
             "[bold red]INDEX_RUNTIME_EXCEEDED[/] final: "
             f"phase={watchdog.phase} committed_chunks={committed_chunks} "
@@ -3617,6 +3684,7 @@ def index_fast(
 ) -> None:
     """Index using new fast sqlite-vec backend."""
     watchdog = None
+    checkpoint = None
     try:
         from contextlib import ExitStack
 
@@ -3635,6 +3703,12 @@ def index_fast(
         start_time = time.time()
         start_monotonic = time.monotonic()
         max_runtime_s = _index_max_runtime_s()
+        calendar = os.environ.get("BRAINLAYER_LAUNCHD_SERVICE") == "index"
+        if calendar:
+            max_runtime_s = _calendar_index_budget_s()
+            if max_runtime_s <= 0:
+                rprint("[yellow]INDEX_DEFERRED maintenance_window=04:00-06:00[/]")
+                raise typer.Exit(75)
         deadline_monotonic = start_monotonic + max_runtime_s
 
         # Find JSONL files
@@ -3658,6 +3732,11 @@ def index_fast(
                         "source_file": str(current_file) if current_file else None,
                     },
                     phase="discover",
+                    # A calendar deadline is a planned yield. The main thread decides
+                    # checkpointed vs failed only AFTER the writer has unwound.
+                    emit=(lambda alarm: rprint(f"INDEX_PASS_CAP_REACHED phase={alarm.context['phase']}"))
+                    if calendar
+                    else None,
                 )
             )
 
@@ -3676,6 +3755,9 @@ def index_fast(
                     rprint(f"[bold red]Error:[/] No JSONL files found in: {source}")
                     raise typer.Exit(1)
 
+            if calendar:
+                jsonl_files.sort()
+                checkpoint = _CalendarIndexCheckpoint(get_db_path(), source, project, force)
             rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
 
             watchdog.set_phase("open_store")
@@ -3704,6 +3786,11 @@ def index_fast(
                 current_file = jsonl_file
                 watchdog.set_phase(f"parse:{jsonl_file.name}")
                 watchdog.raise_if_expired()
+                signature = checkpoint.signature(jsonl_file) if checkpoint else None
+                saved = checkpoint.entry(jsonl_file, signature) if checkpoint else {}
+                if saved.get("done"):
+                    progress.update(task, completed=i + 1)
+                    continue
                 raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
                 proj_name = _normalize_project_name(raw_proj) if raw_proj else None
 
@@ -3722,16 +3809,45 @@ def index_fast(
                         pass  # Could update sub-progress here
 
                     watchdog.set_phase(f"embed_and_upsert:{jsonl_file.name}")
-                    indexed = index_chunks_to_sqlite(
-                        all_chunks,
-                        source_file=str(jsonl_file),
-                        project=proj_name,
-                        on_progress=progress_callback,
-                        deadline_monotonic=deadline_monotonic,
-                        store=runtime_store,
-                    )
-                    total_chunks += indexed
+                    if checkpoint:
+                        from ..system_prompt_guard import looks_like_system_prompt
+
+                        # Match the adapter's admission BEFORE assigning global positions.
+                        all_chunks = [
+                            c
+                            for c in all_chunks
+                            if not c.metadata.get("is_system_prompt") and not looks_like_system_prompt(c.content)
+                        ]
+                        offset = saved.get("next_chunk", 0)
+                        for start in range(offset, len(all_chunks), 64):
+                            watchdog.raise_if_expired()
+                            batch = all_chunks[start : start + 64]
+                            total_chunks += index_chunks_to_sqlite(
+                                batch,
+                                source_file=str(jsonl_file),
+                                project=proj_name,
+                                on_progress=progress_callback,
+                                deadline_monotonic=deadline_monotonic,
+                                store=runtime_store,
+                                start_position=start,
+                            )
+                            checkpoint.save(
+                                jsonl_file, signature, start + len(batch), done=start + len(batch) == len(all_chunks)
+                            )
+                            watchdog.raise_if_expired()
+                    else:
+                        indexed = index_chunks_to_sqlite(
+                            all_chunks,
+                            source_file=str(jsonl_file),
+                            project=proj_name,
+                            on_progress=progress_callback,
+                            deadline_monotonic=deadline_monotonic,
+                            store=runtime_store,
+                        )
+                        total_chunks += indexed
                     watchdog.raise_if_expired(processed_count=0)
+                if checkpoint:
+                    checkpoint.save(jsonl_file, signature, len(all_chunks), done=True)
                 files_completed = i + 1
                 watchdog.note_progress()
                 watchdog.raise_if_expired()
@@ -3762,6 +3878,7 @@ def index_fast(
             committed_chunks=total_chunks + exc.processed_count,
             files_completed=files_completed,
             current_file=current_file,
+            checkpoint=checkpoint,
         ) from exc
     except typer.Exit:
         raise
@@ -3784,6 +3901,7 @@ def index_fast(
                 files_completed=files_completed,
                 current_file=current_file,
                 unwind_error=unwind_error,
+                checkpoint=checkpoint,
             ) from e
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)

@@ -36,6 +36,7 @@ def index_chunks_to_sqlite(
     deadline_monotonic: float | None = None,
     store: VectorStore | None = None,
     precomputed_embeddings: list[EmbeddedChunk] | None = None,
+    start_position: int = 0,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -114,7 +115,7 @@ def index_chunks_to_sqlite(
     chunk_data = []
     embeddings = []
 
-    for i, ec in enumerate(embedded_chunks):
+    for i, ec in enumerate(embedded_chunks, start=start_position):
         chunk = ec.chunk
         metadata = dict(chunk.metadata)
 
