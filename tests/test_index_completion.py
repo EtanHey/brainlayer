@@ -19,6 +19,7 @@ def calendar_fixture(tmp_path, monkeypatch):
     source.mkdir()
     (source / "a.jsonl").write_text("{}\n")
     db = tmp_path / "fixture.db"
+    monkeypatch.setenv("BRAINLAYER_WRITER_PIDFILE_DIR", str(tmp_path / "pidfiles"))
     with VectorStore(db):
         pass
     chunks = [

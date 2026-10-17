@@ -127,14 +127,13 @@ def _index_max_runtime_s() -> float:
 
 def _calendar_index_budget_s(now: datetime | None = None) -> float:
     """Calendar passes cannot inherit an old four-hour cap or occupy 04:00–06:00."""
-    now = now or datetime.now().astimezone()
-    if 4 <= now.hour < 6:
-        return 0.0
-    budget = min(_index_max_runtime_s(), 1800.0)
-    if now.hour < 4:
-        cutoff = now.replace(hour=4, minute=0, second=0, microsecond=0)
-        budget = min(budget, max(0.0, (cutoff - now).total_seconds() - 60))
-    return budget
+    from ..index_budget import calendar_index_budget_s
+
+    budget = calendar_index_budget_s(_index_max_runtime_s(), now)
+    custody_budget = float(os.environ.get("BRAINLAYER_INDEX_CALENDAR_BUDGET_S", budget))
+    if not math.isfinite(custody_budget) or custody_budget < 0:
+        raise ValueError("invalid calendar custody budget")
+    return min(budget, custody_budget)
 
 
 class _CalendarIndexCheckpoint:
@@ -3639,7 +3638,8 @@ def _exit_on_index_deadline(
     """
     from ..alarm import build_alarm, emit_alarm
 
-    if checkpoint is not None and committed_chunks > 0 and _looks_like_watchdog_interrupt(cause):
+    escalated = watchdog is not None and getattr(watchdog, "escalation_emitted", False)
+    if checkpoint is not None and committed_chunks > 0 and _looks_like_watchdog_interrupt(cause) and not escalated:
         rprint(
             "[bold yellow]INDEX_CHECKPOINTED[/] status=checkpointed "
             f"committed_chunks={committed_chunks} files_completed={files_completed} "
@@ -3647,7 +3647,7 @@ def _exit_on_index_deadline(
         )
         return typer.Exit(0)
 
-    if checkpoint is None and watchdog is not None and getattr(watchdog, "alarm_emitted", False):
+    if (checkpoint is None or escalated) and watchdog is not None and getattr(watchdog, "alarm_emitted", False):
         rprint(
             "[bold red]INDEX_RUNTIME_EXCEEDED[/] final: "
             f"phase={watchdog.phase} committed_chunks={committed_chunks} "
@@ -3693,6 +3693,7 @@ def index_fast(
 
         import apsw
 
+        from ..index_budget import CALENDAR_INDEX_UNWIND_S
         from ..index_new import index_chunks_to_sqlite
         from ..index_watchdog import IndexWatchdog
         from ..pipeline.chunk import chunk_content
@@ -3736,6 +3737,7 @@ def index_fast(
                         "source_file": str(current_file) if current_file else None,
                     },
                     phase="discover",
+                    yield_grace_s=CALENDAR_INDEX_UNWIND_S if calendar else 0,
                     # A calendar deadline is a planned yield. The main thread decides
                     # checkpointed vs failed only AFTER the writer has unwound.
                     emit=(lambda alarm: rprint(f"INDEX_PASS_CAP_REACHED phase={alarm.context['phase']}"))
@@ -3909,19 +3911,19 @@ def index_fast(
         raise
     except Exception as e:
         if calendar and isinstance(e, (apsw.BusyError, WriterInUseError)):
-            # The busy context also raises BusyError when its deadline runs out.
-            # A zero-progress runtime cap must remain a failure, not a deferral.
+            # Attribute a deadline-shaped busy error to the cap; genuine writer
+            # contention before that deadline still defers with rc75.
             if (
-                total_chunks == 0
-                and watchdog is not None
+                watchdog is not None
                 and (watchdog.expired or time.monotonic() >= watchdog.deadline_monotonic)
+                and (total_chunks == 0 or isinstance(e, apsw.BusyError))
             ):
                 raise _exit_on_index_deadline(
-                    e,
+                    IndexDeadlineExceeded(0),
                     watchdog=watchdog,
                     max_runtime_s=max_runtime_s,
                     start_monotonic=start_monotonic,
-                    committed_chunks=0,
+                    committed_chunks=total_chunks,
                     files_completed=files_completed,
                     current_file=current_file,
                     checkpoint=checkpoint,

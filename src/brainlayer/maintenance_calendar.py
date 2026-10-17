@@ -8,12 +8,13 @@ import os
 import signal
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import maintenance_control
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
+from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
 from .job_alerts import report
 from .maintenance_control import MaintenanceHold
 from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
@@ -61,7 +62,7 @@ class CalendarPlan:
 
 def calendar_steps(python, cli, lib_dir, scheduled_date):
     commands = (
-        ((cli, "index"), 21600),
+        ((cli, "index"), 1800 + CALENDAR_INDEX_UNWIND_S),
         ((str(lib_dir / "backup-daily.sh"),), 28890),
         ((python, "-m", "brainlayer.maintenance", "--light"), 1800),
         ((str(lib_dir / "jsonl-backup.sh"),), 7200),
@@ -97,6 +98,30 @@ def backup_deadline(step):
     if seconds < 1:
         raise ValueError("invalid backup timeout")
     return max(step.timeout, seconds + 90)
+
+
+def _bounded_index_step(step, now, shutdown_timeout):
+    """Use existing group custody, reserving cleanup before the quiet window."""
+    path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
+    configured = configured_brainlayer_env_value("BRAINLAYER_INDEX_MAX_RUNTIME_S", path)
+    try:
+        requested = float(
+            configured if configured is not None else os.environ.get("BRAINLAYER_INDEX_MAX_RUNTIME_S", 1800)
+        )
+    except (TypeError, ValueError):
+        requested = 1800
+    if not math.isfinite(requested) or requested <= 0:
+        requested = 1800
+    budget = calendar_index_budget_s(
+        min(requested, step.timeout), now, reserve_s=max(60, shutdown_timeout + CALENDAR_INDEX_UNWIND_S + 15)
+    )
+    if budget <= 0:
+        return None
+    return replace(
+        step,
+        timeout=min(step.timeout, budget + CALENDAR_INDEX_UNWIND_S),
+        env=step.env | {"BRAINLAYER_INDEX_CALENDAR_BUDGET_S": str(budget)},
+    )
 
 
 async def pulse(guard, stop, interval):
@@ -238,6 +263,12 @@ async def run_calendar(
                 continue
             code, missed = 1, False
             try:
+                if step.name == "index":
+                    bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
+                    if bounded is None:
+                        results[step.name] = finish(directory, state, step, 75, date, defer_after)
+                        continue
+                    step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
                 if f"com.brainlayer.{step.name}" in disabled or "com.brainlayer.maintenance" in disabled:
                     code = 75

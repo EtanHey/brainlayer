@@ -105,8 +105,12 @@ class IndexWatchdog:
         poll_interval_s: float = _DEFAULT_POLL_INTERVAL_S,
         heartbeat_sink: Callable[[str], None] | None = None,
         phase: str = "starting",
+        yield_grace_s: float = 0,
     ) -> None:
         self._max_runtime_s = float(max_runtime_s)
+        self._yield_grace_s = max(0.0, float(yield_grace_s))
+        self._escalation_attempted = threading.Event()
+        self._escalation_emitted = threading.Event()
         # Two clocks on purpose. `_monotonic` is the CALLER's, read only from the main thread,
         # so the watchdog shares exactly one deadline with the CLI. `_wall` is this module's
         # import-time binding of the real clock and is the only clock the side thread reads:
@@ -174,6 +178,10 @@ class IndexWatchdog:
     @property
     def alarm_emitted(self) -> bool:
         return self._alarm_emitted.is_set()
+
+    @property
+    def escalation_emitted(self) -> bool:
+        return self._escalation_emitted.is_set()
 
     @property
     def deadline_monotonic(self) -> float:
@@ -295,8 +303,19 @@ class IndexWatchdog:
                 self._alarm_emitted.set()
         self._expired.set()
         self._pull_interrupt()
+        # A planned calendar yield may unwind quietly, but a main thread that
+        # still owns its writer after the allowance must alarm independently.
+        if (
+            self._yield_grace_s > 0
+            and self.remaining_s() <= -self._yield_grace_s
+            and not self._escalation_attempted.is_set()
+        ):
+            self._escalation_attempted.set()
+            if self._emit_cap_alarm(force_failure=True):
+                self._escalation_emitted.set()
+                self._alarm_emitted.set()
 
-    def _emit_cap_alarm(self) -> bool:
+    def _emit_cap_alarm(self, *, force_failure: bool = False) -> bool:
         """Emit the cap alarm; return whether it left a record.
 
         A falsy return from ``emit_alarm`` reports unavailable telemetry, not a missing
@@ -315,7 +334,7 @@ class IndexWatchdog:
             "brainlayer index exceeded its maximum runtime inside a phase with no transaction boundary",
             self.context(extra),
         )
-        emit = self._emit if self._emit is not None else emit_alarm
+        emit = self._emit if self._emit is not None and not force_failure else emit_alarm
         try:
             emit(alarm)
         except Exception as exc:  # never let the watchdog thread die on its own alarm
