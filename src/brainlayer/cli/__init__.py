@@ -3638,7 +3638,7 @@ def _exit_on_index_deadline(
     """
     from ..alarm import build_alarm, emit_alarm
 
-    escalated = watchdog is not None and getattr(watchdog, "escalation_emitted", False)
+    escalated = watchdog is not None and getattr(watchdog, "escalation_attempted", False)
     if checkpoint is not None and committed_chunks > 0 and _looks_like_watchdog_interrupt(cause) and not escalated:
         rprint(
             "[bold yellow]INDEX_CHECKPOINTED[/] status=checkpointed "
@@ -3647,7 +3647,10 @@ def _exit_on_index_deadline(
         )
         return typer.Exit(0)
 
-    if (checkpoint is None or escalated) and watchdog is not None and getattr(watchdog, "alarm_emitted", False):
+    recorded = watchdog is not None and getattr(
+        watchdog, "alarm_emitted" if checkpoint is None else "escalation_emitted", False
+    )
+    if recorded:
         rprint(
             "[bold red]INDEX_RUNTIME_EXCEEDED[/] final: "
             f"phase={watchdog.phase} committed_chunks={committed_chunks} "

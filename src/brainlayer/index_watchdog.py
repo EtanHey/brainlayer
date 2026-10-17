@@ -186,6 +186,10 @@ class IndexWatchdog:
         return self._alarm_emitted.is_set()
 
     @property
+    def escalation_attempted(self) -> bool:
+        return self._escalation_attempted.is_set()
+
+    @property
     def escalation_emitted(self) -> bool:
         return self._escalation_emitted.is_set()
 

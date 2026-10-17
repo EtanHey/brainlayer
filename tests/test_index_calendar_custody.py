@@ -3,6 +3,7 @@
 import datetime as dt
 import threading
 from time import monotonic as real_monotonic
+from types import SimpleNamespace
 
 import apsw
 import pytest
@@ -12,6 +13,7 @@ import brainlayer.cli as cli
 import brainlayer.index_new as adapter
 import brainlayer.index_watchdog as watchdog_module
 import brainlayer.maintenance_calendar as calendar
+from brainlayer.vector_store import IndexDeadlineExceeded
 from tests.test_cli_index_calendar import prepare
 from tests.test_index_checkpoint_boundary import synthetic_vectors
 from tests.test_index_completion import calendar_fixture as calendar_fixture
@@ -119,3 +121,36 @@ def test_large_cleanup_allowance_still_leaves_quiet_window_margin(tmp_path, monk
     step = calendar.Step("index", ("fixture-cli",), 21600)
     bounded = calendar._bounded_index_step(step, dt.datetime(2026, 10, 18, 3, 50), 120)
     assert bounded.timeout + 120 == 585  # Fifteen seconds before 04:00, including cleanup.
+
+
+def test_failed_escalation_still_fails_after_progress_and_retries_alarm(monkeypatch):
+    clock, attempts = [100.0], []
+
+    def emit(alarm):
+        attempts.append(alarm)
+        if len(attempts) == 1:
+            raise OSError("synthetic alarm sink failure")
+
+    monkeypatch.setattr("brainlayer.alarm.emit_alarm", emit)
+    watchdog = watchdog_module.IndexWatchdog(
+        started_at=100,
+        max_runtime_s=1,
+        monotonic=lambda: clock[0],
+        wall_monotonic=lambda: clock[0],
+        yield_grace_s=0.5,
+        emit=lambda alarm: None,
+    )
+    clock[0] = 102
+    watchdog._on_deadline()
+    result = cli._exit_on_index_deadline(
+        IndexDeadlineExceeded(0),
+        watchdog=watchdog,
+        max_runtime_s=1,
+        start_monotonic=100,
+        committed_chunks=64,
+        files_completed=0,
+        current_file=None,
+        checkpoint=SimpleNamespace(path="fixture"),
+    )
+    assert result.exit_code == 1
+    assert len(attempts) == 2  # Quiet cap record is not a substitute for the failed alarm.
