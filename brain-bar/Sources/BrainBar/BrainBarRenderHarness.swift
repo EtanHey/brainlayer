@@ -113,7 +113,56 @@ enum BrainBarRenderHarness {
         init(_ message: String) { errorDescription = message }
     }
 
+    /// Real on-screen production views with synthetic job evidence. Runs before App.main,
+    /// so no AppDelegate, daemon, hotkey, canonical DB or supervisor is started.
+    private static func runJobHealthQAIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["BRAINBAR_JOB_HEALTH_QA"] else { return }
+        do {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let now = BrainBarDashboardFixture.fetchedAt
+            let configURL = directory.appendingPathComponent("fixture.env")
+            let store = BrainLayerConfigStore(configURL: configURL)
+            try store.save(.defaultConfig)
+            var observations = Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
+                ($0, BrainLayerLaunchdJobObservation(loadState: $0 == .watch ? .running : .loaded,
+                    runs: 1, lastExitCode: 0, lastRunAt: now, nextRunAt: now.addingTimeInterval(86400),
+                    isContinuous: $0 == .watch, ownership: .supervisor))
+            })
+            observations[.index] = .init(loadState: .loaded, runs: 1, lastExitCode: 1,
+                lastRunAt: now, nextRunAt: now.addingTimeInterval(86400), isContinuous: false,
+                ownership: .supervisor)
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now })
+            let reasons = BrainLayerLaunchdJobGroup.allCases.compactMap { model.groupStatus($0).attentionReason }
+            let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
+            let dashboard = BrainBarDashboardPreview.make(collector: collector,
+                observabilityResult: BrainBarDashboardFixture.readableObservabilityResult, now: now,
+                jobAttentionReasons: reasons)
+            NSApplication.shared.setActivationPolicy(.regular)
+            let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1100, height: 760),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "BrainBar — Lane UI fixture (no live services)"
+            window.contentView = NSHostingView(rootView: dashboard)
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            RunLoop.main.run(until: Date().addingTimeInterval(2))
+            try String(window.windowNumber).write(to: directory.appendingPathComponent("dashboard.window"), atomically: true, encoding: .utf8)
+            RunLoop.main.run(until: Date().addingTimeInterval(12))
+            window.contentView = NSHostingView(rootView: BrainBarSettingsView(viewModel: model))
+            RunLoop.main.run(until: Date().addingTimeInterval(2))
+            try String(window.windowNumber).write(to: directory.appendingPathComponent("jobs.window"), atomically: true, encoding: .utf8)
+            RunLoop.main.run(until: Date().addingTimeInterval(12))
+            window.orderOut(nil)
+            exit(0)
+        } catch {
+            print("Job-health QA failed: \(error)")
+            exit(1)
+        }
+    }
+
     static func runIfRequested() {
+        runJobHealthQAIfRequested()
         guard let path = ProcessInfo.processInfo.environment[environmentVariable] else { return }
         do {
             guard !path.isEmpty, NSString(string: path).isAbsolutePath else {

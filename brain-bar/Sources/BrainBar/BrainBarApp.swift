@@ -81,6 +81,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.collector = collector
         BrainBarAppSupport.wireRuntime(runtime, dbPath: dbPath, collector: collector)
 
+        runtime.jobsModel = BrainBarSettingsViewModel(workspace: workspace,
+            observabilityURL: BrainBarSettingsView.observabilityURL(databasePath: dbPath),
+            watcherHealthURL: WatcherHealthReader.resolvedURL(),
+            backupSources: .live(databasePath: dbPath))
+
         flushPendingBrainBarURLs()
 
         // Google Drive access for backups: checked at launch and every 30 minutes, so the day-6
