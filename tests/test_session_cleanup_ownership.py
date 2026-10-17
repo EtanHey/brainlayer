@@ -5,6 +5,7 @@ import errno
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -88,12 +89,55 @@ def test_live_owned_orphan_is_logged_without_signal(hook, monkeypatch, caplog):
     assert "no signal" in caplog.text
 
 
-def test_no_signal_calls_exist_in_hook(hook):
-    tree = ast.parse(HOOK.read_text())
-    assert not any(
-        isinstance(node, ast.Attribute) and node.attr in {"kill", "killpg", "terminate", "send_signal"}
-        for node in ast.walk(tree)
-    )
+def assert_no_signal_calls(source):
+    tree = ast.parse(source)
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            aliases.update((item.asname or item.name, item.name) for item in node.names)
+    signals = {"kill", "killpg", "terminate", "send_signal", "pthread_kill", "raise_signal", "pidfd_send_signal"}
+    launchers = {"run", "call", "Popen", "check_call", "check_output", "system", "popen", "execl", "execv", "execve"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in signals
+        if isinstance(node, ast.Name):
+            assert aliases.get(node.id, node.id) not in signals
+        if isinstance(node, ast.Call):
+            call = node.func
+            name = call.attr if isinstance(call, ast.Attribute) else aliases.get(ast.unparse(call), "")
+            if name in launchers:
+                for argument in [*node.args, *(kw.value for kw in node.keywords)]:
+                    for literal in ast.walk(argument):
+                        if isinstance(literal, ast.Constant) and isinstance(literal.value, str):
+                            words = shlex.shlex(literal.value, posix=True, punctuation_chars=True)
+                            assert not any(Path(word).name in {"kill", "pkill", "killall"} for word in words)
+
+
+@pytest.mark.parametrize(
+    "source", [None, "print('kill')", "subprocess.run(['/bin/echo', 'hello'])", "subprocess.Popen(argv)"]
+)
+def test_no_signal_calls_exist_in_hook(source):
+    assert_no_signal_calls(HOOK.read_text() if source is None else source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import math as kill; os.kill(123, 15)",
+        "os.killpg(123, 15)",
+        "from os import kill; kill(123, 15)",
+        "from os import kill as stop; stop(123, 15)",
+        "signal.pthread_kill(123, 15)",
+        "from subprocess import run as launch; launch(['/bin/kill', '123'])",
+        "import math as run; subprocess.run(args=['/bin/kill', '123'])",
+        "os.system('true;kill 123')",
+    ]
+    + [f"subprocess.run([{command!r}, '123'])" for command in ("kill", "/usr/bin/pkill", "/usr/bin/killall")]
+    + [f"os.system({(command + ' 123')!r})" for command in ("/bin/kill", "pkill", "killall")],
+)
+def test_signal_guard_rejects_negative_controls(source):
+    with pytest.raises(AssertionError):
+        assert_no_signal_calls(source)
 
 
 @pytest.mark.parametrize("state", ["absent", "changed-birth"])
