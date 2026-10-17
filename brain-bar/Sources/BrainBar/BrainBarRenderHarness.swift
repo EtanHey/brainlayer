@@ -113,6 +113,12 @@ enum BrainBarRenderHarness {
         init(_ message: String) { errorDescription = message }
     }
 
+    private struct JobHealthQAProvider: BrainLayerLaunchdStatusSampling {
+        let observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+        func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] { observations.mapValues(\.loadState) }
+        func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] { observations }
+    }
+
     /// Real on-screen production views with synthetic job evidence. Runs before App.main,
     /// so no AppDelegate, daemon, hotkey, canonical DB or supervisor is started.
     private static func runJobHealthQAIfRequested() {
@@ -133,12 +139,16 @@ enum BrainBarRenderHarness {
                 lastRunAt: now, nextRunAt: now.addingTimeInterval(86400), isContinuous: false,
                 ownership: .supervisor)
             let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                launchdStatusProvider: JobHealthQAProvider(observations: observations),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now })
             let reasons = BrainLayerLaunchdJobGroup.allCases.compactMap { model.groupStatus($0).attentionReason }
             let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
+            let panelState = BrainBarDashboardPanelState()
+            panelState.attentionExpanded = true
             let dashboard = BrainBarDashboardPreview.make(collector: collector,
                 observabilityResult: BrainBarDashboardFixture.readableObservabilityResult, now: now,
-                jobAttentionReasons: reasons)
+                panelState: panelState, jobAttentionReasons: reasons)
             NSApplication.shared.setActivationPolicy(.regular)
             let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1100, height: 760),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
