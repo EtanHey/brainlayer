@@ -154,10 +154,20 @@ def index_chunks_to_sqlite(
 
     # A complete CLI index run injects one shared runtime store. Standalone
     # callers still get one bounded runtime open for this adapter invocation.
+    def upsert(writer):
+        try:
+            return writer.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+        except IndexDeadlineExceeded as exc:
+            # Complete ordered embeddings above + complete store admission below
+            # proves the WHOLE input call, never a count-shaped survivor prefix.
+            if exc.input_complete:
+                exc.completed_input_count = len(chunks)
+            raise
+
     if store is not None:
-        return store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+        return upsert(store)
     with open_writer_store(db_path or get_db_path()) as opened_store:
-        return opened_store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+        return upsert(opened_store)
 
 
 def get_stats(db_path: Path | None = None) -> dict:

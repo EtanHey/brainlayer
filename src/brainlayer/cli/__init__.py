@@ -3828,15 +3828,25 @@ def index_fast(
                         for start in range(offset, len(all_chunks), 64):
                             watchdog.raise_if_expired()
                             batch = all_chunks[start : start + 64]
-                            total_chunks += index_chunks_to_sqlite(
-                                batch,
-                                source_file=str(jsonl_file),
-                                project=proj_name,
-                                on_progress=progress_callback,
-                                deadline_monotonic=deadline_monotonic,
-                                store=runtime_store,
-                                start_position=start,
-                            )
+                            try:
+                                total_chunks += index_chunks_to_sqlite(
+                                    batch,
+                                    source_file=str(jsonl_file),
+                                    project=proj_name,
+                                    on_progress=progress_callback,
+                                    deadline_monotonic=deadline_monotonic,
+                                    store=runtime_store,
+                                    start_position=start,
+                                )
+                            except IndexDeadlineExceeded as exc:
+                                if exc.completed_input_count == len(batch):
+                                    checkpoint.save(
+                                        jsonl_file,
+                                        signature,
+                                        start + len(batch),
+                                        done=start + len(batch) == len(all_chunks),
+                                    )
+                                raise
                             checkpoint.save(
                                 jsonl_file, signature, start + len(batch), done=start + len(batch) == len(all_chunks)
                             )
