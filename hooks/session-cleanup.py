@@ -17,7 +17,6 @@ import os
 import sqlite3
 import stat
 import struct
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -119,17 +118,6 @@ def record_owned_child(pid):
         return True
     except (OSError, ValueError, TypeError):
         return False  # Failed registration leaves no partial ownership record.
-
-
-def start_owned_mcp(argv):
-    """Explicit launch/record path; SessionStart does not currently launch MCPs."""
-    if not argv or not os.path.isabs(argv[0]):
-        raise ValueError("owned MCP executable must be absolute")
-    process = subprocess.Popen(
-        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
-    )
-    record_owned_child(process.pid)
-    return process  # Caller retains its handle even if registration failed.
 
 
 def cleanup_stale_mcp():

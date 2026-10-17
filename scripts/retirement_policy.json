@@ -2160,16 +2160,6 @@
         "target": "sqlite3.connect"
       }
     },
-    "681ef2aff7c49a53085042a933fe304140790574177ea4f1f513ac3630ebe6db": {
-      "non_cloud_purpose": "Explicit absolute local MCP child launch with private PID/birth/executable ownership recording; no model API or network transport.",
-      "site": {
-        "call_sha256": "06a729bf4201f88a0b28e8e542ab78aacb6c100d2f1df1f9bf1af99ea96141bd",
-        "kind": "child_process",
-        "owner": "<module>.start_owned_mcp",
-        "path": "hooks/session-cleanup.py",
-        "target": "subprocess.Popen"
-      }
-    },
     "687f8f47f3150084c6ca1964ec8c253ee8b3ceae827e9d9b3b5b3b9d1766b4c2": {
       "non_cloud_purpose": "Owner-only local supervisor recovery, bounded to three seconds: token-checked pause restoration only after exclusive writer lease acquisition; subprocess only reads launchctl operator disabled state. No cloud or model sender.",
       "site": {
@@ -2258,16 +2248,6 @@
         "owner": "<module>._supervise_backup_process",
         "path": "src/brainlayer/backup_daily.py",
         "target": "subprocess.Popen"
-      }
-    },
-    "6b497e74019beb502d58b936ec91eff28bbf6fadfade5b3fbab2f779729b0850": {
-      "non_cloud_purpose": "Retained module dependency binding: hooks/session-cleanup.py <module>",
-      "site": {
-        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
-        "kind": "import_binding",
-        "owner": "<module>",
-        "path": "hooks/session-cleanup.py",
-        "target": "import subprocess"
       }
     },
     "6b60fdb97f602c9b07783660272f1f9925e92ddb3d2551bcf8001bfafef0084d": {
