@@ -72,15 +72,14 @@ def index_chunks_to_sqlite(
             on_progress=embedding_progress if deadline_monotonic is not None else on_progress,
         )
     else:
-        # Caller may precompute before acquiring a writer, but only for the exact
-        # scrubbed chunks admitted here. Reject stale/unscrubbed payloads.
-        admitted = {(chunk.metadata.get("chunk_id"), chunk.content) for chunk in filtered_chunks}
-        if any((ec.chunk.metadata.get("chunk_id"), ec.chunk.content) not in admitted for ec in precomputed_embeddings):
-            raise ValueError("precomputed embeddings do not match admitted scrubbed chunks")
         embedded_chunks = precomputed_embeddings
 
-    if not embedded_chunks:
-        return 0
+    # Both generated and precomputed results must cover the exact ordered admission
+    # list. Count alone cannot establish positions after a missing/reordered input.
+    if len(embedded_chunks) != len(filtered_chunks) or any(
+        ec.chunk != chunk for ec, chunk in zip(embedded_chunks, filtered_chunks)
+    ):
+        raise ValueError("embeddings do not match admitted scrubbed chunks completely and in order")
 
     # Try to get timestamp from a text source (first JSONL message). SQLite
     # adapters already put timestamps in chunk metadata; opening a live DB as
