@@ -114,6 +114,9 @@ enum BrainBarRenderHarness {
     }
 
     static func runIfRequested() {
+        if let path = ProcessInfo.processInfo.environment["BRAINBAR_DRIVE_CONSENT_CAPTURE"] {
+            captureDriveConsentWindows(directory: URL(fileURLWithPath: path))
+        }
         guard let path = ProcessInfo.processInfo.environment[environmentVariable] else { return }
         do {
             guard !path.isEmpty, NSString(string: path).isAbsolutePath else {
@@ -175,6 +178,69 @@ enum BrainBarRenderHarness {
                 to: .standardError,
                 context: "render error"
             )
+            Darwin.exit(EXIT_FAILURE)
+        }
+    }
+
+    /// Visible, isolated BrainBar windows for screencapture. No app delegate, DB, socket,
+    /// credential runner, production defaults or timers; the harness exits itself after 20 s.
+    private static func captureDriveConsentWindows(directory: URL) -> Never {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            NSApplication.shared.setActivationPolicy(.regular)
+            let now = Date()
+            let expiry = now.addingTimeInterval(36 * 3_600)
+            let store = BrainLayerConfigStore(
+                configURL: directory.appendingPathComponent("unused.env"),
+                loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) },
+                saveOverride: { _ in }
+            )
+            var windows: [NSWindow] = []
+            for page in ["dashboard", "backups"] {
+                let state = BrainBarDashboardPanelState()
+                let settings = BrainBarSettingsViewModel(
+                    workspace: BrainBarRecordingWorkspace(), store: store,
+                    launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                    runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture")),
+                    refreshStatusOnLoad: false, now: { now },
+                    initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult
+                )
+                let view = BrainBarUnifiedWindowPreview.make(
+                    collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: settings,
+                    panelState: state, section: .backups,
+                    driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry)) }
+                )
+                if page == "dashboard" { state.select(.dashboard) }
+                let window = BrainBarMainWindow(
+                    contentRect: NSRect(x: 80, y: 80, width: 960, height: 900),
+                    styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+                )
+                window.title = "BrainBar — Drive consent QA (\(page))"
+                if page == "backups" {
+                    let drive = BrainBarDriveAuthModel(runner: nil)
+                    drive.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry))
+                    let navigation = BrainBarSettingsNavigation(selected: .backups)
+                    window.contentView = NSHostingView(rootView:
+                        BrainBarSettingsView(viewModel: settings, navigation: navigation, showsSidebar: true)
+                            .environment(\.brainBarDriveAuth, drive)
+                            .environment(\.colorScheme, .dark)
+                            .allowsHitTesting(false)
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { navigation.select(.backups) }
+                } else {
+                    window.contentView = NSHostingView(rootView: view.allowsHitTesting(false))
+                }
+                window.makeKeyAndOrderFront(nil)
+                windows.append(window)
+                try String(window.windowNumber).write(to: directory.appendingPathComponent("\(page).window-id"),
+                                                       atomically: true, encoding: .utf8)
+            }
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { Darwin.exit(EXIT_SUCCESS) }
+            withExtendedLifetime(windows) { NSApplication.shared.run() }
+            Darwin.exit(EXIT_SUCCESS)
+        } catch {
+            fputs("Drive consent capture failed: \(error.localizedDescription)\n", stderr)
             Darwin.exit(EXIT_FAILURE)
         }
     }
