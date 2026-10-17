@@ -2,24 +2,29 @@
 """BrainLayer SessionStart cleanup hook — runs on every new Claude Code session.
 
 Performs two maintenance tasks:
-  1. Kills orphaned MCP processes (ppid=1 or stale >6h with idle parent)
+  1. Reconciles owned MCP records and reports orphan candidates without signalling
   2. Checkpoints the WAL if it exceeds WAL_THRESHOLD_MB
 
 Output: brief status line to stdout (injected as Claude context).
 Target: <1s total.
 """
 
+import ctypes
+import errno
+import json
+import logging
 import os
-import signal
 import sqlite3
+import stat
+import struct
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 # --- Config ---
-MAX_AGE_HOURS = 6
 WAL_THRESHOLD_MB = 100  # only checkpoint if WAL > this size
-MCP_PATTERNS = ("brainlayer-mcp", "voicelayer-mcp")
+OWNERSHIP_DIR = Path.home() / ".local/state/brainlayer/session-cleanup-owned"
 _CANONICAL_DB = os.path.expanduser("~/.local/share/brainlayer/brainlayer.db")
 
 
@@ -32,83 +37,158 @@ def get_db_path():
     return None
 
 
-def parse_etime(etime_str):
-    """Parse ps etime (DD-HH:MM:SS / HH:MM:SS / MM:SS) to seconds."""
-    days = 0
-    if "-" in etime_str:
-        day_part, etime_str = etime_str.split("-", 1)
-        days = int(day_part)
-    parts = etime_str.split(":")
-    if len(parts) == 3:
-        h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
-    elif len(parts) == 2:
-        h, m, s = 0, int(parts[0]), int(parts[1])
-    else:
-        return 0
-    return days * 86400 + h * 3600 + m * 60 + s
+def _process_identity(pid):
+    """Kernel identity; None means unknown, ProcessLookupError proves absence."""
+    if type(pid) is not int or pid <= 1:
+        return None
+    try:
+        if sys.platform == "darwin":
+            lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            info = ctypes.create_string_buffer(136)  # proc_bsdinfo (sys/proc_info.h)
+            path = ctypes.create_string_buffer(4096)
+            ctypes.set_errno(0)
+            if lib.proc_pidinfo(pid, 3, 0, info, len(info)) != len(info):
+                if ctypes.get_errno() == errno.ESRCH:
+                    raise ProcessLookupError(errno.ESRCH, "process absent")
+                return None
+            if struct.unpack_from("I", info.raw, 4)[0] == 5:  # SZOMB
+                return None
+            if lib.proc_pidpath(pid, path, len(path)) <= 0:
+                return None
+            ppid, uid = struct.unpack_from("II", info.raw, 16)
+            start = ":".join(map(str, struct.unpack_from("QQ", info.raw, 120)))
+            executable = os.fsdecode(path.value)
+        elif sys.platform == "linux":
+            root = Path(f"/proc/{pid}")
+            try:
+                fields = (root / "stat").read_text().rsplit(")", 1)[1].split()
+            except FileNotFoundError as error:
+                raise ProcessLookupError(errno.ESRCH, "process absent") from error
+            if fields[0] == "Z":
+                return None
+            ppid, uid = int(fields[1]), root.stat().st_uid
+            # Include boot identity so a record cannot survive PID reuse on reboot.
+            start = Path("/proc/sys/kernel/random/boot_id").read_text().strip() + ":" + fields[19]
+            executable = os.readlink(root / "exe")
+        else:
+            return None
+        return dict(pid=pid, ppid=ppid, uid=uid, start=start, executable=executable)
+    except ProcessLookupError:
+        raise
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _ownership_directory(create=False):
+    if create:
+        OWNERSHIP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(OWNERSHIP_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    info = os.fstat(fd)
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        os.close(fd)
+        raise PermissionError("ownership directory must be private")
+    return fd
+
+
+def record_owned_child(pid):
+    """Record only a direct child of this hook; never adopt an existing seat."""
+    try:
+        child = _process_identity(pid)
+    except OSError:
+        return False
+    if not child or child["ppid"] != os.getpid() or child["uid"] != os.getuid():
+        return False
+    try:
+        directory = _ownership_directory(create=True)
+        try:
+            fd = os.open(f"{pid}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            try:
+                with os.fdopen(fd, "w") as output:
+                    json.dump(child, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except BaseException:
+                # Only remove a file this call exclusively created, never a prior record.
+                try:
+                    os.unlink(f"{pid}.json", dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                raise
+        finally:
+            os.close(directory)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False  # Failed registration leaves no partial ownership record.
+
+
+def start_owned_mcp(argv):
+    """Explicit launch/record path; SessionStart does not currently launch MCPs."""
+    if not argv or not os.path.isabs(argv[0]):
+        raise ValueError("owned MCP executable must be absolute")
+    process = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+    )
+    record_owned_child(process.pid)
+    return process  # Caller retains its handle even if registration failed.
 
 
 def cleanup_stale_mcp():
-    """Kill orphaned/stale MCP processes. Returns count killed."""
+    """Reconcile records and return the number of owned orphan candidates. Never signal."""
     try:
-        out = subprocess.check_output(["ps", "-eo", "pid,ppid,etime,command"], text=True, timeout=3)
-    except (subprocess.SubprocessError, FileNotFoundError):
+        directory = _ownership_directory()
+    except OSError:
         return 0
-
-    killed = 0
-    my_pid = os.getpid()
-    age_threshold = MAX_AGE_HOURS * 3600
-
-    for line in out.strip().split("\n")[1:]:
-        parts = line.split(None, 3)
-        if len(parts) < 4:
-            continue
-        pid, ppid, etime, cmd = int(parts[0]), int(parts[1]), parts[2], parts[3]
-
-        if pid == my_pid:
-            continue
-        if not any(pat in cmd for pat in MCP_PATTERNS):
-            continue
-
-        age = parse_etime(etime)
-        should_kill = False
-
-        # Rule 1: orphaned (reparented to init/launchd)
-        if ppid == 1:
-            should_kill = True
-
-        # Rule 2: old process with idle parent
-        elif age > age_threshold:
-            # Check if parent claude has active node/bun children (excluding voicelayer)
+    candidates = 0
+    try:
+        for name in os.listdir(directory):
+            if not name.endswith(".json"):
+                continue
             try:
-                children = subprocess.check_output(["pgrep", "-P", str(ppid)], text=True, timeout=2).strip().split("\n")
-                # If parent only has MCP children, it's idle
-                active_children = 0
-                for child_pid in children:
-                    if not child_pid.strip():
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                with os.fdopen(fd) as source:
+                    info = os.fstat(source.fileno())
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077
+                        or info.st_nlink != 1
+                        or info.st_size > 16384
+                    ):
                         continue
-                    try:
-                        child_cmd = subprocess.check_output(
-                            ["ps", "-p", child_pid.strip(), "-o", "command="], text=True, timeout=1
-                        ).strip()
-                        if not any(pat in child_cmd for pat in MCP_PATTERNS):
-                            active_children += 1
-                    except subprocess.SubprocessError:
-                        pass
-                if active_children == 0:
-                    should_kill = True
-            except subprocess.SubprocessError:
-                # Parent has no children at all — stale
-                should_kill = True
-
-        if should_kill:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                killed += 1
-            except (ProcessLookupError, PermissionError):
-                pass
-
-    return killed
+                    saved = json.load(source)
+                if not isinstance(saved, dict):
+                    continue
+                pid = saved.get("pid")
+                if type(pid) is not int or pid <= 1 or name != f"{pid}.json":
+                    continue
+                if (
+                    saved.get("uid") != os.getuid()
+                    or not isinstance(saved.get("start"), str)
+                    or not saved["start"]
+                    or not isinstance(saved.get("executable"), str)
+                ):
+                    continue
+                try:
+                    current = _process_identity(pid)
+                except ProcessLookupError:
+                    os.unlink(name, dir_fd=directory)
+                    continue
+                if current is None:
+                    continue  # Unreadable identity is not evidence of absence.
+                if current["start"] != saved["start"]:
+                    os.unlink(name, dir_fd=directory)
+                    continue  # Retire stale ownership so this PID can register again.
+                if current["ppid"] != 1 or current["uid"] != saved["uid"]:
+                    continue
+                if current["executable"] != saved["executable"]:
+                    continue
+                logging.getLogger(__name__).warning("Owned orphan MCP candidate pid=%d; no signal sent", pid)
+                candidates += 1
+            except (OSError, ValueError, TypeError):
+                continue
+    finally:
+        os.close(directory)
+    return candidates
 
 
 def wal_checkpoint():
@@ -147,10 +227,10 @@ def main():
     start = time.monotonic()
     messages = []
 
-    # 1. Cleanup stale MCP processes
-    killed = cleanup_stale_mcp()
-    if killed:
-        messages.append(f"Cleaned {killed} stale MCP process{'es' if killed != 1 else ''}")
+    # 1. Reconcile records; orphan candidates are reported, never signalled.
+    candidates = cleanup_stale_mcp()
+    if candidates:
+        messages.append(f"Observed {candidates} owned orphan MCP candidates; no signals sent")
 
     # 2. WAL checkpoint (if needed)
     if (time.monotonic() - start) < 0.8:  # time budget

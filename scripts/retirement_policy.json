@@ -272,16 +272,6 @@
         "target": "subprocess.run"
       }
     },
-    "1343d9c6397cf178c891dfe9799aee09d20625afb231787803bf8b0f89fdaa72": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.cleanup_stale_mcp",
-      "site": {
-        "call_sha256": "8541987cc23ef9cf46700e98742a7fa9e6d2407dd4a2409f0fb1cdb3ef3490c8",
-        "kind": "child_process",
-        "owner": "<module>.cleanup_stale_mcp",
-        "path": "hooks/session-cleanup.py",
-        "target": "subprocess.check_output"
-      }
-    },
     "138ec0749fa72422762f258a4e33be98f929e54ae53340a274c70909ba04618d": {
       "non_cloud_purpose": "Retained module dependency binding: scripts/ratchet_quiesce.py <module>",
       "site": {
@@ -1390,6 +1380,16 @@
         "target": "self.sock.sendall"
       }
     },
+    "43a15a48a9eb1f821a37dc820b4f0457b53913e58da5c01e0227564a4b626fb3": {
+      "non_cloud_purpose": "Read-only Darwin libproc kernel process birth/parent/UID/executable identity for fail-closed owned-child cleanup; no model API or network transport.",
+      "site": {
+        "call_sha256": "aef6bf10a9f68d6a6b540186fa5be44d785ebc76c1384de6389197a9d0b9cf88",
+        "kind": "transport_call",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.create_string_buffer"
+      }
+    },
     "43c057d267648450e9b65487a26f50e101500e4094a49caea04268afef937bc1": {
       "non_cloud_purpose": "Private retirement guard/probe: capture original callables or blocked controls, local package metadata, and synthetic SQLite only; no candidate send admitted. Site: scripts/retirement_source.py <module>.python_findings importlib.util.resolve_name.",
       "site": {
@@ -1718,16 +1718,6 @@
         "owner": "<module>.resolve_machine_id",
         "path": "src/brainlayer/backup_daily.py",
         "target": "subprocess.TimeoutExpired"
-      }
-    },
-    "551dbb6b1f29ffd35d2d2cd7e651a7e800c9041163df1d06c75bb37f0742354c": {
-      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: hooks/session-cleanup.py <module>.cleanup_stale_mcp subprocess.SubprocessError.",
-      "site": {
-        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
-        "kind": "callable_reference",
-        "owner": "<module>.cleanup_stale_mcp",
-        "path": "hooks/session-cleanup.py",
-        "target": "subprocess.SubprocessError"
       }
     },
     "555e4ceded5bd53ac1c47bfe96fa2351bef6db0b063f2251c1aced90fa0c6538": {
@@ -2170,6 +2160,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "681ef2aff7c49a53085042a933fe304140790574177ea4f1f513ac3630ebe6db": {
+      "non_cloud_purpose": "Explicit absolute local MCP child launch with private PID/birth/executable ownership recording; no model API or network transport.",
+      "site": {
+        "call_sha256": "06a729bf4201f88a0b28e8e542ab78aacb6c100d2f1df1f9bf1af99ea96141bd",
+        "kind": "child_process",
+        "owner": "<module>.start_owned_mcp",
+        "path": "hooks/session-cleanup.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "687f8f47f3150084c6ca1964ec8c253ee8b3ceae827e9d9b3b5b3b9d1766b4c2": {
       "non_cloud_purpose": "Owner-only local supervisor recovery, bounded to three seconds: token-checked pause restoration only after exclusive writer lease acquisition; subprocess only reads launchctl operator disabled state. No cloud or model sender.",
       "site": {
@@ -2326,6 +2326,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/timestamp_iso.py",
         "target": "import subprocess"
+      }
+    },
+    "6d9baf3e13d879e9ce9e39ac24a54be981d5623fb265d43097a032ba1fd57bf5": {
+      "non_cloud_purpose": "Read-only Darwin libproc kernel process birth/parent/UID/executable identity for fail-closed owned-child cleanup; no model API or network transport.",
+      "site": {
+        "call_sha256": "29f63178e9f1315c8155ab58b4ae60ae6f48134e240f9e1eca84e4d88b39e1f1",
+        "kind": "transport_call",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.create_string_buffer"
       }
     },
     "6dcda7b3618524cd94f99273d26091b632623db8eae8df6b911843a64eeeaf75": {
@@ -2606,6 +2616,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "7bf79d53ef27f44b14c53c0db81654c5fddc2899cdd9f048fef2df47af3e902c": {
+      "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "7d586f3e7e97e739f34db5656a6f775f925856c1ab0beaafe16d63b9aa618ab6": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/launchd_primitive.py <module>",
       "site": {
@@ -2764,6 +2784,16 @@
         "owner": "<module>.match_session_to_plan",
         "path": "src/brainlayer/pipeline/plan_linking.py",
         "target": "session.get"
+      }
+    },
+    "85bbee5e82d8e076fc5fc0bae895df84e6233cfd0829e1205b2a3f5f10b82aa7": {
+      "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
+      "site": {
+        "call_sha256": "00bdfee16be0c5560e1431a166d6d5e8fbd176e1bc66a646408c1fcebebe16e7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.CDLL"
       }
     },
     "85edf7ad1310157f713eeb2171a1a59a83cc18f78801dcc3f647d755219665f7": {
@@ -3254,6 +3284,16 @@
         "target": "import subprocess"
       }
     },
+    "9972e282f5c6760919d7a3239334ddaed6e1848dbbae17d5c5240c267a9fa1f6": {
+      "non_cloud_purpose": "Read-only Darwin libproc kernel process birth/parent/UID/executable identity for fail-closed owned-child cleanup; no model API or network transport.",
+      "site": {
+        "call_sha256": "669c8db7bfb9b4e64a7aa5f9239cbd229a5c460f228936e83d225f5ab2176b82",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "hooks/session-cleanup.py",
+        "target": "import ctypes"
+      }
+    },
     "998258738d22d54d33466257cfd22e0a19b0ee9a0a97092dd7661c956373d5b3": {
       "non_cloud_purpose": "Bounded local ps/lsof/git metadata commands for host, process ancestry, Unix peer and checkout evidence; no network/model command is passed here. Site: <module>.run subprocess.run.",
       "site": {
@@ -3432,16 +3472,6 @@
         "target": "subprocess.run"
       }
     },
-    "a148e9c21bd5d9b213949123d3595c100fea040e92864c0c2e7fb4a565376720": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.cleanup_stale_mcp",
-      "site": {
-        "call_sha256": "e7e9c40e0119e9f4421551fd020682c9bc05bb5ebe0805993b6090b4ef224154",
-        "kind": "child_process",
-        "owner": "<module>.cleanup_stale_mcp",
-        "path": "hooks/session-cleanup.py",
-        "target": "subprocess.check_output"
-      }
-    },
     "a19f15c518ba4a9d9e5d70747f377879d8050b298da3efbe74d440d24c2ffce1": {
       "non_cloud_purpose": "Local inherited anonymous Unix socketpair and SCM_RIGHTS writer-lease transfer to the guardian; private acknowledgement and process-group custody, no TCP, public socket or cloud/model sender.",
       "site": {
@@ -3460,16 +3490,6 @@
         "owner": "<module>.reindex_episode",
         "path": "scripts/diarize_episodes.py",
         "target": "subprocess.run"
-      }
-    },
-    "a479729af0d59b85b2a485823834511fa433e37765a5c41bf5e1a0fc93de2190": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: hooks/session-cleanup.py <module>.cleanup_stale_mcp",
-      "site": {
-        "call_sha256": "7da08a5d9068bdd2207d64327260a3175157e515f37fbc6dfc4cf5a67ef31b83",
-        "kind": "child_process",
-        "owner": "<module>.cleanup_stale_mcp",
-        "path": "hooks/session-cleanup.py",
-        "target": "subprocess.check_output"
       }
     },
     "a5071046c464e0617a34b0c3cb5dc4d8a715363e6f57e8fd8b7e58c08bf82ed8": {
@@ -3918,6 +3938,16 @@
         "owner": "<module>.check_mcp",
         "path": "scripts/sprint_gate.py",
         "target": "client.request"
+      }
+    },
+    "b3d3d76fb3bb61559f94de302d991371ec0d8e6400f2a8ac96f081bde71ccd76": {
+      "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
+      "site": {
+        "call_sha256": "a193054982dec76866734ed885d369a96b077cfe1d00402ebbe226d9959b594a",
+        "kind": "transport_call",
+        "owner": "<module>._process_identity",
+        "path": "hooks/session-cleanup.py",
+        "target": "ctypes.set_errno"
       }
     },
     "b40a92458cc40955f678415e6c70bd1fd40ffa80868aed7437cabf0d7382111d": {
