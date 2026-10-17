@@ -89,6 +89,7 @@ def _drive_fixture(*, foreign_owner=False, missing_prior=False):
             result = snapshots.get(parent_id, [])
         return Mock(execute=Mock(return_value={"files": result}))
 
+    files.get.return_value.execute.return_value = {"parents": ["backups"]}
     files.list.side_effect = listing
     return service
 
@@ -113,8 +114,48 @@ def test_missing_prior_folder_is_not_created():
 def test_discovery_rejects_foreign_machine_in_prior_folder():
     service = _drive_fixture(foreign_owner=True)
     with pytest.raises(backup_daily.DriveFolderOwnedByOtherMachineError):
-        backup_daily.list_machine_drive_backups(service, machine_id="Locals-MacBook-Pro")
+        backup_daily.prune_drive_backups(service, machine_id="Locals-MacBook-Pro")
     service.files.return_value.update.assert_not_called()
+
+
+def test_opt_in_retention_sees_prior_ids_without_creating_or_moving_folders():
+    service = _drive_fixture()
+    removed = backup_daily.prune_drive_backups(
+        service, machine_id="Locals-MacBook-Pro", retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=1)
+    )
+    assert removed == ["2026-10-17.db.gz"]
+    service.files.return_value.update.assert_called_once_with(
+        fileId="old", body={"trashed": True}, supportsAllDrives=True
+    )
+    service.files.return_value.create.assert_not_called()
+    service.files.return_value.delete.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_verified_backup_routes_opt_in_retention_to_prior_folder_inventory(tmp_path, monkeypatch, enabled):
+    from tests.test_backup_daily import _stub_verified_backup_run
+
+    snapshot = tmp_path / "2026-10-18.db.gz"
+    snapshot.write_bytes(b"synthetic-backup")
+    service = _drive_fixture()
+    ensure = backup_daily.ensure_drive_folder_chain
+    check_owner = backup_daily.assert_drive_folder_owned_by_machine
+    _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
+    monkeypatch.setattr(backup_daily, "ensure_drive_folder_chain", ensure)
+    monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", check_owner)
+    monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "Locals-MacBook-Pro")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1" if enabled else "0")
+    result = backup_daily.run_backup(
+        db_path=tmp_path / "synthetic.db",
+        staging_dir=tmp_path,
+        log_path=tmp_path / "backup.log",
+        remove_local_after_upload=False,
+        retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=1),
+    )
+    assert result["uploaded"] and result["verified"]
+    assert result["retention_deleted"] == (["2026-10-17.db.gz"] if enabled else [])
+    assert result["drive_folder"].endswith("brainlayer-db-Locals-MacBook-Pro")
+    assert service.files.return_value.update.call_count == int(enabled)
 
 
 def test_discovery_paginates_folder_and_snapshot_results_and_deduplicates():
