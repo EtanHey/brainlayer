@@ -132,9 +132,36 @@ enum BrainBarRenderHarness {
             observations[.index] = .init(loadState: .loaded, runs: 1, lastExitCode: 1,
                 lastRunAt: now, nextRunAt: now.addingTimeInterval(86400), isContinuous: false,
                 ownership: .supervisor)
+            if let scenario = ProcessInfo.processInfo.environment["BRAINBAR_MAINTENANCE_QA"] {
+                // Exercise the production history reader/provider with private synthetic records.
+                let finished: [String: Any] = ["event": "finished", "step": "maintenance-weekly",
+                    "ts": now.timeIntervalSince1970, "status": scenario == "success" ? "ok" : "deferred",
+                    "returncode": scenario == "success" ? 0 : 75, "replaces": "maintenance-nightly",
+                    "reason": scenario == "success" ? "" : "index-overran-window"]
+                let spawn: [String: Any] = ["event": "spawn", "step": "maintenance-weekly",
+                    "ts": now.addingTimeInterval(-60).timeIntervalSince1970, "pid": 4242]
+                var data = Data()
+                for row in (scenario == "success" ? [spawn, finished] : [finished]) {
+                    data.append(try JSONSerialization.data(withJSONObject: row))
+                    data.append(0x0a)
+                }
+                try data.write(to: directory.appendingPathComponent("runs.jsonl"))
+                let history = BrainBarCalendarHistory.read(directory: directory)
+                let provider = BrainLayerLaunchdStatusProvider(commandRunner: { _ in
+                    .init(terminationStatus: 0, output: "runs = 0")
+                }, now: { now }, ownership: { .supervisor }, calendarHistory: { history },
+                    calendarSchedule: { DateComponents(hour: 3, minute: 15) },
+                    calendarLogsDirectory: { directory }, calendarIsDisabled: { _ in false })
+                observations[.maintenanceWeekly] = provider.sampleActivity()[.maintenanceWeekly]
+                observations[.index] = .init(loadState: .loaded, runs: 1, lastExitCode: 0,
+                    lastRunAt: now, nextRunAt: now.addingTimeInterval(86400), isContinuous: false,
+                    ownership: .supervisor)
+            }
             let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
-                initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now })
-            let reasons = BrainLayerLaunchdJobGroup.allCases.compactMap { model.groupStatus($0).attentionReason }
+                initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
+                initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)),
+                initialMaintenanceEvidence: .init(weeklyCompletion: .completed(now), runRecords: [:]))
+            let reasons = model.dashboardJobAttentionReasons
             let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
             let dashboard = BrainBarDashboardPreview.make(collector: collector,
                 observabilityResult: BrainBarDashboardFixture.readableObservabilityResult, now: now,
