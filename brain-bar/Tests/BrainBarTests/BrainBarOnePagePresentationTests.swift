@@ -321,12 +321,54 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testCalendarFailuresPreventAllGoodUsingJobsVerdict() throws {
+        for group in BrainLayerLaunchdJobGroup.allCases {
+            var observations = Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
+                ($0, BrainLayerLaunchdJobObservation(loadState: $0 == .watch ? .running : .loaded, runs: 1,
+                    lastExitCode: 0, lastRunAt: BrainBarOnePageTestFixture.now,
+                    nextRunAt: nil, isContinuous: false, ownership: .supervisor))
+            })
+            let failedJob = try XCTUnwrap(group.jobs.last)
+            observations[failedJob] = .init(loadState: .loaded, runs: 1, lastExitCode: 1,
+                lastRunAt: BrainBarOnePageTestFixture.now, nextRunAt: nil,
+                isContinuous: false, ownership: .supervisor)
+            let jobsVerdict = group.status(settings: [:], observations: observations, formatDate: { _ in "today" })
+            XCTAssertEqual(jobsVerdict.health, .unhealthy)
+            let url = brainBarTestTemporaryDirectory().appendingPathComponent("jobs-\(UUID().uuidString).env")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let store = BrainLayerConfigStore(configURL: url)
+            try store.save(.defaultConfig)
+            let now = BrainBarOnePageTestFixture.now
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
+                initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)))
+            let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
+                now: now, jobAttentionReasons: model.dashboardJobAttentionReasons)
+            XCTAssertEqual(presentation.status.headline, "1 thing needs you")
+            XCTAssertEqual(presentation.status.reason, model.groupStatus(group).attentionReason)
+            XCTAssertEqual(presentation.attentionItems, [try XCTUnwrap(model.groupStatus(group).attentionReason)])
+            XCTAssertEqual(presentation.status.tone, .amber)
+        }
+    }
+
+    @MainActor
+    func testCalendarRecoveryClearsDashboardAttention() throws {
+        let status = BrainLayerLaunchdGroupStatus(health: .healthy, attentionReason: nil,
+            lastRunText: "today", nextRunText: "tomorrow")
+        let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
+            now: BrainBarOnePageTestFixture.now, jobAttentionReasons: [status.attentionReason].compactMap { $0 })
+        XCTAssertEqual(presentation.status.headline, "All good")
+        XCTAssertTrue(presentation.attentionItems.isEmpty)
+    }
+
+    @MainActor
     private func makePresentation(
         result: ObservabilityReadResult,
         now: Date,
         agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity,
         snapshotFreshness: SnapshotFreshnessState? = nil,
-        collector providedCollector: StatsCollector? = nil
+        collector providedCollector: StatsCollector? = nil,
+        jobAttentionReasons: [String] = []
     ) throws -> BrainBarOnePagePresentation {
         let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
         let flow = DashboardFlowSummary.derive(
@@ -351,6 +393,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             stats: collector.stats,
             agentActivity: agentActivity,
             now: now,
+            jobAttentionReasons: jobAttentionReasons,
             calendar: BrainBarOnePageTestFixture.calendar,
             locale: Locale(identifier: "en_US"),
             observabilityCadence: .known(300)

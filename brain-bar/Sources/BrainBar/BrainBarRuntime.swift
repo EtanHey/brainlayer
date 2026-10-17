@@ -13,6 +13,10 @@ final class BrainBarRuntime: ObservableObject {
     @Published private(set) var database: BrainDatabase?
     private(set) var databasePath: String?
 
+    #if BRAINBAR_UI
+    @Published var jobsModel: BrainBarSettingsViewModel?
+    #endif
+
     var onToggleRequested: (() -> Void)?
 
     init(
