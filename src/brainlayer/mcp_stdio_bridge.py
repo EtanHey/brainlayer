@@ -21,6 +21,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import BinaryIO
 
+from .parent_death import install_parent_death_watcher
 from .socket_hygiene import refuse_production_brainbar_socket
 
 DEFAULT_SOCKET_PATH = "/tmp/brainbar.sock"
@@ -482,6 +483,7 @@ def run_bridge(
 
 
 def main() -> None:
+    install_parent_death_watcher()
     raise SystemExit(run_bridge(config_from_env()))
 
 
