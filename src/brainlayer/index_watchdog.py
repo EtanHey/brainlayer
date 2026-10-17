@@ -39,6 +39,12 @@ own thread, which a blocked main thread cannot delay:
 Not covered: a phase that neither issues SQL nor returns cannot be *aborted* from here, only
 alarmed and heartbeaten. Killing such a run is a policy call and its own change.
 
+Calendar passes supply a non-failure cap emitter and a bounded ``yield_grace_s``.
+They may unwind as a healthy checkpointed yield during that allowance. If they
+remain active afterwards, this same thread emits the failure alarm independently
+of the main thread. The calendar runner separately enforces its owned process
+group deadline through the existing supervisor custody path.
+
 The deadline comes from this module's import-time binding of ``time.monotonic``. That is
 deliberate: the CLI's clock is monkeypatched by several tests, and a watchdog reading a
 patched clock would both mis-fire and steal values from those tests' iterators.
