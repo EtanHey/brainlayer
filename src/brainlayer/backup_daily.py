@@ -245,7 +245,8 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
         key: _redact_upload_secrets(value) if "error" in key and isinstance(value, str) else value
         for key, value in payload.items()
     }
-    payload.setdefault("snapshot_created_at", None)
+    if "uploaded" in payload:
+        payload.setdefault("snapshot_created_at", None)
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+", encoding="utf-8") as handle:
