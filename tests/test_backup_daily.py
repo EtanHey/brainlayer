@@ -1976,13 +1976,22 @@ class _RetentionExecute:
 
 class _RetentionFiles:
     def __init__(self, count=8):
-        self.items = [{"id": f"id-{day}", "name": f"2026-05-{day:02d}.db.gz"} for day in range(1, count + 1)]
+        self.items = [
+            {
+                "id": f"id-{day}",
+                "name": f"2026-05-{day:02d}.db.gz",
+                "appProperties": {"brainlayer_machine": "test-machine"},
+            }
+            for day in range(1, count + 1)
+        ]
         self.trashed: list[tuple[str, dict]] = []
         self.deleted: list[str] = []
         self.list_calls = 0
 
     def list(self, **kwargs):  # noqa: ARG002
         self.list_calls += 1
+        if "mimeType = 'application/vnd.google-apps.folder'" in kwargs["q"]:
+            return _RetentionExecute({"files": [{"id": "folder-id"}]})
         return _RetentionExecute({"files": [item for item in self.items if not item.get("trashed")]})
 
     def update(self, *, fileId, body, **kwargs):  # noqa: N803, ARG002
