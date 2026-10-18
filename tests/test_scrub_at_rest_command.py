@@ -276,6 +276,7 @@ def live_guard(db, tmp_path, monkeypatch):
     receipt = {
         "db": str(db.db_path),
         "attempted_at": now.isoformat(),
+        "snapshot_created_at": now.isoformat(),
         "uploaded": True,
         "verified": True,
         "drive_file": {"id": "fixture"},
@@ -343,7 +344,7 @@ def test_live_apply_refuses_unqualified_backup_before_services_or_writes(db, liv
         live_guard.backup.unlink()
     else:
         if backup_state == "stale":
-            receipt["attempted_at"] = (live_guard.now - dt.timedelta(hours=24, seconds=1)).isoformat()
+            receipt["snapshot_created_at"] = (live_guard.now - dt.timedelta(hours=24, seconds=1)).isoformat()
         elif backup_state == "unverified":
             receipt["verified"] = False
         else:
@@ -489,7 +490,7 @@ def test_writer_revived_during_survey_blocks_apply(db, live_guard, monkeypatch):
 
 def test_live_cli_accepts_verified_backup_older_than_six_hours(db, live_guard):
     receipt = live_guard.receipt.copy()
-    receipt["attempted_at"] = (live_guard.now - dt.timedelta(hours=23, minutes=59)).isoformat()
+    receipt["snapshot_created_at"] = (live_guard.now - dt.timedelta(hours=23, minutes=59)).isoformat()
     live_guard.backup.write_text(json.dumps(receipt) + "\n")
     result = CliRunner().invoke(
         app, ["scrub-at-rest", "--db", str(db.db_path), "--allow-live-db", "--expect-rows", str(live_guard.total)]
