@@ -10,6 +10,7 @@ from brainlayer.brainbar_identity import JOBS
 
 @pytest.fixture
 def monitor(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "job-alerts.json"))
     agents = tmp_path / "agents"
     agents.mkdir()
     app = tmp_path / "BrainBar.app"
@@ -337,3 +338,220 @@ def test_process_scan_scrubs_and_bounds_executable_basename(monkeypatch):
     assert auto.brew_processes() == ["42 [REDACTED:github]"]
     monkeypatch.setattr(auto, "process_table", lambda: f"42 1 /private/{'x' * 300} /Homebrew/child")
     assert auto.brew_processes() == ["42 " + "x" * 128]
+
+
+@pytest.mark.parametrize("error", [auto.subprocess.TimeoutExpired(["ps", "private-argv"], 5), OSError("private-argv")])
+@pytest.mark.parametrize("codes", [(113, 113), (0, 113), (113, 1)])
+def test_scan_failures_are_transient_durable_and_recover(monitor, monkeypatch, error, codes):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    alert_file = worker.state.with_name("alerts.json")
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alert_file))
+    monkeypatch.setattr(
+        auto,
+        "report",
+        lambda key, reason: (alerts.append((key, reason)), job_alerts.report(key, reason, notify=lambda _: None)),
+    )
+    worker.state.write_text('{"stage":"ready","identity":{}}')
+    brew_state = worker.state.with_suffix(".brew.json")
+    brew_state.write_text('{"since":1000,"alerted":true}')
+    before = worker.state.read_bytes(), brew_state.read_bytes()
+
+    def fail():
+        raise error
+
+    monkeypatch.setattr(auto, "brew_processes", fail)
+    monkeypatch.setattr(
+        auto, "loaded", lambda label: SimpleNamespace(returncode=codes[[x[0] for x in JOBS].index(label)])
+    )
+    for _ in range(11):
+        auto.AutoActivator(worker.agents, worker.state).tick()
+    assert not alerts and not calls
+    assert (worker.state.read_bytes(), brew_state.read_bytes()) == before
+    auto.AutoActivator(worker.agents, worker.state).tick()
+    assert bool(alerts) == (codes == (113, 113))
+    assert "private-argv" not in repr(alerts)
+    if alerts:
+        assert type(error).__name__ in alerts[-1][1]
+    # Recovery must clear even if no plists remain, without erasing other failures.
+    for path in worker.agents.glob("*.plist"):
+        path.unlink()
+    monkeypatch.setattr(auto, "brew_processes", lambda: [])
+    worker.tick()
+    assert "brainbar-activation" not in job_alerts.active_alerts()
+    monkeypatch.setattr(auto, "brew_processes", fail)
+    worker.tick()
+    assert "brainbar-activation" not in job_alerts.active_alerts()
+
+
+@pytest.mark.parametrize(
+    "reason,cleared",
+    [
+        (
+            "BrainBar activation monitor refused: Command '['/bin/ps', '-axo', 'pid=,ppid=,comm=,args=']' timed out after 5 seconds",
+            True,
+        ),
+        ("BrainBar activation failed: blocked", False),
+    ],
+)
+def test_successful_scan_clears_only_scan_alerts(monitor, monkeypatch, reason, cleared):
+    from brainlayer import job_alerts
+
+    worker, _, _, _ = monitor
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(worker.state.with_name("alerts.json")))
+    job_alerts.report("brainbar-activation", reason, notify=lambda _: None)
+    monkeypatch.setattr(auto, "report", lambda key, reason: job_alerts.report(key, reason, notify=lambda _: None))
+    for path in worker.agents.glob("*.plist"):
+        path.unlink()
+    worker.tick()
+    assert ("brainbar-activation" not in job_alerts.active_alerts()) == cleared
+
+
+def test_second_scan_failure_never_launches_and_successful_scan_resets_count(monitor, monkeypatch):
+    worker, _, calls, alerts = monitor
+    scans = 0
+
+    def scan():
+        nonlocal scans
+        scans += 1
+        if scans % 2 == 0:
+            raise OSError("private-argv")
+        return []
+
+    monkeypatch.setattr(auto, "brew_processes", scan)
+    for _ in range(11):
+        auto.AutoActivator(worker.agents, worker.state).tick()
+    assert not calls and not alerts and not worker.state.exists()
+    worker.tick()
+    assert not calls and not worker.state.exists()
+    assert not alerts
+    assert json.loads(worker.state.with_suffix(".scan.json").read_text()) == {"failures": 1}
+
+
+@pytest.mark.parametrize(
+    "scan_reason",
+    [
+        "BrainBar activation process scan failed for >=12 ticks: TimeoutExpired",
+        "BrainBar activation monitor refused: Command '['/bin/ps', '-axo']' timed out after 5 seconds",
+        "BrainBar activation monitor refused: [Errno 11] Resource temporarily unavailable",
+    ],
+)
+def test_scan_recovery_keeps_new_activation_failure_visible(monitor, monkeypatch, scan_reason):
+    from brainlayer import job_alerts
+
+    worker, _, calls, _ = monitor
+    job_alerts.report("brainbar-activation", scan_reason, notify=lambda _: None)
+    monkeypatch.setattr(auto, "report", lambda key, reason: job_alerts.report(key, reason, notify=lambda _: None))
+    worker.tick()
+    assert len(calls) == 1
+    assert (
+        job_alerts.active_alerts()["brainbar-activation"]
+        == "BrainBar activation failed: blocked; run brainlayer brainbar activate"
+    )
+    worker.tick()
+    assert len(calls) == 1
+    assert "activation failed: blocked" in job_alerts.active_alerts()["brainbar-activation"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("launchctl private-argv"),
+        auto.subprocess.TimeoutExpired(["launchctl", "private-argv"], 5),
+        RuntimeError("launchctl private-argv"),
+    ],
+)
+def test_scan_failure_with_unknown_loaded_state_does_not_alert(monitor, monkeypatch, error):
+    worker, _, calls, alerts = monitor
+    worker.state.with_suffix(".scan.json").write_text('{"failures":11}')
+
+    def fail_scan():
+        raise OSError("ps private-argv")
+
+    def fail_loaded(label):
+        raise error
+
+    monkeypatch.setattr(auto, "brew_processes", fail_scan)
+    monkeypatch.setattr(auto, "loaded", fail_loaded)
+    worker.tick()
+    assert not alerts and not calls and not worker.state.exists()
+
+
+def test_successful_scan_resets_counter_before_later_tick_error(monitor):
+    worker, _, calls, alerts = monitor
+    failures = worker.state.with_suffix(".scan.json")
+    failures.write_text('{"failures":11}')
+    (worker.agents / f"{JOBS[0][0]}.plist").write_text("invalid plist")
+    with pytest.raises(plistlib.InvalidFileException):
+        worker.tick()
+    assert not failures.exists()
+    assert not calls and not alerts
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_non_scan_errno_never_flaps_after_one_shot_migration(monitor, monkeypatch, legacy):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    notifications = []
+    if legacy:
+        job_alerts.report(
+            "brainbar-activation", "BrainBar activation monitor refused: [Errno 11] old scan", notify=lambda _: None
+        )
+
+    def report(key, reason):
+        alerts.append((key, reason))
+        return job_alerts.report(key, reason, notify=notifications.append)
+
+    monkeypatch.setattr(auto, "report", report)
+
+    def fail_identity(app):
+        raise PermissionError(13, "fixture identity denied")
+
+    def fail_scan():
+        raise OSError("fixture scan unavailable")
+
+    with monkeypatch.context() as scan_patch:
+        scan_patch.setattr(auto, "brew_processes", fail_scan)
+        worker.tick()
+    assert not worker.state.with_suffix(".scan-migration.json").exists()
+    monkeypatch.setattr(auto, "app_identity", fail_identity)
+    for _ in range(3):
+        with pytest.raises(PermissionError) as failure:
+            auto.AutoActivator(worker.agents, worker.state).tick()
+        report("brainbar-activation", f"BrainBar activation monitor refused: {failure.value}")
+        assert "[Errno 13]" in job_alerts.active_alerts()["brainbar-activation"]
+    assert sum(reason is None for _, reason in alerts) == int(legacy)
+    assert sum(reason is not None for _, reason in alerts) == 3
+    assert len(notifications) == 1 + int(legacy)
+    assert worker.state.with_suffix(".scan-migration.json").is_file()
+    assert not calls
+
+
+def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    reason = "BrainBar activation monitor refused: [Errno 11] old scan"
+    job_alerts.report("brainbar-activation", reason, notify=lambda _: None)
+    notifications = []
+
+    def report(key, reason):
+        alerts.append((key, reason))
+        return job_alerts.report(key, reason, notify=notifications.append)
+
+    def unwritable(path, payload):
+        assert path == worker.state.with_suffix(".scan-migration.json")
+        raise PermissionError(13, "fixture migration denied")
+
+    monkeypatch.setattr(auto, "report", report)
+    monkeypatch.setattr(auto, "_atomic_write_json", unwritable)
+    for _ in range(3):
+        with pytest.raises(PermissionError) as failure:
+            auto.AutoActivator(worker.agents, worker.state).tick()
+        report("brainbar-activation", f"BrainBar activation monitor refused: {failure.value}")
+        assert job_alerts.active_alerts()["brainbar-activation"] == reason
+    assert len(alerts) == 3 and all(reason is not None for _, reason in alerts)
+    assert not notifications and not calls
+    assert not worker.state.with_suffix(".scan-migration.json").exists()
