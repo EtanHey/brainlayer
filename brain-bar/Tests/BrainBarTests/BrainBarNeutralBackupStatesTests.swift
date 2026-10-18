@@ -11,7 +11,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
     func document(
         attempt: Bool = false, pending: String? = nil, error: String? = nil,
         freshness: String = "fresh", retention: String = "PASS", attemptAge: Double = 1,
-        localVerified: Bool = true, snapshotAge: Double = 2, historicalUpload: Bool = false
+        localVerified: Bool = true, snapshotAge: Double = 2, historicalUpload: Bool = false, offsiteAge: Double = 24
     ) throws -> ObservabilityDocument {
         guard case let .readable(base) = BrainBarDashboardFixture.healthyObservabilityResult else {
             throw NSError(domain: "fixture", code: 1)
@@ -49,7 +49,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
                 "localIntegrity": "ok", "localIntegrityPragma": "quick_check",
             ]
             backups["dbSnapshot"] = [
-                "lastAt": now.addingTimeInterval(-86400).timeIntervalSinceReferenceDate,
+                "lastAt": now.addingTimeInterval(-offsiteAge * 3600).timeIntervalSinceReferenceDate,
                 "destination": "previous.db.gz", "verified": true,
             ]
         }
@@ -62,7 +62,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             let b = try document(attempt: true, historicalUpload: history).backups
             let checks = BrainBarBackupChecks.derive(b, now: now)
             XCTAssertEqual(checks.checks[0].tone, .neutral)
-            XCTAssertTrue(checks.checks[0].value.contains("Idle"))
+            XCTAssertTrue(checks.checks[0].value.contains("No new transcripts"))
             XCTAssertEqual(checks.checks[5].tone, .neutral)
             XCTAssertEqual(checks.checks[5].value, "None")
             XCTAssertFalse(checks.checks[3].value.contains("Both copies"))
@@ -78,7 +78,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             let checks = BrainBarBackupChecks.derive(b, now: now)
             XCTAssertEqual(checks.checks[1].tone, .green)
             XCTAssertEqual(checks.checks[2].tone, .neutral)
-            XCTAssertEqual(checks.checks[2].value, "Local snapshot verified, upload in progress")
+            XCTAssertEqual(checks.checks[2].value, state == "pending" ? "Upload queued" : "Upload in progress")
             XCTAssertNil(checks.attentionSentence)
             XCTAssertTrue(checks.details.contains { $0.value.contains("previous.db.gz") })
         }
@@ -87,6 +87,8 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
     func testFailedUploadShowsActualReason() throws {
         let b = try document(attempt: true, pending: "failed", error: "DriveUploadError").backups
         let checks = BrainBarBackupChecks.derive(b, now: now)
+        XCTAssertEqual(checks.checks[0].tone, .neutral) // PROBE2: DB failure cannot blame transcripts.
+        XCTAssertEqual(checks.checks.first { $0.id == "archives" }?.tone, .neutral)
         XCTAssertEqual(checks.checks[1].tone, .green)
         XCTAssertEqual(checks.checks[2].tone, .red)
         XCTAssertTrue(checks.checks[2].value.contains("Drive rejected upload"))
@@ -98,9 +100,13 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         XCTAssertEqual(abandoned.checks[2].tone, .red)
         XCTAssertTrue(abandoned.checks[2].value.contains("abandoned"))
         XCTAssertTrue(abandoned.checks[2].value.contains("Drive rejected upload"))
+        // Defensive decoder state: real producers do not currently emit nothing_pending.
         let nothing = BrainBarBackupChecks.derive(try document(attempt: true, pending: "nothing_pending").backups, now: now)
         XCTAssertFalse(nothing.summary.contains("Upload in progress"))
         XCTAssertEqual(nothing.checks.first { $0.id == "freshness" }?.tone, .red)
+        XCTAssertEqual(nothing.checks[2].tone, .red)
+        XCTAssertEqual(nothing.checks[2].value, "No local snapshot found to verify. Run backup-daily or check the snapshot job.")
+        XCTAssertEqual(nothing.checks[2].value, nothing.checks.first { $0.id == "freshness" }?.value)
     }
 
     func testMissingStaleFailedAndOldProducerEvidenceStaysRed() throws {
@@ -111,11 +117,42 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             document(attempt: true, error: "job_alert:Weekly maintenance missed its quiet window"),
             document(attempt: true, pending: "pending", localVerified: false),
             document(attempt: true, pending: "pending", snapshotAge: 40),
+            document(attempt: true, pending: "in_progress", offsiteAge: 30 * 24),
         ]
         for document in states {
             XCTAssertNotNil(BrainBarBackupChecks.derive(document.backups, now: now).attentionSentence)
         }
     }
+    func testUnrelatedErrorsKeepTranscriptCoverageNeutralAndTranscriptErrorsDoNot() throws {
+        for error in ["DriveUploadError", "drive_credentials_restored_backup_pending", "job_alert:Weekly maintenance missed its quiet window"] {
+            let status = ObservabilityPresentation.backupStatus(for: try document(attempt: true, error: error).backups, now: now)
+            XCTAssertEqual(status.upload.tone, .neutral, error)
+            XCTAssertEqual(status.archives.tone, .neutral, error)
+            XCTAssertEqual(status.freshness.tone, .neutral, error)
+            if error.hasPrefix("job_alert:") { XCTAssertEqual(status.lines.filter { $0.tone == .red }.count, 1) }
+        }
+        let status = ObservabilityPresentation.backupStatus(for: try document(attempt: true, error: "jsonl_backup_attempt_failed").backups, now: now)
+        XCTAssertEqual(status.upload.tone, .red)
+        XCTAssertEqual(status.archives.tone, .red)
+    }
+
+    func testIdleCopyUsesLastUploadAndInjectedLocaleAndCalendar() throws {
+        let doc = try document(attempt: true, historicalUpload: true)
+        for locale in [Locale(identifier: "en_US"), Locale(identifier: "fr_FR")] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: -12 * 3600)!
+            let checks = BrainBarBackupChecks.derive(doc.backups, now: now, locale: locale)
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.locale = locale
+            formatter.dateFormat = "MMM d"
+            XCTAssertEqual(checks.checks[0].value, "No new transcripts since \(formatter.string(from: doc.backups.lastVerifiedUpload!.at)) · checked \(BrainBarBackupChecks.relative(doc.backups.transcriptAttempt!.at, now: now, locale: locale))")
+            XCTAssertEqual(checks.checks.first { $0.id == "freshness" }?.title, "Transcript coverage")
+            XCTAssertFalse(checks.checks.map(\.value).joined().contains("no-op"))
+        }
+    }
+
     func testV2OptionalEvidenceSurvivesSnakeCaseWireAndOldDocumentsStayRed() throws {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
@@ -142,7 +179,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
     func testRealPythonProducerFixturesDecodeAndKeepOffsiteHistory() throws {
         let fixture = try XCTUnwrap(Bundle.module.resourceURL).appendingPathComponent("Fixtures/neutral-backup-states-v2.json")
         let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [[String: Any]])
-        XCTAssertEqual(cases.count, 9)
+        XCTAssertEqual(cases.count, 12)
         let root = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -155,11 +192,11 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             }
             let checks = BrainBarBackupChecks.derive(doc.backups, now: doc.generatedAt)
             let status = ObservabilityPresentation.backupStatus(for: doc.backups, now: doc.generatedAt)
-            XCTAssertEqual(status.snapshot.tone, .green, name)
+            XCTAssertEqual(status.snapshot.tone, name == "stale_offsite" ? .red : .green, name)
             switch name {
             case "pending", "in_progress":
                 XCTAssertEqual(status.snapshotUpload?.tone, .neutral, name)
-                XCTAssertEqual(status.snapshotUpload?.text, "Local snapshot verified, upload in progress")
+                XCTAssertEqual(status.snapshotUpload?.text, name == "pending" ? "Upload queued" : "Upload in progress")
                 XCTAssertEqual(doc.backups.dbSnapshot?.destination, "previous.db.gz")
                 XCTAssertNil(checks.attentionSentence)
             case "failed", "abandoned":
@@ -167,6 +204,18 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
                 XCTAssertTrue(status.snapshotUpload?.text.contains("Synthetic Drive rejected upload") == true)
                 XCTAssertEqual(doc.backups.errorType, "SyntheticUploadFailure")
                 XCTAssertNotNil(checks.attentionSentence)
+            case "stale_offsite":
+                XCTAssertEqual(status.snapshotUpload?.tone, .red)
+                XCTAssertEqual(status.snapshotUpload?.text, "Last offsite DB copy is 30 days old; upload still pending")
+                XCTAssertFalse(status.uploadInProgress)
+                XCTAssertNotNil(checks.attentionSentence)
+            case "m1_weekly_alert":
+                XCTAssertEqual(status.lines.filter { $0.tone == .red }.map(\.text), ["Weekly maintenance missed its quiet window"])
+                XCTAssertEqual(status.upload.tone, .neutral)
+                XCTAssertEqual(status.archives.tone, .neutral)
+            case "verified_bundle":
+                XCTAssertEqual(status.freshness.tone, .green)
+                XCTAssertFalse(checks.checks.first { $0.id == "freshness" }!.value.contains("attempt"))
             case "verified":
                 XCTAssertNil(status.snapshotUpload)
                 XCTAssertEqual(doc.backups.dbSnapshot?.destination, "local.db.gz")
@@ -201,7 +250,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
                 hero: hero, observability: .readable(doc), stats: collector.stats, agentActivity: collector.agentActivity,
                 now: now, observabilityCadence: .known(300))
             XCTAssertEqual(dashboard.backupLines.map(\.tone), state == nil ? [.green, .neutral] : [.green, .neutral, .neutral])
-            XCTAssertTrue(dashboard.backupLines.last?.text.contains("Idle") == true)
+            XCTAssertTrue(dashboard.backupLines.last?.text.contains("Transcripts · Drive · no changes") == true)
             // Job-alert reconciliation must retain the new optional evidence.
             XCTAssertNotNil(doc.replacingBackupsErrorType(nil).backups.transcriptAttempt)
         }

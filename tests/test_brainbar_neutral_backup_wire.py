@@ -47,6 +47,9 @@ def producer_documents(root: Path) -> list[dict]:
         "verified",
         "superseded",
         "legacy",
+        "stale_offsite",
+        "m1_weekly_alert",
+        "verified_bundle",
     ):
         attempts = [{"attempted_at": "2026-09-13T10:00:00Z", "status": "no-op", "verified": True, "uploaded": False}]
         if name == "idle_old_upload":
@@ -60,21 +63,27 @@ def producer_documents(root: Path) -> list[dict]:
                     "archive_id": "synthetic-old-archive",
                 },
             )
+        if name == "verified_bundle":
+            attempts = [{"attempted_at": "2026-09-13T10:00:00Z", "status": "uploaded", "verified": True, "uploaded": True, "archive_id": "synthetic-current-archive"}]
+        alert = Path(env["BRAINLAYER_JOB_ALERT_PATH"])
+        alert.write_text(json.dumps({"maintenance-weekly": "Weekly maintenance missed its quiet window"} if name == "m1_weekly_alert" else {}))
         transcript.write_text("".join(json.dumps(row) + "\n" for row in attempts))
-        receipts = [prior]
-        if name not in {"idle", "idle_old_upload", "legacy"}:
+        receipts = [dict(prior)]
+        if name == "stale_offsite":
+            receipts[0]["snapshot_created_at"] = "2026-08-14T12:00:00Z"
+        if name not in {"idle", "idle_old_upload", "legacy", "m1_weekly_alert"}:
             local = {
                 "backup_log_provenance": "real",
                 "snapshot_created_at": "2026-09-13T10:00:00Z",
                 "snapshot": "/synthetic/local.db.gz",
                 "local_verified": name != "abandoned",
-                "uploaded": name == "verified",
-                "verified": name == "verified",
-                "upload_state": name,
+                "uploaded": name in {"verified", "verified_bundle"},
+                "verified": name in {"verified", "verified_bundle"},
+                "upload_state": "in_progress" if name == "stale_offsite" else "verified" if name == "verified_bundle" else name,
                 "local_integrity": "ok",
                 "local_integrity_pragma": "integrity_check",
             }
-            if name == "verified":
+            if name in {"verified", "verified_bundle"}:
                 local["drive_file"] = {"name": "local.db.gz"}
             if name in {"failed", "abandoned"}:
                 local.update(error_type="SyntheticUploadFailure", error="Synthetic Drive rejected upload")
