@@ -1776,6 +1776,7 @@ def test_changed_only_scope_escalates_a_tag_range_that_maps_nothing(tmp_path: Pa
 
 CLI_ROOT_SUITES = (
     "test_agent_profiles.py",
+    "test_brainbar_activation.py",
     "test_cli_direct_sqlite.py",
     "test_cli_enrich.py",
     "test_cli_index_watchdog.py",

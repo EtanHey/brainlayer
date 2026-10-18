@@ -1250,6 +1250,16 @@
         "path": "scripts/smoke/firstturn-brainlayer-smoke.sh"
       }
     },
+    "3cdf2e247726a9d74edc7c7cb715986282b5a132838060e77f1db120ae6c7685": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py import subprocess",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "import subprocess"
+      }
+    },
     "3cfa1e9476fcb597dff155aae72aa5662a1b221eef3cbcaa264b2e0f43a570a8": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/timestamp_iso.py <module>.normalize_timestamps",
       "site": {
@@ -1638,6 +1648,16 @@
         "owner": "<module>",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "import subprocess"
+      }
+    },
+    "508e10f03e9f77c03e2fc478d5218e12c0fe84cf6d94375a5fc41008d6d45b41": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.run",
+      "site": {
+        "call_sha256": "a095e06df5d3fe7d0277e719db38e6a049f4b1cc12b99eed002516bad73c6176",
+        "kind": "child_process",
+        "owner": "<module>.process_table",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.run"
       }
     },
     "50b2f0f2f2257f72f03e67570e861dff2b5aa22b333ac8b4d1f618e6f9826359": {
@@ -2318,6 +2338,16 @@
         "target": "ctypes.create_string_buffer"
       }
     },
+    "6da250c856992e23ead73f9682ff781d595736aaad3f0f006016c2f846efa18b": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_identity.py subprocess.run",
+      "site": {
+        "call_sha256": "92ea588f361a98ae851c9d4468db3485eeea0b6087b067e77d850435078cc623",
+        "kind": "child_process",
+        "owner": "<module>.run",
+        "path": "src/brainlayer/brainbar_identity.py",
+        "target": "subprocess.run"
+      }
+    },
     "6dcda7b3618524cd94f99273d26091b632623db8eae8df6b911843a64eeeaf75": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/jobs.py <module> subprocess.CompletedProcess.",
       "site": {
@@ -2534,6 +2564,16 @@
         "owner": "<module>.verify_mcp_transport",
         "path": "src/brainlayer/setup.py",
         "target": "send"
+      }
+    },
+    "750675453d5c685f8414e64001a01bc484af5584e61d45354dff7fb8d3941e1b": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_activation.py subprocess.run",
+      "site": {
+        "call_sha256": "cc0eb602d3e13b4999d4bba47999cb87ad97ea039d078014c7038cfb12043340",
+        "kind": "child_process",
+        "owner": "<module>._activate.launchctl",
+        "path": "src/brainlayer/brainbar_activation.py",
+        "target": "subprocess.run"
       }
     },
     "75430fc442439c95e27e0131fe4a33c1f67ad55c94c2d43b3fd8f298fdc74200": {
@@ -2796,6 +2836,16 @@
         "target": "subprocess.CalledProcessError"
       }
     },
+    "8603f977ea72946a916e65188ba6798c0abc1030a93cf9525f0af6134bc674d6": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.run",
+      "site": {
+        "call_sha256": "c7fd474aa226faf574ca49abd297cb1ae78f34a4db04c7e75af827623e8d4996",
+        "kind": "child_process",
+        "owner": "<module>.AutoActivator.tick",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.run"
+      }
+    },
     "86368bb78adc22ccd207f1265f1194046d766451f205cd43b744a22f2fbd98b9": {
       "non_cloud_purpose": "Local scheduled maintenance custody and owner-only status; backup keeps its own timeout supervisor in the calendar process group with inherited writer lease. No cloud/model sender.",
       "site": {
@@ -3032,6 +3082,16 @@
         "owner": "<module>.mine_frustration_qrels",
         "path": "src/brainlayer/pipeline/frustration_mining.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "8e86972592b9e5fff715ba921c5c11d34de31806941aae4e8d469bf86f666904": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_activation.py subprocess.SubprocessError",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._activate",
+        "path": "src/brainlayer/brainbar_activation.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "8ecd96d695d13d204302846617a99b4237c6ad87d183b7a980e0b54f566e3c65": {
@@ -3380,6 +3440,16 @@
         "owner": "<module>.db_provenance",
         "path": "scripts/sprint_gate.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "9fd30f625b9dac0cde79fdcf3137fcfefdbc4c333a0d99a213fb862d4201b4bb": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_identity.py import subprocess",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/brainbar_identity.py",
+        "target": "import subprocess"
       }
     },
     "9fe423d92c5c06da1c21f7647cfcd0b4fe184d00ebb62ad7a9af0e8299666cbb": {
@@ -3920,6 +3990,16 @@
         "target": "client.request"
       }
     },
+    "b3d373e7eabc6891fb4d549302284973cccc2bef72c89173c31f99ab212a5c52": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/cli/__init__.py subprocess.SubprocessError",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.brainbar_verify_running_command",
+        "path": "src/brainlayer/cli/__init__.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "b3d3d76fb3bb61559f94de302d991371ec0d8e6400f2a8ac96f081bde71ccd76": {
       "non_cloud_purpose": "Read-only Darwin libproc process identity and errno classification: ESRCH alone proves absence for stale ownership-record reconciliation; no signals, model API or network transport.",
       "site": {
@@ -4378,6 +4458,16 @@
         "owner": "<module>.helper_env.command_line",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "c48fb58f99e5cda29f038129d5a25503321dcaa4b7bafd1d0e5aa48c4df450ca": {
+      "non_cloud_purpose": "Local cask recovery and identity verification only: bounded launchctl, ps/lsof vnode inspection, or supervised installed activation CLI; no cloud/enrichment sender. src/brainlayer/brainbar_auto_activation.py subprocess.SubprocessError",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.AutoActivator.tick",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "c55344aac21699ba19a9f0fea59efdeb28b5e96455edf00c9fb7b95f2c745386": {
@@ -5494,6 +5584,16 @@
         "owner": "<module>._migrate.verify_daemon",
         "path": "src/brainlayer/launchd_consolidation.py",
         "target": "client.request"
+      }
+    },
+    "f8c55f059cab056550803c9270a12adfe6a8c6382c60660075b5886deee0c591": {
+      "non_cloud_purpose": "Explicit post-Homebrew local BrainBar activation only: bounded /bin/launchctl lifecycle calls and failure cleanup; no cloud models, enrichment, or network sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/brainbar_activation.py",
+        "target": "import subprocess"
       }
     },
     "fa3f5b16bf754ffb6681c1b70e3c8ac635902a35a1b96c60748e62969e1ad363": {

@@ -330,8 +330,8 @@ apply_update() {
         unmanaged|stale-ledger|outdated)
             log "Drift detected ($DRIFT_KIND). Adopting $OFFERED_VERSION without running any uninstall recipe."
             quarantine_stale_registration
-            # Keep the current services alive until installation succeeds. The cask's
-            # postflight bootouts, bootstraps, and kickstarts both services atomically.
+            # Keep services alive until installation succeeds. Explicit activation
+            # after brew returns replaces them and verifies the running build.
             adopt_install
             ;;
         *)
@@ -385,6 +385,9 @@ verify() {
         check "brainlayer PATH" 1 "$path_cli"
     fi
 
+    if "$canonical_cli" brainbar verify-running --app "$APP_PATH"; then ok=1; else ok=0; fi
+    check "running bundle identity (GitCommit/version)" "$ok" "$APP_PATH"
+
     if pgrep -x BrainBar >/dev/null 2>&1; then ok=1; else ok=0; fi
     check "BrainBar process" "$ok" "$([[ "$ok" = 1 ]] && printf running || printf 'not running')"
 
@@ -428,6 +431,11 @@ main() {
         log "Dry run complete. Nothing was changed."
         return 0
     fi
+
+    # Homebrew postflight deliberately does not launch the quarantined app.
+    # These commands are required even when optional summary checks are skipped.
+    run_cmd "${BREW_BIN%/*}/brainlayer" brainbar activate --verify
+    run_cmd "${BREW_BIN%/*}/brainlayer" brainbar verify-running --app "$APP_PATH"
 
     if [[ "$SKIP_VERIFY" = "1" ]]; then
         log "Verification skipped (BRAINLAYER_UPDATE_SKIP_VERIFY=1)."
