@@ -734,3 +734,23 @@ def test_r2_malformed_weekly_age_preserves_upload_and_denies_vacuum(lane, monkey
     assert receipt["drive_file"]["id"] == "completed"
     assert "invalid BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS" in receipt["verification_error"]
     assert lane.snapshot.exists()
+
+
+@pytest.mark.parametrize("forthcoming", [0, backup.COPY_CHUNK_BYTES])
+def test_r2_raw_floor_failure_names_retained_stalled_backup(lane, monkeypatch, forthcoming):
+    stalled(lane)
+    lane.outcomes.append(_DriveResponse(404))
+    monkeypatch.setattr(backup.shutil, "disk_usage", lambda path: SimpleNamespace(free=backup.MIN_RAW_FREE_BYTES - 1))
+
+    def floor_during_snapshot(*args, **kwargs):
+        backup._require_raw_floor(lane.root, forthcoming=forthcoming)
+
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", floor_during_snapshot)
+    with pytest.raises(backup.RetainedStalledBackupCapacityError):
+        lane.run("2026-10-18")
+    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    assert lane.snapshot.name in receipt["error_type"]
+    assert lane.snapshot.name in receipt["error"]
+    assert "raw free space floor breached" in receipt["error"]
+    assert lane.snapshot.read_bytes() == b"abcdef"
+    assert not receipt.get("superseded_stalled_deleted")

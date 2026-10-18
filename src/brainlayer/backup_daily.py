@@ -1246,9 +1246,10 @@ def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machin
 class RetainedStalledBackupCapacityError(RuntimeError):
     error_code = "retained_stalled_backup_capacity"
 
-    def __init__(self, names: list[str]):
+    def __init__(self, names: list[str], *, reason: str | None = None):
         self.error_type = f"RetainedStalledBackupCapacityError[{','.join(names)}]"
-        super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}")
+        detail = f"; {reason}" if reason else ""
+        super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}{detail}")
 
 
 class RetainedStalledBackupConflictError(RuntimeError):
@@ -2016,8 +2017,11 @@ def run_backup(
                     capacity_status_callback=record_capacity,
                 )
             except RuntimeError as exc:
-                if stalled and "Insufficient free space" in _redact_upload_secrets(str(exc)):
-                    raise RetainedStalledBackupCapacityError([Path(r["snapshot"]).name for r in stalled]) from exc
+                reason = _redact_upload_secrets(str(exc))
+                if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
+                    raise RetainedStalledBackupCapacityError(
+                        [Path(r["snapshot"]).name for r in stalled], reason=reason
+                    ) from exc
                 raise
             result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started
             return artifact
