@@ -1861,6 +1861,7 @@ def _recent_local_verified_backup(
         created = _snapshot_created_time(receipt)
         if (
             receipt.get("db") == str(db_path)
+            and "snapshot_created_at" in receipt
             and created is not None
             and created.astimezone(now.tzinfo).date() == now.date()
             and dt.timedelta(0) <= now - created <= dt.timedelta(hours=max_age_hours)

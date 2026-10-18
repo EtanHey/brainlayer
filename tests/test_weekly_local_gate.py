@@ -228,3 +228,15 @@ def test_invalid_older_copy_does_not_prevent_upload_of_intact_copy(local_lane):
     records = [json.loads(line) for line in local_lane["log_path"].read_text().splitlines()]
     assert records[-1]["error_code"] == "local_snapshot_invalid"
     assert Path(invalid["snapshot"]).exists()
+
+
+def test_local_gate_requires_explicit_creation_time_not_filename_midnight(local_lane):
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
+    receipt.pop("snapshot_created_at")
+    local_lane["log_path"].write_text(json.dumps(receipt) + "\n")
+    date = dt.date.fromisoformat(Path(receipt["snapshot"]).name[:10])
+    now = dt.datetime.combine(date, dt.time(0, 30), tzinfo=dt.UTC)
+    assert (
+        backup._recent_local_verified_backup(local_lane["log_path"], local_lane["db_path"], now=now, max_age_hours=6)
+        is None
+    )
