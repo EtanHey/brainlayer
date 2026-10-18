@@ -140,6 +140,51 @@ def test_all_error_daily_log_is_measured_stale() -> None:
     assert result["db_snapshot"] is None
 
 
+@pytest.mark.parametrize("history", ["none", "older-than-30-days"])
+def test_verified_idle_noop_is_fresh_without_a_recent_upload(tmp_path: Path, history: str) -> None:
+    env, recorder = _command_env(tmp_path)
+    launchd = tmp_path / "launchd.txt"
+    launchd.write_text("service = com.brainlayer.jsonl-backup\n")
+    env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"] = str(launchd)
+    env["BRAINLAYER_JOB_ALERT_PATH"] = str(tmp_path / "absent-alerts.json")
+    records = []
+    if history != "none":
+        records.append(
+            {
+                "attempted_at": "2026-08-01T10:00:00Z",
+                "status": "uploaded",
+                "archive_id": "synthetic-old-archive",
+                "verified": True,
+                "uploaded": True,
+            }
+        )
+    records.append(
+        {
+            "attempted_at": "2026-09-13T10:00:00Z",
+            "status": "no-op",
+            "verified": True,
+            "uploaded": False,
+            "message": "no new transcripts; already covered",
+        }
+    )
+    Path(env["BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG"]).write_text(
+        "".join(json.dumps(record) + "\n" for record in records)
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    assert result["freshness"] == "fresh"
+    assert result["error_type"] is None
+    assert result["surviving_archives_30d"] == 0
+    upload = result["last_verified_upload"]
+    if history == "none":
+        assert upload is None  # Never fabricate an upload to appease a UI check.
+    else:
+        assert upload["at"] == "2026-08-01T10:00:00Z"
+        assert upload["age_hours"] > 30 * 24
+
+
 @pytest.mark.parametrize(
     ("case", "reason", "status", "future"),
     [

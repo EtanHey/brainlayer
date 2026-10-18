@@ -128,12 +128,10 @@ def is_t3_app_initiated_codex_session(
             return False
         linked_session_ids = t3_app_codex_session_ids(selected_path, projection_version=version)
     linked = session_id in linked_session_ids
-    if t3_origin and not linked:
-        raise_alarm(
-            "t3_runtime_linkage_pending",
-            "T3-origin session has no selected projection linkage",
-            {"path": str(source_file)},
-        )
+    if t3_origin:
+        from .t3_linkage_alarm import observe
+
+        observe(source_file, session_id, sources, pending=not linked)
     return linked
 
 
