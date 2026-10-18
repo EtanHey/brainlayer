@@ -32,6 +32,7 @@ from .backup_daily import (
     BackupAlreadyRunningError,
     _backup_log_path,
     _recent_local_verified_backup,
+    local_backup_date,
     local_backup_max_age_hours,
 )
 from .drain import BurnDrainResult, burn_drain_once
@@ -1147,7 +1148,7 @@ def _pin_weekly_backup(config: MaintenanceConfig, backup: dict[str, Any] | None)
             {
                 "snapshot": backup["snapshot"],
                 "db": str(config.db_path),
-                "date": config.now_fn().date().isoformat(),
+                "date": local_backup_date(config.now_fn()).isoformat(),
             },
         )
         yield

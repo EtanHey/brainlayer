@@ -3,9 +3,13 @@
 # Pytest registers the imported fixture; test arguments intentionally shadow that import.
 # ruff: noqa: F811
 
+import asyncio
 import datetime as dt
 import json
+import os
+import time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -19,6 +23,35 @@ from tests.test_weekly_local_gate import config_for, local_lane  # noqa: F401, F
 def append(log, receipt):
     with log.open("a") as out:
         out.write(json.dumps(receipt) + "\n")
+
+
+@pytest.fixture
+def local_clock(monkeypatch):
+    """Freeze both wall time and injected UTC clocks; restore the process timezone."""
+    real_datetime = dt.datetime
+    instant = [real_datetime(2026, 10, 18, 21, 30, tzinfo=dt.UTC)]
+
+    class FrozenDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(instant[0].timestamp(), tz)
+
+    def set_clock(zone, local):
+        monkeypatch.setenv("TZ", zone)
+        time.tzset()
+        instant[0] = local.replace(tzinfo=ZoneInfo(zone)).astimezone(dt.UTC)
+        return instant[0]
+
+    previous_tz = os.environ.get("TZ")
+    monkeypatch.setattr(dt, "datetime", FrozenDateTime)
+    try:
+        yield set_clock
+    finally:
+        if previous_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous_tz
+        time.tzset()
 
 
 def test_probe_d_failed_verification_cannot_fall_back_to_earlier_good_receipt(local_lane, tmp_path, monkeypatch):
@@ -214,13 +247,69 @@ def test_superseded_pending_reclamation_preserves_weekly_pin_and_other_db(local_
     assert latest[older[0]["snapshot"]]["upload_state"] == "superseded"
 
 
-def test_weekly_pin_holds_backup_lock_through_quiesce(local_lane, tmp_path):
+def test_weekly_pin_holds_backup_lock_through_quiesce(local_lane, tmp_path, local_clock):
+    local_clock("Asia/Jerusalem", dt.datetime(2026, 10, 19, 0, 30))
     receipt = backup.run_backup(**local_lane, phase="snapshot")
     with maintenance._pin_weekly_backup(config_for(local_lane, tmp_path), receipt):
         assert maintenance._backup_lock_is_held(local_lane["staging_dir"])
         assert backup._protected_snapshot_names(local_lane["staging_dir"]) == {Path(receipt["snapshot"]).name}
     assert not maintenance._backup_lock_is_held(local_lane["staging_dir"])
     assert backup._protected_snapshot_names(local_lane["staging_dir"])  # retained for tonight after VACUUM
+
+
+@pytest.mark.parametrize("zone", ["Asia/Jerusalem", "UTC"])
+@pytest.mark.parametrize("day", [18, 25], ids=["summer-offset", "dst-fall-back"])
+@pytest.mark.parametrize("hour,minute", [(23, 30), (0, 30), (2, 59), (3, 15)])
+def test_snapshot_gate_and_pin_share_local_date(local_lane, tmp_path, local_clock, zone, day, hour, minute):
+    local = dt.datetime(2026, 10, day, hour, minute)
+    utc_now = local_clock(zone, local)
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
+    config = config_for(local_lane, tmp_path)
+    assert config.now_fn() == utc_now
+    with maintenance._pin_weekly_backup(config, receipt):
+        pin = json.loads((local_lane["staging_dir"] / ".weekly-backup-pin.json").read_text())
+        assert pin["date"] == local.date().isoformat()
+        assert backup._protected_snapshot_names(local_lane["staging_dir"]) == {Path(receipt["snapshot"]).name}
+    assert Path(receipt["snapshot"]).name == f"{local.date().isoformat()}.db.gz"
+    assert backup.run_backup(**local_lane, phase="snapshot")["snapshot"] == receipt["snapshot"]
+
+
+@pytest.mark.parametrize("zone", ["Asia/Jerusalem", "UTC"])
+def test_local_midnight_expires_pin_and_gate_even_within_age_limit(local_lane, tmp_path, local_clock, zone):
+    local_clock(zone, dt.datetime(2026, 10, 18, 23, 30))
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
+    with maintenance._pin_weekly_backup(config_for(local_lane, tmp_path), receipt):
+        assert backup._protected_snapshot_names(local_lane["staging_dir"])
+    now = local_clock(zone, dt.datetime(2026, 10, 19, 0, 30))
+    assert backup._protected_snapshot_names(local_lane["staging_dir"]) == set()
+    assert (
+        backup._recent_local_verified_backup(local_lane["log_path"], local_lane["db_path"], now=now, max_age_hours=6)
+        is None
+    )
+
+
+@pytest.mark.parametrize("zone", ["Asia/Jerusalem", "UTC"])
+@pytest.mark.parametrize("day", [18, 25], ids=["summer-offset", "dst-fall-back"])
+def test_same_local_date_remains_eligible_across_utc_rollover(local_lane, tmp_path, local_clock, zone, day):
+    local_clock(zone, dt.datetime(2026, 10, day, 2, 59))
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
+    local_clock(zone, dt.datetime(2026, 10, day, 3, 15))
+    assert maintenance._recent_verified_backup(config_for(local_lane, tmp_path))["snapshot"] == receipt["snapshot"]
+
+
+@pytest.mark.parametrize("zone", ["Asia/Jerusalem", "UTC"])
+def test_calendar_default_date_uses_local_day_of_injected_utc_clock(tmp_path, local_clock, monkeypatch, zone):
+    now = local_clock(zone, dt.datetime(2026, 10, 19, 0, 30))
+    events = []
+
+    class BusyCustody:
+        def __enter__(self):
+            raise BlockingIOError
+
+    monkeypatch.setattr(calendar, "Custody", lambda _: BusyCustody())
+    monkeypatch.setattr(calendar, "record", lambda _, **event: events.append(event))
+    assert asyncio.run(calendar.run_calendar([], tmp_path, tmp_path, now_fn=lambda: now)) == 0
+    assert events == [{"event": "already-running", "scheduled_date": "2026-10-19"}]
 
 
 def test_v1_schema_remains_frozen_and_local_fields_only_live_in_v2_sibling(local_lane):
