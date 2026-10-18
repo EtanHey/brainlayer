@@ -201,7 +201,7 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
         restored_conn.close()
 
 
-def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(tmp_path, monkeypatch):
+def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapshot(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     source = tmp_path / "brainlayer.db"
@@ -241,7 +241,7 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(
     assert result["pragma"] == "skipped"
     assert result["local_removed"] is True
     assert not (staging_dir / "2026-06-05.db.gz").exists()
-    assert (staging_dir / "2026-06-05.db").exists()
+    assert not (staging_dir / "2026-06-05.db").exists()
 
 
 def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, monkeypatch):
@@ -1446,7 +1446,7 @@ def test_backup_peak_accounts_for_verify_and_prior_raw():
     assert backup_daily._peak_backup_required_bytes(db, gz, db, full=True) == db + 2 * gz + margin
 
 
-def test_preflight_credits_only_raw_copy_pruned_before_verify(tmp_path, monkeypatch):
+def test_preflight_never_credits_raw_copy_without_valid_gzip(tmp_path, monkeypatch):
     from brainlayer import backup_daily
 
     source = tmp_path / "brainlayer.db"
@@ -1471,7 +1471,7 @@ def test_preflight_credits_only_raw_copy_pruned_before_verify(tmp_path, monkeypa
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
     )
 
-    with pytest.raises(RuntimeError, match="writer reached"):
+    with pytest.raises(RuntimeError, match="Insufficient free space.*2026-05-13.db"):
         backup_daily.create_sqlite_backup_artifact(source, with_prior, date_stamp="2026-05-14")
     with pytest.raises(RuntimeError, match="Insufficient free space"):
         backup_daily.create_sqlite_backup_artifact(source, without_prior, date_stamp="2026-05-14")
