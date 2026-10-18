@@ -4460,6 +4460,16 @@
         "target": "subprocess.run"
       }
     },
+    "c48fb58f99e5cda29f038129d5a25503321dcaa4b7bafd1d0e5aa48c4df450ca": {
+      "non_cloud_purpose": "Local process-scan/launchctl exception classification only; references the subprocess.SubprocessError exception class without invoking a command, network transport, or cloud model. Site: src/brainlayer/brainbar_auto_activation.py <module>.AutoActivator.tick subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.AutoActivator.tick",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "c55344aac21699ba19a9f0fea59efdeb28b5e96455edf00c9fb7b95f2c745386": {
       "non_cloud_purpose": "Read only local kernel boot identity: Darwin libc sysctlbyname kern.boottime (timeval buffer), or Linux boot_id file. No subprocess/network/model sender.",
       "site": {
@@ -4538,6 +4548,16 @@
         "owner": "<module>.socket_owner_binary",
         "path": "scripts/ci_ratchet_table.py",
         "target": "subprocess.run"
+      }
+    },
+    "c89c92906d58e90ed9dff7098da7848aa4d3d8e1cb0f2ab5669c5bdd67931e4a": {
+      "non_cloud_purpose": "Local process-scan/launchctl exception classification only; references the subprocess.SubprocessError exception class without invoking a command, network transport, or cloud model. Site: src/brainlayer/brainbar_auto_activation.py <module>.AutoActivator._defer_for_brew subprocess.SubprocessError.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.AutoActivator._defer_for_brew",
+        "path": "src/brainlayer/brainbar_auto_activation.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "c8e8ecaa10063ee1be9dd072083642685db915a79ba7b6959a9bbd529eae8ac1": {
