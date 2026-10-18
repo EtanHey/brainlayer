@@ -25,6 +25,7 @@ NAMES = tuple(
     )
 )
 KEYS = {
+    "index": "index",
     "backup-daily": "backup-daily",
     "jsonl-backup": "jsonl-backup",
     "maintenance-nightly": "maintenance-light",

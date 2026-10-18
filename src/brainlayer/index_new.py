@@ -38,6 +38,7 @@ def index_chunks_to_sqlite(
     precomputed_embeddings: list[EmbeddedChunk] | None = None,
     start_position: int = 0,
     on_skipped_empty: Callable[[int], None] | None = None,
+    on_rejected: Callable[[int], None] | None = None,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -71,6 +72,31 @@ def index_chunks_to_sqlite(
     filtered_chunks = admitted_chunks
     if not filtered_chunks:
         return 0
+
+    # Intentional rejection consumes input positions, including an entirely rejected batch.
+    from .ingest_guard import reject_recursive_mcp_output
+
+    admitted_indices = []
+    for i, chunk in enumerate(filtered_chunks):
+        try:
+            reject_recursive_mcp_output(chunk.content, chunk_id=chunk.metadata.get("chunk_id"), source_file=source_file)
+        except ValueError:
+            continue
+        admitted_indices.append(i)
+    rejected = len(filtered_chunks) - len(admitted_indices)
+    if rejected:
+        if on_rejected is not None:
+            on_rejected(rejected)
+        if precomputed_embeddings is not None:
+            if len(precomputed_embeddings) != len(filtered_chunks) or any(
+                ec.chunk != c for ec, c in zip(precomputed_embeddings, filtered_chunks)
+            ):
+                raise ValueError("embeddings do not match admitted scrubbed chunks completely and in order")
+            precomputed_embeddings = [precomputed_embeddings[i] for i in admitted_indices]
+        positions = [positions[i] for i in admitted_indices]
+        filtered_chunks = [filtered_chunks[i] for i in admitted_indices]
+        if not filtered_chunks:
+            return 0
 
     # Generate embeddings
     def embedding_progress(completed: int, total: int) -> None:

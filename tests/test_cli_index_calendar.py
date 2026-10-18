@@ -122,7 +122,7 @@ def test_calendar_real_error_after_progress_is_failure(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("force", [False, True])
-def test_checkpoint_replays_changed_or_forced_file(tmp_path, monkeypatch, force):
+def test_checkpoint_resumes_append_or_forces_replay(tmp_path, monkeypatch, force):
     source, _, _ = prepare(tmp_path, monkeypatch)
     seen = []
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", lambda chunks, **kw: seen.append(kw) or 1)
@@ -131,7 +131,8 @@ def test_checkpoint_replays_changed_or_forced_file(tmp_path, monkeypatch, force)
         (source / "a.jsonl").write_text("{}\n{}\n")
     args = ["index", str(source)] + (["--force"] if force else [])
     assert CliRunner().invoke(cli.app, args).exit_code == 0
-    assert len(seen) == 2
+    # The fixture still exposes one chunk after the append: no new input to embed.
+    assert len(seen) == (2 if force else 1)
 
 
 @pytest.mark.parametrize(
