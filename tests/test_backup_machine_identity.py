@@ -199,3 +199,33 @@ def test_recovery_receipts_remain_visible_across_prior_identity():
     assert snapshot["destination"] == "2026-10-17.db.gz"
     assert snapshot["verified"] is True
     assert error is None and not all_errors
+
+
+@pytest.mark.parametrize("drive_file", [{"id": "prior-file", "name": "2026-10-17.db.gz"}, "2026-10-17.db.gz"])
+def test_prior_identity_drive_only_receipt_uses_artifact_date_not_retry_time(drive_file):
+    record = {
+        "backup_log_provenance": "real",
+        "machine_id": "Locals-MBP.lan",
+        "drive_folder": "Brain Drive/06_ARCHIVE/backups/brainlayer-db-Locals-MBP.lan",
+        "attempted_at": "2026-10-18T23:59:59Z",
+        "uploaded": True,
+        "verified": True,
+        "drive_file": drive_file,
+    }
+    snapshot, error, all_errors = observability_backup._daily_snapshot([record])
+    assert snapshot == {"last_at": "2026-10-17T00:00:00Z", "destination": "2026-10-17.db.gz", "verified": True}
+    assert error is None and not all_errors
+
+
+@pytest.mark.parametrize("created", [None, "invalid", "2026-10-17T20:00:00"])
+def test_explicit_unknown_creation_time_never_falls_back_to_prior_drive_filename(created):
+    assert (
+        backup_daily._snapshot_created_time(
+            {
+                "snapshot_created_at": created,
+                "drive_file": {"id": "prior-file", "name": "2026-10-17.db.gz"},
+                "attempted_at": "2026-10-18T23:59:59Z",
+            }
+        )
+        is None
+    )

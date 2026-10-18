@@ -188,6 +188,7 @@ def test_weekly_backup_waits_for_daily_then_reuses_verified_receipt(tmp_path, mo
     receipt_readbacks = []
     expected_receipt = {
         "attempted_at": "2026-09-27T03:17:00+00:00",
+        "snapshot_created_at": "2026-09-27T03:17:00+00:00",
         "db": str(config.db_path),
         "uploaded": True,
         "verified": True,
@@ -402,6 +403,7 @@ def test_weekly_backup_rechecks_after_lock_race(tmp_path, monkeypatch):
                 [
                     {
                         "attempted_at": "2026-09-27T03:17:00+00:00",
+                        "snapshot_created_at": "2026-09-27T03:17:00+00:00",
                         "db": str(config.db_path),
                         "uploaded": True,
                         "verified": True,
@@ -438,6 +440,7 @@ def test_weekly_child_rechecks_verified_receipt_after_acquiring_backup_lock(tmp_
         [
             {
                 "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                "snapshot_created_at": dt.datetime.now(dt.UTC).isoformat(),
                 "db": str(db_path),
                 "uploaded": True,
                 "verified": True,
@@ -459,6 +462,7 @@ def test_weekly_child_does_not_reuse_unverified_receipt(tmp_path, monkeypatch):
         [
             {
                 "attempted_at": dt.datetime.now(dt.UTC).isoformat(),
+                "snapshot_created_at": dt.datetime.now(dt.UTC).isoformat(),
                 "db": str(db_path),
                 "uploaded": True,
                 "verified": False,

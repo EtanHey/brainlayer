@@ -17,6 +17,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -34,6 +35,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -66,6 +68,7 @@ BACKUP_ATTEMPT_MAX_AGE_ENV = "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
+BACKUP_RESUME_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
@@ -73,6 +76,7 @@ BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
 DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV = "BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND"
 DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV = "BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS"
+DRIVE_UPLOAD_RETRY_BUDGET_ENV = "BRAINLAYER_DRIVE_UPLOAD_RETRY_BUDGET_SECONDS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = drive_credentials.DRIVE_SCOPES
 DEFAULT_LOCAL_COMPRESSED_KEEP = 3
@@ -123,6 +127,7 @@ class SQLiteBackupArtifact:
     surviving_attempt_growth_reserve_bytes: int
     attempt_reclamation: str
     writer_probe_error: str | None
+    snapshot_created_at: str | None = None
 
 
 def _today() -> str:
@@ -178,13 +183,81 @@ def default_drive_folder_parts(machine_id: str) -> list[str]:
     return [*CANONICAL_FOLDER_PARTS[:-1], f"brainlayer-db-{resolved}"]
 
 
+def _redact_upload_secrets(value: str) -> str:
+    def redact_url(match: re.Match[str]) -> str:
+        url = match.group(0)
+        return "[redacted-session-url]" if "upload_id" in url.lower() or "/upload/drive/" in url else url
+
+    value = re.sub(r"https?://[^\s\"'<>]+", redact_url, value)
+    return re.sub(r"(?i)(upload_id(?:=|%3d))[^&\s\"'<>;]+", r"\1[REDACTED]", value)
+
+
+def _redact_upload_exception(exc: BaseException) -> None:
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        exc.args = tuple(_redact_upload_secrets(arg) if isinstance(arg, str) else arg for arg in exc.args)
+        exc = exc.__cause__ or exc.__context__
+
+
+def _receipt_append_prefix(fd: int, read_fd: int) -> str:
+    """Repair only an incomplete final append while holding the log's exclusive lock."""
+    size = os.fstat(fd).st_size
+    if not size or os.pread(read_fd, 1, size - 1) == b"\n":
+        return ""
+    start = size
+    tail = b""
+    while start:
+        previous = max(0, start - 8192)
+        tail = os.pread(read_fd, start - previous, previous) + tail
+        start = previous
+        if b"\n" in tail:
+            break
+    boundary = tail.rfind(b"\n") + 1
+    try:
+        json.loads(tail[boundary:])
+    except (ValueError, UnicodeDecodeError):
+        os.ftruncate(fd, start + boundary)
+        return ""
+    return "\n"  # Preserve a complete legacy record lacking a line terminator.
+
+
+def _read_backup_receipts(path: Path) -> list[dict[str, Any]]:
+    raw_lines = path.read_bytes().splitlines(keepends=True)
+    receipts = []
+    for index, line in enumerate(raw_lines):
+        if not line.strip():
+            continue
+        try:
+            receipt = json.loads(line)
+            if not isinstance(receipt, dict):
+                raise ValueError("backup receipt is not an object")
+        except (ValueError, UnicodeDecodeError):
+            if index == len(raw_lines) - 1 and not line.endswith(b"\n"):
+                break  # A killed writer cannot invalidate the preceding durable session.
+            raise
+        receipts.append(receipt)
+    return receipts
+
+
 def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
+    payload = {
+        key: _redact_upload_secrets(value) if "error" in key and isinstance(value, str) else value
+        for key, value in payload.items()
+    }
+    if "uploaded" in payload:
+        payload.setdefault("snapshot_created_at", None)
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a", encoding="utf-8") as handle:
+        if payload.get("resumable_upload"):
+            os.fchmod(handle.fileno(), 0o600)  # The session URL is a private upload capability.
         fcntl.flock(handle, fcntl.LOCK_EX)
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-        handle.flush()  # Flush before close releases the lock shared with log_cap.
+        with path.open("rb") as reader:
+            prefix = _receipt_append_prefix(handle.fileno(), reader.fileno())
+        handle.write(prefix + json.dumps(payload, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())  # Persist before close releases the lock shared with log_cap.
 
 
 def _backup_log_path(
@@ -221,8 +294,9 @@ class BackupStoppedError(BaseException):
 class DriveUploadStalledError(RuntimeError):
     error_code = "drive_upload_stalled"
 
-    def __init__(self, *, bytes_confirmed: int, total_bytes: int, attempts: int):
+    def __init__(self, *, bytes_confirmed: int, total_bytes: int, attempts: int, session_url: str | None = None):
         self.bytes_confirmed = bytes_confirmed
+        self.session_url = session_url
         super().__init__(
             f"{self.error_code}: confirmed {bytes_confirmed}/{total_bytes} bytes after {attempts} stalled attempts"
         )
@@ -340,10 +414,12 @@ def _retry_transient_drive_call(call: Callable[[], Any], *, what: str) -> Any:
             raise  # the whole-run deadline is not a network blip
         except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, TransportError) as exc:
             if attempt >= limit:
-                raise RuntimeError(f"{what} failed after {attempt} attempts: {type(exc).__name__}: {exc}") from exc
+                raise RuntimeError(
+                    f"{what} failed after {attempt} attempts: {type(exc).__name__}: {_redact_upload_secrets(str(exc))}"
+                ) from exc
             sleep_seconds = min(60, 2**attempt)
             print(
-                f"{what} retry attempt={attempt}/{limit}: {type(exc).__name__}: {exc}; sleeping {sleep_seconds}s",
+                f"{what} retry attempt={attempt}/{limit}: {type(exc).__name__}: {_redact_upload_secrets(str(exc))}; sleeping {sleep_seconds}s",
                 flush=True,
             )
             _sleep(sleep_seconds)
@@ -575,7 +651,10 @@ def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path)
         try:
             shutil.rmtree(directory)
         except OSError as exc:
-            print(f"Backup temp cleanup deferred: name={directory.name} error={exc}", flush=True)
+            print(
+                f"Backup temp cleanup deferred: name={directory.name} error={_redact_upload_secrets(str(exc))}",
+                flush=True,
+            )
         else:
             removed.append(directory.name)
     return removed
@@ -667,7 +746,7 @@ def _request_macos_purge(path: Path, amount_bytes: int) -> None:
     except BackupTimeoutError:
         raise
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"macOS CacheDelete request unavailable: {exc}") from exc
+        raise RuntimeError(f"macOS CacheDelete request unavailable: {_redact_upload_secrets(str(exc))}") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
         raise RuntimeError(f"macOS CacheDelete request failed: {detail or f'exit {completed.returncode}'}")
@@ -748,7 +827,7 @@ def create_sqlite_backup_artifact(
         raise
     except (OSError, RuntimeError, ValueError) as exc:
         writer_started_at = None
-        writer_probe_error = f"{type(exc).__name__}: {exc}"
+        writer_probe_error = f"{type(exc).__name__}: {_redact_upload_secrets(str(exc))}"
         print(f"BrainBar attempt reclamation degraded: {writer_probe_error}", flush=True)
     attempt_reclamation = "armed" if writer_started_at is not None else "degraded"
     if reclamation_status_callback is not None:
@@ -791,7 +870,7 @@ def create_sqlite_backup_artifact(
         try:
             _request_macos_purge(output_dir, request_bytes)
         except RuntimeError as exc:
-            purge_error = str(exc)
+            purge_error = _redact_upload_secrets(str(exc))
         raw_free_bytes = shutil.disk_usage(output_dir).free
         for _ in range(60):
             if raw_free_bytes >= required_bytes:
@@ -829,6 +908,7 @@ def create_sqlite_backup_artifact(
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
+        snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         _require_raw_floor(output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot)
@@ -860,6 +940,7 @@ def create_sqlite_backup_artifact(
         surviving_attempt_growth_reserve_bytes=surviving_attempt_growth_reserve_bytes,
         attempt_reclamation=attempt_reclamation,
         writer_probe_error=writer_probe_error,
+        snapshot_created_at=snapshot_created_at,
     )
 
 
@@ -962,12 +1043,12 @@ def request_brainbar_vacuum_into(
                 existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
             if attempt >= max_attempts:
                 print(
-                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}",
+                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}",
                     flush=True,
                 )
                 break
             print(
-                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}; "
+                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}; "
                 f"retrying in {retry_backoff_seconds}s",
                 flush=True,
             )
@@ -1164,6 +1245,31 @@ def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machin
         )
 
 
+class RetainedStalledBackupCapacityError(RuntimeError):
+    error_code = "retained_stalled_backup_capacity"
+
+    def __init__(self, names: list[str], *, reason: str | None = None):
+        self.error_type = f"RetainedStalledBackupCapacityError[{','.join(names)}]"
+        detail = f"; {reason}" if reason else ""
+        super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}{detail}")
+
+
+class RetainedStalledBackupConflictError(RuntimeError):
+    error_code = "retained_stalled_backup_conflict"
+
+    def __init__(self, name: str):
+        self.error_type = f"RetainedStalledBackupConflictError[{name}]"
+        super().__init__(f"Same-day snapshot collision; retaining stalled backup {name}")
+
+
+class DriveSessionExpiredError(RuntimeError):
+    """Drive no longer recognizes the saved upload session (404/410)."""
+
+
+class _DriveRetryableHTTPError(RuntimeError):
+    pass
+
+
 def upload_file_to_drive_raw(
     file_path: Path,
     folder_id: str,
@@ -1172,33 +1278,15 @@ def upload_file_to_drive_raw(
     machine_id: str,
     chunk_size: int = 8 * 1024 * 1024,
     max_attempts: int = 30,
+    resume_session_url: str | None = None,
+    progress_callback: Callable[[str, int], None] | None = None,
+    run_deadline: float | None = None,
 ) -> dict[str, Any]:
-    """Upload large backups with Drive's raw resumable protocol."""
+    """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
     file_path = Path(file_path)
     total = file_path.stat().st_size
-    metadata = {
-        "name": file_path.name,
-        "parents": [folder_id],
-        "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
-    }
-    init = requests.post(
-        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-        # md5Checksum is REQUIRED: retention coverage compares it against the surviving
-        # object. Without it the integrity branch silently becomes dead code (PR #815 review).
-        "&fields=id,name,size,md5Checksum,appProperties",
-        headers={
-            "Authorization": f"Bearer {credentials.token}",
-            "Content-Type": "application/json; charset=UTF-8",
-            "X-Upload-Content-Type": "application/gzip",
-            "X-Upload-Content-Length": str(total),
-        },
-        data=json.dumps(metadata),
-        timeout=60,
-    )
-    init.raise_for_status()
-    upload_url = init.headers["Location"]
+    upload_url = resume_session_url
 
-    sent = 0
     deadline_floor = _configured_positive_number(
         DRIVE_UPLOAD_DEADLINE_FLOOR_ENV,
         DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS,
@@ -1207,146 +1295,151 @@ def upload_file_to_drive_raw(
     minimum_rate = _configured_positive_number(
         DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV, DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND
     )
-    stall_limit = _drive_upload_stall_max_attempts()
-    stalled_attempts = 0
+    budget = _configured_positive_number(DRIVE_UPLOAD_RETRY_BUDGET_ENV, 20 * 60)
+    run_deadline = run_deadline if run_deadline is not None else time.monotonic() + _configured_backup_timeout_seconds()
+
+    def request_deadline(desired: float) -> float:
+        remaining = run_deadline - time.monotonic() - 5  # reserve receipt flush/fsync before supervisor/ALRM
+        if remaining <= 0:
+            raise BackupTimeoutError("Drive recovery stopped before run deadline to persist receipt")
+        return min(desired, remaining)
+
+    # Preserve the explicit operator attempt cap, without changing metadata-read retries.
+    stall_limit = (
+        _drive_upload_stall_max_attempts() if os.environ.get(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV) else max_attempts
+    )
+    sent = stalled_attempts = http_attempts = 0
+    slept = 0.0
+    stall_started: float | None = None
+    probe = resume_session_url is not None
+    recovering = False
     session = requests.Session()
+
+    def backoff() -> None:
+        nonlocal slept
+        elapsed = max(slept, time.monotonic() - stall_started) if stall_started is not None else slept
+        if stalled_attempts >= stall_limit or elapsed >= budget:
+            raise DriveUploadStalledError(
+                bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts, session_url=upload_url
+            )
+        delay = min(300, 30 * 2 ** min(max(0, stalled_attempts - 1), 4), budget - elapsed, request_deadline(budget))
+        print(
+            f"drive upload stalled; confirmed={sent}/{total} attempt={stalled_attempts}/{stall_limit}; "
+            f"sleeping {delay}s",
+            flush=True,
+        )
+        _sleep(delay)
+        slept += delay
+
     try:
-        with file_path.open("rb") as handle:
-            while sent < total:
-                handle.seek(sent)
-                expected = min(chunk_size, total - sent)
-                chunk = handle.read(expected)
-                if len(chunk) != expected:
-                    raise RuntimeError(
-                        f"Backup file changed during upload: expected {expected} bytes, got {len(chunk)}"
-                    )
-                start = sent
-                end = sent + len(chunk) - 1
-                headers = {
-                    "Authorization": f"Bearer {credentials.token}",
-                    "Content-Length": str(len(chunk)),
-                    "Content-Range": f"bytes {start}-{end}/{total}",
-                }
-                for attempt in range(1, max_attempts + 1):
-                    try:
-                        deadline = max(deadline_floor, len(chunk) / minimum_rate)
-                        response = _drive_put_with_deadline(
-                            session, upload_url, headers=headers, data=chunk, deadline=deadline
-                        )
-                        if response.status_code in {200, 201}:
-                            return response.json()
-                        if response.status_code == 308:
-                            uploaded_range = response.headers.get("Range")
-                            confirmed = (
-                                int(uploaded_range.rsplit("-", 1)[1]) + 1
-                                if uploaded_range and "-" in uploaded_range
-                                else sent
-                            )
-                            if confirmed < sent or confirmed > total:
-                                raise RuntimeError(
-                                    f"Drive upload returned invalid confirmed offset {confirmed}; "
-                                    f"expected {sent}..{total}"
-                                )
-                            if confirmed == sent:
-                                raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
-                            sent = confirmed
-                            stalled_attempts = 0
-                            print(f"drive upload progress: {sent}/{total} bytes", flush=True)
-                            break
-                        if response.status_code in {429, 500, 502, 503, 504}:
-                            raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
-                        response.raise_for_status()
-                    except BackupTimeoutError:
-                        raise  # the whole-run deadline is not a network blip
-                    except (_DriveRequestDeadlineExceeded, *_DRIVE_TRANSIENT_NETWORK_ERRORS) as transient:
-                        # The response was lost, not refused: Drive may hold this chunk, or the
-                        # whole file. Ask the session before sending a single byte again.
-                        print(
-                            f"drive upload chunk={start}-{end} interrupted: {type(transient).__name__}: "
-                            f"{transient}; querying session offset",
-                            flush=True,
-                        )
-                        previously_confirmed = sent
-                        stalled_attempts += 1
-                        query_headers = {
-                            "Authorization": f"Bearer {credentials.token}",
-                            "Content-Length": "0",
-                            "Content-Range": f"bytes */{total}",
+        while upload_url is None:
+            try:
+                init = requests.post(
+                    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+                    "&fields=id,name,size,md5Checksum,appProperties",
+                    headers={
+                        "Authorization": f"Bearer {credentials.token}",
+                        "Content-Type": "application/json; charset=UTF-8",
+                        "X-Upload-Content-Type": "application/gzip",
+                        "X-Upload-Content-Length": str(total),
+                    },
+                    data=json.dumps(
+                        {
+                            "name": file_path.name,
+                            "parents": [folder_id],
+                            "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
                         }
-                        while True:
-                            session = requests.Session()
-                            try:
-                                status = _drive_put_with_deadline(
-                                    session, upload_url, headers=query_headers, data=b"", deadline=deadline_floor
-                                )
-                                if status.status_code in {200, 201}:
-                                    return status.json()
-                                if status.status_code in {429, 500, 502, 503, 504}:
-                                    raise requests.RequestException(f"offset query HTTP {status.status_code}")
-                                if status.status_code != 308:
-                                    status.raise_for_status()
-                                uploaded_range = status.headers.get("Range")
-                                confirmed = (
-                                    int(uploaded_range.rsplit("-", 1)[1]) + 1
-                                    if uploaded_range and "-" in uploaded_range
-                                    else 0
-                                )
-                                if confirmed < sent or confirmed > total:
-                                    raise RuntimeError(
-                                        f"Drive offset query returned invalid confirmed offset {confirmed}; "
-                                        f"expected {sent}..{total}"
-                                    )
-                                sent = confirmed
-                                break
-                            except BackupTimeoutError:
-                                raise  # the whole-run deadline is not a network blip
-                            except (
-                                _DriveRequestDeadlineExceeded,
-                                requests.RequestException,
-                                *_DRIVE_TRANSIENT_NETWORK_ERRORS,
-                            ) as query_error:
-                                session.close()
-                                stalled_attempts += 1
-                                if stalled_attempts >= stall_limit:
-                                    raise DriveUploadStalledError(
-                                        bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts
-                                    ) from query_error
-                                sleep_seconds = min(60, 2**stalled_attempts)
-                                print(
-                                    f"drive upload offset query retry attempt={stalled_attempts}/{stall_limit}: "
-                                    f"{query_error}; sleeping {sleep_seconds}s",
-                                    flush=True,
-                                )
-                                _sleep(sleep_seconds)
-                        if sent > previously_confirmed:
-                            stalled_attempts = 0
-                            print(f"drive upload progress: {sent}/{total} bytes", flush=True)
-                            break
-                        if stalled_attempts >= stall_limit:
-                            raise DriveUploadStalledError(
-                                bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts
-                            )
-                        sleep_seconds = min(60, 2**stalled_attempts)
-                        print(
-                            f"drive upload stalled; confirmed={sent}/{total} "
-                            f"attempt={stalled_attempts}/{stall_limit}; sleeping {sleep_seconds}s",
-                            flush=True,
+                    ),
+                    timeout=request_deadline(60),
+                )
+                init.raise_for_status()
+                upload_url = init.headers["Location"]
+            except BackupTimeoutError:
+                raise
+            except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, requests.Timeout):
+                stall_started = time.monotonic() if stall_started is None else stall_started
+                stalled_attempts += 1
+                backoff()
+        stalled_attempts, slept, stall_started = 0, 0.0, None
+        if progress_callback is not None:
+            progress_callback(upload_url, sent)
+        with file_path.open("rb") as handle:
+            while sent < total or probe:
+                is_probe = probe
+                if is_probe:
+                    chunk = b""
+                    content_range = f"bytes */{total}"
+                else:
+                    handle.seek(sent)
+                    expected = min(chunk_size, total - sent)
+                    chunk = handle.read(expected)
+                    if len(chunk) != expected:
+                        raise RuntimeError("Backup file changed during upload")
+                    content_range = f"bytes {sent}-{sent + len(chunk) - 1}/{total}"
+                try:
+                    response = _drive_put_with_deadline(
+                        session,
+                        upload_url,
+                        headers={
+                            "Authorization": f"Bearer {credentials.token}",
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": content_range,
+                        },
+                        data=chunk,
+                        deadline=request_deadline(max(deadline_floor, len(chunk) / minimum_rate)),
+                    )
+                    if response.status_code in {200, 201}:
+                        return response.json()
+                    if is_probe and response.status_code in {404, 410}:
+                        raise DriveSessionExpiredError("Drive upload session expired")
+                    if response.status_code in {429, 500, 502, 503, 504}:
+                        raise _DriveRetryableHTTPError(f"Drive HTTP {response.status_code}")
+                    response.raise_for_status()  # Auth/consent and other 4xx fail immediately.
+                    if response.status_code != 308:
+                        raise RuntimeError(f"Unexpected Drive status {response.status_code}")
+                    uploaded_range = response.headers.get("Range")
+                    if not uploaded_range and sent > 0:
+                        raise _DriveRequestDeadlineExceeded(
+                            "Drive omitted Range after a confirmed prefix; query session"
                         )
-                        _sleep(sleep_seconds)
-                        break
-                    except Exception as exc:
-                        if attempt >= max_attempts:
-                            raise
-                        sleep_seconds = min(60, 2 ** min(attempt, 6))
-                        print(
-                            f"drive upload retry chunk={start}-{end} attempt={attempt}/{max_attempts}: {exc}; "
-                            f"sleeping {sleep_seconds}s",
-                            flush=True,
+                    confirmed = int(uploaded_range.rsplit("-", 1)[1]) + 1 if uploaded_range else 0
+                    if confirmed < sent or confirmed > total:
+                        raise RuntimeError(
+                            f"Drive returned invalid confirmed offset {confirmed}; expected {sent}..{total}"
                         )
-                        _sleep(sleep_seconds)
+                    http_attempts = 0
+                    if confirmed > sent:
+                        sent = confirmed
+                        if progress_callback is not None:
+                            progress_callback(upload_url, sent)
+                        stalled_attempts, slept, stall_started = 0, 0.0, None
+                        print(f"drive upload progress: {sent}/{total} bytes", flush=True)
+                    elif not is_probe or confirmed == total:
+                        raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
+                    elif recovering:
+                        backoff()
+                    probe, recovering = confirmed == total, False
+                except BackupTimeoutError:
+                    raise
+                except (_DriveRequestDeadlineExceeded, *_DRIVE_TRANSIENT_NETWORK_ERRORS):
+                    stall_started = time.monotonic() if stall_started is None else stall_started
+                    stalled_attempts += 1
+                    recovering = True
+                    session.close()
+                    session = requests.Session()
+                    if is_probe:
+                        backoff()
+                    probe = True
+                except _DriveRetryableHTTPError:
+                    http_attempts += 1
+                    if http_attempts >= max_attempts:
+                        raise
+                    _sleep(min(60, 2 ** min(http_attempts, 6), request_deadline(60)))
+    except BaseException as exc:
+        _redact_upload_exception(exc)
+        raise
     finally:
         session.close()
-
     raise RuntimeError("Drive upload ended without final response")
 
 
@@ -1527,7 +1620,7 @@ def verify_sqlite_backup_artifact(
             result["verified"] = True
     except Exception as exc:
         result.setdefault("gzip_test", False)
-        result["verification_error"] = str(exc)
+        result["verification_error"] = _redact_upload_secrets(str(exc))
     return result
 
 
@@ -1603,23 +1696,50 @@ def prune_drive_backups(
     return trashed
 
 
+def _snapshot_created_time(receipt: Mapping[str, Any]) -> dt.datetime | None:
+    """Exact VACUUM time, or conservative UTC midnight for a legacy dated artifact."""
+    try:
+        if "snapshot_created_at" in receipt:
+            value = dt.datetime.fromisoformat(receipt["snapshot_created_at"])
+            return value.astimezone(dt.UTC) if value.tzinfo is not None else None
+        drive_file = receipt.get("drive_file")
+        drive_name = drive_file.get("name") if isinstance(drive_file, dict) else drive_file
+        # Recovery receipts across a prior machine identity may have only a Drive
+        # filename. Its artifact date is conservative; attempted_at would relabel old bytes.
+        for name in (receipt.get("snapshot"), drive_name):
+            date = _parse_snapshot_date(Path(name).name) if isinstance(name, str) else None
+            if date is not None:
+                return dt.datetime.combine(date, dt.time(), dt.UTC)
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
+def _resume_fresh_enough(receipt: Mapping[str, Any], now: dt.datetime) -> bool:
+    created = _snapshot_created_time(receipt)
+    hours = _configured_positive_number(BACKUP_RESUME_MAX_AGE_HOURS_ENV, 36)
+    weekly = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
+    if weekly is not None:
+        hours = min(hours, float(weekly))
+    return created is not None and dt.timedelta(0) <= now - created < dt.timedelta(hours=hours)
+
+
 def _recent_verified_backup_for_reuse(
     log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
 ) -> dict[str, Any] | None:
     try:
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
+        receipts = _read_backup_receipts(log_path)
+    except (OSError, ValueError):
         return None
     now = now.astimezone(dt.UTC)
-    for line in reversed(lines):
+    for receipt in reversed(receipts):
         try:
-            receipt = json.loads(line)
-            attempted = dt.datetime.fromisoformat(receipt["attempted_at"])
+            created = _snapshot_created_time(receipt)
         except (ValueError, KeyError, TypeError):
             continue
-        if attempted.tzinfo is None:
+        if created is None:
             continue
-        age = now - attempted.astimezone(dt.UTC)
+        age = now - created
         drive_file = receipt.get("drive_file")
         if (
             receipt.get("db") == str(db_path)
@@ -1681,6 +1801,128 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
     return wrapped
 
 
+def _upload_identity(path: Path) -> dict[str, Any]:
+    with path.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    return {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": digest}
+
+
+def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path) -> list[dict[str, Any]]:
+    """Latest receipt per artifact; uncertainty disables reclamation, never broadens it."""
+    if not log_path.exists():
+        return []
+    try:
+        receipts = _read_backup_receipts(log_path)
+        latest = {r["snapshot"]: r for r in receipts if isinstance(r, dict) and isinstance(r.get("snapshot"), str)}
+        protected = {
+            str(Path(r["snapshot"]).resolve())
+            for r in receipts
+            if isinstance(r, dict)
+            and (r.get("uploaded") is True or r.get("verified") is True)
+            and isinstance(r.get("snapshot"), str)
+        }
+        candidates = []
+        for name, receipt in reversed(list(latest.items())):
+            path = Path(name)
+            state = receipt.get("resumable_upload")
+            if (
+                str(path.resolve()) in protected
+                or receipt.get("uploaded") is not False
+                or receipt.get("verified") is not False
+                or not isinstance(receipt.get("resumable_upload"), dict)
+                or dt.datetime.fromisoformat(receipt["attempted_at"])
+                >= dt.datetime.fromisoformat(context["attempted_at"])
+                or any(
+                    receipt.get(k) != context.get(k)
+                    for k in ("db", "machine_id", "drive_folder", "backup_log_provenance")
+                )
+            ):
+                continue
+            if (
+                not isinstance(state, dict)
+                or path.is_symlink()
+                or not path.is_file()
+                or path.parent.resolve() != staging_dir.resolve()
+                or _parse_snapshot_date(path.name) is None
+                or path.name != f"{path.name[:10]}.db.gz"
+                or path.stat().st_nlink != 1
+                or _upload_identity(path) != {k: state.get(k) for k in ("path", "size", "sha256")}
+            ):
+                print(f"Retaining stalled backup with unconfirmed identity: {path.name}", flush=True)
+                continue
+            candidates.append(receipt)
+        return sorted(
+            candidates,
+            key=lambda r: (
+                _snapshot_created_time(r) or dt.datetime.min.replace(tzinfo=dt.UTC),
+                dt.datetime.fromisoformat(r["attempted_at"]),
+            ),
+            reverse=True,
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        print("Cannot validate stalled-backup receipts; retaining local artifacts", flush=True)
+        return []
+
+
+def _safe_upload_url(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "www.googleapis.com"
+        and parsed.path == "/upload/drive/v3/files"
+        and "upload_id=" in parsed.query
+    )
+
+
+def _retained_target_collision(log_path: Path, target: Path) -> bool:
+    if not target.exists() or not log_path.exists():
+        return False
+    try:
+        for receipt in _read_backup_receipts(log_path):
+            name = receipt.get("snapshot")
+            if (
+                isinstance(name, str)
+                and Path(name).resolve() == target.resolve()
+                and receipt.get("uploaded") is False
+                and receipt.get("verified") is False
+                and (
+                    isinstance(receipt.get("resumable_upload"), dict)
+                    or receipt.get("error_code") == "drive_upload_stalled"
+                )
+            ):
+                return True
+        return False
+    except (OSError, ValueError):
+        return True  # An unreadable journal cannot authorize replacing an existing local artifact.
+
+
+def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, Any], date_stamp: str) -> None:
+    for receipt in receipts:
+        path = Path(receipt["snapshot"])
+        try:
+            if (
+                path.name[:10] >= date_stamp
+                or _snapshot_created_time(receipt) is None
+                or _snapshot_created_time(result) is None
+                or _snapshot_created_time(receipt) >= _snapshot_created_time(result)
+                or path.is_symlink()
+                or path.stat().st_nlink != 1
+                or _upload_identity(path) != {k: receipt["resumable_upload"].get(k) for k in ("path", "size", "sha256")}
+            ):
+                print(f"Retaining stalled backup without proof it is superseded: {path.name}", flush=True)
+                continue
+            path.unlink()
+            result.setdefault("superseded_stalled_deleted", []).append(path.name)
+            print(f"Removed superseded stalled backup: {path.name}", flush=True)
+        except OSError:
+            print(f"Could not reclaim stalled backup: {path.name}; retaining it", flush=True)
+
+
 @_serialized_backup_run
 def run_backup(
     db_path: Path | None = None,
@@ -1692,7 +1934,14 @@ def run_backup(
     upload: bool = True,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
     remove_local_after_upload: bool = True,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
+    run_deadline = (
+        deadline_monotonic
+        if deadline_monotonic is not None
+        else time.monotonic() + _configured_backup_timeout_seconds()
+    )
+    resume_state: dict[str, Any] | None = None
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
@@ -1737,54 +1986,139 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
-        artifact = create_sqlite_backup_artifact(
-            resolved_db_path,
-            staging_dir,
-            date_stamp=resolved_date_stamp,
-            reclamation_status_callback=record_reclamation_status,
-            capacity_status_callback=record_capacity,
+        stalled = _stalled_uploads(resolved_log_path, result, Path(staging_dir)) if upload else []
+        candidate = next(
+            (
+                r
+                for r in stalled
+                if _safe_upload_url(r["resumable_upload"].get("url"))
+                and _resume_fresh_enough(r, dt.datetime.fromisoformat(result["attempted_at"]))
+            ),
+            None,
         )
-        snapshot = artifact.gzip_path
-        snapshot_size = snapshot.stat().st_size
-        result.update(
-            {
-                "snapshot": str(snapshot),
-                "local_uncompressed_snapshot": (
-                    str(artifact.uncompressed_path) if artifact.uncompressed_path else None
-                ),
-                "local_retention_deleted": artifact.local_retention_deleted,
-                "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
-                "surviving_attempts": getattr(artifact, "surviving_attempts", []),
-                "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
-                "surviving_attempt_growth_reserve_bytes": getattr(
-                    artifact,
-                    "surviving_attempt_growth_reserve_bytes",
-                    0,
-                ),
-                "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
-                "writer_probe_error": getattr(artifact, "writer_probe_error", None),
-                "sentinel_snapshot_chunks": artifact.sentinel_chunks,
-                "bytes": snapshot_size,
-            }
-        )
-        if upload:
+
+        def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
+            if resume is not None:
+                return SQLiteBackupArtifact(
+                    gzip_path=Path(resume["snapshot"]),
+                    uncompressed_path=None,
+                    sentinel_chunks=resume["sentinel_snapshot_chunks"],
+                    local_retention_deleted=[],
+                    stale_attempts_deleted=[],
+                    surviving_attempts=[],
+                    surviving_attempt_bytes=0,
+                    surviving_attempt_growth_reserve_bytes=0,
+                    attempt_reclamation="resumed",
+                    writer_probe_error=None,
+                    snapshot_created_at=_snapshot_created_time(resume).isoformat(),
+                )
+            target = Path(staging_dir) / f"{resolved_date_stamp}.db.gz"
+            if _retained_target_collision(resolved_log_path, target):
+                raise RetainedStalledBackupConflictError(target.name)
+            create_started = dt.datetime.now(dt.UTC).isoformat()
+            try:
+                artifact = create_sqlite_backup_artifact(
+                    resolved_db_path,
+                    staging_dir,
+                    date_stamp=resolved_date_stamp,
+                    reclamation_status_callback=record_reclamation_status,
+                    capacity_status_callback=record_capacity,
+                )
+            except RuntimeError as exc:
+                reason = _redact_upload_secrets(str(exc))
+                if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
+                    raise RetainedStalledBackupCapacityError(
+                        [Path(r["snapshot"]).name for r in stalled], reason=reason
+                    ) from exc
+                raise
+            result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started
+            return artifact
+
+        for resume in [candidate, None] if candidate is not None else [None]:
+            artifact = prepare_artifact(resume)
+            snapshot = artifact.gzip_path
+            snapshot_size = snapshot.stat().st_size
+            result.update(
+                {
+                    "snapshot": str(snapshot),
+                    "snapshot_created_at": getattr(artifact, "snapshot_created_at", None)
+                    or result.get("snapshot_created_at"),
+                    "local_uncompressed_snapshot": (
+                        str(artifact.uncompressed_path) if artifact.uncompressed_path else None
+                    ),
+                    "local_retention_deleted": artifact.local_retention_deleted,
+                    "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
+                    "surviving_attempts": getattr(artifact, "surviving_attempts", []),
+                    "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
+                    "surviving_attempt_growth_reserve_bytes": getattr(
+                        artifact,
+                        "surviving_attempt_growth_reserve_bytes",
+                        0,
+                    ),
+                    "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
+                    "writer_probe_error": getattr(artifact, "writer_probe_error", None),
+                    "sentinel_snapshot_chunks": artifact.sentinel_chunks,
+                    "bytes": snapshot_size,
+                }
+            )
+            if not upload:
+                break
             credentials = get_drive_credentials()
             service = build_drive_service()
             folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
-            assert_drive_folder_owned_by_machine(
-                service,
-                folder_id=folder_id,
-                machine_id=resolved_machine_id,
-            )
-            uploaded = upload_file_to_drive_raw(
-                snapshot,
-                folder_id,
-                credentials,
-                machine_id=resolved_machine_id,
-            )
+            assert_drive_folder_owned_by_machine(service, folder_id=folder_id, machine_id=resolved_machine_id)
+            if resume is not None and resume["resumable_upload"].get("folder_id") != folder_id:
+                print("Saved Drive destination changed; preparing a fresh snapshot", flush=True)
+                continue
+            upload_identity = _upload_identity(snapshot)
+            if resume is not None and upload_identity != {
+                k: resume["resumable_upload"].get(k) for k in ("path", "size", "sha256")
+            }:
+                print("Saved artifact changed before resume; preparing a fresh snapshot", flush=True)
+                continue
+
+            def record_upload_progress(url: str, confirmed: int) -> None:
+                nonlocal resume_state
+                next_state = {"url": url, "folder_id": folder_id, **upload_identity}
+                first = resume_state != next_state
+                resume_state = next_state
+                result["bytes_confirmed"] = confirmed
+                if first:
+                    _append_json_log(
+                        resolved_log_path,
+                        {
+                            **result,
+                            "resumable_upload": resume_state,
+                            "error_code": "drive_upload_interrupted",
+                            "upload_in_progress": True,
+                        },
+                    )
+
+            try:
+                uploaded = upload_file_to_drive_raw(
+                    snapshot,
+                    folder_id,
+                    credentials,
+                    machine_id=resolved_machine_id,
+                    progress_callback=record_upload_progress,
+                    run_deadline=run_deadline,
+                    **({"resume_session_url": resume["resumable_upload"]["url"]} if resume else {}),
+                )
+            except DriveSessionExpiredError:
+                if resume is None:
+                    raise
+                print("Saved Drive session expired; preparing a fresh snapshot", flush=True)
+                continue
+            break
+        if upload:
             file_id = uploaded.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
+            # Drive has completed the session. Persist that fact before verification can
+            # fail or its final receipt can be truncated; an older checkpoint must not revive it.
+            result.update({"uploaded": True, "drive_file": uploaded})
+            resume_state = None
+            _append_json_log(resolved_log_path, {**result, "verification_pending": True})
             # The service above has sat idle through an upload that can run for hours; its
             # keep-alive socket is dead by now (2026-09-23: a finished upload was recorded failed
             # when verification reset on it). Every post-upload call gets a fresh connection. The
@@ -1805,8 +2139,33 @@ def run_backup(
                     file_id=file_id,
                 )
             )
-            # Keep the confirmed upload addressable even if cleanup/retention fails.
-            result.update({"uploaded": True, "drive_file": uploaded})
+            if not result["verified"] and not result.get("verification_error"):
+                result["verification_error"] = "local backup verification failed without a diagnostic"
+            weekly_age = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
+            if result["verified"] and weekly_age is not None:
+                try:
+                    max_hours = float(weekly_age)
+                    if not math.isfinite(max_hours) or max_hours < 0:
+                        raise ValueError("weekly age must be finite and nonnegative")
+                except (ValueError, TypeError):
+                    result.update(
+                        {
+                            "verified": False,
+                            "verification_error": f"invalid {BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV}; VACUUM not authorized",
+                        }
+                    )
+                else:
+                    created = _snapshot_created_time(result)
+                    if (
+                        created is None
+                        or not 0 <= (dt.datetime.now(dt.UTC) - created).total_seconds() / 3600 <= max_hours
+                    ):
+                        result.update(
+                            {
+                                "verified": False,
+                                "verification_error": "snapshot aged beyond weekly backup safety window; VACUUM not authorized",
+                            }
+                        )
             if result["verified"]:
                 result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
                     snapshot.parent, snapshot
@@ -1814,6 +2173,8 @@ def run_backup(
                 if remove_local_after_upload:
                     snapshot.unlink()
                     result["local_removed"] = True
+                if resume is None:
+                    _remove_superseded_stalls(stalled, result, snapshot.name[:10])
                 verified_drive_names = _verified_snapshot_names_from_log(resolved_log_path)
                 verified_drive_names.add(snapshot.name)
                 result["local_gzip_retention_deleted"] = prune_local_gzip_snapshots(
@@ -1830,21 +2191,28 @@ def run_backup(
                             retention_policy=retention_policy,
                         )
                     except Exception as exc:
-                        result.update({"retention_error_type": type(exc).__name__, "retention_error": str(exc)})
+                        result.update(
+                            {
+                                "retention_error_type": type(exc).__name__,
+                                "retention_error": _redact_upload_secrets(str(exc)),
+                            }
+                        )
                         raise
 
     except BackupStoppedError as exc:
         result.update(
             {
                 "error_type": type(exc).__name__,
-                "error": str(exc),
+                "error": _redact_upload_secrets(str(exc)),
                 "stop_signal": signal.Signals(exc.signum).name,
             }
         )
         exc.receipt_logged = True
         raise
     except Exception as exc:
-        result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        result.update(
+            {"error_type": getattr(exc, "error_type", type(exc).__name__), "error": _redact_upload_secrets(str(exc))}
+        )
         error_code = getattr(exc, "error_code", None)
         if isinstance(error_code, str):
             result["error_code"] = error_code
@@ -1858,6 +2226,9 @@ def run_backup(
             )
         raise
     finally:
+        if resume_state is not None and not result["uploaded"] and not result.get("drive_file"):
+            result["resumable_upload"] = resume_state
+            result.setdefault("error_code", "drive_upload_interrupted")
         _append_json_log(resolved_log_path, result)
     return result
 
@@ -1874,6 +2245,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
     try:
         resolved_db_path = get_db_path()
         result = run_backup(
+            deadline_monotonic=time.monotonic() + timeout_seconds,
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
             # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH
             # is a legacy alias. With neither set, run_backup derives the host folder.
@@ -1900,7 +2272,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
                     "uploaded": False,
                     "backup_log_provenance": _backup_log_provenance(),
                     "error_type": "BackupStoppedError",
-                    "error": str(exc),
+                    "error": _redact_upload_secrets(str(exc)),
                     "stop_signal": signal.Signals(exc.signum).name,
                 },
             )
@@ -1909,14 +2281,17 @@ def _run_backup_process(timeout_seconds: int) -> int:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
         return 124
     except Exception as exc:
-        print(f"brainlayer backup failed: {exc}\n{traceback.format_exc()}", flush=True)
+        print(
+            f"brainlayer backup failed: {_redact_upload_secrets(str(exc))}\n{_redact_upload_secrets(traceback.format_exc())}",
+            flush=True,
+        )
         return 1
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
-    print(json.dumps(result, sort_keys=True), flush=True)
+    print(_redact_upload_secrets(json.dumps(result, sort_keys=True)), flush=True)
     return 0 if result.get("verified", True) else 1
 
 

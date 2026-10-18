@@ -74,7 +74,7 @@ def test_healthy_fixture_matches_frozen_backup_contract(case: str) -> None:
         "retention_invariant": "PASS",
         "surviving_archives_30d": 1,
         "launchd": {"label": "com.brainlayer.jsonl-backup", "bootstrapped": True, "disabled_dir_present": True},
-        "db_snapshot": {"last_at": "2026-09-13T09:00:00Z", "destination": "synthetic-drive", "verified": True},
+        "db_snapshot": {"last_at": "2026-09-13T00:00:00Z", "destination": "synthetic-drive", "verified": True},
         "error_type": None,
     }
     assert opened == [
@@ -232,7 +232,7 @@ def test_legacy_daily_snapshot_derives_attempt_time_from_snapshot_date() -> None
             }
         ]
     )
-    expected = datetime.fromisoformat("2026-09-13T05:00:00").astimezone(UTC).isoformat().replace("+00:00", "Z")
+    expected = "2026-09-13T00:00:00Z"
     assert snapshot == {
         "last_at": expected,
         "destination": "synthetic-drive",
@@ -248,6 +248,7 @@ def test_daily_snapshot_fits_current_drive_file_receipt_and_md5_verification() -
             {
                 "backup_log_provenance": "real",
                 "attempted_at": "2026-09-13T02:00:00Z",
+                "snapshot_created_at": "2026-09-13T02:00:00Z",
                 "db": "/synthetic/brainlayer.db",
                 "drive_file": {"id": "drive-id", "name": "2026-09-13.db.gz", "size": "123"},
                 "snapshot": "/synthetic/2026-09-13.db.gz",
@@ -275,6 +276,7 @@ def test_daily_snapshot_skips_failed_latest_attempt_for_last_success() -> None:
             {
                 "backup_log_provenance": "real",
                 "attempted_at": "2026-09-13T09:00:00Z",
+                "snapshot_created_at": "2026-09-13T09:00:00Z",
                 "drive_file": {"name": "2026-09-13.db.gz"},
                 "snapshot": "/synthetic/2026-09-13.db.gz",
                 "uploaded": True,

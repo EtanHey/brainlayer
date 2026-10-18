@@ -1,6 +1,5 @@
 """Caller-level regressions adapted from ID-R1-SOL1/SOL2 synthetic reproductions."""
 
-import json
 from unittest.mock import Mock
 
 import pytest
@@ -99,7 +98,11 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
             log_path=receipt_path,
             machine_id="Locals-MacBook-Pro",
         )
-    receipt = json.loads(receipt_path.read_text())
+    receipts = b._read_backup_receipts(receipt_path)
+    assert len(receipts) == 2
+    assert receipts[0]["uploaded"] is True and receipts[0]["verification_pending"] is True
+    assert "resumable_upload" not in receipts[0]
+    receipt = receipts[-1]
     assert receipt["uploaded"] and receipt["verified"]
     assert receipt["drive_file"]["id"] == "drive-file-id"
     assert receipt["local_removed"] and not snapshot.exists()

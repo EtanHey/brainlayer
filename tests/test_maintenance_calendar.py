@@ -191,6 +191,7 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
     before = db.stat().st_size
     prior = dict(
         attempted_at=(clock[0] - dt.timedelta(hours=22 if existing_receipt == "yesterday" else 1)).isoformat(),
+        snapshot_created_at=(clock[0] - dt.timedelta(hours=22 if existing_receipt == "yesterday" else 1)).isoformat(),
         db=str(db),
         uploaded=True,
         verified=True,
@@ -213,6 +214,7 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
         clock[0] += dt.timedelta(hours=2, minutes=20)
         receipt = dict(
             attempted_at=started.isoformat(),
+            snapshot_created_at=started.isoformat(),
             db=str(db_path),
             uploaded=True,
             verified=True,

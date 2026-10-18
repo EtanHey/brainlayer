@@ -22,16 +22,6 @@
         "target": "socket.socket"
       }
     },
-    "01de005383a5bd942b899fd451e09bd0823f07d3dcf4c79d42972baa46be07a6": {
-      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
-      "site": {
-        "call_sha256": "c8f377425d2efd0c91ee81c31324e143a3fef8e4e0de5bd009d3d9ea562e0a97",
-        "kind": "generic_send",
-        "owner": "<module>.upload_file_to_drive_raw",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "requests.post"
-      }
-    },
     "0251bde8a9132c26cbaf2e8c1444007af605295d4e5b5a300dfd7612078ca874": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_tag_contains.py <module>._git subprocess.CompletedProcess.",
       "site": {
@@ -2416,6 +2406,16 @@
         "path": "brain-bar/Sources/BrainBarDaemon/BrainBusClient.swift"
       }
     },
+    "6f9e4a98af6f5066a1a7c3d934021074e0a7f3c3bc5a57262bb52e1e089c3fee": {
+      "non_cloud_purpose": "Drive backup resumable session creation and network timeout classification under a bounded recovery budget; no model API.",
+      "site": {
+        "call_sha256": "b0566914dfd9eeb91911f122eb459a80f5663e97b9cdb8f19d998abe0884fafa",
+        "kind": "callable_reference",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Timeout"
+      }
+    },
     "7000b1aac5396c337df05ca3ffdf0a27e49df836f2693add674f75bbf49a09bf": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.send.",
       "site": {
@@ -2836,16 +2836,6 @@
         "target": "import importlib.util"
       }
     },
-    "87403a07c63b8e7f1552db6d5f51fe9d022b31d6ee46b373816b58b11861741c": {
-      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.RequestException.",
-      "site": {
-        "call_sha256": "a6133f6f93f3c45bc30dd3acc473748ebdfbaaa6361302b8de2a06bee65a03d4",
-        "kind": "callable_reference",
-        "owner": "<module>.upload_file_to_drive_raw",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "requests.RequestException"
-      }
-    },
     "87ff92f466a87c97487fa94dade93ed6dbd8401d447bb13506bb409dcb892b31": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/observability_backup.py <module>.build_backups_section subprocess.SubprocessError.",
       "site": {
@@ -3072,16 +3062,6 @@
         "owner": "<module>",
         "path": "src/brainlayer/index_completeness.py",
         "target": "import subprocess"
-      }
-    },
-    "90bcdd1288f9d0b7e60a747941eb6f52bcc863c89f0fed2d01ae4771cff8f53e": {
-      "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module>.upload_file_to_drive_raw requests.RequestException.",
-      "site": {
-        "call_sha256": "93e0479d37956b0d24d24b1bcab5405a92d985ac5ee3f2594c1f674334e44cb6",
-        "kind": "transport_call",
-        "owner": "<module>.upload_file_to_drive_raw",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "requests.RequestException"
       }
     },
     "914d9965f99d76c3b11d36041f8b2a2db2585ed21ba1f53a9342c6922c562a4a": {
@@ -3312,6 +3292,16 @@
         "owner": "<module>._fetch_json3_transcript",
         "path": "scripts/index_youtube.py",
         "target": "urllib.request.urlopen"
+      }
+    },
+    "9bd0c3c4b2634f14d17a31e7cee191815de37091912f59a7efc146679cd94663": {
+      "non_cloud_purpose": "Parse saved Drive session URL locally to restrict credential-bearing resume requests to the Drive upload endpoint; no network I/O.",
+      "site": {
+        "call_sha256": "7f6d2de520ba06bee6c9a0ce4b82e28e111014f95ae8adfe098303d46ce04b21",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "from urllib.parse import urlsplit"
       }
     },
     "9c307fa89e68026c119bc8f2f716968653e6e22550f11af0a71b3fbe5b774cbe": {
@@ -4200,6 +4190,16 @@
         "target": "ctypes.byref"
       }
     },
+    "bd5ed4864e3468227a0bf605fa207043b36dcc37585f00c81969f14013253932": {
+      "non_cloud_purpose": "Parse saved Drive session URL locally to restrict credential-bearing resume requests to the Drive upload endpoint; no network I/O.",
+      "site": {
+        "call_sha256": "c3c28b61196919657f27bd8a4a64ab3ebaf5336730ae718cdbaaf1b7d0ee1a4e",
+        "kind": "transport_call",
+        "owner": "<module>._safe_upload_url",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "urllib.parse.urlsplit"
+      }
+    },
     "bd84dfde36162fc7399c003a0f02e58ba551252cfee8730a6e21c01ac25ac526": {
       "non_cloud_purpose": "Existing Google Drive resumable backup upload session or transport error metadata; not a model API. Site: src/brainlayer/backup_daily.py <module> requests.exceptions.ChunkedEncodingError.",
       "site": {
@@ -4834,6 +4834,16 @@
         "owner": "<module>.helper_started_at",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "ddd3ce0283349eeebe4ea16ba63d1a009ab519c300b5ca4a5c5f618a1ed3109d": {
+      "non_cloud_purpose": "Drive backup resumable session creation and network timeout classification under a bounded recovery budget; no model API.",
+      "site": {
+        "call_sha256": "4049e49df5e328f380d3c2e4090bce3d3b05c78e1fa5d35aba7159c06a75accf",
+        "kind": "generic_send",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.post"
       }
     },
     "de00ab5510da36ed21719375c85227f6fce4dbaf23348c6e8d035077341724c0": {
