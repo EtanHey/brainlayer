@@ -39,6 +39,34 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.61] - 2026-10-18
+
+### Fixed
+- Retry calendar watch status timeouts within the existing readiness deadline (#1361).
+- Isolate Drive consent capture readers from installed production paths (#1369).
+- Include calendar jobs in BrainBar health and retain measured failures while observability loads (#1353).
+- Explain calendar maintenance substitutions and deferrals in BrainBar (#1354).
+- Checkpoint bounded calendar index passes, yield to resident writers, and bound custody with stalled-yield escalation (#1371).
+- Skip empty scrubbed chunks without aborting CLI or T3 indexing (#1372).
+- Defer nightly Drive upload until maintenance finishes while preserving weekly daily-backup reuse (#1375).
+- Keep BrainBar attention stable and explain index deferrals (#1376).
+- Converge calendar backlog, isolate resource faults, version checkpoints, and escalate repeated deferrals (#1380).
+
+### Changed
+- Integrate the calendar, Drive capture, BrainBar health, maintenance, and index checkpoint fixes (#1373).
+- Integrate calendar ordering, BrainBar attention, and index convergence with aligned regression tests (#1382).
+- Release the BrainLayer formula and BrainBar app together.
+
+### Upgrade notes
+- The first calendar index pass after upgrading replays every file once while it builds the new checkpoint (`index-checkpoint-*.json` beside the DB); later passes resume. `INDEX_PIPELINE_VERSION` (currently 1) only gates resuming appended files and quarantine history.
+- Calendar step order now differs on nightly and weekly nights: nightly maintenance precedes daily Drive upload; weekly nights retain the daily-backup receipt dependency.
+
+
+### Operator-visible
+- New index stdout/alarm tokens: `INDEX_CHECKPOINTED`, `INDEX_BACKLOG_STALLED`, `INDEX_FILE_QUARANTINED`, `INDEX_PASS_CAP_REACHED`, `INDEX_RESOURCE_FAILED` / `INDEX_RESOURCE_SKIPPED`.
+- New tunables: `BRAINLAYER_INDEX_QUARANTINE_PASSES`, `BRAINLAYER_INDEX_STALL_PASSES`, and `BRAINLAYER_INDEX_CALENDAR_BUDGET_S`.
+- Files can be quarantined after repeated deterministic failures. See [index convergence](docs/operations/index-convergence.md) for the procedure to clear quarantine and retry.
+
 ## [1.5.60] - 2026-10-18
 
 ### Fixed
