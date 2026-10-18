@@ -34,6 +34,7 @@ from rich.table import Table
 from .. import __version__
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
+from ..pipeline import chunk as index_pipeline
 from ..retired_services import RETIRED_ENRICHMENT_LABELS
 
 app = typer.Typer(
@@ -209,7 +210,10 @@ class _CalendarIndexCheckpoint:
                     or any(type(best.get(k)) is not int or best[k] < 0 for k in self.backlog_keys())
                 ):
                     raise ValueError("invalid best backlog")
-                if previous.get("database") == self.database and previous.get("pipeline_version") == __version__:
+                if (
+                    previous.get("database") == self.database
+                    and previous.get("pipeline_version") == index_pipeline.INDEX_PIPELINE_VERSION
+                ):
                     self.previous = previous
                     self.failures = previous.get("failures", {})
             except FileNotFoundError:
@@ -258,16 +262,15 @@ class _CalendarIndexCheckpoint:
 
     def entry(self, path: Path, signature: list[int]) -> dict:
         saved = self.files.get(str(path.resolve()), {})
-        # Positions are meaningful only under the admission/chunking pipeline
-        # that produced them. Package upgrades conservatively replay all inputs.
-        if saved.get("pipeline_version") != __version__:
-            return {}
+        # Unchanged inputs keep their state across releases. Only append-resume
+        # reuses positions under newly parsed/chunked input and needs a version gate.
         if saved.get("signature") == signature:
             return saved
         old = saved.get("signature", [])
         # Only a verified same-inode/device, newline-terminated prefix may retain offsets.
         if (
-            len(old) == 4
+            saved.get("pipeline_version") == index_pipeline.INDEX_PIPELINE_VERSION
+            and len(old) == 4
             and old[0] == signature[0]
             and old[3] == signature[3]
             and signature[1] >= old[1]
@@ -308,7 +311,7 @@ class _CalendarIndexCheckpoint:
                 stream.seek(signature[1] - 1)
             boundary = not signature[1] or stream.read(1) == b"\n"
         self.files[key] = dict(
-            pipeline_version=__version__,
+            pipeline_version=index_pipeline.INDEX_PIPELINE_VERSION,
             signature=signature,
             next_chunk=next_chunk,
             done=done,
@@ -335,7 +338,7 @@ class _CalendarIndexCheckpoint:
         )
 
     def failure_matches(self, path, old):
-        if old.get("pipeline_version") != __version__:
+        if old.get("pipeline_version") != index_pipeline.INDEX_PIPELINE_VERSION:
             return False
         signature, prior = self.signature(path), old.get("signature", [])
         if prior == signature:
@@ -377,7 +380,7 @@ class _CalendarIndexCheckpoint:
             else 1
         )
         self.failures[key] = dict(
-            pipeline_version=__version__,
+            pipeline_version=index_pipeline.INDEX_PIPELINE_VERSION,
             signature=signature,
             prefix_sha256=self.hashes.get((str(path), tuple(signature), signature[1])),
             error=token,
@@ -430,7 +433,8 @@ class _CalendarIndexCheckpoint:
                 best = backlog
             else:
                 smaller = (backlog["chunks_remaining"], backlog["files_remaining"]) < (
-                    best["chunks_remaining"], best["files_remaining"]
+                    best["chunks_remaining"],
+                    best["files_remaining"],
                 )
                 stalled = 0 if smaller else stalled + 1
                 if smaller:
@@ -438,7 +442,7 @@ class _CalendarIndexCheckpoint:
         quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
         state = dict(
             database=self.database,
-            pipeline_version=__version__,
+            pipeline_version=index_pipeline.INDEX_PIPELINE_VERSION,
             **backlog,
             stalled_passes=stalled,
             best_backlog=best,

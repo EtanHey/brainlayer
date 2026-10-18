@@ -44,16 +44,19 @@ Real rc1 non-convergence follows the failed-job report path.
 
 An append resumes at the saved input offset only on the same device/inode, with at
 least the saved byte length, a newline-terminated saved prefix, and a matching SHA-256
-of that prefix. Every checkpoint entry also records `pipeline_version`, using the
-package's `brainlayer.__version__`. Any package-version mismatch, including an entry
-without a stamp, replays from zero even for an unchanged file. This deliberately
-invalidates offsets on every package upgrade, so changed parsing, classification,
-chunking or admission cannot skip appended input under an obsolete position count.
-Release/deployment of such changes must advance the package version; source edits
-under the same package version are not an upgrade boundary. Truncation, replacement,
-or prefix rewrite also replays from zero. Older checkpoint entries without the
-identity/fingerprint proof replay conservatively. Backlog inventory/baselines are
-versioned too: an upgrade recounts instead of trusting old chunk totals.
+of that prefix. Append-resume also requires the saved `pipeline_version` to equal
+`INDEX_PIPELINE_VERSION` in `pipeline/chunk.py` (initially **1**); a missing or
+mismatched stamp replays the changed file from zero. Unchanged signatures retain
+their saved state, including done files, across both package and pipeline versions.
+Package-only releases therefore do not re-embed the corpus. Bump this explicit
+constant whenever parsing, classification, chunking, or admission changes positional
+output. The small parse→classify→chunk→admit fixture in
+`test_r2_pipeline_golden_admitted_output` hashes ordered admitted rows, including
+positions, metadata and content; changed output requires a version bump and a
+reviewed hash for that new version. Truncation, replacement, or prefix rewrite also
+replays from zero. Older checkpoint entries without identity/fingerprint proof
+cannot append-resume. Backlog inventory/baselines use the same constant: a pipeline
+upgrade recounts instead of trusting old chunk totals.
 Fingerprints are captured before embedding so a deadline after COMMIT cannot block
 publication of an already proven complete batch.
 
@@ -69,7 +72,7 @@ PyTorch OutOfMemoryError remains retryable even when an encoder and `embed_chunk
 wrap it in RuntimeError. These errors still fail the pass visibly. Appending to the same failing prefix does
 not erase its streak. A quarantined file is skipped so later files can proceed, but it
 remains in the backlog, is named by `INDEX_QUARANTINED`, and forces rc1 until resolved.
-Failure entries carry the same package `pipeline_version`: an upgrade clears the
+Failure entries carry the same explicit `INDEX_PIPELINE_VERSION`: a pipeline upgrade clears the
 old failure streak and retries the unchanged file, starting at count 1 if it still
 fails. Rewriting/replacing the failing prefix also retries it; `--force` clears
 checkpoint/failure history and replays all inputs. For a targeted retry without a

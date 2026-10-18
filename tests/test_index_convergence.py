@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 import brainlayer.cli as cli
 import brainlayer.index_new as adapter
+import brainlayer.pipeline.chunk as index_pipeline
 from brainlayer.runtime_store import ReadonlyStore
 from tests.test_index_checkpoint_boundary import cap_after_commit, checkpoint, synthetic_vectors
 from tests.test_index_completion import calendar_fixture as calendar_fixture
@@ -302,27 +303,24 @@ def test_r1_measured_convergence_and_new_work_cycle_remain_healthy(tmp_path):
         assert not alarm and state["stalled_passes"] == 0
 
 
-@pytest.mark.parametrize("append", [False, True])
-def test_r1_pipeline_upgrade_replays_changed_prefix_admission(calendar_fixture, monkeypatch, append):
+def test_r1_pipeline_upgrade_replays_changed_prefix_admission(calendar_fixture, monkeypatch):
     source, db, chunks, _ = calendar_fixture
     monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
     assert invoke(source).exit_code == 0
-    old_version = cli.__version__
     # New chunker admits two prefix chunks instead of 66; appended inputs now
     # occupy positions 2 and 3, below the old offset. Never reuse that offset.
     chunks[:] = chunks[:2]
-    if append:
-        with (source / "a.jsonl").open("a") as stream:
-            stream.write("{}\n")
-        chunks.extend(replace(chunks[0], content=f"Upgrade appended input {i}") for i in range(2))
-    monkeypatch.setattr(cli, "__version__", old_version + "+review-upgrade")
+    with (source / "a.jsonl").open("a") as stream:
+        stream.write("{}\n")
+    chunks.extend(replace(chunks[0], content=f"Upgrade appended input {i}") for i in range(2))
+    monkeypatch.setattr(index_pipeline, "INDEX_PIPELINE_VERSION", 2, raising=False)
     seen = []
     monkeypatch.setattr(adapter, "embed_chunks", lambda cs, **kw: seen.extend(cs) or synthetic_vectors(cs))
     result = invoke(source)
     assert result.exit_code == 0, result.output
     assert seen == chunks
     saved = next(iter(checkpoint(db).values()))
-    assert saved["pipeline_version"] == cli.__version__
+    assert saved["pipeline_version"] == index_pipeline.INDEX_PIPELINE_VERSION
     assert saved["next_chunk"] == len(chunks)
     with ReadonlyStore(db) as store:
         rows = list(
@@ -346,12 +344,12 @@ def test_r1_pipeline_upgrade_retries_quarantine_with_fresh_failure_streak(calend
     for _ in range(3):
         assert invoke(source).exit_code == 1
     assert len(calls) == 3
-    monkeypatch.setattr(cli, "__version__", cli.__version__ + "+review-upgrade")
+    monkeypatch.setattr(index_pipeline, "INDEX_PIPELINE_VERSION", 2, raising=False)
     assert invoke(source).exit_code == 1
     assert len(calls) == 4
     state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
     failure = next(iter(state["failures"].values()))
-    assert failure["count"] == 1 and failure["pipeline_version"] == cli.__version__
+    assert failure["count"] == 1 and failure["pipeline_version"] == index_pipeline.INDEX_PIPELINE_VERSION
     assert not state["quarantined"]
     monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
     assert invoke(source).exit_code == 0
@@ -440,3 +438,79 @@ def test_r2_quarantined_unknown_does_not_hide_measured_convergence(tmp_path, cap
     output = capsys.readouterr().out
     assert "INDEX_FILE_QUARANTINED" in output
     assert "INDEX_BACKLOG_STALLED" not in output
+
+
+@pytest.mark.parametrize("bump", ["package", "pipeline"])
+def test_r2_done_unchanged_file_stays_done_across_versions(calendar_fixture, monkeypatch, bump):
+    source, db, chunks, _ = calendar_fixture
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    assert invoke(source).exit_code == 0
+    if bump == "package":
+        monkeypatch.setattr(cli, "__version__", cli.__version__ + "+package-only")
+    else:
+        monkeypatch.setattr(index_pipeline, "INDEX_PIPELINE_VERSION", 2, raising=False)
+    seen = []
+    monkeypatch.setattr(adapter, "embed_chunks", lambda cs, **kw: seen.extend(cs) or synthetic_vectors(cs))
+    result = invoke(source)
+    assert result.exit_code == 0, result.output
+    assert not seen
+    assert "files_remaining=0 chunks_remaining=0" in result.output
+    assert next(iter(checkpoint(db).values()))["done"]
+    readback(db, chunks)
+
+
+def test_r2_pipeline_golden_admitted_output(tmp_path, monkeypatch):
+    """Bump the pipeline constant AND add its reviewed hash when output changes."""
+    import hashlib
+
+    from brainlayer.pipeline.classify import classify_content
+    from brainlayer.pipeline.extract import parse_jsonl
+
+    records = [
+        dict(type="user", message=dict(content="Why must append offsets preserve every admitted input position?")),
+        dict(type="progress", message=dict(content="This progress event is noise and must be skipped.")),
+        dict(
+            type="assistant",
+            message=dict(content="Keep a durable checkpoint only after the transaction commits. " * 55),
+        ),
+        dict(
+            type="assistant",
+            message=dict(
+                content="```python\ndef checkpoint_after_commit(store):\n    store.commit()\n    return True\n```"
+            ),
+        ),
+        dict(type="user", message=dict(content='Recursive MCP response {"jsonrpc":"2.0","method":"tools/call"}')),
+        dict(type="user", message=dict(content="ok")),
+        dict(type="user", message=dict(content="You are Claude Code, Anthropic's official CLI for Claude. " * 55)),
+    ]
+    source = tmp_path / "golden.jsonl"
+    source.write_text("\n".join(json.dumps(record) for record in records) + "\nmalformed\n")
+    chunks = []
+    for record in parse_jsonl(source):
+        classified = classify_content(record)
+        if classified is not None:
+            chunks.extend(index_pipeline.chunk_content(classified))
+    rows = []
+
+    class Writer:
+        def upsert_chunks(self, admitted, embeddings, **kw):
+            rows.extend(
+                {
+                    key: row[key]
+                    for key in ("content", "content_type", "value_type", "position", "char_count", "metadata")
+                }
+                for row in admitted
+            )
+            return len(admitted)
+
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    rejected = []
+    adapter.index_chunks_to_sqlite(chunks, str(source), store=Writer(), on_rejected=rejected.append)
+    assert rejected == [1]
+    assert len(rows) >= 3  # The golden covers real splitting and both admission and rejection.
+    digest = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    golden = {1: "98d4c376a48ea00f7cc48db03fa25bc79151296bae62005c2d7bf629a9e7311f"}
+    assert digest == golden[index_pipeline.INDEX_PIPELINE_VERSION], (
+        "Pipeline output changed: review it, bump INDEX_PIPELINE_VERSION, and add the new golden hash",
+        digest,
+    )

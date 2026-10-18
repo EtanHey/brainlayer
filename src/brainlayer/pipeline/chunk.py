@@ -37,6 +37,10 @@ class Chunk:
     char_count: int
 
 
+# Bump when parsing, classification, chunking, or admission changes positional output.
+# Pin reviewed outputs by version in test_r2_pipeline_golden_admitted_output.
+INDEX_PIPELINE_VERSION = 1
+
 # Target chunk size in characters (research suggests ~500 tokens ≈ 2000 chars)
 TARGET_CHUNK_SIZE = 2000
 MAX_CHUNK_SIZE = 4000
