@@ -216,7 +216,7 @@ post-backup gate failure skips service bootout and all DB maintenance with exit 
 
 Unuploaded gzip snapshots remain until their own upload verifies, regardless of newer snapshots;
 capacity errors list retained archives. Observability's optional `db_snapshot.local_verified`,
-`uploaded` and `upload_state` fields distinguish local safety from offsite coverage. Existing
+`uploaded`, `upload_state` and `upload_error` fields distinguish local safety from offsite coverage. Existing
 `verified` keeps its uploaded-and-verified meaning. BrainBar needs the tracked Swift follow-up to
 render local-verified/pending as neutral; old clients still show that state as unverified.
 `--full --dry-run` reports a held backup lock without starting backup work.

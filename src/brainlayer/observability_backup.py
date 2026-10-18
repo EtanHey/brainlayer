@@ -116,15 +116,15 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     all_errors = all(record.get("error") or record.get("error_type") for record in real)
     latest = real[-1]
     error_type = str(latest["error_type"]) if latest.get("error_type") else None
-    if latest.get("verification_error"):
-        error_type = str(latest["verification_error"])
-    if latest.get("local_verified") and latest.get("upload_state") == "failed" and latest.get("error"):
-        error_type = str(latest["error"])
+    error_reason = latest.get("error") or latest.get("verification_error")
+    if latest.get("verification_error") and error_type is None:
+        error_type = "backup_verification_failed"
     latest_by_snapshot = {record["snapshot"]: record for record in real if isinstance(record.get("snapshot"), str)}
     if error_type is None:
         for pending in reversed(list(latest_by_snapshot.values())):
             if pending.get("upload_state") == "failed" and not (pending.get("uploaded") and pending.get("verified")):
-                error_type = str(pending.get("error") or pending.get("verification_error") or "backup_error")
+                error_type = str(pending.get("error_type") or pending.get("error_code") or "backup_error")
+                error_reason = pending.get("error") or pending.get("verification_error")
                 break
     if "google-drive-mcp/tokens.json" in str(latest.get("error", "")):
         error_type = "drive_credentials_missing"
@@ -153,6 +153,7 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
                             "local_verified": True,
                             "uploaded": record.get("uploaded") is True,
                             "upload_state": record.get("upload_state", "pending"),
+                            "upload_error": error_reason,
                         }
                         if local
                         else {}

@@ -633,6 +633,12 @@
                 "verified",
                 "failed"
               ]
+            },
+            "upload_error": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         },

@@ -164,7 +164,9 @@ def test_upload_recovery_never_recreates_snapshot_or_reuploads_completed_session
     assert failed["upload_state"] == "failed"
     from brainlayer.observability_backup import _daily_snapshot
 
-    assert _daily_snapshot([failed])[1] == failed["error"]
+    snapshot, error_type, _ = _daily_snapshot([failed])
+    assert error_type == failed["error_type"]
+    assert snapshot["upload_error"] == failed["error"]
     assert Path(receipt["snapshot"]).exists()
     assert maintenance._weekly_backup(config_for(local_lane, Path(local_lane["db_path"]).parent))["local_verified"]
     assert backup.run_backup(**local_lane, phase="upload")["verified"]
@@ -191,7 +193,8 @@ def test_new_snapshot_does_not_hide_an_older_failed_upload(local_lane):
         receipt, snapshot="older.db.gz", upload_state="failed", error="Drive offline", error_type="ConnectionError"
     )
     _, error, _ = _daily_snapshot([failed, receipt])
-    assert error == "Drive offline"
+    assert error == "ConnectionError"
+    assert _daily_snapshot([failed, receipt])[0]["upload_error"] == "Drive offline"
     completed = dict(failed, uploaded=True, verified=True, upload_state="verified")
     completed.pop("error")
     completed.pop("error_type")

@@ -2471,7 +2471,9 @@ def run_backup(
     finally:
         result["retained_raw_snapshots"] = _retained_raw_snapshot_names(Path(staging_dir))
         raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
-        if result.get("error") or result.get("verification_error"):
+        if (result.get("error") or result.get("verification_error")) and not (
+            result["uploaded"] and result["verified"]
+        ):
             result["upload_state"] = "failed"
         if raw.is_file() and not raw.is_symlink():
             result["local_uncompressed_snapshot"] = str(raw)
