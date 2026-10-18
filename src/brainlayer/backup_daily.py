@@ -2131,6 +2131,8 @@ def run_backup(
                     file_id=file_id,
                 )
             )
+            if not result["verified"] and not result.get("verification_error"):
+                result["verification_error"] = "local backup verification failed without a diagnostic"
             weekly_age = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
             if result["verified"] and weekly_age is not None:
                 try:

@@ -675,20 +675,26 @@ def _r2_completed_with_failed_verification(lane, monkeypatch, failure):
         )
 
         def verify(*args, **kwargs):
+            if failure == "bare_local_verify":
+                return {"verified": False}
             return {"verified": False, "verification_error": "local gzip verification failed"}
 
     monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verify)
     return lane.run("2026-10-18" if failure == "weekly_age" else "2026-10-17")
 
 
-@pytest.mark.parametrize("failure", ["weekly_age", "local_verify"])
+@pytest.mark.parametrize("failure", ["weekly_age", "local_verify", "bare_local_verify"])
 def test_r2_completed_upload_is_not_an_interrupted_session(lane, monkeypatch, failure):
     result = _r2_completed_with_failed_verification(lane, monkeypatch, failure)
     assert result["uploaded"] is True and result["drive_file"]["id"] == "done"
     assert result["verified"] is False
     assert "resumable_upload" not in result
     assert result.get("error_code") != "drive_upload_interrupted"
-    reason = "weekly backup safety window" if failure == "weekly_age" else "local gzip verification failed"
+    reason = {
+        "weekly_age": "weekly backup safety window",
+        "local_verify": "local gzip verification failed",
+        "bare_local_verify": "local backup verification failed",
+    }[failure]
     assert reason in result["verification_error"]
     receipt = json.loads(lane.log.read_text().splitlines()[-1])
     assert "resumable_upload" not in receipt and URL not in json.dumps(receipt)

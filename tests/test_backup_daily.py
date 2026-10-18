@@ -2210,8 +2210,13 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     )
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    logged = json.loads(lines[0])
+    assert len(lines) == 2
+    completed = json.loads(lines[0])
+    assert completed["uploaded"] is True and completed["verified"] is False
+    assert completed["drive_file"]["id"] == "drive-file-id"
+    assert completed["verification_pending"] is True
+    assert "resumable_upload" not in completed
+    logged = json.loads(lines[-1])
     assert logged["snapshot"] == str(snapshot)
     assert logged["drive_file"]["id"] == "drive-file-id"
     assert logged["verified"] is True
