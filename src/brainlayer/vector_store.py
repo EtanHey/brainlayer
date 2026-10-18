@@ -83,9 +83,13 @@ _OPERATIONAL_FTS_CLASS_SQL = "COALESCE(content_class, 'knowledge') = 'operationa
 class IndexDeadlineExceeded(RuntimeError):
     """Raised outside a write transaction when an index deadline expires."""
 
-    def __init__(self, processed_count: int) -> None:
+    def __init__(self, processed_count: int, *, input_complete: bool = False) -> None:
         super().__init__("index deadline exceeded")
         self.processed_count = processed_count
+        # Only upsert can prove every admitted pair committed, including the
+        # intentional admission omissions. A processed count alone cannot.
+        self.input_complete = input_complete
+        self.completed_input_count = 0  # Translated to adapter inputs by index_new.
 
 
 def _positive_int_env(name: str, default: int, *, max_value: int = _MAX_APSW_BUSY_TIMEOUT_MS) -> int:
@@ -2545,7 +2549,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 return
             if committed_any:
                 invalidate_upsert_caches()
-            raise IndexDeadlineExceeded(processed_count)
+            raise IndexDeadlineExceeded(processed_count, input_complete=processed_count == len(valid_pairs))
 
         for start in range(0, len(valid_pairs), batch_size):
             raise_if_deadline_exceeded()

@@ -421,6 +421,13 @@ def _index_chunks(
         for chunk in chunks
         if not chunk.metadata.get("is_system_prompt") and not looks_like_system_prompt(chunk.content)
     ]
+    # Match index admission before budgeting, change detection, and precomputing
+    # vectors. Empty inputs are handled skips, not pending writes to replay.
+    admitted = [chunk for chunk in eligible if chunk.content.strip()]
+    skipped_empty = len(eligible) - len(admitted)
+    if skipped_empty:
+        logger.info("T3 index admission skipped_empty_chunks=%s source_file=%s", skipped_empty, source_file)
+    eligible = admitted
     # Fail fast on an already-busy writer, then release it before model loading.
     with open_writer_store(db_path) as store:
         changed = _changed_chunks(eligible, store)

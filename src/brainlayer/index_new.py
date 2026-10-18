@@ -36,6 +36,8 @@ def index_chunks_to_sqlite(
     deadline_monotonic: float | None = None,
     store: VectorStore | None = None,
     precomputed_embeddings: list[EmbeddedChunk] | None = None,
+    start_position: int = 0,
+    on_skipped_empty: Callable[[int], None] | None = None,
 ) -> int:
     """Index chunks to sqlite-vec database."""
     if not chunks:
@@ -57,6 +59,18 @@ def index_chunks_to_sqlite(
     # Scrub before embedding, so the vector, the stored row, its FTS copy and
     # its content hash are all computed from the same scrubbed text.
     filtered_chunks = [_scrubbed_chunk(chunk) for chunk in filtered_chunks]
+    # Keep positions in the original admission list: calendar checkpoints count
+    # consumed inputs, including empty chunks, rather than only surviving rows.
+    positions = [i for i, chunk in enumerate(filtered_chunks, start=start_position) if chunk.content.strip()]
+    admitted_chunks = [chunk for chunk in filtered_chunks if chunk.content.strip()]
+    skipped_empty = len(filtered_chunks) - len(admitted_chunks)
+    if skipped_empty:
+        logger.info("Index admission skipped_empty_chunks=%s source_file=%s", skipped_empty, source_file)
+        if on_skipped_empty is not None:
+            on_skipped_empty(skipped_empty)
+    filtered_chunks = admitted_chunks
+    if not filtered_chunks:
+        return 0
 
     # Generate embeddings
     def embedding_progress(completed: int, total: int) -> None:
@@ -71,15 +85,14 @@ def index_chunks_to_sqlite(
             on_progress=embedding_progress if deadline_monotonic is not None else on_progress,
         )
     else:
-        # Caller may precompute before acquiring a writer, but only for the exact
-        # scrubbed chunks admitted here. Reject stale/unscrubbed payloads.
-        admitted = {(chunk.metadata.get("chunk_id"), chunk.content) for chunk in filtered_chunks}
-        if any((ec.chunk.metadata.get("chunk_id"), ec.chunk.content) not in admitted for ec in precomputed_embeddings):
-            raise ValueError("precomputed embeddings do not match admitted scrubbed chunks")
         embedded_chunks = precomputed_embeddings
 
-    if not embedded_chunks:
-        return 0
+    # Both generated and precomputed results must cover the exact ordered admission
+    # list. Count alone cannot establish positions after a missing/reordered input.
+    if len(embedded_chunks) != len(filtered_chunks) or any(
+        ec.chunk != chunk for ec, chunk in zip(embedded_chunks, filtered_chunks)
+    ):
+        raise ValueError("embeddings do not match admitted scrubbed chunks completely and in order")
 
     # Try to get timestamp from a text source (first JSONL message). SQLite
     # adapters already put timestamps in chunk metadata; opening a live DB as
@@ -114,7 +127,7 @@ def index_chunks_to_sqlite(
     chunk_data = []
     embeddings = []
 
-    for i, ec in enumerate(embedded_chunks):
+    for i, ec in zip(positions, embedded_chunks):
         chunk = ec.chunk
         metadata = dict(chunk.metadata)
 
@@ -154,10 +167,20 @@ def index_chunks_to_sqlite(
 
     # A complete CLI index run injects one shared runtime store. Standalone
     # callers still get one bounded runtime open for this adapter invocation.
+    def upsert(writer):
+        try:
+            return writer.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+        except IndexDeadlineExceeded as exc:
+            # Complete ordered embeddings above + complete store admission below
+            # proves the WHOLE input call, never a count-shaped survivor prefix.
+            if exc.input_complete:
+                exc.completed_input_count = len(chunks)
+            raise
+
     if store is not None:
-        return store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+        return upsert(store)
     with open_writer_store(db_path or get_db_path()) as opened_store:
-        return opened_store.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+        return upsert(opened_store)
 
 
 def get_stats(db_path: Path | None = None) -> dict:

@@ -125,6 +125,65 @@ def _index_max_runtime_s() -> float:
     return value
 
 
+def _calendar_index_budget_s(now: datetime | None = None) -> float:
+    """Calendar passes cannot inherit an old four-hour cap or occupy 04:00–06:00."""
+    from ..index_budget import calendar_index_budget_s
+
+    budget = calendar_index_budget_s(_index_max_runtime_s(), now)
+    custody_budget = float(os.environ.get("BRAINLAYER_INDEX_CALENDAR_BUDGET_S", budget))
+    if not math.isfinite(custody_budget) or custody_budget < 0:
+        raise ValueError("invalid calendar custody budget")
+    return min(budget, custody_budget)
+
+
+class _CalendarIndexCheckpoint:
+    """Only advance after a committed batch; replay an interrupted batch safely."""
+
+    def __init__(self, db: Path, source: Path, project: str | None, force: bool):
+        identity = hashlib.sha256(f"{db.resolve()}\0{source.resolve()}\0{project}".encode()).hexdigest()[:16]
+        self.path = db.parent / f"index-checkpoint-{identity}.json"
+        stat = db.stat()
+        self.database = [stat.st_dev, stat.st_ino]
+        self.files = {}
+        if self.path.exists() and not force:
+            saved = json.loads(self.path.read_text())
+            if saved.get("version") not in {1, 2} or not isinstance(saved.get("files"), dict):
+                raise ValueError("invalid calendar index checkpoint")
+            # v1 could outlive NORMAL-mode WAL commits. Replay those inputs once;
+            # only v2 entries are published after durable calendar commits.
+            if saved.get("version") == 2 and saved.get("database") == self.database:
+                self.files = saved["files"]
+                for entry in self.files.values():
+                    if (
+                        not isinstance(entry, dict)
+                        or type(entry.get("next_chunk")) is not int
+                        or entry["next_chunk"] < 0
+                        or type(entry.get("done")) is not bool
+                    ):
+                        raise ValueError("invalid calendar index checkpoint entry")
+        from ..drive_credentials import _atomic_write
+
+        _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
+
+    @staticmethod
+    def signature(path: Path) -> list[int]:
+        stat = path.stat()
+        return [stat.st_ino, stat.st_size, stat.st_mtime_ns]
+
+    def entry(self, path: Path, signature: list[int]) -> dict:
+        saved = self.files.get(str(path.resolve()), {})
+        return saved if saved.get("signature") == signature else {}
+
+    def save(self, path: Path, signature: list[int], next_chunk: int, *, done: bool = False):
+        from ..drive_credentials import _atomic_write
+
+        # A source changed during parsing/writing must be replayed, never marked complete.
+        if self.signature(path) != signature:
+            return
+        self.files[str(path.resolve())] = dict(signature=signature, next_chunk=next_chunk, done=done)
+        _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
+
+
 @app.command("observability")
 def observability_command(
     write: bool = typer.Option(False, "--write", help="Write observability.json beside the resolved database."),
@@ -3569,6 +3628,7 @@ def _exit_on_index_deadline(
     files_completed: int,
     current_file: Path | None,
     unwind_error: str | None = None,
+    checkpoint: _CalendarIndexCheckpoint | None = None,
 ) -> typer.Exit:
     """Emit the cap alarm once and return the Exit the caller should raise.
 
@@ -3578,7 +3638,19 @@ def _exit_on_index_deadline(
     """
     from ..alarm import build_alarm, emit_alarm
 
-    if watchdog is not None and getattr(watchdog, "alarm_emitted", False):
+    escalated = watchdog is not None and getattr(watchdog, "escalation_attempted", False)
+    if checkpoint is not None and committed_chunks > 0 and _looks_like_watchdog_interrupt(cause) and not escalated:
+        rprint(
+            "[bold yellow]INDEX_CHECKPOINTED[/] status=checkpointed "
+            f"committed_chunks={committed_chunks} files_completed={files_completed} "
+            f"checkpoint={checkpoint.path}"
+        )
+        return typer.Exit(0)
+
+    recorded = watchdog is not None and getattr(
+        watchdog, "alarm_emitted" if checkpoint is None else "escalation_emitted", False
+    )
+    if recorded:
         rprint(
             "[bold red]INDEX_RUNTIME_EXCEEDED[/] final: "
             f"phase={watchdog.phase} committed_chunks={committed_chunks} "
@@ -3617,16 +3689,27 @@ def index_fast(
 ) -> None:
     """Index using new fast sqlite-vec backend."""
     watchdog = None
+    checkpoint = None
+    skipped_empty_chunks = 0
+
+    def note_skipped_empty(count: int) -> None:
+        nonlocal skipped_empty_chunks
+        skipped_empty_chunks += count
+
+    calendar = os.environ.get("BRAINLAYER_LAUNCHD_SERVICE") == "index"
     try:
         from contextlib import ExitStack
 
+        import apsw
+
+        from ..index_budget import CALENDAR_INDEX_UNWIND_S
         from ..index_new import index_chunks_to_sqlite
         from ..index_watchdog import IndexWatchdog
         from ..pipeline.chunk import chunk_content
         from ..pipeline.classify import classify_content
         from ..pipeline.extract import parse_jsonl
         from ..runtime_store import ReadonlyStore, open_writer_store
-        from ..vector_store import IndexDeadlineExceeded
+        from ..vector_store import IndexDeadlineExceeded, WriterInUseError, temporary_write_busy_timeout_ms
 
         if not source.exists():
             rprint(f"[bold red]Error:[/] Source directory not found: {source}")
@@ -3635,6 +3718,11 @@ def index_fast(
         start_time = time.time()
         start_monotonic = time.monotonic()
         max_runtime_s = _index_max_runtime_s()
+        if calendar:
+            max_runtime_s = _calendar_index_budget_s()
+            if max_runtime_s <= 0:
+                rprint("[yellow]INDEX_DEFERRED maintenance_window=04:00-06:00[/]")
+                raise typer.Exit(75)
         deadline_monotonic = start_monotonic + max_runtime_s
 
         # Find JSONL files
@@ -3658,6 +3746,12 @@ def index_fast(
                         "source_file": str(current_file) if current_file else None,
                     },
                     phase="discover",
+                    yield_grace_s=CALENDAR_INDEX_UNWIND_S if calendar else 0,
+                    # A calendar deadline is a planned yield. The main thread decides
+                    # checkpointed vs failed only AFTER the writer has unwound.
+                    emit=(lambda alarm: rprint(f"INDEX_PASS_CAP_REACHED phase={alarm.context['phase']}"))
+                    if calendar
+                    else None,
                 )
             )
 
@@ -3676,9 +3770,16 @@ def index_fast(
                     rprint(f"[bold red]Error:[/] No JSONL files found in: {source}")
                     raise typer.Exit(1)
 
+            if calendar:
+                jsonl_files.sort()
+                checkpoint = _CalendarIndexCheckpoint(get_db_path(), source, project, force)
             rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
 
             watchdog.set_phase("open_store")
+            if calendar:
+                # Reuse the resident writer's bounded SQLite coordination. Keep
+                # retries within this pass, then yield without discarding progress.
+                stack.enter_context(temporary_write_busy_timeout_ms(1000, deadline=deadline_monotonic))
             # sqlite3_interrupt is the only lever that reaches the inner statements FTS5 and
             # vec0 drive; apsw documents calling it from another thread as safe. The hook hands
             # it over BEFORE the schema probe runs, so open_store -- which has no cap of its
@@ -3686,6 +3787,13 @@ def index_fast(
             runtime_store = stack.enter_context(
                 open_writer_store(get_db_path(), on_connection=_attach_interrupt(watchdog))
             )
+            if calendar:
+                # The sidecar may survive a host crash. Commit its rows durably
+                # BEFORE publishing a skip offset: EXTRA equals FULL in WAL and
+                # also syncs the rollback-journal directory in DELETE mode.
+                # Connection-local, so resident/interactive writers retain their policy.
+                runtime_store.conn.execute("PRAGMA synchronous = EXTRA")
+                runtime_store.conn.execute("PRAGMA fullfsync = ON")
             progress = stack.enter_context(
                 Progress(
                     SpinnerColumn(),
@@ -3704,6 +3812,11 @@ def index_fast(
                 current_file = jsonl_file
                 watchdog.set_phase(f"parse:{jsonl_file.name}")
                 watchdog.raise_if_expired()
+                signature = checkpoint.signature(jsonl_file) if checkpoint else None
+                saved = checkpoint.entry(jsonl_file, signature) if checkpoint else {}
+                if saved.get("done"):
+                    progress.update(task, completed=i + 1)
+                    continue
                 raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
                 proj_name = _normalize_project_name(raw_proj) if raw_proj else None
 
@@ -3722,16 +3835,57 @@ def index_fast(
                         pass  # Could update sub-progress here
 
                     watchdog.set_phase(f"embed_and_upsert:{jsonl_file.name}")
-                    indexed = index_chunks_to_sqlite(
-                        all_chunks,
-                        source_file=str(jsonl_file),
-                        project=proj_name,
-                        on_progress=progress_callback,
-                        deadline_monotonic=deadline_monotonic,
-                        store=runtime_store,
-                    )
-                    total_chunks += indexed
+                    if checkpoint:
+                        from ..system_prompt_guard import looks_like_system_prompt
+
+                        # Match the adapter's admission BEFORE assigning global positions.
+                        all_chunks = [
+                            c
+                            for c in all_chunks
+                            if not c.metadata.get("is_system_prompt") and not looks_like_system_prompt(c.content)
+                        ]
+                        offset = saved.get("next_chunk", 0)
+                        for start in range(offset, len(all_chunks), 64):
+                            watchdog.raise_if_expired()
+                            batch = all_chunks[start : start + 64]
+                            try:
+                                total_chunks += index_chunks_to_sqlite(
+                                    batch,
+                                    source_file=str(jsonl_file),
+                                    project=proj_name,
+                                    on_progress=progress_callback,
+                                    deadline_monotonic=deadline_monotonic,
+                                    store=runtime_store,
+                                    start_position=start,
+                                    on_skipped_empty=note_skipped_empty,
+                                )
+                            except IndexDeadlineExceeded as exc:
+                                if exc.completed_input_count == len(batch):
+                                    checkpoint.save(
+                                        jsonl_file,
+                                        signature,
+                                        start + len(batch),
+                                        done=start + len(batch) == len(all_chunks),
+                                    )
+                                raise
+                            checkpoint.save(
+                                jsonl_file, signature, start + len(batch), done=start + len(batch) == len(all_chunks)
+                            )
+                            watchdog.raise_if_expired()
+                    else:
+                        indexed = index_chunks_to_sqlite(
+                            all_chunks,
+                            source_file=str(jsonl_file),
+                            project=proj_name,
+                            on_progress=progress_callback,
+                            deadline_monotonic=deadline_monotonic,
+                            store=runtime_store,
+                            on_skipped_empty=note_skipped_empty,
+                        )
+                        total_chunks += indexed
                     watchdog.raise_if_expired(processed_count=0)
+                if checkpoint:
+                    checkpoint.save(jsonl_file, signature, len(all_chunks), done=True)
                 files_completed = i + 1
                 watchdog.note_progress()
                 watchdog.raise_if_expired()
@@ -3762,10 +3916,35 @@ def index_fast(
             committed_chunks=total_chunks + exc.processed_count,
             files_completed=files_completed,
             current_file=current_file,
+            checkpoint=checkpoint,
         ) from exc
     except typer.Exit:
         raise
     except Exception as e:
+        if calendar and isinstance(e, (apsw.BusyError, WriterInUseError)):
+            # Attribute a deadline-shaped busy error to the cap; genuine writer
+            # contention before that deadline still defers with rc75.
+            if (
+                watchdog is not None
+                and (watchdog.expired or time.monotonic() >= watchdog.deadline_monotonic)
+                and (total_chunks == 0 or isinstance(e, apsw.BusyError))
+            ):
+                raise _exit_on_index_deadline(
+                    IndexDeadlineExceeded(0),
+                    watchdog=watchdog,
+                    max_runtime_s=max_runtime_s,
+                    start_monotonic=start_monotonic,
+                    committed_chunks=total_chunks,
+                    files_completed=files_completed,
+                    current_file=current_file,
+                    checkpoint=checkpoint,
+                ) from e
+            rprint(
+                "[yellow]INDEX_DEFERRED resident_writer_busy[/] "
+                f"committed_chunks={total_chunks} files_completed={files_completed} "
+                f"cause={type(e).__name__}"
+            )
+            raise typer.Exit(75) from e
         # An expired watchdog means the cap is part of the story -- but NOT that this
         # exception is the cap. An interrupt we asked for is; a schema mismatch, an I/O error
         # or an OOM during the unwind is a real failure that happens to land late, and
@@ -3784,9 +3963,12 @@ def index_fast(
                 files_completed=files_completed,
                 current_file=current_file,
                 unwind_error=unwind_error,
+                checkpoint=checkpoint,
             ) from e
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
+    finally:
+        rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks}")
 
 
 @app.command("ingest-t3")

@@ -758,6 +758,7 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_precompact_chunk_origin.py",
         "test_ingest_t3.py",
         "test_context_pipeline.py",
+        "test_index_empty_content.py",
     )
     for filename in (*expected, "test_think_recall_integration.py"):
         (test_root / filename).write_text("test placeholder\n")
@@ -2011,4 +2012,51 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
     assert result.returncode == 0, result.stdout
     assert "falling back to full pytest unit suite" in result.stdout
     assert f"unmapped: scripts/{script}.py" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text()
+
+
+IDX_FOCUSED_MAPPINGS = (
+    ("ingest/t3", ("test_ingest_t3.py",)),
+    (
+        "index_new",
+        ("test_source_class.py", "test_ingest_t3.py", "test_context_pipeline.py", "test_index_empty_content.py"),
+    ),
+    ("embeddings", ("test_embedding_truncation.py", "test_embedding_device.py", "test_index_completion.py")),
+    ("index_budget", ("test_index_calendar_custody.py", "test_cli_index_calendar.py")),
+)
+
+
+@pytest.mark.parametrize("module,expected", IDX_FOCUSED_MAPPINGS)
+def test_changed_only_scope_maps_idx_cohort_modules(tmp_path: Path, module, expected) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in expected:
+        (test_root / name).write_text("test placeholder\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    logged = pytest_log.read_text()
+    for name in expected:
+        assert str(test_root / name) in logged
+    assert "falling back to full pytest unit suite" not in result.stdout
+    assert f"{test_root}/ -v" not in logged
+
+
+@pytest.mark.parametrize(
+    "module,expected,missing",
+    [(module, expected, missing) for module, expected in IDX_FOCUSED_MAPPINGS for missing in expected],
+)
+def test_idx_cohort_mapping_escalates_when_a_companion_is_missing(tmp_path: Path, module, expected, missing) -> None:
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in expected:
+        if name != missing:
+            (test_root / name).write_text("test placeholder\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = f"src/brainlayer/{module}.py"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "falling back to full pytest unit suite" in result.stdout
+    assert f"unmapped: src/brainlayer/{module}.py" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()
