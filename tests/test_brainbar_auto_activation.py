@@ -517,16 +517,41 @@ def test_non_scan_errno_never_flaps_after_one_shot_migration(monitor, monkeypatc
         worker.tick()
     assert not worker.state.with_suffix(".scan-migration.json").exists()
     monkeypatch.setattr(auto, "app_identity", fail_identity)
-    activator = auto.AutoActivator
-    monkeypatch.setattr(auto, "AutoActivator", lambda agents, state: activator(worker.agents, state))
-    monkeypatch.setattr(auto.sys, "argv", ["monitor", "--state", str(worker.state)])
-    monkeypatch.delenv("BRAINLAYER_FORBID_BRAINBAR_SOCKET", raising=False)
     for _ in range(3):
-        with pytest.raises(SystemExit, match="1"):
-            auto.main()
+        with pytest.raises(PermissionError) as failure:
+            auto.AutoActivator(worker.agents, worker.state).tick()
+        report("brainbar-activation", f"BrainBar activation monitor refused: {failure.value}")
         assert "[Errno 13]" in job_alerts.active_alerts()["brainbar-activation"]
     assert sum(reason is None for _, reason in alerts) == int(legacy)
     assert sum(reason is not None for _, reason in alerts) == 3
     assert len(notifications) == 1 + int(legacy)
     assert worker.state.with_suffix(".scan-migration.json").is_file()
     assert not calls
+
+
+def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    reason = "BrainBar activation monitor refused: [Errno 11] old scan"
+    job_alerts.report("brainbar-activation", reason, notify=lambda _: None)
+    notifications = []
+
+    def report(key, reason):
+        alerts.append((key, reason))
+        return job_alerts.report(key, reason, notify=notifications.append)
+
+    def unwritable(path, payload):
+        assert path == worker.state.with_suffix(".scan-migration.json")
+        raise PermissionError(13, "fixture migration denied")
+
+    monkeypatch.setattr(auto, "report", report)
+    monkeypatch.setattr(auto, "_atomic_write_json", unwritable)
+    for _ in range(3):
+        with pytest.raises(PermissionError) as failure:
+            auto.AutoActivator(worker.agents, worker.state).tick()
+        report("brainbar-activation", f"BrainBar activation monitor refused: {failure.value}")
+        assert job_alerts.active_alerts()["brainbar-activation"] == reason
+    assert len(alerts) == 3 and all(reason is not None for _, reason in alerts)
+    assert not notifications and not calls
+    assert not worker.state.with_suffix(".scan-migration.json").exists()
