@@ -13,7 +13,7 @@ brainlayer health-check --json --heal
 - Hotlane BrainBar embedding daemon is running.
 - No running hotlane command line is disabling the embedding backlog with `--backlog-batch 0`.
 - Active chunks missing semantic vectors are decreasing across ticks. One unchanged tick is tolerated; the second unchanged tick alarms.
-- BrainBar's served MCP socket can answer a `brain_search` canary with at least one result.
+- BrainBar's served MCP socket can answer a `brain_search` canary successfully, including zero results.
 - The JSONL backup attempt log has a fresh terminal receipt. A verified upload and a
   verified `no-op` are healthy but remain distinct in `jsonl_backup.state`; failed,
   malformed, missing, or older-than-36-hour receipts are critical issues. A
@@ -54,7 +54,7 @@ With `--heal`, the check uses `launchctl kickstart -k` for cheap recovery:
   Transient SQLite busy failures are warnings and preserve the last successful
   baseline, stall counter and heal episode; a later successful sample continues
   the comparison. An unavailable current count cannot itself trigger that heal.
-- `com.brainlayer.brainbar-daemon` when the BrainBar MCP canary fails or returns zero results.
+- `com.brainlayer.brainbar-daemon` when the BrainBar MCP canary fails retrieval or transport.
 
 Before a kickstart, the check reads the launchd process state. Processes in an
 uninterruptible `U`/`D` state are not kickstarted repeatedly; the check records a
@@ -78,6 +78,23 @@ The independent Tier-0 watchdog treats `slow_check: true` as unhealthy even
 when the state file was just refreshed, and treats any state as stale after 900
 seconds. Its first alert is immediate; repeat alerts for the same failure class
 are suppressed for 1,800 seconds while recovery attempts continue.
+
+## Idle machines
+
+No new transcripts, zero indexed today, an old last-store timestamp, unchanged
+offsets, and a flat `drained_total` with an empty queue are normal during inactivity.
+Watcher polls and drain cycles should keep advancing while their processes run.
+A fresh verified transcript-backup `no-op` receipt is healthy even when the last
+archive upload is old; the upload timestamp remains historical evidence.
+
+Real failures still need attention: stopped processes, stalled watcher polling,
+undrained queued work, failing scheduled jobs, and missing, stale, malformed or
+failed backup attempts. A recent source write is evidence of work to ingest,
+never a requirement for keeping an otherwise healthy idle machine green.
+
+The [2026-10-18 audit](idle-machine-audit-2026-10-18.md) records both Macs' observed
+state and the remaining native backup presentation follow-up. These are read-only
+observations, not deployment or native visual verification.
 
 ## Logs
 
