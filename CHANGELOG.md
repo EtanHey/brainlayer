@@ -42,7 +42,7 @@
 ## [1.5.65] - 2026-10-18
 
 ### Fixed
-- A transient `ps` timeout or OS error during the BrainBar activation process scan defers activation instead of raising a false "activation monitor refused" alert. A scan alert is raised only after 12 consecutive failed ticks while both BrainBar jobs are unloaded, and clears after the next successful scan (#1399).
+- A transient `ps` timeout or OS error during the BrainBar activation process scan defers activation instead of raising a false "activation monitor refused" alert. A scan alert is raised after 12 consecutive scan failures, provided both BrainBar jobs are unloaded at the time of the alert; the next successful scan clears it (#1399).
 - A persistent non-scan `OSError` no longer flaps the activation alert (cleared after each successful scan, then re-reported every tick). A legacy `BrainBar activation monitor refused: [Errno …]` alert is cleared once, by a one-shot migration on the first successful scan; later errno failures stay raised (#1403).
 - The `t3_runtime_linkage_pending` CRITICAL alarm is deduplicated: emission happens once per file/state transition with hourly reminders, backed by a durable per-file status in `t3-linkage-status/` beside the resolved DB. Every pending observation still raises and ingestion still defers (#1400).
 
