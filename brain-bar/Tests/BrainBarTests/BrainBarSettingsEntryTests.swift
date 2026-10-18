@@ -16,7 +16,13 @@ final class BrainBarSettingsEntryTests: XCTestCase {
         let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
-            refreshStatusOnLoad: false, observabilityURL: url)
+            refreshStatusOnLoad: false, observabilityURL: url,
+            observabilityRead: { readURL in
+                // Decode this fixture only: readReconciled also resolves installed job-alert inputs.
+                XCTAssertEqual(readURL, url)
+                guard readURL == url else { return .unreadable("Unexpected fixture URL") }
+                return ObservabilityReader.read(url: readURL)
+            })
         await settle { model.hasCompletedObservabilityRead }
         XCTAssertNotNil(model.backupStatusReason)
         model.onePasswordReference = "op://synthetic/draft/key"

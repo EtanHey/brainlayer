@@ -175,7 +175,8 @@ enum BrainBarRenderHarness {
             panelState.attentionExpanded = true
             let dashboard = BrainBarDashboardPreview.make(collector: collector,
                 observabilityResult: BrainBarDashboardFixture.readableObservabilityResult, now: now,
-                panelState: panelState, jobAttentionReasons: reasons)
+                panelState: panelState, jobAttentionReasons: reasons,
+                observabilityCadence: .known(300))
             NSApplication.shared.setActivationPolicy(.regular)
             let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1100, height: 760),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
