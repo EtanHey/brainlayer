@@ -336,3 +336,7 @@ HTTP client/auth failures still stop immediately.
 A fresh snapshot cannot overwrite a same-day stalled gzip. An expired or unsafe
 session with such a collision fails explicitly and retains the existing file.
 A later dated run can create a replacement without changing backup filenames.
+
+The weekly age gate is checked again after upload and verification. A snapshot
+that crosses the weekly freshness limit during upload remains protected locally
+and returns an unsuccessful safety receipt, so weekly VACUUM cannot proceed.

@@ -611,3 +611,34 @@ def test_r1_same_day_fresh_snapshot_cannot_overwrite_retained_stalled_copy(lane,
     with pytest.raises(RuntimeError, match="retaining.*2026-10-17.db.gz"):
         lane.run("2026-10-17")
     assert lane.snapshot.read_bytes() == b"abcdef"
+
+
+def test_r1_weekly_snapshot_expiring_during_upload_cannot_authorize_vacuum(lane, monkeypatch):
+    import datetime as dt
+
+    receipt = stalled(lane)
+    clock = [dt.datetime.now(dt.UTC)]
+    created = (clock[0] - dt.timedelta(hours=5, minutes=59)).isoformat()
+    receipt["snapshot_created_at"] = created
+    lane.log.write_text(json.dumps(receipt) + "\n")
+    real_datetime = dt.datetime
+
+    class Clock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0].astimezone(tz)
+
+    monkeypatch.setattr(backup.dt, "datetime", Clock)
+    monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", "6")
+    lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
+
+    def verify(*args, **kwargs):
+        clock[0] += dt.timedelta(minutes=2)
+        return {"verified": True}
+
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verify)
+    result = lane.run("2026-10-18")
+    assert result["uploaded"]
+    assert result["verified"] is False
+    assert "snapshot" in result["verification_error"]
+    assert lane.snapshot.exists()

@@ -2122,6 +2122,18 @@ def run_backup(
                     file_id=file_id,
                 )
             )
+            weekly_age = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
+            if result["verified"] and weekly_age is not None:
+                created = _snapshot_created_time(result)
+                if created is None or not dt.timedelta(0) <= dt.datetime.now(dt.UTC) - created <= dt.timedelta(
+                    hours=float(weekly_age)
+                ):
+                    result.update(
+                        {
+                            "verified": False,
+                            "verification_error": "snapshot aged beyond weekly backup safety window; VACUUM not authorized",
+                        }
+                    )
             # Keep the confirmed upload addressable even if cleanup/retention fails.
             result.update({"uploaded": True, "drive_file": uploaded})
             if result["verified"]:
