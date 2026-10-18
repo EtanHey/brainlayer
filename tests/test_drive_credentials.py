@@ -181,7 +181,9 @@ def test_status_json_stays_safe_on_refresh_transport_failure(tmp_path):
     assert status["state"] == "valid" and "private-payload" not in json.dumps(status)
 
 
-@pytest.mark.parametrize("elapsed_days, expected", [(2, "valid"), (6.5, "expiring")])
+@pytest.mark.parametrize(
+    "elapsed_days, expected", [(2, "valid"), (5, "expiring"), (5.5, "expiring"), (6.5, "expiring")]
+)
 def test_offline_status_keeps_local_consent_clock(tmp_path, elapsed_days, expected):
     from google.auth.exceptions import TransportError
 
@@ -288,7 +290,9 @@ def test_testing_mode_consent_expires_after_seven_days(tmp_path):
         request_factory=object,
         alert_reporter=lambda *_: None,
     )
-    assert drive_credentials.credential_status(now=consented + timedelta(days=5), **kwargs)["state"] == "valid"
+    assert (
+        drive_credentials.credential_status(now=consented + timedelta(days=5, seconds=-1), **kwargs)["state"] == "valid"
+    )
     expiring = drive_credentials.credential_status(now=consented + timedelta(days=6, minutes=1), **kwargs)
     assert expiring["state"] == "expiring"
     assert expiring["expires_at"] == (consented + timedelta(days=7)).isoformat()
@@ -340,4 +344,41 @@ def test_refresh_network_error_stays_retryable_without_token_payload(tmp_path):
     with pytest.raises(TransportError, match="network failure") as caught:
         drive_credentials.load_credentials(token_path=token, client_path=client, credentials_class=NetworkFailure)
     assert "private-payload" not in str(caught.value)
+    assert token.read_bytes() == before
+
+
+@pytest.mark.parametrize("hours_left", [48, 36, 0, -1])
+def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hours_left, caplog):
+    from brainlayer import drive_credentials
+
+    token, client = tmp_path / "token.json", tmp_path / "client.json"
+    _token(token)
+    _client(client)
+    consented = datetime(2026, 10, 17, 18, 50, tzinfo=UTC)
+    expires = consented + timedelta(days=7)
+    data = json.loads(token.read_text())
+    data["consented_at"] = consented.isoformat()
+    token.write_text(json.dumps(data))
+    before = token.read_bytes()
+    alerts = []
+    kwargs = dict(
+        token_path=token,
+        client_path=client,
+        credentials_class=FakeCredentials,
+        request_factory=object,
+        now=expires - timedelta(hours=hours_left),
+        alert_reporter=lambda *args: alerts.append(args),
+    )
+    if hours_left <= 0:
+        with pytest.raises(drive_credentials.DriveCredentialError) as caught:
+            drive_credentials.load_credentials(**kwargs)
+        assert expires.isoformat() in str(caught.value)
+    else:
+        drive_credentials.load_credentials(**kwargs)
+        assert f"Drive access expires at {expires.isoformat()}" in caplog.text
+    assert alerts and expires.isoformat() in alerts[-1][1]
+    status = drive_credentials.credential_status(**kwargs)
+    assert status["state"] == ("invalid" if hours_left <= 0 else "expiring")
+    assert status["expires_at"] == expires.isoformat()
+    assert expires.isoformat() in status["reason"]
     assert token.read_bytes() == before
