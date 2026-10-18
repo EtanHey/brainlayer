@@ -758,6 +758,7 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_precompact_chunk_origin.py",
         "test_ingest_t3.py",
         "test_context_pipeline.py",
+        "test_index_empty_content.py",
     )
     for filename in (*expected, "test_think_recall_integration.py"):
         (test_root / filename).write_text("test placeholder\n")
@@ -2015,6 +2016,10 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
 
 
 IDX_FOCUSED_MAPPINGS = (
+    (
+        "index_new",
+        ("test_source_class.py", "test_ingest_t3.py", "test_context_pipeline.py", "test_index_empty_content.py"),
+    ),
     ("embeddings", ("test_embedding_truncation.py", "test_embedding_device.py", "test_index_completion.py")),
     ("index_budget", ("test_index_calendar_custody.py", "test_cli_index_calendar.py")),
 )

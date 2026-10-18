@@ -3690,6 +3690,12 @@ def index_fast(
     """Index using new fast sqlite-vec backend."""
     watchdog = None
     checkpoint = None
+    skipped_empty_chunks = 0
+
+    def note_skipped_empty(count: int) -> None:
+        nonlocal skipped_empty_chunks
+        skipped_empty_chunks += count
+
     calendar = os.environ.get("BRAINLAYER_LAUNCHD_SERVICE") == "index"
     try:
         from contextlib import ExitStack
@@ -3851,6 +3857,7 @@ def index_fast(
                                     deadline_monotonic=deadline_monotonic,
                                     store=runtime_store,
                                     start_position=start,
+                                    on_skipped_empty=note_skipped_empty,
                                 )
                             except IndexDeadlineExceeded as exc:
                                 if exc.completed_input_count == len(batch):
@@ -3873,6 +3880,7 @@ def index_fast(
                             on_progress=progress_callback,
                             deadline_monotonic=deadline_monotonic,
                             store=runtime_store,
+                            on_skipped_empty=note_skipped_empty,
                         )
                         total_chunks += indexed
                     watchdog.raise_if_expired(processed_count=0)
@@ -3959,6 +3967,8 @@ def index_fast(
             ) from e
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
+    finally:
+        rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks}")
 
 
 @app.command("ingest-t3")

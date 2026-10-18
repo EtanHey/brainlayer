@@ -379,13 +379,15 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
-      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py)
+      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py|src/brainlayer/index_new.py)
         # These modules have split test owners. Require every companion before narrowing;
         # a missing suite must retain the existing full-suite escalation.
         if [ "$changed" = "src/brainlayer/embeddings.py" ]; then
           idx_tests=(test_embedding_truncation.py test_embedding_device.py test_index_completion.py)
-        else
+        elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
+        else
+          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py)
         fi
         idx_complete=1
         for rel in "${idx_tests[@]}"; do
@@ -400,15 +402,6 @@ map_changed_files_to_pytests() {
           done
           mapped=1
         fi
-        ;;
-      src/brainlayer/index_new.py)
-        for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
-          test_path="$TEST_ROOT/$rel"
-          if [ -f "$test_path" ]; then
-            append_unique "$test_path"
-            mapped=1
-          fi
-        done
         ;;
       tests/*.py)
         test_path="$TEST_ROOT/${changed#tests/}"
