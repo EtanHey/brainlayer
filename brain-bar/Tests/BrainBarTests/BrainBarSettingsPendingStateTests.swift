@@ -527,6 +527,34 @@ final class BrainBarSettingsPendingStateTests: XCTestCase {
         }
     }
 
+    func testOpenSettingsRereadsHeartbeatAfterSupervisorRestartWithoutAnotherActivation() async throws {
+        let now = Date(timeIntervalSince1970: 1_791_500_000)
+        let old = WatcherHealthFileRead.readable(.init(updatedAt: now.addingTimeInterval(-3600), pollCount: 400))
+        let fresh = WatcherHealthFileRead.readable(.init(updatedAt: now, pollCount: 1))
+        let launchd = PendingLaunchdSamples([healthyStates])
+        let reads = PendingSettingsSamples([BrainBarDashboardFixture.healthyObservabilityResult])
+        let watcherReads = PendingSettingsSamples([old, fresh])
+        defer { launchd.releaseAll(); reads.releaseAll(); watcherReads.releaseAll() }
+        let (root, model) = try makeModel(launchd: launchd, reads: reads, initialStates: healthyStates,
+                                        watcherReads: watcherReads, initialWatcherHealth: old, now: now)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertTrue(model.watcherStatus.needsAttention)
+        let gate = WatcherHealthPollGate()
+        let task = Task { await model.monitorWatcherHealth { try await gate.next() } }
+        defer { task.cancel() }
+        watcherReads.release(0)
+        try await waitUntil { watcherReads.completed == 1 }
+        // Python has restarted and polls again; no launchd or DB refresh is requested.
+        await gate.advance()
+        watcherReads.release(1)
+        try await waitUntil { model.watcherHealth == fresh }
+        XCTAssertEqual(model.watcherStatus, .running(heartbeatAt: now))
+        XCTAssertEqual(launchd.calls, 0)
+        task.cancel()
+        await gate.finish()
+        await task.value
+    }
+
     private func makeModel(
         launchd: PendingLaunchdSamples, reads: PendingSettingsSamples<ObservabilityReadResult>,
         initialStates: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] = [:],
@@ -624,5 +652,25 @@ private final class PendingSettingsSamples<Value: Sendable>: @unchecked Sendable
 
     func releaseAll() {
         gates.forEach { $0.signal() }
+    }
+}
+
+private actor WatcherHealthPollGate {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var released = false
+    private var finished = false
+    func next() async throws {
+        if finished { throw CancellationError() }
+        if released { released = false; return }
+        try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+    func advance() {
+        if let pending = continuation { continuation = nil; pending.resume() }
+        else { released = true }
+    }
+    func finish() {
+        finished = true
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
     }
 }
