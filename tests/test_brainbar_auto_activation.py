@@ -10,6 +10,7 @@ from brainlayer.brainbar_identity import JOBS
 
 @pytest.fixture
 def monitor(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(tmp_path / "job-alerts.json"))
     agents = tmp_path / "agents"
     agents.mkdir()
     app = tmp_path / "BrainBar.app"
@@ -337,3 +338,93 @@ def test_process_scan_scrubs_and_bounds_executable_basename(monkeypatch):
     assert auto.brew_processes() == ["42 [REDACTED:github]"]
     monkeypatch.setattr(auto, "process_table", lambda: f"42 1 /private/{'x' * 300} /Homebrew/child")
     assert auto.brew_processes() == ["42 " + "x" * 128]
+
+
+@pytest.mark.parametrize("error", [auto.subprocess.TimeoutExpired(["ps", "private-argv"], 5), OSError("private-argv")])
+@pytest.mark.parametrize("codes", [(113, 113), (0, 113), (113, 1)])
+def test_scan_failures_are_transient_durable_and_recover(monitor, monkeypatch, error, codes):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    alert_file = worker.state.with_name("alerts.json")
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alert_file))
+    monkeypatch.setattr(
+        auto,
+        "report",
+        lambda key, reason: (alerts.append((key, reason)), job_alerts.report(key, reason, notify=lambda _: None)),
+    )
+    worker.state.write_text('{"stage":"ready","identity":{}}')
+    brew_state = worker.state.with_suffix(".brew.json")
+    brew_state.write_text('{"since":1000,"alerted":true}')
+    before = worker.state.read_bytes(), brew_state.read_bytes()
+
+    def fail():
+        raise error
+
+    monkeypatch.setattr(auto, "brew_processes", fail)
+    monkeypatch.setattr(
+        auto, "loaded", lambda label: SimpleNamespace(returncode=codes[[x[0] for x in JOBS].index(label)])
+    )
+    for _ in range(11):
+        auto.AutoActivator(worker.agents, worker.state).tick()
+    assert not alerts and not calls
+    assert (worker.state.read_bytes(), brew_state.read_bytes()) == before
+    auto.AutoActivator(worker.agents, worker.state).tick()
+    assert bool(alerts) == (codes == (113, 113))
+    assert "private-argv" not in repr(alerts)
+    if alerts:
+        assert type(error).__name__ in alerts[-1][1]
+    # Recovery must clear even if no plists remain, without erasing other failures.
+    for path in worker.agents.glob("*.plist"):
+        path.unlink()
+    monkeypatch.setattr(auto, "brew_processes", lambda: [])
+    worker.tick()
+    assert "brainbar-activation" not in job_alerts.active_alerts()
+    monkeypatch.setattr(auto, "brew_processes", fail)
+    worker.tick()
+    assert "brainbar-activation" not in job_alerts.active_alerts()
+
+
+@pytest.mark.parametrize(
+    "reason,cleared",
+    [
+        (
+            "BrainBar activation monitor refused: Command '['/bin/ps', '-axo', 'pid=,ppid=,comm=,args=']' timed out after 5 seconds",
+            True,
+        ),
+        ("BrainBar activation failed: blocked", False),
+    ],
+)
+def test_successful_scan_clears_only_scan_alerts(monitor, monkeypatch, reason, cleared):
+    from brainlayer import job_alerts
+
+    worker, _, _, _ = monitor
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(worker.state.with_name("alerts.json")))
+    job_alerts.report("brainbar-activation", reason, notify=lambda _: None)
+    monkeypatch.setattr(auto, "report", lambda key, reason: job_alerts.report(key, reason, notify=lambda _: None))
+    for path in worker.agents.glob("*.plist"):
+        path.unlink()
+    worker.tick()
+    assert ("brainbar-activation" not in job_alerts.active_alerts()) == cleared
+
+
+def test_second_scan_failure_never_launches_and_counts_failed_ticks(monitor, monkeypatch):
+    worker, _, calls, alerts = monitor
+    scans = 0
+
+    def scan():
+        nonlocal scans
+        scans += 1
+        if scans % 2 == 0:
+            raise OSError("private-argv")
+        return []
+
+    monkeypatch.setattr(auto, "brew_processes", scan)
+    for _ in range(11):
+        auto.AutoActivator(worker.agents, worker.state).tick()
+    assert not calls and not alerts and not worker.state.exists()
+    worker.tick()
+    assert len(alerts) == 1 and "OSError" in alerts[0][1]
+    assert not calls and not worker.state.exists()
+    worker.tick()
+    assert all(reason is not None for _, reason in alerts)
