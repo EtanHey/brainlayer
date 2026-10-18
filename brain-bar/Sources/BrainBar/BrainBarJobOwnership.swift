@@ -90,6 +90,8 @@ struct BrainBarCalendarHistory: Sendable {
         let code: Int32
         let status: String
         var startedAt: Date? = nil
+        var reason: String? = nil
+        var replaces: String? = nil
     }
     var runs: [String: Run] = [:]
     var error: String? = nil
@@ -109,6 +111,7 @@ struct BrainBarCalendarHistory: Sendable {
                    let ts = row["ts"] as? Double, ts.isFinite {
                     starts[step] = Date(timeIntervalSince1970: ts)
                 }
+                if row["event"] as? String == "runner" { starts.removeAll() }
                 guard row["event"] as? String == "finished" else { continue }
                 guard let step = row["step"] as? String, let ts = row["ts"] as? Double, ts.isFinite,
                       let status = row["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
@@ -119,7 +122,8 @@ struct BrainBarCalendarHistory: Sendable {
                 guard let code = row["returncode"] as? Int32,
                       ["ok", "failed", "deferred", "stopped"].contains(status)
                 else { throw CocoaError(.fileReadCorruptFile) }
-                result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status, startedAt: startedAt)
+                result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
+                    startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String)
             }
             return result
         } catch { return Self(error: "Maintenance calendar history is unreadable") }

@@ -8,12 +8,13 @@ import os
 import signal
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import maintenance_control
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
+from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
 from .job_alerts import report
 from .maintenance_control import MaintenanceHold
 from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
@@ -61,7 +62,7 @@ class CalendarPlan:
 
 def calendar_steps(python, cli, lib_dir, scheduled_date):
     commands = (
-        ((cli, "index"), 21600),
+        ((cli, "index"), 1800 + CALENDAR_INDEX_UNWIND_S),
         ((str(lib_dir / "backup-daily.sh"),), 28890),
         ((python, "-m", "brainlayer.maintenance", "--light"), 1800),
         ((str(lib_dir / "jsonl-backup.sh"),), 7200),
@@ -97,6 +98,30 @@ def backup_deadline(step):
     if seconds < 1:
         raise ValueError("invalid backup timeout")
     return max(step.timeout, seconds + 90)
+
+
+def _bounded_index_step(step, now, shutdown_timeout):
+    """Use existing group custody, reserving cleanup before the quiet window."""
+    path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
+    configured = configured_brainlayer_env_value("BRAINLAYER_INDEX_MAX_RUNTIME_S", path)
+    try:
+        requested = float(
+            configured if configured is not None else os.environ.get("BRAINLAYER_INDEX_MAX_RUNTIME_S", 1800)
+        )
+    except (TypeError, ValueError):
+        requested = 1800
+    if not math.isfinite(requested) or requested <= 0:
+        requested = 1800
+    budget = calendar_index_budget_s(
+        min(requested, step.timeout), now, reserve_s=max(60, shutdown_timeout + CALENDAR_INDEX_UNWIND_S + 15)
+    )
+    if budget <= 0:
+        return None
+    return replace(
+        step,
+        timeout=min(step.timeout, budget + CALENDAR_INDEX_UNWIND_S),
+        env=step.env | {"BRAINLAYER_INDEX_CALENDAR_BUDGET_S": str(budget)},
+    )
 
 
 async def pulse(guard, stop, interval):
@@ -148,9 +173,10 @@ async def _window(directory, step, now_fn, sleep_fn, stop):
     return not stop.is_set() and 4 <= now_fn().hour < 6
 
 
-def finish(directory, state, step, code, date, defer_after, missed=False, stopped=False):
+def finish(directory, state, step, code, date, defer_after, missed=False, stopped=False, *, reason=None, replaces=None):
     status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
-    record(directory, event="finished", step=step.name, status=status, returncode=code)
+    detail = {key: value for key, value in dict(reason=reason, replaces=replaces).items() if value is not None}
+    record(directory, event="finished", step=step.name, status=status, returncode=code, **detail)
     key = KEYS.get(step.name)
     if key and not stopped:
         if code == 75:
@@ -213,10 +239,13 @@ async def run_calendar(
         state = json.loads(state_path.read_text()) if state_path.exists() else dict(deferrals={})
         if not isinstance(state, dict) or not isinstance(state.get("deferrals"), dict):
             raise ValueError("unknown calendar state")
-        if isinstance(steps, CalendarPlan):
+        planned = isinstance(steps, CalendarPlan)
+        if planned:
             marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
             steps = steps.select(marker)
         steps = tuple(steps)
+        weekly_substitution = planned and any(step.name == "maintenance-weekly" for step in steps)
+        index_overran_window = False
         client = maintenance_control.control_client()
         logs.mkdir(parents=True, exist_ok=True)
         guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
@@ -236,13 +265,21 @@ async def run_calendar(
             if stop.is_set():
                 record(directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
-            code, missed = 1, False
+            code, missed, reason = 1, False, None
             try:
+                if step.name == "index":
+                    bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
+                    if bounded is None:
+                        results[step.name] = finish(directory, state, step, 75, date, defer_after)
+                        continue
+                    step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
                 if f"com.brainlayer.{step.name}" in disabled or "com.brainlayer.maintenance" in disabled:
-                    code = 75
+                    code, reason = 75, "disabled"
                 elif not await _window(directory, step, now_fn, sleep_fn, stop):
                     code, missed = (143, False) if stop.is_set() else (75, True)
+                    if missed:
+                        reason = "index-overran-window" if index_overran_window else "quiet-window-missed"
                 else:
                     child_env = (
                         env
@@ -253,6 +290,7 @@ async def run_calendar(
                         if stop.is_set():
                             code = 143
                         else:
+                            started = now_fn()
                             code = await _execute_step(
                                 step,
                                 held_env,
@@ -264,10 +302,27 @@ async def run_calendar(
                                 guard_timeout=guard_timeout,
                                 shutdown_timeout=shutdown_timeout,
                             )
+                            ended = now_fn()
+                            if step.name == "index":
+                                # Only attribute the miss to indexing when its measured interval
+                                # crossed this day's window end. Backup delays get a generic reason.
+                                window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
+                                index_overran_window = started < window_end <= ended
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
-            results[step.name] = finish(directory, state, step, code, date, defer_after, missed, stop.is_set())
+            results[step.name] = finish(
+                directory,
+                state,
+                step,
+                code,
+                date,
+                defer_after,
+                missed,
+                stop.is_set(),
+                reason=reason,
+                replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
+            )
         if all(results.get(n) == "ok" for n in ("maintenance-weekly", "decay", "repair-fts")):
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             _atomic_write(directory / "state.json", state)

@@ -49,9 +49,11 @@ def test_index_deadline_exits_nonzero_with_loud_alarm(tmp_path, monkeypatch):
         on_progress,
         deadline_monotonic=None,
         store=None,
+        on_skipped_empty=None,
     ):
         captured["deadline"] = deadline_monotonic
         captured["store"] = store
+        on_skipped_empty(1)
         raise IndexDeadlineExceeded(processed_count=2)
 
     def fake_emit_alarm(alarm):
@@ -76,6 +78,7 @@ def test_index_deadline_exits_nonzero_with_loud_alarm(tmp_path, monkeypatch):
     assert len(alarms) == 1
     assert alarms[0].context["max_runtime_s"] == 7.0
     assert alarms[0].context["committed_chunks"] == 2
+    assert "skipped_empty_chunks=1" in result.stdout
 
 
 def test_fast_index_under_deadline_completes_without_alarm(tmp_path, monkeypatch):
@@ -93,9 +96,11 @@ def test_fast_index_under_deadline_completes_without_alarm(tmp_path, monkeypatch
         on_progress,
         deadline_monotonic=None,
         store=None,
+        on_skipped_empty=None,
     ):
         captured["deadline"] = deadline_monotonic
         captured["store"] = store
+        on_skipped_empty(1)
         return 3
 
     monkeypatch.setattr("brainlayer.index_new.index_chunks_to_sqlite", fake_index)
@@ -112,6 +117,7 @@ def test_fast_index_under_deadline_completes_without_alarm(tmp_path, monkeypatch
     assert captured["store"] is runtime_store
     assert alarms == []
     assert "Indexed 3 chunks" in result.stdout
+    assert "skipped_empty_chunks=1" in result.stdout
 
 
 def test_index_deadline_trips_after_file_that_produces_no_writes(tmp_path, monkeypatch):

@@ -80,3 +80,34 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
     assert any(e["event"] == "wait-start" for e in events) == (finish[0] < 4)
     if finish[0] < 6:
         assert json.loads((path / "calendar" / "state.json").read_text())["last_weekly"] == "2026-10-11"
+
+
+@pytest.mark.parametrize("late_step", ["index", "backup-daily", None])
+def test_calendar_records_actual_window_blocker_and_weekly_substitution(request, monkeypatch, late_step):
+    from brainlayer import maintenance_calendar
+
+    path, _, _, _ = request.getfixturevalue("control")
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(path / "alerts.json"))
+    clock = [dt.datetime(2026, 10, 11, 3, 15)]
+
+    async def execute(step, env, **kwargs):
+        if step.name == late_step:
+            clock[0] = clock[0].replace(hour=6, minute=10)
+        return 0
+
+    async def sleep(seconds):
+        clock[0] = clock[0].replace(hour=4, minute=0)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(maintenance_calendar, "_execute_step", execute)
+    plan = calendar_steps(sys.executable, "/unused/cli", path, dt.date(2026, 10, 11))
+    assert (
+        asyncio.run(run_calendar(plan, path / "calendar", path / "logs", now_fn=lambda: clock[0], sleep_fn=sleep)) == 0
+    )
+    rows = [json.loads(line) for line in (path / "calendar" / "runs.jsonl").read_text().splitlines()]
+    weekly = next(row for row in rows if row["event"] == "finished" and row["step"] == "maintenance-weekly")
+    assert weekly.get("replaces") == "maintenance-nightly"
+    assert weekly.get("reason") == (
+        "index-overran-window" if late_step == "index" else "quiet-window-missed" if late_step else None
+    )
+    assert weekly["status"] == ("deferred" if late_step else "ok")

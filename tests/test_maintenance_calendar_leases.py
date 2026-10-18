@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from brainlayer.maintenance_calendar import Step, run_calendar
+from tests.calendar_watch_readiness import wait_for_calendar_watch
 from tests.test_maintenance_control import control, native  # noqa: F401
 from tests.test_service_supervisor import eventually, exists
 
@@ -21,19 +22,31 @@ def runner(request, monkeypatch):
     return path, query
 
 
-def test_nested_lease_verified_and_timeout_reaps_descendants_before_next_step(runner):
+@pytest.mark.parametrize("step_name", ["maintenance-nightly", "index"])
+def test_nested_lease_verified_and_timeout_reaps_descendants_before_next_step(runner, step_name, monkeypatch):
     path, query = runner
-    marker = path / "descendant"
+    (path / "fixture.env").write_text("")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(path / "fixture.env"))
+    marker = path / "calendar-descendant"
     leaf = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(60)"
     source = f"import subprocess,sys,time; from pathlib import Path; from brainlayer.maintenance_control import MaintenanceHold\nwith MaintenanceHold():\n c=subprocess.Popen((sys.executable,'-c',{leaf!r})); Path({str(marker)!r}).write_text(str(c.pid)); time.sleep(60)"
+    if step_name == "index":
+        # Online index has no maintenance pause; do not spend its synthetic cap
+        # waiting for resident writers to acknowledge a nested maintenance hold.
+        source = source.replace("with MaintenanceHold():", "if True:")
     next_step = f"import os; from pathlib import Path; pid=int(Path({str(marker)!r}).read_text());\ntry: os.kill(pid,0)\nexcept ProcessLookupError: pass\nelse: raise SystemExit(99)"
     steps = [
-        Step("maintenance-nightly", (sys.executable, "-c", source), 0.5),
+        Step(step_name, (sys.executable, "-c", source), 2 if step_name == "index" else 0.5),
         Step("p0-counter", (sys.executable, "-c", next_step), 5),
     ]
     assert (
         asyncio.run(
-            run_calendar(steps, path / "calendar", path / "logs", now_fn=lambda: dt.datetime(2026, 10, 12, 4, 30))
+            run_calendar(
+                steps,
+                path / "calendar",
+                path / "logs",
+                now_fn=lambda: dt.datetime(2026, 10, 12, 3 if step_name == "index" else 4, 30),
+            )
         )
         == 1
     )
@@ -102,7 +115,7 @@ raise SystemExit(asyncio.run(run_calendar([Step('maintenance-nightly',(sys.execu
             return False
 
         eventually(dead)
-        eventually(lambda: bool(query()["components"]["watch"]["pid"]))
+        wait_for_calendar_watch(query, path)
     finally:
         if parent.poll() is None:
             parent.kill()

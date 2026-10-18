@@ -13,6 +13,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     var calendarStartedAt: Date? = nil
     var calendarDisabled = false
     var calendarDeferralRecord: BrainLayerMaintenanceEvidence.RunRecord? = nil
+    var calendarMissedWindowReason: String? = nil
 
     var backupScheduleLine: ObservabilityStatusLine? {
         guard ownership != .legacy else { return nil }
@@ -35,6 +36,7 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     }
 
     var calendarDeferralVerdict: BrainLayerMaintenanceExit.Verdict {
+        if let calendarMissedWindowReason { return .failed(calendarMissedWindowReason) }
         if calendarDisabled { return .deferred("disabled") }
         return BrainLayerMaintenanceExit.verdict(calendarDeferralRecord, lastRunAt: calendarStartedAt)
     }

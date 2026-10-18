@@ -235,6 +235,18 @@ final class BrainBarSettingsViewModel: ObservableObject {
         group.jobs.allSatisfy { config.launchdJobs[$0]?.enabled == true }
     }
 
+    var dashboardJobAttentionReasons: [String] {
+        BrainLayerLaunchdJobGroup.allCases.compactMap { group in
+            let status = groupStatus(group)
+            switch status.health {
+            case .unhealthy, .unknown, .deferred:
+                return status.attentionReason ?? "\(group.title): \(status.health.title)."
+            case .checking, .healthy, .awaitingRun, .skipped:
+                return nil
+            }
+        }
+    }
+
     func groupStatus(_ group: BrainLayerLaunchdJobGroup) -> BrainLayerLaunchdGroupStatus {
         let watcher = watcherStatus
         // The independent health reader can measure a failure before launchd finishes.
@@ -830,8 +842,8 @@ struct BrainBarSettingsView: View {
         _navigation = StateObject(wrappedValue: BrainBarSettingsNavigation(selected: initialSection))
     }
 
-    init(viewModel: BrainBarSettingsViewModel, navigation: BrainBarSettingsNavigation, showsSidebar: Bool) {
-        activationRevision = 0
+    init(viewModel: BrainBarSettingsViewModel, navigation: BrainBarSettingsNavigation, showsSidebar: Bool, activationRevision: Int = 0) {
+        self.activationRevision = activationRevision
         self.showsSidebar = showsSidebar
         _viewModel = StateObject(wrappedValue: viewModel)
         _navigation = StateObject(wrappedValue: navigation)
@@ -872,7 +884,7 @@ struct BrainBarSettingsView: View {
         .background(Color.brainBarBackgroundBase)
         .foregroundStyle(Color.brainBarTextPrimary)
         .environment(\.colorScheme, .dark)
-        .onChange(of: activationRevision) { _, _ in
+        .onChange(of: activationRevision, initial: true) { _, _ in
             _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
             viewModel.refreshLaunchdStatus()
             viewModel.refreshObservabilityStatus()

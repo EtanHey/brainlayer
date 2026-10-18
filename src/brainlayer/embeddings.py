@@ -106,13 +106,16 @@ class EmbeddingModel:
 
             try:
                 embeddings = model.encode(batch_texts, convert_to_numpy=True, show_progress_bar=False)
+                if len(embeddings) != len(batch_chunks):
+                    raise ValueError(f"encoder returned {len(embeddings)} vectors for {len(batch_chunks)} inputs")
 
                 for chunk, embedding in zip(batch_chunks, embeddings):
                     results.append(EmbeddedChunk(chunk=chunk, embedding=embedding.tolist()))
 
             except Exception as e:
-                logger.error(f"Failed to embed batch: {e}")
-                continue
+                # A compacted survivor list loses input positions and cannot prove
+                # completion. Fail the invocation so every missing input is retryable.
+                raise RuntimeError(f"Failed to embed input batch starting at {i}: {e}") from e
 
             if on_progress:
                 on_progress(len(results), total)

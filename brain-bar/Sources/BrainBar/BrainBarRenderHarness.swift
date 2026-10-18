@@ -113,7 +113,94 @@ enum BrainBarRenderHarness {
         init(_ message: String) { errorDescription = message }
     }
 
+    private struct JobHealthQAProvider: BrainLayerLaunchdStatusSampling {
+        let observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+        func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] { observations.mapValues(\.loadState) }
+        func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] { observations }
+    }
+
+    /// Real on-screen production views with synthetic job evidence. Runs before App.main,
+    /// so no AppDelegate, daemon, hotkey, canonical DB or supervisor is started.
+    private static func runJobHealthQAIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["BRAINBAR_JOB_HEALTH_QA"] else { return }
+        do {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let now = BrainBarDashboardFixture.fetchedAt
+            let configURL = directory.appendingPathComponent("fixture.env")
+            let store = BrainLayerConfigStore(configURL: configURL)
+            try store.save(.defaultConfig)
+            var observations = Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
+                ($0, BrainLayerLaunchdJobObservation(loadState: $0 == .watch ? .running : .loaded,
+                    runs: 1, lastExitCode: 0, lastRunAt: now, nextRunAt: now.addingTimeInterval(86400),
+                    isContinuous: $0 == .watch, ownership: .supervisor))
+            })
+            observations[.index] = .init(loadState: .loaded, runs: 1, lastExitCode: 1,
+                lastRunAt: now, nextRunAt: now.addingTimeInterval(86400), isContinuous: false,
+                ownership: .supervisor)
+            if let scenario = ProcessInfo.processInfo.environment["BRAINBAR_MAINTENANCE_QA"] {
+                // Exercise the production history reader/provider with private synthetic records.
+                let finished: [String: Any] = ["event": "finished", "step": "maintenance-weekly",
+                    "ts": now.timeIntervalSince1970, "status": scenario == "success" ? "ok" : "deferred",
+                    "returncode": scenario == "success" ? 0 : 75, "replaces": "maintenance-nightly",
+                    "reason": scenario == "success" ? "" : "index-overran-window"]
+                let spawn: [String: Any] = ["event": "spawn", "step": "maintenance-weekly",
+                    "ts": now.addingTimeInterval(-60).timeIntervalSince1970, "pid": 4242]
+                var data = Data()
+                for row in (scenario == "success" ? [spawn, finished] : [finished]) {
+                    data.append(try JSONSerialization.data(withJSONObject: row))
+                    data.append(0x0a)
+                }
+                try data.write(to: directory.appendingPathComponent("runs.jsonl"))
+                let history = BrainBarCalendarHistory.read(directory: directory)
+                let provider = BrainLayerLaunchdStatusProvider(commandRunner: { _ in
+                    .init(terminationStatus: 0, output: "runs = 0")
+                }, now: { now }, ownership: { .supervisor }, calendarHistory: { history },
+                    calendarSchedule: { DateComponents(hour: 3, minute: 15) },
+                    calendarLogsDirectory: { directory }, calendarIsDisabled: { _ in false })
+                observations[.maintenanceWeekly] = provider.sampleActivity()[.maintenanceWeekly]
+                observations[.index] = .init(loadState: .loaded, runs: 1, lastExitCode: 0,
+                    lastRunAt: now, nextRunAt: now.addingTimeInterval(86400), isContinuous: false,
+                    ownership: .supervisor)
+            }
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                launchdStatusProvider: JobHealthQAProvider(observations: observations),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
+                initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
+                initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)),
+                initialMaintenanceEvidence: .init(weeklyCompletion: .completed(now), runRecords: [:]))
+            let reasons = model.dashboardJobAttentionReasons
+            let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
+            let panelState = BrainBarDashboardPanelState()
+            panelState.attentionExpanded = true
+            let dashboard = BrainBarDashboardPreview.make(collector: collector,
+                observabilityResult: BrainBarDashboardFixture.readableObservabilityResult, now: now,
+                panelState: panelState, jobAttentionReasons: reasons,
+                observabilityCadence: .known(300))
+            NSApplication.shared.setActivationPolicy(.regular)
+            let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1100, height: 760),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "BrainBar — Lane UI fixture (no live services)"
+            window.contentView = NSHostingView(rootView: dashboard)
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            RunLoop.main.run(until: Date().addingTimeInterval(2))
+            try String(window.windowNumber).write(to: directory.appendingPathComponent("dashboard.window"), atomically: true, encoding: .utf8)
+            RunLoop.main.run(until: Date().addingTimeInterval(12))
+            window.contentView = NSHostingView(rootView: BrainBarSettingsView(viewModel: model))
+            RunLoop.main.run(until: Date().addingTimeInterval(2))
+            try String(window.windowNumber).write(to: directory.appendingPathComponent("jobs.window"), atomically: true, encoding: .utf8)
+            RunLoop.main.run(until: Date().addingTimeInterval(12))
+            window.orderOut(nil)
+            exit(0)
+        } catch {
+            print("Job-health QA failed: \(error)")
+            exit(1)
+        }
+    }
+
     static func runIfRequested() {
+        runJobHealthQAIfRequested()
         if let path = ProcessInfo.processInfo.environment["BRAINBAR_DRIVE_CONSENT_CAPTURE"] {
             captureDriveConsentWindows(directory: URL(fileURLWithPath: path))
         }
@@ -182,33 +269,25 @@ enum BrainBarRenderHarness {
         }
     }
 
-    /// Visible, isolated BrainBar windows for screencapture. No app delegate, DB, socket,
-    /// credential runner, production defaults or timers; the harness exits itself after 20 s.
+    /// Visible windows with private/static readers, no app delegate, DB or credential runner.
+    /// View-local timers read only injected memory; the harness exits itself after 20 s.
     private static func captureDriveConsentWindows(directory: URL) -> Never {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.regular)
             let now = Date()
             let expiry = now.addingTimeInterval(36 * 3_600)
-            let store = BrainLayerConfigStore(
-                configURL: directory.appendingPathComponent("unused.env"),
-                loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) },
-                saveOverride: { _ in }
-            )
             var windows: [NSWindow] = []
             for page in ["dashboard", "backups"] {
                 let state = BrainBarDashboardPanelState()
-                let settings = BrainBarSettingsViewModel(
-                    workspace: BrainBarRecordingWorkspace(), store: store,
-                    launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
-                    runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture")),
-                    refreshStatusOnLoad: false, now: { now },
-                    initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult
-                )
+                let fixture = BrainBarDriveConsentCaptureFixture(directory: directory, now: now)
+                let settings = fixture.settings
                 let view = BrainBarUnifiedWindowPreview.make(
-                    collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: settings,
+                    collector: fixture.collector, settingsViewModel: settings,
                     panelState: state, section: .backups,
-                    driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry)) }
+                    driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry)) },
+                    fixtureDashboard: fixture.dashboard(panelState: state),
+                    databasePath: directory.appendingPathComponent("unused.db").path
                 )
                 if page == "dashboard" { state.select(.dashboard) }
                 let window = BrainBarMainWindow(
