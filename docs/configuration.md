@@ -226,7 +226,24 @@ An empty upload drain exits successfully without appending a receipt or clearing
 Observability keeps `backups.db_snapshot` at the last offsite uploaded-and-verified receipt, preserving
 existing BrainBar behavior. Schema v2 adds the optional sibling `backups.local_snapshot` with
 `local_verified`, `uploaded`, `upload_state`, `upload_error` and local integrity evidence. Upload failures
-still set `backups.error_type`; #1398 will render the sibling's pending state neutrally. Schema v1 is frozen.
+still set `backups.error_type`. BrainBar shows a fresh verified local snapshot with a pending or
+in-progress upload as “Upload queued” or “Upload in progress” alongside the green last offsite copy,
+only while that offsite copy is also within `threshold_hours` (normally 36 hours). A stale offsite
+copy turns red even if each nightly job produces a new local copy. Failed or abandoned
+uploads remain red and show `upload_error`; missing/unverified/stale local proof remains red. A
+`nothing_pending` state makes both local snapshot and freshness rows red with an action to run
+backup-daily or check the snapshot job; current producers do not emit this state. Schema v1 is frozen.
+
+Schema v2 also exposes optional `backups.transcript_attempt` evidence (`at`, `status: "no-op"`,
+`verified: true`, `uploaded: false`) only for a valid fresh verified no-op receipt. BrainBar presents
+that idle state neutrally under “Transcript coverage”, showing the last upload date and relative check
+time with the caller’s calendar/locale; the actual archive ID and count remain in details.
+Unrelated DB, Drive and weekly job failures retain their own attention lines without blaming transcript
+coverage. Only transcript attempt errors, retention or freshness invalidate the idle evidence.
+Missing, stale, failed or unverified attempt evidence never enables the idle presentation. Job failures,
+expired Drive access and retention failures still require attention. Older documents without these
+optional fields keep their previous presentation.
+
 The snapshot step has a separate timeout (`BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS`, default **45 minutes**,
 three times a measured 14m18s snapshot rounded up to five minutes) and is also
 clipped to finish its process-group cleanup before 06:00. Both phases honor the existing

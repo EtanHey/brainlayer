@@ -382,10 +382,30 @@ def build_backups_section(
         freshness = "unknown"
     bootstrapped = not launchd_not_loaded and observed_label in launchd_text
 
+    # Optional evidence, never synthesized from a missing upload or a zero archive count.
+    evidence: dict[str, Any] = {}
+    latest = jsonl_records[-1]
+    attempted_at = _jsonl_backup_attempt_time(latest)
+    if (
+        health.state == "no_op"
+        and attempted_at is not None
+        and 0 <= (now.astimezone(UTC) - attempted_at).total_seconds() <= DEFAULT_JSONL_BACKUP_MAX_AGE_SECONDS
+        and latest.get("status") == "no-op"
+        and latest.get("verified") is True
+        and latest.get("uploaded") is False
+    ):
+        evidence["transcript_attempt"] = {
+            "at": attempted_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "status": "no-op",
+            "verified": True,
+            "uploaded": False,
+        }
+
     return {
         "state": "measured",
         "reason": "",
         "inputs": inputs,
+        **evidence,
         "last_verified_upload": last_upload,
         "freshness": freshness,
         "threshold_hours": THRESHOLD_HOURS,

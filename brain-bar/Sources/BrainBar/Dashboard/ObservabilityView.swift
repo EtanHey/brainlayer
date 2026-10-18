@@ -218,6 +218,40 @@ struct ObservabilityDocument: Codable, Sendable {
         let lastVerifiedUpload: LastVerifiedUpload?
         let dbSnapshot: DBSnapshot?
         let launchd: Launchd?
+        var transcriptAttempt: TranscriptAttempt? = nil
+        var localSnapshot: LocalSnapshot? = nil
+
+        func isRecent(_ date: Date, now: Date) -> Bool {
+            guard let thresholdHours, thresholdHours > 0 else { return false }
+            return (0...thresholdHours * 3600).contains(now.timeIntervalSince(date))
+        }
+
+        func hasRecentVerifiedNoOp(now: Date) -> Bool {
+            guard let attempt = transcriptAttempt, attempt.status == "no-op",
+                  attempt.verified, !attempt.uploaded, isRecent(attempt.at, now: now) else { return false }
+            return true
+        }
+
+        func verifiedIdle(now: Date) -> Bool {
+            state == "measured" && freshness == "fresh" && retentionInvariant == "PASS" &&
+                (errorType?.hasPrefix("jsonl_backup_attempt_") != true) && hasRecentVerifiedNoOp(now: now) &&
+                lastVerifiedUpload?.verified != false
+        }
+
+        func localUploadPending(now: Date) -> Bool {
+            guard let value = localSnapshot, value.localVerified,
+                  !value.uploaded, let lastAt = value.lastAt,
+                  ["pending", "in_progress"].contains(value.uploadState),
+                  value.uploadError == nil || value.uploadError == "",
+                  isRecent(lastAt, now: now),
+                  let offsite = dbSnapshot, offsite.verified, isRecent(offsite.lastAt, now: now) else { return false }
+            return true
+        }
+    }
+    struct TranscriptAttempt: Codable, Sendable {
+        let at: Date
+        let status: String
+        let verified, uploaded: Bool
     }
     struct LastVerifiedUpload: Codable, Sendable {
         let at: Date, ageHours: Double
@@ -228,6 +262,14 @@ struct ObservabilityDocument: Codable, Sendable {
         let lastAt: Date
         let destination: String
         let verified: Bool
+    }
+    struct LocalSnapshot: Codable, Sendable {
+        let lastAt: Date?
+        let destination: String?
+        let localVerified, uploaded: Bool
+        let uploadState: String
+        let uploadError: String?
+        let localIntegrity, localIntegrityPragma: String?
     }
     struct Launchd: Codable, Sendable {
         let label: String
@@ -346,9 +388,14 @@ struct ObservabilityBackupStatus: Equatable, Sendable {
     let error: ObservabilityStatusLine?
     /// `error` is a job alert (#1031): the failed job's own sentence for Etan.
     var errorIsJobAlert = false
+    var snapshotUpload: ObservabilityStatusLine? = nil
+    var uploadInProgress = false
+    var uploadQueued = false
+    var freshnessCheckTitle = "Up to date"
+    var freshnessCheckValue = "Unknown"
 
     var lines: [ObservabilityStatusLine] {
-        [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
+        [upload, snapshot] + [snapshotUpload].compactMap { $0 } + [job, freshness, retention, archives] + [error].compactMap { $0 }
     }
 
     /// The one red line that speaks for the backups: a job alert, the failed job's own sentence,
@@ -426,7 +473,7 @@ enum ObservabilityPresentation {
         let backupTone: ObservabilityCardTone = document.backups.freshness == "unknown" ||
             document.backups.retentionInvariant == "unknown" ? .neutral :
             (document.backups.freshness == "stale" || document.backups.retentionInvariant == "FAIL" ? .amber : .standard)
-        let backupStatus = backupStatus(for: document.backups, locale: locale)
+        let backupStatus = backupStatus(for: document.backups, locale: locale, now: now)
         let backups = card(
             "Backups", "Where copies are, when they last verified, and whether recovery is healthy",
             document.backups.state, document.backups.reason, stale, tone: backupTone,
@@ -470,21 +517,65 @@ enum ObservabilityPresentation {
     static func backupStatus(
         for backups: ObservabilityDocument.Backups,
         locale: Locale = .current,
-        jobStatus: ObservabilityStatusLine? = nil
+        jobStatus: ObservabilityStatusLine? = nil,
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) -> ObservabilityBackupStatus {
-        let upload = backups.lastVerifiedUpload.map { value in
+        let idle = backups.verifiedIdle(now: now)
+        var upload = backups.lastVerifiedUpload.map { value in
             ObservabilityStatusLine(
                 text: "\(value.verified ? "Last verified transcript upload" : "Last transcript upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · transcript archive \(value.archiveId)",
                 tone: value.verified ? .green : .red
             )
         } ?? .init(text: "No verified transcript upload on record", tone: .red)
 
-        let snapshot = backups.dbSnapshot.map { value in
+        if idle, let attempt = backups.transcriptAttempt {
+            let since = backups.lastVerifiedUpload.map { " since \(idleDate($0.at, calendar: calendar, locale: locale))" } ?? ""
+            upload = .init(text: "No new transcripts\(since) · checked \(relative(attempt.at, now: now, locale: locale))", tone: .neutral)
+        }
+
+        var snapshot = backups.dbSnapshot.map { value in
             ObservabilityStatusLine(
                 text: "Latest DB snapshot (\(value.verified ? "verified" : "NOT verified")): \(localDate(value.lastAt)) → \(value.destination)",
-                tone: value.verified ? .green : .red
-            )
+                tone: value.verified ? .green : .red)
         } ?? .init(text: "No verified DB snapshot on record", tone: .red)
+        // New v2 evidence gets an independent offsite age check. Legacy documents retain their contract.
+        let staleOffsite = (backups.localSnapshot != nil || backups.transcriptAttempt != nil) &&
+            backups.dbSnapshot.map { $0.verified && !backups.isRecent($0.lastAt, now: now) } == true
+        let offsiteAge = backups.dbSnapshot.map { relative($0.lastAt, now: now, locale: locale) } ?? "unknown"
+        let pendingState = backups.localSnapshot.map { ["pending", "in_progress"].contains($0.uploadState) } == true
+        let staleText: String
+        if let date = backups.dbSnapshot?.lastAt, now >= date {
+            let days = Int(now.timeIntervalSince(date) / 86400)
+            let age = days > 0 ? "\(number(days, locale: locale)) \(days == 1 ? "day" : "days") old" : "outside the freshness window (\(offsiteAge))"
+            staleText = "Last offsite DB copy is \(age)" + (pendingState ? "; upload still pending" : "")
+        } else {
+            staleText = "Last offsite DB copy has an invalid timestamp"
+        }
+        if staleOffsite { snapshot = .init(text: staleText, tone: .red) }
+        let snapshotUpload: ObservabilityStatusLine?
+        if let value = backups.localSnapshot {
+            if let error = value.uploadError, !error.isEmpty {
+                snapshotUpload = .init(text: "DB upload \(value.uploadState): \(error)", tone: .red)
+            } else if ["failed", "abandoned"].contains(value.uploadState) {
+                snapshotUpload = .init(text: "DB upload \(value.uploadState): No failure reason provided", tone: .red)
+            } else if value.uploadState == "superseded", backups.dbSnapshot?.verified == true {
+                snapshotUpload = .init(text: "Local snapshot superseded by a verified offsite copy", tone: .neutral)
+            } else if value.uploadState == "nothing_pending" {
+                snapshotUpload = .init(text: missingLocalSnapshot, tone: .red)
+            } else if pendingState && staleOffsite {
+                snapshotUpload = .init(text: staleText, tone: .red)
+            } else if backups.localUploadPending(now: now) {
+                snapshotUpload = .init(text: value.uploadState == "pending" ? "Upload queued" : "Upload in progress", tone: .neutral)
+            } else if !value.localVerified || value.lastAt.map({ !backups.isRecent($0, now: now) }) != false ||
+                        !value.uploaded || value.uploadState != "verified" {
+                snapshotUpload = .init(text: "Local DB snapshot missing verification or stale", tone: .red)
+            } else {
+                snapshotUpload = nil
+            }
+        } else {
+            snapshotUpload = nil
+        }
 
         let job: ObservabilityStatusLine
         let jobLabel = backups.launchd?.label ?? "com.brainlayer.jsonl-backup"
@@ -499,11 +590,30 @@ enum ObservabilityPresentation {
         }
 
         let threshold = backups.thresholdHours.map { number(Int($0), locale: locale) } ?? "unknown"
+        let plainThreshold = backups.thresholdHours.map { "\(Int($0)) hours" }
         let freshness: ObservabilityStatusLine
+        let freshnessCheckValue: String
+        var freshnessCheckTitle = "Up to date"
         switch backups.freshness {
-        case "fresh": freshness = .init(text: "Backup freshness (DB + transcript): fresh (within \(threshold) h)", tone: .green)
-        case "stale": freshness = .init(text: "Backup freshness (DB + transcript): stale (> \(threshold) h)", tone: .red)
-        default: freshness = .init(text: "Backup freshness (DB + transcript): unknown", tone: .red)
+        case _ where backups.localSnapshot?.uploadState == "nothing_pending":
+            freshness = .init(text: missingLocalSnapshot, tone: .red)
+            freshnessCheckValue = freshness.text
+        case "fresh" where idle:
+            freshness = .init(text: "Checked \(relative(backups.transcriptAttempt!.at, now: now, locale: locale)); nothing new", tone: .neutral)
+            freshnessCheckTitle = "Transcript coverage"
+            freshnessCheckValue = freshness.text
+        case "fresh" where backups.localSnapshot != nil:
+            freshness = .init(text: "Transcript backup is current", tone: .green)
+            freshnessCheckValue = freshness.text
+        case "fresh":
+            freshness = .init(text: "Backup freshness (DB + transcript): fresh (within \(threshold) h)", tone: .green)
+            freshnessCheckValue = plainThreshold.map { "Both copies are under \($0) old" } ?? "Both copies are recent"
+        case "stale":
+            freshness = .init(text: "Backup freshness (DB + transcript): stale (> \(threshold) h)", tone: .red)
+            freshnessCheckValue = plainThreshold.map { "A copy is older than \($0)" } ?? "A copy is out of date"
+        default:
+            freshness = .init(text: "Backup freshness (DB + transcript): unknown", tone: .red)
+            freshnessCheckValue = "Unknown"
         }
 
         let retentionValue = backups.retentionInvariant ?? "unknown"
@@ -515,7 +625,7 @@ enum ObservabilityPresentation {
         if let archiveCount = backups.survivingArchives30D {
             archives = .init(
                 text: "\(number(archiveCount, locale: locale)) verified transcript \(archiveCount == 1 ? "archive" : "archives") in the last 30 days",
-                tone: archiveCount > 0 ? .green : .red
+                tone: idle ? .neutral : archiveCount > 0 ? .green : .red
             )
         } else {
             archives = .init(text: "Verified transcript archives in the last 30 days: unknown", tone: .red)
@@ -536,8 +646,29 @@ enum ObservabilityPresentation {
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
             retention: retention, archives: archives, error: error,
-            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true
+            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true, snapshotUpload: snapshotUpload, uploadInProgress: backups.localUploadPending(now: now),
+            uploadQueued: backups.localSnapshot?.uploadState == "pending",
+            freshnessCheckTitle: freshnessCheckTitle, freshnessCheckValue: freshnessCheckValue
         )
+    }
+
+    static func relative(_ date: Date, now: Date, locale: Locale = .current) -> String {
+        guard now.timeIntervalSince(date) >= 60 else { return "just now" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: now)
+    }
+
+    private static let missingLocalSnapshot = "No local snapshot found to verify. Run backup-daily or check the snapshot job."
+
+    private static func idleDate(_ date: Date, calendar: Calendar, locale: Locale) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
     }
 
     private static func localDate(_ date: Date) -> String {

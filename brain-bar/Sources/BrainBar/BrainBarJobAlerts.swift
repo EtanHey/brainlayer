@@ -141,7 +141,8 @@ extension ObservabilityDocument {
                 state: b.state, reason: b.reason, inputs: b.inputs, freshness: b.freshness,
                 thresholdHours: b.thresholdHours, retentionInvariant: b.retentionInvariant,
                 survivingArchives30D: b.survivingArchives30D, errorType: errorType,
-                lastVerifiedUpload: b.lastVerifiedUpload, dbSnapshot: b.dbSnapshot, launchd: b.launchd
+                lastVerifiedUpload: b.lastVerifiedUpload, dbSnapshot: b.dbSnapshot, launchd: b.launchd,
+                transcriptAttempt: b.transcriptAttempt, localSnapshot: b.localSnapshot
             )
         )
     }

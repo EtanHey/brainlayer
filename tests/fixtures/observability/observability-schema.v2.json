@@ -598,6 +598,31 @@
             }
           }
         },
+        "transcript_attempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "at",
+            "status",
+            "verified",
+            "uploaded"
+          ],
+          "properties": {
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "const": "no-op"
+            },
+            "verified": {
+              "const": true
+            },
+            "uploaded": {
+              "const": false
+            }
+          }
+        },
         "db_snapshot": {
           "type": [
             "object",
