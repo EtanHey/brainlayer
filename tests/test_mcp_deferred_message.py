@@ -1,6 +1,154 @@
 """The DEFERRED store receipt must read as SUCCESS so agents stop re-storing (Etan, 2026-08-09)."""
 
+import os
+import threading
+from contextlib import contextmanager
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
 from brainlayer.mcp._format import format_store_result
+
+
+@pytest.fixture
+def owned_legacy_replay(monkeypatch, tmp_path, isolate_brainlayer_runtime_paths):
+    """Run the real scheduler, then join every owned thread before paths restore."""
+    from brainlayer.mcp import store_handler
+
+    @contextmanager
+    def own():
+        assert store_handler._pending_replay_active is False
+        db_path = tmp_path / "owned-replay" / "brainlayer.db"
+        db_path.parent.mkdir()
+        path = db_path.parent / "pending-stores.jsonl"
+        threads, errors, delays, resolved_paths = [], [], [], []
+        sleeping, release = threading.Event(), threading.Event()
+        real_path = store_handler._get_pending_store_path
+
+        def checked_path():
+            assert os.environ["BRAINLAYER_TEST_PATH_PROVENANCE"] == "pytest"
+            assert os.environ["BRAINLAYER_DB"] == str(db_path)
+            resolved = real_path()
+            assert resolved == path
+            resolved_paths.append(resolved)
+            return resolved
+
+        def controlled_sleep(delay):
+            delays.append(delay)
+            assert len(delays) <= 4, "unexpected unbounded replay in a synthetic test"
+            sleeping.set()
+            assert release.wait(timeout=2), "test did not release its owned replay"
+
+        def owned_thread(*, target, daemon):
+            def run():
+                try:
+                    target()
+                except BaseException as exc:
+                    errors.append(exc)  # Re-raised after joining, never suppressed.
+
+            thread = threading.Thread(target=run, daemon=daemon)
+            threads.append(thread)
+            return thread
+
+        with monkeypatch.context() as scope:
+            scope.setenv("BRAINLAYER_DB", str(db_path))
+            scope.setattr(store_handler, "_get_pending_store_path", checked_path)
+            scope.setattr(store_handler, "threading", SimpleNamespace(Thread=owned_thread))
+            scope.setattr(store_handler, "time", SimpleNamespace(sleep=controlled_sleep))
+            try:
+                yield SimpleNamespace(
+                    path=path,
+                    db_path=db_path,
+                    threads=threads,
+                    delays=delays,
+                    sleeping=sleeping,
+                    resolved_paths=resolved_paths,
+                )
+            finally:
+                release.set()
+                # Iteration includes any successor registered by the last-empty-check race.
+                for thread in threads:
+                    thread.join(timeout=2)
+                assert all(not thread.is_alive() for thread in threads), "owned replay outlived private paths"
+                if errors:
+                    raise errors[0]
+                assert store_handler._pending_replay_active is False
+
+    return own
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_real_replay_finishes_before_private_paths_restore(owned_legacy_replay, monkeypatch, pending):
+    from brainlayer import runtime_store
+    from brainlayer.mcp import store_handler
+
+    original_db = os.environ["BRAINLAYER_DB"]
+    store = Mock()
+    open_writer = Mock(return_value=store)
+    monkeypatch.setattr(runtime_store, "open_writer_store", open_writer)
+    flushed = []
+
+    with owned_legacy_replay() as replay:
+        replay.path.write_text("synthetic pending item\n" if pending else "")
+
+        def flush(actual_store, embed_fn):
+            assert actual_store is store
+            assert embed_fn is None
+            flushed.append(store_handler._get_pending_store_path())
+            replay.path.write_text("")
+
+        monkeypatch.setattr(store_handler, "_flush_pending_stores", flush)
+        store_handler._schedule_pending_store_replay()
+        assert replay.sleeping.wait(timeout=2)
+        assert replay.threads[0].is_alive()
+        assert store_handler._pending_replay_active is True
+        store_handler._schedule_pending_store_replay()
+        assert len(replay.threads) == 1  # Active replays coalesce.
+        open_writer.assert_not_called()
+
+    assert os.environ["BRAINLAYER_DB"] == original_db
+    assert replay.resolved_paths
+    assert replay.delays == ([2.0, 4.0] if pending else [2.0])
+    assert flushed == ([replay.path] if pending else [])
+    if pending:
+        open_writer.assert_called_once_with(replay.db_path)
+        store.close.assert_called_once_with()
+    else:
+        open_writer.assert_not_called()
+        store.close.assert_not_called()
+
+
+def test_real_replay_joins_successor_after_last_empty_check(owned_legacy_replay, monkeypatch):
+    from brainlayer import runtime_store
+    from brainlayer.mcp import store_handler
+
+    store = Mock()
+    open_writer = Mock(return_value=store)
+    monkeypatch.setattr(runtime_store, "open_writer_store", open_writer)
+    real_has_data = store_handler._pending_store_has_data
+    appended = False
+
+    def append_after_empty_probe(path):
+        nonlocal appended
+        has_data = real_has_data(path)
+        if not has_data and not appended:
+            path.write_text("synthetic late append\n")
+            appended = True
+        return has_data
+
+    monkeypatch.setattr(store_handler, "_pending_store_has_data", append_after_empty_probe)
+    with owned_legacy_replay() as replay:
+        replay.path.write_text("")
+        monkeypatch.setattr(store_handler, "_flush_pending_stores", lambda *_: replay.path.write_text(""))
+        store_handler._schedule_pending_store_replay()
+        assert replay.sleeping.wait(timeout=2)
+
+    assert len(replay.threads) == 2
+    assert replay.delays == [2.0, 2.0, 4.0]
+    assert replay.path.read_text() == ""
+    open_writer.assert_called_once_with(replay.db_path)
+    store.close.assert_called_once_with()
 
 
 def test_deferred_store_receipt_reads_as_success_and_forbids_restore() -> None:
