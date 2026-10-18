@@ -594,3 +594,20 @@ def test_r1_newest_stalled_candidate_wins_after_older_key_is_updated(lane):
     result = lane.run("2026-10-18")
     assert result["snapshot"] == str(lane.snapshot)
     assert lane.puts[-2][0] == URL
+
+
+def test_r1_same_day_fresh_snapshot_cannot_overwrite_retained_stalled_copy(lane, monkeypatch):
+    stalled(lane)
+    lane.outcomes.extend([_DriveResponse(404), _DriveResponse(200, payload={"id": "new"})])
+
+    def overwrite(*args, **kwargs):
+        lane.snapshot.write_bytes(b"fresh!")
+        return SimpleNamespace(
+            gzip_path=lane.snapshot, uncompressed_path=None, sentinel_chunks=1, local_retention_deleted=[]
+        )
+
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", overwrite)
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": False})
+    with pytest.raises(RuntimeError, match="retaining.*2026-10-17.db.gz"):
+        lane.run("2026-10-17")
+    assert lane.snapshot.read_bytes() == b"abcdef"

@@ -332,3 +332,7 @@ failures preserve its identity and confirmed offset. Recovery sleeps and request
 timeouts share the remaining whole-run deadline, reserving five seconds to write
 the receipt. Session-creation POST network failures use the same bounded backoff;
 HTTP client/auth failures still stop immediately.
+
+A fresh snapshot cannot overwrite a same-day stalled gzip. An expired or unsafe
+session with such a collision fails explicitly and retains the existing file.
+A later dated run can create a replacement without changing backup filenames.

@@ -1251,6 +1251,14 @@ class RetainedStalledBackupCapacityError(RuntimeError):
         super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}")
 
 
+class RetainedStalledBackupConflictError(RuntimeError):
+    error_code = "retained_stalled_backup_conflict"
+
+    def __init__(self, name: str):
+        self.error_type = f"RetainedStalledBackupConflictError[{name}]"
+        super().__init__(f"Same-day snapshot collision; retaining stalled backup {name}")
+
+
 class DriveSessionExpiredError(RuntimeError):
     """Drive no longer recognizes the saved upload session (404/410)."""
 
@@ -1862,12 +1870,37 @@ def _safe_upload_url(value: Any) -> bool:
     )
 
 
+def _retained_target_collision(log_path: Path, target: Path) -> bool:
+    if not target.exists() or not log_path.exists():
+        return False
+    try:
+        for receipt in _read_backup_receipts(log_path):
+            name = receipt.get("snapshot")
+            if (
+                isinstance(name, str)
+                and Path(name).resolve() == target.resolve()
+                and receipt.get("uploaded") is False
+                and receipt.get("verified") is False
+                and (
+                    isinstance(receipt.get("resumable_upload"), dict)
+                    or receipt.get("error_code") == "drive_upload_stalled"
+                )
+            ):
+                return True
+        return False
+    except (OSError, ValueError):
+        return True  # An unreadable journal cannot authorize replacing an existing local artifact.
+
+
 def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, Any], date_stamp: str) -> None:
     for receipt in receipts:
         path = Path(receipt["snapshot"])
         try:
             if (
                 path.name[:10] >= date_stamp
+                or _snapshot_created_time(receipt) is None
+                or _snapshot_created_time(result) is None
+                or _snapshot_created_time(receipt) >= _snapshot_created_time(result)
                 or path.is_symlink()
                 or path.stat().st_nlink != 1
                 or _upload_identity(path) != {k: receipt["resumable_upload"].get(k) for k in ("path", "size", "sha256")}
@@ -1970,6 +2003,9 @@ def run_backup(
                     writer_probe_error=None,
                     snapshot_created_at=_snapshot_created_time(resume).isoformat(),
                 )
+            target = Path(staging_dir) / f"{resolved_date_stamp}.db.gz"
+            if _retained_target_collision(resolved_log_path, target):
+                raise RetainedStalledBackupConflictError(target.name)
             create_started = dt.datetime.now(dt.UTC).isoformat()
             try:
                 artifact = create_sqlite_backup_artifact(
