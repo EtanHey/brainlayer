@@ -1387,6 +1387,10 @@ def upload_file_to_drive_raw(
                     if response.status_code != 308:
                         raise RuntimeError(f"Unexpected Drive status {response.status_code}")
                     uploaded_range = response.headers.get("Range")
+                    if not uploaded_range and sent > 0:
+                        raise _DriveRequestDeadlineExceeded(
+                            "Drive omitted Range after a confirmed prefix; query session"
+                        )
                     confirmed = int(uploaded_range.rsplit("-", 1)[1]) + 1 if uploaded_range else 0
                     if confirmed < sent or confirmed > total:
                         raise RuntimeError(
@@ -1830,7 +1834,14 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
                 print(f"Retaining stalled backup with unconfirmed identity: {path.name}", flush=True)
                 continue
             candidates.append(receipt)
-        return candidates
+        return sorted(
+            candidates,
+            key=lambda r: (
+                _snapshot_created_time(r) or dt.datetime.min.replace(tzinfo=dt.UTC),
+                dt.datetime.fromisoformat(r["attempted_at"]),
+            ),
+            reverse=True,
+        )
     except (OSError, ValueError, TypeError, KeyError):
         print("Cannot validate stalled-backup receipts; retaining local artifacts", flush=True)
         return []

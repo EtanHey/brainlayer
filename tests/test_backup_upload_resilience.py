@@ -374,6 +374,7 @@ def test_r1_weekly_resume_obeys_snapshot_freshness_window(lane, monkeypatch):
 
 def test_r1_reuse_and_observability_age_snapshot_not_verification(lane):
     import datetime as dt
+
     from brainlayer.observability_backup import _daily_snapshot
 
     now = dt.datetime.now(dt.UTC)
@@ -556,3 +557,40 @@ def test_r1_truncated_final_receipt_preserves_last_durable_session(lane):
     # Appending after the crash tail must preserve independently parseable JSONL.
     receipts = [json.loads(line) for line in lane.log.read_text().splitlines()]
     assert receipts[-1]["verified"]
+
+
+def test_r1_missing_range_after_confirmed_prefix_probes_without_rewinding(lane):
+    lane.outcomes.extend(
+        [
+            _DriveResponse(308, headers={"Range": "bytes=0-2"}),
+            _DriveResponse(308),
+            _DriveResponse(308, headers={"Range": "bytes=0-2"}),
+            _DriveResponse(200, payload={"id": "done"}),
+        ]
+    )
+    assert lane.run()["verified"]
+    assert [item[1] for item in lane.puts] == ["bytes 0-5/6", "bytes 3-5/6", "bytes */6", "bytes 3-5/6"]
+
+
+def test_r1_newest_stalled_candidate_wins_after_older_key_is_updated(lane):
+    import datetime as dt
+
+    receipt = stalled(lane)
+    now = dt.datetime.now(dt.UTC)
+    receipt["snapshot_created_at"] = (now - dt.timedelta(hours=1)).isoformat()
+    receipt["attempted_at"] = (now - dt.timedelta(hours=3)).isoformat()
+    older_path = lane.root / "2026-10-16.db.gz"
+    older_path.write_bytes(b"abcdef")
+    older = {
+        **receipt,
+        "snapshot": str(older_path),
+        "snapshot_created_at": (now - dt.timedelta(hours=2)).isoformat(),
+        "attempted_at": (now - dt.timedelta(hours=2)).isoformat(),
+        "resumable_upload": {**receipt["resumable_upload"], "path": str(older_path), "url": URL + "-older"},
+    }
+    updated = {**receipt, "attempted_at": (now - dt.timedelta(minutes=30)).isoformat()}
+    lane.log.write_text("".join(json.dumps(r) + "\n" for r in [receipt, older, updated]))
+    lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
+    result = lane.run("2026-10-18")
+    assert result["snapshot"] == str(lane.snapshot)
+    assert lane.puts[-2][0] == URL
