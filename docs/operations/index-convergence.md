@@ -66,11 +66,19 @@ store's rejection contract remains unchanged.
 
 `BRAINLAYER_INDEX_QUARANTINE_PASSES` (default **3**) controls quarantine after identical
 ValueError/RuntimeError failures at the same input offset. Cap interrupts, SQLite busy
-errors, and resource failures are not quarantined. Resource detection walks preserved
-exception causes/contexts, so OSError (including ENOSPC), MemoryError, or a loaded
+errors, and resource failures are not quarantined. Resource detection checks only
+the primary exception and explicit `__cause__` chain (never `__context__`), so
+OSError (including ENOSPC), MemoryError, or a loaded
 PyTorch OutOfMemoryError remains retryable even when an encoder and `embed_chunks`
-wrap it in RuntimeError. These errors still fail the pass visibly. Appending to the same failing prefix does
-not erase its streak. A quarantined file is skipped so later files can proceed, but it
+wrap it in RuntimeError. A resource fault skips only that file for the current pass,
+including faults during inventory, and later files continue. `INDEX_BACKLOG` reports
+`resource_files`, and `INDEX_RESOURCE_SKIPPED` names each affected file and error
+class; `resource_faults` records those classes in the pass sidecar without retaining
+a failure streak. The file is retried next pass. Resource faults alone produce rc1
+(`INDEX_RESOURCE_FAILED`) only when no input was durably consumed and no new file
+was completed; otherwise the pass retains rc0 unless an independent quarantine or
+fully measured backlog-stall alarm applies. Checkpoint publication faults remain
+fatal for the pass. Appending to the same failing prefix does not erase its streak. A quarantined file is skipped so later files can proceed, but it
 remains in the backlog, is named by `INDEX_QUARANTINED`, and forces rc1 until resolved.
 Failure entries carry the same explicit `INDEX_PIPELINE_VERSION`: a pipeline upgrade clears the
 old failure streak and retries the unchanged file, starting at count 1 if it still

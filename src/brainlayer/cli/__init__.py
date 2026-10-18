@@ -148,7 +148,8 @@ class _CalendarIndexCheckpoint:
         self.database = [stat.st_dev, stat.st_ino]
         self.files, self.current, self.catalog, self.hashes = {}, {}, {}, {}
         self.previous, self.failures = {}, {}
-        self.pass_consumed = 0
+        self.pass_consumed = self.pass_completed = 0
+        self.resource_faults = {}
         self.check = lambda: None
         self.rejected_chunks = 0
         if not force:
@@ -225,7 +226,9 @@ class _CalendarIndexCheckpoint:
     def _write(self):
         from ..drive_credentials import _atomic_write
 
+        self.checkpoint_write_failed = True
         _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
+        self.checkpoint_write_failed = False
 
     @staticmethod
     def valid_signature(value) -> bool:
@@ -306,6 +309,7 @@ class _CalendarIndexCheckpoint:
         key = str(path.resolve())
         prior = self.current.get(key, self.entry(path, signature))
         self.pass_consumed += max(0, next_chunk - prior.get("next_chunk", 0))
+        self.pass_completed += int(done and not prior.get("done"))
         with path.open("rb") as stream:
             if signature[1]:
                 stream.seek(signature[1] - 1)
@@ -352,24 +356,32 @@ class _CalendarIndexCheckpoint:
             and old["prefix_sha256"] == self.fingerprint(path, prior[1])
         )
 
-    def failed(self, path, exc):
-        key, signature = str(path.resolve()), self.signature(path)
-        # embed_chunks deliberately preserves the encoder exception as a cause
-        # while wrapping it in RuntimeError. Resource failures are retryable, not
-        # deterministic bad inputs, even through multiple encoder wrappers.
-        pending, seen = [exc], set()
+    @staticmethod
+    def resource_cause(exc):
+        # Explicit causes preserve encoder wrappers; unrelated handler context
+        # is not evidence that this file's failure was a resource fault.
+        seen = set()
         torch_oom = getattr(sys.modules.get("torch"), "OutOfMemoryError", None)
-        while pending:
-            cause = pending.pop()
-            if id(cause) in seen:
-                continue
-            seen.add(id(cause))
-            if isinstance(cause, (OSError, MemoryError)) or (
-                isinstance(torch_oom, type) and isinstance(cause, torch_oom)
-            ):
-                self.failures.pop(key, None)
-                return False
-            pending.extend(item for item in (cause.__cause__, cause.__context__) if item is not None)
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            if isinstance(exc, (OSError, MemoryError)) or (isinstance(torch_oom, type) and isinstance(exc, torch_oom)):
+                return type(exc).__name__
+            exc = exc.__cause__
+        return None
+
+    def skip_resource(self, path, exc):
+        cause = self.resource_cause(exc)
+        if cause is None:
+            return False
+        key = str(path.resolve())
+        self.failures.pop(key, None)
+        self.resource_faults[key] = cause
+        return True
+
+    def failed(self, path, exc):
+        if self.skip_resource(path, exc):
+            return False
+        key, signature = str(path.resolve()), self.signature(path)
         # Keep a fingerprint, not exception/source text, in persistent diagnostics.
         token = hashlib.sha256(f"{type(exc).__name__}:{exc}".encode()).hexdigest()
         old = self.failures.get(key, {})
@@ -448,11 +460,17 @@ class _CalendarIndexCheckpoint:
             best_backlog=best,
             deferred=deferred,
             quarantined=quarantined,
+            resource_faults=self.resource_faults,
             failures=self.failures,
             catalog=self.catalog,
         )
         _atomic_write(self.backlog_path, state)
-        rprint(f"INDEX_BACKLOG {self.summary()} stalled_passes={stalled} quarantined_files={len(quarantined)}")
+        rprint(
+            f"INDEX_BACKLOG {self.summary()} stalled_passes={stalled} "
+            f"quarantined_files={len(quarantined)} resource_files={len(self.resource_faults)}"
+        )
+        for path, cause in self.resource_faults.items():
+            rprint(f"INDEX_RESOURCE_SKIPPED file={path} cause={cause}")
         for path in quarantined:
             rprint(f"INDEX_QUARANTINED file={path}")
         if deferred:
@@ -462,6 +480,9 @@ class _CalendarIndexCheckpoint:
         if quarantined or (measured and stalled >= self.limit("BRAINLAYER_INDEX_STALL_PASSES")):
             code = "INDEX_FILE_QUARANTINED" if quarantined else "INDEX_BACKLOG_STALLED"
             rprint(f"[bold red]{code}[/] attention_required=true")
+            return True
+        if self.resource_faults and not (self.pass_consumed or self.pass_completed):
+            rprint("[bold red]INDEX_RESOURCE_FAILED[/] attention_required=true progressed=false")
             return True
         return False
 
@@ -4091,9 +4112,10 @@ def index_fast(
                                     and not looks_like_system_prompt(c.content)
                                 )
                         checkpoint.measured(path, count)
-                    except (ValueError, RuntimeError) as exc:
+                    except (ValueError, RuntimeError, OSError, MemoryError) as exc:
                         if watchdog.expired or _looks_like_watchdog_interrupt(exc):
                             raise
+                        checkpoint.skip_resource(path, exc)
                         # Count and classify deterministic failures only once in the actual file attempt.
                         continue
             rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
@@ -4145,7 +4167,9 @@ def index_fast(
                 if saved.get("done"):
                     progress.update(task, completed=i + 1)
                     continue
-                if checkpoint and checkpoint.quarantined(jsonl_file):
+                if checkpoint and (
+                    checkpoint.quarantined(jsonl_file) or str(jsonl_file.resolve()) in checkpoint.resource_faults
+                ):
                     continue
                 try:
                     if checkpoint:
@@ -4230,14 +4254,17 @@ def index_fast(
                     files_completed = i + 1
                     watchdog.note_progress()
                     watchdog.raise_if_expired()
-                except (ValueError, RuntimeError) as exc:
+                except (ValueError, RuntimeError, OSError, MemoryError) as exc:
                     if (
                         not checkpoint
+                        or checkpoint.checkpoint_write_failed
                         or watchdog.expired
                         or time.monotonic() >= deadline_monotonic
                         or _looks_like_watchdog_interrupt(exc)
                     ):
                         raise
+                    if checkpoint.skip_resource(jsonl_file, exc):
+                        continue
                     if not checkpoint.failed(jsonl_file, exc):
                         raise
                     rprint(f"[red]INDEX_QUARANTINED[/] file={jsonl_file} cause={type(exc).__name__}")

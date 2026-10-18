@@ -514,3 +514,96 @@ def test_r2_pipeline_golden_admitted_output(tmp_path, monkeypatch):
         "Pipeline output changed: review it, bump INDEX_PIPELINE_VERSION, and add the new golden hash",
         digest,
     )
+
+
+@pytest.mark.parametrize("stage", ["encode", "parse"])
+@pytest.mark.parametrize("resource", ["enospc", "memory", "wrapped"])
+def test_r2_resource_fault_skips_file_but_later_files_progress(calendar_fixture, monkeypatch, stage, resource):
+    import errno
+
+    source, db, chunks, _ = calendar_fixture
+    (source / "b.jsonl").write_text("{}\n")
+    calls = []
+
+    def fail():
+        if resource == "memory":
+            raise MemoryError("synthetic memory pressure")
+        try:
+            raise OSError(errno.ENOSPC, "synthetic disk full")
+        except OSError as exc:
+            if resource == "wrapped":
+                raise RuntimeError("encoder failed") from exc
+            raise
+
+    def parse(path):
+        if path.name == "a.jsonl":
+            calls.append("a")
+            fail()
+        return [{}]
+
+    def encode(cs, **kw):
+        calls.append("encode")
+        if len(calls) == 1:
+            fail()
+        return synthetic_vectors(cs)
+
+    if stage == "parse":
+        monkeypatch.setattr("brainlayer.pipeline.extract.parse_jsonl", parse)
+        monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    else:
+        monkeypatch.setattr(adapter, "embed_chunks", encode)
+    result = invoke(source)
+    assert result.exit_code == 0, result.output
+    saved = checkpoint(db)
+    assert len(saved) == 1 and next(iter(saved)).endswith("b.jsonl")
+    assert next(iter(saved.values()))["done"]
+    assert "resource_files=1" in result.output
+    assert "INDEX_RESOURCE_SKIPPED" in result.output and "a.jsonl" in result.output
+    state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
+    assert not state["failures"] and not state["quarantined"]
+    if stage == "parse":
+        assert calls == ["a"]  # A resource failure in inventory is skipped for this pass too.
+    # On the next pass the resource file is retried, even though b is already done.
+    monkeypatch.setattr("brainlayer.pipeline.extract.parse_jsonl", lambda p: [{}])
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    assert invoke(source).exit_code == 0
+    assert len(checkpoint(db)) == 2
+
+
+def test_r2_unrelated_exception_context_does_not_prevent_quarantine(tmp_path):
+    db, path = tmp_path / "probe.db", tmp_path / "bad.jsonl"
+    db.write_bytes(b"fixture")
+    path.write_text("{}\n")
+    for count in range(1, 4):
+        cp = cli._CalendarIndexCheckpoint(db, tmp_path, None, False)
+        cp.begin([path])
+        try:
+            try:
+                raise OSError("unrelated earlier operation")
+            except OSError:
+                raise ValueError("deterministic bad file") from None
+        except ValueError as exc:
+            assert exc.__context__ is not None and exc.__cause__ is None
+            assert cp.failed(path, exc) == (count == 3)
+        cp.finish()
+    assert next(iter(cp.failures.values()))["count"] == 3
+
+
+def test_r2_checkpoint_publication_fault_still_fails_pass(calendar_fixture, monkeypatch):
+    import errno
+
+    from brainlayer.drive_credentials import _atomic_write
+
+    source, db, chunks, _ = calendar_fixture
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+
+    def publish(path, payload):
+        if path.name.startswith("index-checkpoint-") and payload["files"]:
+            raise OSError(errno.ENOSPC, "checkpoint publication failed")
+        return _atomic_write(path, payload)
+
+    monkeypatch.setattr("brainlayer.drive_credentials._atomic_write", publish)
+    result = invoke(source)
+    assert result.exit_code == 1, result.output
+    assert "INDEX_RESOURCE_SKIPPED" not in result.output
+    assert checkpoint(db) == {}
