@@ -2225,7 +2225,7 @@ def run_backup(
                     raise RetainedStalledBackupCapacityError(
                         [Path(r["snapshot"]).name for r in stalled], reason=reason
                     ) from exc
-                if floor_breach:
+                if "Insufficient free space" in reason or floor_breach:
                     raise RuntimeError(reason) from exc
                 raise
             result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started

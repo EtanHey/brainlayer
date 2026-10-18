@@ -240,3 +240,17 @@ def test_local_gate_requires_explicit_creation_time_not_filename_midnight(local_
         backup._recent_local_verified_backup(local_lane["log_path"], local_lane["db_path"], now=now, max_age_hours=6)
         is None
     )
+
+
+def test_snapshot_capacity_error_names_retained_gzip(local_lane, monkeypatch):
+    local_lane["staging_dir"].mkdir()
+    retained = local_lane["staging_dir"] / "2026-10-01.db.gz"
+    retained.write_bytes(b"retained")
+
+    def no_capacity(*args, **kwargs):
+        raise RuntimeError("Insufficient free space for backup")
+
+    monkeypatch.setattr(backup, "create_sqlite_backup_artifact", no_capacity)
+    with pytest.raises(RuntimeError, match=retained.name):
+        backup.run_backup(**local_lane, phase="snapshot")
+    assert retained.exists()
