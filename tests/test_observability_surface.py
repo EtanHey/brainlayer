@@ -113,6 +113,25 @@ def test_offset_timestamps_are_compared_as_utc_instants(tmp_path: Path) -> None:
     assert sum(item["count_in_window"] for item in actual["emitters"]["by_emitter"]) == 11
 
 
+def test_49_hour_old_corpus_keeps_zero_activity_measured(tmp_path: Path) -> None:
+    case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
+    db = tmp_path / "idle.sqlite"
+    shutil.copy2(FIXTURES / str(case["inputs"]["db"]), db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute("UPDATE chunks SET created_at = '2026-09-11T11:00:00Z'")
+    actual, _ = _run_case({**case, "inputs": {**case["inputs"], "db": str(db)}}, tmp_path)
+
+    for section in OWNED_SECTIONS:
+        assert actual[section]["state"] == "measured"
+        assert actual[section]["reason"] == ""
+    assert actual["stores"]["total_chunks"] == 27
+    assert actual["stores"]["in_window"] == {"count": 0, "by_hour": []}
+    assert actual["stores"]["latest"][0]["stored_at"] == "2026-09-11T11:00:00Z"
+    assert actual["emitters"]["by_emitter"] == []
+    assert all(item["in_window"] == 0 for item in actual["emitters"]["by_source_class"])
+
+
 def test_invalid_timestamps_are_counted_but_excluded_from_windowed_metrics(tmp_path: Path) -> None:
     case = next(case for case in _dev_cases() if case["case_id"] == "healthy-dev")
     db = tmp_path / "malformed-time.sqlite"

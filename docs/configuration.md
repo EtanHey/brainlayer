@@ -202,23 +202,35 @@ Weekly calendar runs use index → `backup-snapshot` → full maintenance → JS
 counters, checkpoint, decay and FTS checks → `backup-daily` in upload-only mode. Snapshot and upload use the existing
 calendar process-group supervisor sequentially; the upload keeps the existing job/history/log name; no detached worker is created. Nightly runs retain
 maintenance first and DB upload last. `BRAINLAYER_BACKUP_PHASE=snapshot` writes a durable local
-receipt after gzip CRC/ISIZE and SQLite header/sentinel checks; `upload` drains retained snapshots
+receipt after mandatory raw SQLite `integrity_check` (nightly uses `quick_check`), gzip CRC/ISIZE,
+SQLite header/sentinel and byte-equality checks; `upload` drains retained snapshots newest first
 from those same bytes, preserving resumable sessions and retrying completed-session verification.
 The default `all` phase keeps the combined daily command.
 
 Weekly VACUUM requires a local verified snapshot of the same database, created since local midnight
-and at most six hours old. The receipt binds SHA-256, size and path; missing, altered, unverified,
+and at most `BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS` old (default **6**, shared by snapshot reuse and
+the maintenance gate). Only the latest receipt for each snapshot counts, with raw `integrity_check: ok`.
+The receipt binds SHA-256, size and path; missing, altered, unverified, failed remote verification,
 future or yesterday's copies cannot authorize VACUUM. Remote upload is not part of that gate.
 Calendar runs without that proof skip VACUUM with exit **76**. A standalone full run may create a
 local snapshot under the daily supervisor within the remaining quiet window. A held backup lock
 still waits up to two hours. Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
 
-Unuploaded gzip snapshots remain until their own upload verifies, regardless of newer snapshots;
-capacity errors list retained archives. Observability's optional `db_snapshot.local_verified`,
-`uploaded`, `upload_state` and `upload_error` fields distinguish local safety from offsite coverage. Existing
-`verified` keeps its uploaded-and-verified meaning. BrainBar needs the tracked Swift follow-up to
-render local-verified/pending as neutral; old clients still show that state as unverified.
+Older pending copies of the same DB become reclaimable only after a newer copy is offsite-verified;
+capacity errors list retained archives. Weekly maintenance holds the archive lock across quiesce/VACUUM
+and pins its exact snapshot for the rest of that local date. Missing or changed pending copies become
+terminal `abandoned` receipts with `local_verified: false` and one durable alert; later runs can progress.
+An empty upload drain exits successfully without appending a receipt or clearing the snapshot alert.
+
+Observability keeps `backups.db_snapshot` at the last offsite uploaded-and-verified receipt, preserving
+existing BrainBar behavior. Schema v2 adds the optional sibling `backups.local_snapshot` with
+`local_verified`, `uploaded`, `upload_state`, `upload_error` and local integrity evidence. Upload failures
+still set `backups.error_type`; #1398 will render the sibling's pending state neutrally. Schema v1 is frozen.
+The snapshot step has a separate timeout (`BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS`, default **45 minutes**,
+three times a measured 14m18s snapshot rounded up to five minutes) and is also
+clipped to finish its process-group cleanup before 06:00. Both phases honor the existing
+`BRAINLAYER_LAUNCHD_BACKUP_DAILY_ENABLED` gate; snapshot failures have their own alert key.
 `--full --dry-run` reports a held backup lock without starting backup work.
 
 Scheduled FTS row-count checks use a read-only connection and do not acquire the maintenance writer lock. Full FTS rebuilds require an explicit offline database copy path.
@@ -344,8 +356,8 @@ Daily receipts record `snapshot_created_at` at VACUUM start; resumed receipts
 preserve it. Verified-backup reuse and observability age the snapshot, rather
 than its later upload attempt. Legacy dated snapshots use conservative UTC
 midnight; unknown creation times fail closed. Resume requires an age below
-`BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS` (default **36**). Weekly maintenance's
-`BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS` further limits that age.
+`BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS` (default **36**). The legacy combined-upload
+reuse override remains supported for older callers; weekly local reuse uses the shared local-age knob above.
 
 The upload session is checkpointed privately before sending bytes, so even a
 supervisor exit retains a probeable session. Timeout, stop, and mid-upload auth
@@ -358,6 +370,5 @@ A fresh snapshot cannot overwrite a same-day stalled gzip. An expired or unsafe
 session with such a collision fails explicitly and retains the existing file.
 A later dated run can create a replacement without changing backup filenames.
 
-The weekly age gate is checked again after upload and verification. A snapshot
-that crosses the weekly freshness limit during upload remains protected locally
-and returns an unsuccessful safety receipt, so weekly VACUUM cannot proceed.
+Weekly maintenance rechecks local proof immediately before quiesce and VACUUM. Upload runs after
+weekly maintenance and retains its independent remote verification contract.

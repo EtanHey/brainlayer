@@ -95,7 +95,7 @@
         "freshness": {"enum": ["fresh", "stale", "unknown"]}, "threshold_hours": {"type": "integer", "const": 36},
         "retention_invariant": {"enum": ["PASS", "FAIL", "unknown"]}, "surviving_archives_30d": {"type": "integer", "minimum": 0},
         "launchd": {"type": "object", "additionalProperties": false, "required": ["label", "bootstrapped", "disabled_dir_present"], "properties": {"label": {"const": "com.brainlayer.jsonl-backup"}, "bootstrapped": {"type": "boolean"}, "disabled_dir_present": {"type": "boolean"}}},
-        "db_snapshot": {"type": ["object", "null"], "additionalProperties": false, "required": ["last_at", "destination", "verified"], "properties": {"last_at": {"type": "string", "format": "date-time"}, "destination": {"type": "string"}, "verified": {"type": "boolean"}, "local_verified": {"type": "boolean"}, "uploaded": {"type": "boolean"}, "upload_state": {"enum": ["pending", "in_progress", "verified", "failed"]}, "upload_error": {"type": ["string", "null"]}}},
+        "db_snapshot": {"type": ["object", "null"], "additionalProperties": false, "required": ["last_at", "destination", "verified"], "properties": {"last_at": {"type": "string", "format": "date-time"}, "destination": {"type": "string"}, "verified": {"type": "boolean"}}},
         "error_type": {"type": ["string", "null"]}
       }
     },

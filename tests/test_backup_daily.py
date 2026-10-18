@@ -377,7 +377,7 @@ def test_prune_local_gzip_snapshots_preserves_unverified_archive_without_three_n
     assert (tmp_path / "2026-06-04.db.gz").exists()
 
 
-def test_prune_local_gzip_snapshots_preserves_unverified_archive_with_three_newer_verified_copies(tmp_path):
+def test_prune_local_gzip_snapshots_reclaims_unverified_archive_with_three_newer_verified_copies(tmp_path):
     from brainlayer.backup_daily import prune_local_gzip_snapshots
 
     for day in range(1, 7):
@@ -392,8 +392,8 @@ def test_prune_local_gzip_snapshots_preserves_unverified_archive_with_three_newe
         },
     )
 
-    assert deleted == []
-    assert len(list(tmp_path.glob("*.db.gz"))) == 6
+    assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
+    assert len(list(tmp_path.glob("*.db.gz"))) == 3
 
 
 def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_path, monkeypatch):
@@ -411,6 +411,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
                     "uploaded": True,
                     "verified": True,
                     "snapshot": str(tmp_path / f"2026-06-{day:02d}.db.gz"),
+                    "db": str(tmp_path / "brainlayer.db"),
                 }
             )
             for day in (4, 6, 8)
@@ -2202,7 +2203,8 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     )
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3
+    assert len(lines) == 4
+    assert json.loads(lines[-2])["uploaded"] is True and json.loads(lines[-2])["verified"] is True
     assert json.loads(lines[0])["local_verified"] is True
     completed = json.loads(lines[1])
     assert completed["uploaded"] is True and completed["verified"] is False

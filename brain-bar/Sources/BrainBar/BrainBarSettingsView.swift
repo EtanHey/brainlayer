@@ -152,17 +152,31 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
-    /// Re-reads watcher-health.json off the main actor; only the newest request publishes.
+    /// Keep the canonical heartbeat current while the Settings view is mounted, independently
+    /// of activation, the supervisor status sweep and database stats. SwiftUI owns cancellation.
+    func monitorWatcherHealth(
+        waitForNextPoll: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(30)) }
+    ) async {
+        guard watcherHealthURL != nil else { return }
+        while !Task.isCancelled {
+            await sampleWatcherHealth()
+            do { try await waitForNextPoll() } catch { return }
+        }
+    }
+
     func refreshWatcherHealth() {
+        Task { await sampleWatcherHealth() }
+    }
+
+    /// Re-reads watcher-health.json off the main actor; only the newest request publishes.
+    private func sampleWatcherHealth() async {
         guard let watcherHealthURL else { return }
         watcherHealthGeneration &+= 1
         let generation = watcherHealthGeneration
         let read = watcherHealthRead
-        Task {
-            let result = await Task.detached { read(watcherHealthURL) }.value
-            guard generation == watcherHealthGeneration else { return }
-            watcherHealth = result
-        }
+        let result = await Task.detached { read(watcherHealthURL) }.value
+        guard !Task.isCancelled, generation == watcherHealthGeneration else { return }
+        watcherHealth = result
     }
 
     /// Re-reads the installed plists, the backup logs and the local copies off the main actor;
@@ -887,6 +901,7 @@ struct BrainBarSettingsView: View {
         .background(Color.brainBarBackgroundBase)
         .foregroundStyle(Color.brainBarTextPrimary)
         .environment(\.colorScheme, .dark)
+        .task { await viewModel.monitorWatcherHealth() }
         .onChange(of: activationRevision, initial: true) { _, _ in
             _ = viewModel.reloadConfigFromDisk(preservingDrafts: true)
             viewModel.refreshLaunchdStatus()

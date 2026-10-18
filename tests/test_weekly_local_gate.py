@@ -47,7 +47,7 @@ def config_for(args, tmp_path):
 
 
 def test_snapshot_receipt_authorizes_weekly_before_any_drive_call(local_lane, monkeypatch, tmp_path):
-    receipt = backup.run_backup(**local_lane, upload=False)
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
     assert receipt["local_verified"] is True
     assert receipt["uploaded"] is False and receipt["verified"] is False
     assert receipt["upload_state"] == "pending"
@@ -57,9 +57,11 @@ def test_snapshot_receipt_authorizes_weekly_before_any_drive_call(local_lane, mo
     assert maintenance._weekly_backup(config_for(local_lane, tmp_path))["snapshot"] == receipt["snapshot"]
 
 
-@pytest.mark.parametrize("damage", ["missing", "changed", "unverified", "other-db", "yesterday", "future"])
+@pytest.mark.parametrize(
+    "damage", ["missing", "changed", "unverified", "other-db", "yesterday", "future", "failed-verification"]
+)
 def test_local_gate_fails_closed(local_lane, monkeypatch, tmp_path, damage):
-    receipt = backup.run_backup(**local_lane, upload=False)
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
     now = dt.datetime.now(dt.UTC)
     if damage == "missing":
         Path(receipt["snapshot"]).unlink()
@@ -67,6 +69,8 @@ def test_local_gate_fails_closed(local_lane, monkeypatch, tmp_path, damage):
         Path(receipt["snapshot"]).write_bytes(b"changed")
     elif damage == "unverified":
         receipt["local_verified"] = False
+    elif damage == "failed-verification":
+        receipt.update(uploaded=True, verified=False, verification_error="integrity failed")
     elif damage == "other-db":
         receipt["db"] = str(tmp_path / "different.db")
     else:
@@ -80,7 +84,7 @@ def test_local_gate_fails_closed(local_lane, monkeypatch, tmp_path, damage):
 
 
 def test_upload_phase_reuses_snapshot_and_completed_receipt(local_lane, monkeypatch):
-    receipt = backup.run_backup(**local_lane, upload=False)
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", lambda *a, **kw: pytest.fail("second snapshot"))
     monkeypatch.setattr(backup, "get_drive_credentials", lambda: object())
     monkeypatch.setattr(backup, "build_drive_service", lambda: object())
@@ -97,16 +101,16 @@ def test_upload_phase_reuses_snapshot_and_completed_receipt(local_lane, monkeypa
     monkeypatch.setattr(backup, "upload_file_to_drive_raw", upload)
     result = backup.run_backup(**local_lane, phase="upload")
     assert result["verified"] is True
-    assert backup.run_backup(**local_lane, phase="upload")["drive_file"]["id"] == "uploaded"
+    assert backup.run_backup(**local_lane, phase="upload")["upload_state"] == "nothing_pending"
     assert uploads == [Path(receipt["snapshot"])]
 
 
-def test_retention_never_prunes_pending_local_copy(tmp_path):
+def test_retention_reclaims_old_pending_after_three_newer_offsite_verified(tmp_path):
     for day in range(1, 6):
         (tmp_path / f"2026-10-{day:02}.db.gz").write_bytes(b"gzip")
     names = {f"2026-10-{day:02}.db.gz" for day in range(2, 6)}
     backup.prune_local_gzip_snapshots(tmp_path, keep_latest=3, verified_drive_names=names)
-    assert (tmp_path / "2026-10-01.db.gz").exists()
+    assert not (tmp_path / "2026-10-01.db.gz").exists()
 
 
 def test_weekly_calendar_upload_runs_last(tmp_path):
@@ -120,10 +124,12 @@ def test_weekly_calendar_upload_runs_last(tmp_path):
 
 
 def test_observability_pending_is_distinct_from_uploaded(local_lane):
-    from brainlayer.observability_backup import _daily_snapshot
+    from brainlayer.observability_backup import _daily_snapshot, _local_snapshot
 
-    receipt = backup.run_backup(**local_lane, upload=False)
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
     snapshot, error, _ = _daily_snapshot([receipt])
+    assert snapshot is None
+    snapshot = _local_snapshot([receipt])
     assert snapshot["local_verified"] is True
     assert snapshot["uploaded"] is False
     assert snapshot["upload_state"] == "pending"
@@ -162,31 +168,41 @@ def test_upload_recovery_never_recreates_snapshot_or_reuploads_completed_session
         monkeypatch.setattr(backup, "verify_drive_upload", lambda *a, **kw: None)
     failed = json.loads(local_lane["log_path"].read_text().splitlines()[-1])
     assert failed["upload_state"] == "failed"
-    from brainlayer.observability_backup import _daily_snapshot
+    from brainlayer.observability_backup import _daily_snapshot, _local_snapshot
 
     snapshot, error_type, _ = _daily_snapshot([failed])
     assert error_type == failed["error_type"]
-    assert snapshot["upload_error"] == failed["error"]
+    assert snapshot is None
+    assert _local_snapshot([failed])["upload_error"] == failed["error"]
     assert Path(receipt["snapshot"]).exists()
-    assert maintenance._weekly_backup(config_for(local_lane, Path(local_lane["db_path"]).parent))["local_verified"]
+    monkeypatch.setenv("BRAINLAYER_CALENDAR_STEP", "1")
+    if failure == "verification":
+        with pytest.raises(maintenance.MaintenanceAbort):
+            maintenance._weekly_backup(config_for(local_lane, Path(local_lane["db_path"]).parent))
+    else:
+        assert maintenance._weekly_backup(config_for(local_lane, Path(local_lane["db_path"]).parent))["local_verified"]
     assert backup.run_backup(**local_lane, phase="upload")["verified"]
     assert attempts == ([None, url] if failure == "stalled" else [None])
 
 
-def test_pending_snapshot_fields_validate_both_observability_schemas(local_lane):
+def test_pending_snapshot_uses_v2_sibling_and_legacy_null_validates_both_schemas(local_lane):
     import jsonschema
 
-    from brainlayer.observability_backup import _daily_snapshot
+    from brainlayer.observability_backup import _daily_snapshot, _local_snapshot
 
     receipt = backup.run_backup(**local_lane, phase="snapshot")
     snapshot, _, _ = _daily_snapshot([receipt])
     for version in (1, 2):
         schema = json.loads(Path(f"tests/fixtures/observability/observability-schema.v{version}.json").read_text())
         jsonschema.validate(snapshot, schema["$defs"]["backups_measured"]["properties"]["db_snapshot"])
+        if version == 2:
+            jsonschema.validate(
+                _local_snapshot([receipt]), schema["$defs"]["backups_measured"]["properties"]["local_snapshot"]
+            )
 
 
 def test_new_snapshot_does_not_hide_an_older_failed_upload(local_lane):
-    from brainlayer.observability_backup import _daily_snapshot
+    from brainlayer.observability_backup import _daily_snapshot, _local_snapshot
 
     receipt = backup.run_backup(**local_lane, phase="snapshot")
     failed = dict(
@@ -194,7 +210,8 @@ def test_new_snapshot_does_not_hide_an_older_failed_upload(local_lane):
     )
     _, error, _ = _daily_snapshot([failed, receipt])
     assert error == "ConnectionError"
-    assert _daily_snapshot([failed, receipt])[0]["upload_error"] == "Drive offline"
+    assert _daily_snapshot([failed, receipt])[0] is None
+    assert _local_snapshot([failed, receipt])["upload_error"] == "Drive offline"
     completed = dict(failed, uploaded=True, verified=True, upload_state="verified")
     completed.pop("error")
     completed.pop("error_type")
@@ -219,14 +236,19 @@ def test_invalid_older_copy_does_not_prevent_upload_of_intact_copy(local_lane):
     receipt = backup.run_backup(**local_lane, phase="snapshot")
     invalid = dict(receipt, snapshot=str(local_lane["staging_dir"] / "2026-10-01.db.gz"))
     Path(invalid["snapshot"]).write_bytes(b"corrupt")
-    # Put invalid first, then intact; the uploader must retain and report it while progressing.
+    # A completed newest copy allows the next pass to terminalize the corrupt older copy.
     local_lane["log_path"].write_text(json.dumps(invalid) + "\n" + json.dumps(receipt) + "\n")
     assert (
         backup._local_upload_receipt(local_lane["log_path"], receipt, local_lane["staging_dir"])["snapshot"]
         == receipt["snapshot"]
     )
+    with local_lane["log_path"].open("a") as out:
+        out.write(json.dumps(dict(receipt, uploaded=True, verified=True)) + "\n")
+    assert backup._local_upload_receipt(local_lane["log_path"], receipt, local_lane["staging_dir"]) is None
     records = [json.loads(line) for line in local_lane["log_path"].read_text().splitlines()]
-    assert records[-1]["error_code"] == "local_snapshot_invalid"
+    invalid_latest = [r for r in records if r.get("snapshot") == invalid["snapshot"]][-1]
+    assert invalid_latest["error_code"] == "local_snapshot_invalid"
+    assert invalid_latest["upload_state"] == "abandoned"
     assert Path(invalid["snapshot"]).exists()
 
 

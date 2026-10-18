@@ -93,7 +93,9 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
                     assert db.stat().st_size == before
                     return exc.value.code
                 result = maintenance.run_maintenance("full", config=cfg)
-                assert result.backup_status == "verified" and result.vacuum_after_bytes < result.vacuum_before_bytes
+                assert (
+                    result.backup_status == "local_verified" and result.vacuum_after_bytes < result.vacuum_before_bytes
+                )
             finally:
                 os.environ.clear()
                 os.environ.update(old)
@@ -116,7 +118,7 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
     rejected = receipt == "unverified" and finish[0] < 6
     assert asyncio.run(
         run_calendar(plan, path / "calendar", path / "logs", now_fn=lambda: clock[0], sleep_fn=sleep)
-    ) == int(receipt == "unverified")
+    ) == int(rejected)
     assert ("maintenance-weekly" in seen) == (finish[0] < 6)
     assert (db.stat().st_size < before) == (finish[0] < 6 and not rejected)
     assert backups == []
@@ -210,6 +212,8 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
         db=str(db),
         snapshot=str(snapshot),
         local_verified=True,
+        local_integrity="ok",
+        local_integrity_pragma="integrity_check",
         uploaded=False,
         verified=False,
         local_artifact=backup_daily._upload_identity(snapshot),
@@ -241,7 +245,7 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
                 clock[0] += dt.timedelta(hours=4)
             elif step.name == "maintenance-weekly":
                 result = maintenance.run_maintenance("full", config=cfg)
-                assert result.backup_status == "verified"
+                assert result.backup_status == "local_verified"
                 assert f"verified_local_backup={snapshot}" in result.actions
         return 0
 
@@ -281,7 +285,7 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
     assert dict(seen)["backup-daily"].hour == 4
     assert db.stat().st_size < before  # Real fixture VACUUM after verified receipt reuse.
     rows = [json.loads(line) for line in cfg.log_path.read_text().splitlines()]
-    assert any(row.get("backup_status") == "reused_verified" for row in rows)
+    assert any(row.get("backup_status") == "local_verified" for row in rows)
     assert json.loads((path / "calendar" / "state.json").read_text())["last_weekly"] == "2026-10-11"
 
 
