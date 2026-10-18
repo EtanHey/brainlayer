@@ -39,6 +39,21 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.60] - 2026-10-18
+
+### Fixed
+- Exit the MCP stdio bridge when its parent exits (#1344).
+- Stabilize backup identity resolution and expose read-only prior inventory (#1346).
+- Bind backup retention to upload ancestry and preserve receipts (#1347).
+- Surface expiring Drive consent in BrainBar before backups fail (#1348).
+- Run SSH harness probes in the existing Aqua session, scope credentials and Cursor trust, validate receipt parents, and distinguish agy diagnostics from tool inventory (#1329, #1330, #1333, #1334).
+- Report unavailable Codex App probes as skipped and clear inherited T3 attribution for Codex CLI probes (#1335, #1336).
+- Restrict session cleanup to recorded owned MCP orphans without sending signals; add signal-path regression coverage (#1337, #1338).
+- Keep replay fixture work and cleanup privately owned, with independent target-completion evidence (#1366).
+
+### Changed
+- Release the BrainLayer formula and BrainBar app together.
+
 ## [1.5.59] - 2026-10-16
 
 ### Fixed
