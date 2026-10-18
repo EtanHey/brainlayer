@@ -200,16 +200,16 @@ def _redact_upload_exception(exc: BaseException) -> None:
         exc = exc.__cause__ or exc.__context__
 
 
-def _receipt_append_prefix(fd: int) -> str:
+def _receipt_append_prefix(fd: int, read_fd: int) -> str:
     """Repair only an incomplete final append while holding the log's exclusive lock."""
     size = os.fstat(fd).st_size
-    if not size or os.pread(fd, 1, size - 1) == b"\n":
+    if not size or os.pread(read_fd, 1, size - 1) == b"\n":
         return ""
     start = size
     tail = b""
     while start:
         previous = max(0, start - 8192)
-        tail = os.pread(fd, start - previous, previous) + tail
+        tail = os.pread(read_fd, start - previous, previous) + tail
         start = previous
         if b"\n" in tail:
             break
@@ -249,11 +249,12 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
         payload.setdefault("snapshot_created_at", None)
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a", encoding="utf-8") as handle:
         if payload.get("resumable_upload"):
             os.fchmod(handle.fileno(), 0o600)  # The session URL is a private upload capability.
         fcntl.flock(handle, fcntl.LOCK_EX)
-        prefix = _receipt_append_prefix(handle.fileno())
+        with path.open("rb") as reader:
+            prefix = _receipt_append_prefix(handle.fileno(), reader.fileno())
         handle.write(prefix + json.dumps(payload, sort_keys=True) + "\n")
         handle.flush()
         os.fsync(handle.fileno())  # Persist before close releases the lock shared with log_cap.

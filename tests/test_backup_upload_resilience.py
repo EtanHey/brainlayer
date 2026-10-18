@@ -508,11 +508,36 @@ def test_r1_failure_traceback_and_retry_log_redact_session_url(lane, monkeypatch
     assert "upload_id=test" not in capsys.readouterr().out
 
 
-def test_r1_receipt_append_writes_whole_line_flushes_and_fsyncs(tmp_path, monkeypatch):
-    from pathlib import Path
+@pytest.mark.parametrize("existing,resumable", [(False, False), (False, True), (True, True)])
+def test_receipt_is_private_from_creation_and_tightens_existing_session_log(tmp_path, monkeypatch, existing, resumable):
+    path = tmp_path / "receipt.jsonl"
+    if existing:
+        path.write_text('{"old": true}\n')
+        path.chmod(0o644)
+    real_fchmod = backup.os.fchmod
 
+    def fchmod(fd, mode):
+        if not existing:
+            assert backup.os.fstat(fd).st_mode & 0o777 == 0o600, "log was exposed before fchmod"
+        real_fchmod(fd, mode)
+
+    monkeypatch.setattr(backup.os, "fchmod", fchmod)
+    mask = backup.os.umask(0o022)
+    try:
+        payload = {"resumable_upload": {"session_url": URL}} if resumable else {"error": "fixture"}
+        backup._append_json_log(path, payload)
+    finally:
+        backup.os.umask(mask)
+    assert path.stat().st_mode & 0o777 == 0o600
+    records = backup._read_backup_receipts(path)
+    assert records[-1] == payload
+    if existing:
+        assert records[0] == {"old": True}
+
+
+def test_r1_receipt_append_writes_whole_line_flushes_and_fsyncs(tmp_path, monkeypatch):
     events = []
-    real_open = Path.open
+    real_fdopen = backup.os.fdopen
 
     class TrackedHandle:
         def __init__(self, handle):
@@ -535,7 +560,7 @@ def test_r1_receipt_append_writes_whole_line_flushes_and_fsyncs(tmp_path, monkey
             events.append(("flush", None))
             return self.handle.flush()
 
-    monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs: TrackedHandle(real_open(path, *args, **kwargs)))
+    monkeypatch.setattr(backup.os, "fdopen", lambda *args, **kwargs: TrackedHandle(real_fdopen(*args, **kwargs)))
     real_fsync = backup.os.fsync
 
     def fsync(fd):
