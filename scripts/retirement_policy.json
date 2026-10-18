@@ -302,6 +302,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "152c44cc4ee073c1879177830c6b348f8e03be262422ab34ff6256643257ca3c": {
+      "non_cloud_purpose": "Read path, size and SHA-256 fields from a saved JSON resumable-upload receipt dictionary to compare the retained local artifact identity before the existing Drive upload. Dictionary metadata lookup only; no network or cloud-model send.",
+      "site": {
+        "call_sha256": "436f9258025850f402b9114484b4fd120f973e40b1e3bad697b61b7c92ce378a",
+        "kind": "generic_send",
+        "owner": "<module>.run_backup",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "saved_session.get"
+      }
+    },
     "15535a145e5492d50ea89bc81c4edabe6ddb9611955c7029b027fbd8f2d3e913": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/launchd/throughput-watchdog.py <module>._bounded_nul_paths subprocess.TimeoutExpired.",
       "site": {
@@ -860,6 +870,16 @@
         "owner": "<module>.Bridge.__enter__",
         "path": "scripts/harness_probe.py",
         "target": "subprocess.Popen"
+      }
+    },
+    "2d78a78ee20c7713d42cc1f6b7d925e10bdf8cffcce33c224cc01126e37a03dd": {
+      "non_cloud_purpose": "Read the saved JSON resumable-upload receipt URL for the existing upload URL allowlist check. Dictionary metadata lookup only; does not issue a request or introduce a cloud-model sender.",
+      "site": {
+        "call_sha256": "60edffd1890f7c9bd9b1221fca2ae4896b4447725f448f0a69f592ac76675b4d",
+        "kind": "generic_send",
+        "owner": "<module>.run_backup",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "saved_session.get"
       }
     },
     "2d81f86c7f960dd55f7655138bd445cc16fce8cf165a4cacde02e26c8b9514b8": {
@@ -5154,6 +5174,16 @@
         "owner": "<module>.AppSocket.send",
         "path": "scripts/harness_probe_native.py",
         "target": "self.sock.sendall"
+      }
+    },
+    "e9c7c70bfc19bfbffaa0adcb4c0a60337272cdbf816f385a146c1c7054a0d649": {
+      "non_cloud_purpose": "Read the saved JSON resumable-upload receipt folder ID to reject a changed Drive destination before reusing the local snapshot. Dictionary metadata lookup only; no network or cloud-model send.",
+      "site": {
+        "call_sha256": "31e54e40913df065082944270d5f1800bcd521f957295fd4a6ea2e03f390d065",
+        "kind": "generic_send",
+        "owner": "<module>.run_backup",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "saved_session.get"
       }
     },
     "e9cff9602db67d7b7552cfcc036a66bd39f037039a13edb2ca632d5de2479f92": {

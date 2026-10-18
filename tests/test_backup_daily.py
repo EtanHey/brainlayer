@@ -377,7 +377,7 @@ def test_prune_local_gzip_snapshots_preserves_unverified_archive_without_three_n
     assert (tmp_path / "2026-06-04.db.gz").exists()
 
 
-def test_prune_local_gzip_snapshots_deletes_unverified_archive_with_three_newer_verified_copies(tmp_path):
+def test_prune_local_gzip_snapshots_reclaims_unverified_archive_with_three_newer_verified_copies(tmp_path):
     from brainlayer.backup_daily import prune_local_gzip_snapshots
 
     for day in range(1, 7):
@@ -393,11 +393,7 @@ def test_prune_local_gzip_snapshots_deletes_unverified_archive_with_three_newer_
     )
 
     assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
-    assert sorted(path.name for path in tmp_path.glob("*.db.gz")) == [
-        "2026-06-04.db.gz",
-        "2026-06-05.db.gz",
-        "2026-06-06.db.gz",
-    ]
+    assert len(list(tmp_path.glob("*.db.gz"))) == 3
 
 
 def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_path, monkeypatch):
@@ -415,6 +411,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
                     "uploaded": True,
                     "verified": True,
                     "snapshot": str(tmp_path / f"2026-06-{day:02d}.db.gz"),
+                    "db": str(tmp_path / "brainlayer.db"),
                 }
             )
             for day in (4, 6, 8)
@@ -463,15 +460,11 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
     assert result["verified"] is True
     assert result["local_gzip_retention_deleted"] == [
         "2026-06-06.db.gz",
-        "2026-06-05.db.gz",
         "2026-06-04.db.gz",
-        "2026-06-03.db.gz",
-        "2026-06-02.db.gz",
-        "2026-06-01.db.gz",
     ]
     assert (tmp_path / "2026-06-07.db.gz").exists()
     assert (tmp_path / "2026-06-09.db.gz").exists()
-    assert not (tmp_path / "2026-06-03.db.gz").exists()
+    assert (tmp_path / "2026-06-03.db.gz").exists()
 
 
 def test_verified_snapshot_log_parser_accepts_only_uploaded_verified_snapshot_names(tmp_path):
@@ -1651,7 +1644,7 @@ def test_run_backup_refuses_folder_with_other_machine_snapshot_and_records_error
         )
 
     assert upload_calls == []
-    receipt = json.loads(log_path.read_text(encoding="utf-8"))
+    receipt = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
     assert receipt["uploaded"] is False
     assert receipt["error_code"] == "drive_folder_owned_by_other_machine"
 
@@ -1773,7 +1766,7 @@ def test_invalid_machine_id_is_recorded_in_backup_receipt(tmp_path, monkeypatch)
             log_path=log_path,
         )
 
-    receipt = json.loads(log_path.read_text(encoding="utf-8"))
+    receipt = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
     assert receipt["error_code"] == "invalid_machine_id"
     assert receipt["uploaded"] is False
 
@@ -2210,8 +2203,10 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     )
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2
-    completed = json.loads(lines[0])
+    assert len(lines) == 4
+    assert json.loads(lines[-2])["uploaded"] is True and json.loads(lines[-2])["verified"] is True
+    assert json.loads(lines[0])["local_verified"] is True
+    completed = json.loads(lines[1])
     assert completed["uploaded"] is True and completed["verified"] is False
     assert completed["drive_file"]["id"] == "drive-file-id"
     assert completed["verification_pending"] is True
@@ -2260,8 +2255,8 @@ def test_run_backup_appends_file_log_when_upload_fails(tmp_path, monkeypatch):
         )
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    logged = json.loads(lines[0])
+    assert len(lines) == 2
+    logged = json.loads(lines[-1])
     assert logged["snapshot"] == str(snapshot)
     assert logged["uploaded"] is False
     assert logged["verified"] is False
@@ -2327,8 +2322,8 @@ def test_run_backup_uses_env_log_path_without_explicit_log_path(tmp_path, monkey
     )
 
     lines = safe_log_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    logged = json.loads(lines[0])
+    assert len(lines) == 2
+    logged = json.loads(lines[-1])
     assert logged == result
     assert logged["backup_log_provenance"] == "pytest"
 

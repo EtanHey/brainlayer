@@ -69,6 +69,9 @@ BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 BACKUP_RESUME_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS"
+# Real 20.56 GB copy snapshot: 858.5s. Three times that, rounded up to five minutes.
+DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 2700
+BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
@@ -128,10 +131,19 @@ class SQLiteBackupArtifact:
     attempt_reclamation: str
     writer_probe_error: str | None
     snapshot_created_at: str | None = None
+    local_integrity: str | None = None
+    local_integrity_pragma: str | None = None
+    snapshot_duration_seconds: float | None = None
+    integrity_duration_seconds: float | None = None
+
+
+def local_backup_date(now: dt.datetime | None = None) -> dt.date:
+    """Use the machine's local day for snapshot names, weekly pins and eligibility."""
+    return (now if now is not None else dt.datetime.now(dt.UTC)).astimezone().date()
 
 
 def _today() -> str:
-    return dt.datetime.now(dt.UTC).date().isoformat()
+    return local_backup_date().isoformat()
 
 
 class InvalidMachineIdError(ValueError):
@@ -378,6 +390,10 @@ def _configured_positive_number(name: str, default: float, *, maximum: float | N
     return value
 
 
+def local_backup_max_age_hours() -> float:
+    return _configured_positive_number(BACKUP_LOCAL_MAX_AGE_HOURS_ENV, 6)
+
+
 def _drive_upload_stall_max_attempts() -> int:
     value = _configured_positive_number(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV, DEFAULT_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS)
     if value != int(value):
@@ -464,7 +480,10 @@ def _raise_backup_stopped(signum, frame) -> None:  # noqa: ARG001
 def _sqlite_pragma_check(db_path: Path, pragma_name: str) -> str:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        row = conn.execute(f"PRAGMA {pragma_name}").fetchone()
+        # Bound integrity-check memory while avoiding tiny-cache index thrashing.
+        conn.execute("PRAGMA cache_size=-131072")
+        rows = conn.execute(f"PRAGMA {pragma_name}").fetchall()
+        row = rows[0] if len(rows) == 1 else None
     finally:
         conn.close()
     return str(row[0]) if row else ""
@@ -889,12 +908,15 @@ def create_sqlite_backup_artifact(
     local_uncompressed_keep: int = DEFAULT_LOCAL_UNCOMPRESSED_KEEP,
     reclamation_status_callback: Callable[[str, str | None], None] | None = None,
     capacity_status_callback: Callable[[int, int | None, int, int], None] | None = None,
+    integrity_full: bool | None = None,
+    integrity_status_callback: Callable[[str, str, float], None] | None = None,
 ) -> SQLiteBackupArtifact:
     """Create an integrity-tested gzip; retain raw only if gzip creation/checking fails.
 
     The legacy keep_uncompressed/local_uncompressed_keep arguments are accepted for
     caller compatibility; they cannot authorize retaining duplicates or pruning only copies.
     """
+    snapshot_started = time.monotonic()
     db_path = Path(db_path).expanduser()
     output_dir = Path(output_dir).expanduser()
     date_stamp = date_stamp or _today()
@@ -1000,6 +1022,21 @@ def create_sqlite_backup_artifact(
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         _require_raw_floor(output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot)
+        pragma = (
+            "integrity_check"
+            if (integrity_full if integrity_full is not None else _should_run_full_verify(date_stamp))
+            else "quick_check"
+        )
+        integrity_started = time.monotonic()
+        try:
+            integrity = _sqlite_pragma_check(raw_snapshot, pragma)
+        except sqlite3.Error as exc:
+            integrity = f"{type(exc).__name__}: {exc}"
+        integrity_duration = time.monotonic() - integrity_started
+        if integrity_status_callback is not None:
+            integrity_status_callback(integrity, pragma, integrity_duration)
+        if integrity != "ok":
+            raise RuntimeError(f"Raw snapshot {pragma} failed: {integrity}; retaining raw snapshot")
 
         temp_gz = Path(tmp) / final_gz.name
         with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
@@ -1021,6 +1058,10 @@ def create_sqlite_backup_artifact(
         attempt_reclamation=attempt_reclamation,
         writer_probe_error=writer_probe_error,
         snapshot_created_at=snapshot_created_at,
+        local_integrity=integrity,
+        local_integrity_pragma=pragma,
+        snapshot_duration_seconds=time.monotonic() - snapshot_started,
+        integrity_duration_seconds=integrity_duration,
     )
 
 
@@ -1552,16 +1593,22 @@ def _parse_snapshot_date(name: str, *, prefix: str = "", suffix: str = ".db.gz")
         return None
 
 
-def _verified_snapshot_names_from_log(log_path: Path) -> set[str]:
+def _verified_snapshot_names_from_log(log_path: Path, *, db_path: Path | None = None) -> set[str]:
     verified: set[str] = set()
     try:
         lines = Path(log_path).read_text(encoding="utf-8").splitlines()
     except (FileNotFoundError, OSError):
         return verified
+    latest = {}
     for line in lines:
         try:
             payload = json.loads(line)
+            if isinstance(payload, dict) and isinstance(payload.get("snapshot"), str):
+                latest[payload["snapshot"]] = payload
         except json.JSONDecodeError:
+            continue
+    for payload in latest.values():
+        if db_path is not None and payload.get("db") != str(db_path):
             continue
         if payload.get("uploaded") is not True or payload.get("verified") is not True:
             continue
@@ -1578,6 +1625,7 @@ def prune_local_gzip_snapshots(
     *,
     keep_latest: int = DEFAULT_LOCAL_COMPRESSED_KEEP,
     verified_drive_names: set[str] | None = None,
+    protected_names: set[str] | None = None,
 ) -> list[str]:
     """Cap local gzip snapshots without deleting an archive lacking remote coverage."""
     if keep_latest < 1:
@@ -1587,7 +1635,6 @@ def prune_local_gzip_snapshots(
         return []
 
     verified_names = verified_drive_names or set()
-    verified_dates = {parsed for name in verified_names if (parsed := _parse_snapshot_date(name)) is not None}
     dated: list[tuple[dt.date, Path]] = []
     for path in output_dir.iterdir():
         parsed = _parse_snapshot_date(path.name)
@@ -1599,10 +1646,11 @@ def prune_local_gzip_snapshots(
     for index, (snapshot_date, path) in enumerate(dated):
         if index < keep_latest:
             continue
-        if path.name not in verified_names:
-            newer_verified = sum(date > snapshot_date for date in verified_dates)
-            if newer_verified < keep_latest:
-                continue
+        if path.name in (protected_names if protected_names is not None else _protected_snapshot_names(output_dir)):
+            continue
+        newer_verified = sum(name > path.name for name in verified_names)
+        if path.name not in verified_names and newer_verified < keep_latest:
+            continue
         path.unlink(missing_ok=True)
         deleted.append(path.name)
     return deleted
@@ -1834,6 +1882,147 @@ def _recent_verified_backup_for_reuse(
     return None
 
 
+def _local_snapshot_intact(receipt: Mapping[str, Any]) -> bool:
+    """The durable #1387 proof is bound to these exact bytes, not a dated filename."""
+    try:
+        path = Path(receipt["snapshot"])
+        return (
+            receipt.get("local_verified") is True
+            and not path.is_symlink()
+            and path.is_file()
+            and path.stat().st_nlink == 1
+            and receipt.get("local_artifact") == _upload_identity(path)
+        )
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+
+
+def _recent_local_verified_backup(
+    log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
+) -> dict[str, Any] | None:
+    try:
+        receipts = _read_backup_receipts(log_path)
+    except (OSError, ValueError):
+        return None
+    latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+    for receipt in reversed(list(latest.values())):
+        created = _snapshot_created_time(receipt)
+        if (
+            receipt.get("db") == str(db_path)
+            and "snapshot_created_at" in receipt
+            and created is not None
+            and local_backup_date(created) == local_backup_date(now)
+            and dt.timedelta(0) <= now - created <= dt.timedelta(hours=max_age_hours)
+            and _local_snapshot_intact(receipt)
+            and receipt.get("local_integrity") == "ok"
+            and receipt.get("local_integrity_pragma") == "integrity_check"
+            and not receipt.get("verification_error")
+            and not (receipt.get("uploaded") is True and receipt.get("verified") is not True)
+        ):
+            return receipt
+    return None
+
+
+def _protected_snapshot_names(staging_dir: Path) -> set[str]:
+    pin = staging_dir / ".weekly-backup-pin.json"
+    try:
+        payload = json.loads(pin.read_text())
+        if payload["date"] == local_backup_date().isoformat():
+            return {Path(payload["snapshot"]).name}
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, KeyError, TypeError):
+        return {p.name for p in staging_dir.glob("*.db.gz")}  # unreadable custody fails closed
+    return set()
+
+
+def _reclaim_superseded_local(log_path: Path, result: dict[str, Any], staging_dir: Path) -> None:
+    if not (result.get("uploaded") is True and result.get("verified") is True):
+        return
+    try:
+        receipts = _read_backup_receipts(log_path)
+    except (OSError, ValueError):
+        print("Cannot validate local receipts; retaining all superseded artifacts", flush=True)
+        return
+    latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+    protected = _protected_snapshot_names(staging_dir) | {
+        Path(r["snapshot"]).name for r in receipts if r.get("verified") is True and isinstance(r.get("snapshot"), str)
+    }
+    for receipt in latest.values():
+        path = Path(receipt["snapshot"])
+        created, newer = _snapshot_created_time(receipt), _snapshot_created_time(result)
+        if (
+            any(receipt.get(k) != result.get(k) for k in ("db", "machine_id", "drive_folder", "backup_log_provenance"))
+            or path.parent.resolve() != staging_dir.resolve()
+            or path.name in protected
+            or created is None
+            or newer is None
+            or created >= newer
+            or receipt.get("uploaded") is True
+            and receipt.get("verified") is True
+        ):
+            continue
+        abandoned = receipt.get("upload_state") == "abandoned"
+        if not abandoned and not _local_snapshot_intact(receipt):
+            continue
+        if not abandoned:
+            path.unlink()
+            result.setdefault("superseded_stalled_deleted", []).append(path.name)
+        terminal = {
+            k: v for k, v in receipt.items() if k not in {"error", "error_type", "error_code", "verification_error"}
+        }
+        _append_json_log(
+            log_path,
+            {**terminal, "local_verified": False, "upload_state": "superseded", "superseded_by": result["snapshot"]},
+        )
+
+
+def _local_upload_receipt(
+    log_path: Path, context: dict[str, Any], staging_dir: Path, *, snapshot_name: str | None = None
+) -> dict[str, Any] | None:
+    """Resume only the selected destination's exact artifact, including completed sessions."""
+    try:
+        receipts = _read_backup_receipts(log_path) if log_path.exists() else []
+    except ValueError:
+        if snapshot_name is None or (staging_dir / snapshot_name).exists():
+            raise
+        print("Cannot validate upload journal; retaining all existing gzip archives", flush=True)
+        return None
+    latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+    for receipt in sorted(
+        latest.values(), key=lambda r: _snapshot_created_time(r) or dt.datetime.min.replace(tzinfo=dt.UTC), reverse=True
+    ):
+        if any(receipt.get(k) != context.get(k) for k in ("db", "machine_id", "drive_folder", "backup_log_provenance")):
+            continue
+        if receipt.get("local_verified") is not True:
+            continue
+        path = Path(receipt["snapshot"])
+        if path.parent.resolve() != staging_dir.resolve() or (snapshot_name is not None and path.name != snapshot_name):
+            continue
+        if receipt.get("uploaded") is True and receipt.get("verified") is True:
+            continue
+        if not _local_snapshot_intact(receipt):
+            invalid = f"Local snapshot missing or changed: {path.name}; upload abandoned"
+            _append_json_log(
+                log_path,
+                {
+                    **receipt,
+                    "upload_state": "abandoned",
+                    "local_verified": False,
+                    "error": invalid,
+                    "error_code": "local_snapshot_invalid",
+                },
+            )
+            from . import job_alerts
+
+            job_alerts.report(
+                "backup-upload-abandoned", invalid, path=job_alerts.alert_path(db_path=Path(context["db"]))
+            )
+            continue
+        return receipt
+    return None
+
+
 def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     @functools.wraps(func)
     def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1863,7 +2052,7 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
                 # Weekly maintenance's first receipt check precedes this lock. A daily
                 # backup can finish in that gap, so recheck before copying the DB.
                 reuse_age = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
-                if reuse_age is not None:
+                if reuse_age is not None and bound.arguments.get("phase", "all") == "all":
                     hours = float(reuse_age)
                     if not math.isfinite(hours) or hours < 0:
                         raise ValueError(f"{BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV} must be finite and nonnegative")
@@ -1963,15 +2152,17 @@ def _retained_target_collision(log_path: Path, target: Path) -> bool:
     if not target.exists() or not log_path.exists():
         return False
     try:
-        for receipt in _read_backup_receipts(log_path):
+        receipts = _read_backup_receipts(log_path)
+        latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
+        for receipt in latest.values():
             name = receipt.get("snapshot")
             if (
                 isinstance(name, str)
                 and Path(name).resolve() == target.resolve()
-                and receipt.get("uploaded") is False
-                and receipt.get("verified") is False
+                and not (receipt.get("uploaded") is True and receipt.get("verified") is True)
                 and (
-                    isinstance(receipt.get("resumable_upload"), dict)
+                    receipt.get("local_verified") is True
+                    or isinstance(receipt.get("resumable_upload"), dict)
                     or receipt.get("error_code") == "drive_upload_stalled"
                 )
             ):
@@ -1984,6 +2175,8 @@ def _retained_target_collision(log_path: Path, target: Path) -> bool:
 def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, Any], date_stamp: str) -> None:
     for receipt in receipts:
         path = Path(receipt["snapshot"])
+        if not path.exists():
+            continue
         try:
             if (
                 path.name[:10] >= date_stamp
@@ -1995,6 +2188,8 @@ def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, 
                 or _upload_identity(path) != {k: receipt["resumable_upload"].get(k) for k in ("path", "size", "sha256")}
             ):
                 print(f"Retaining stalled backup without proof it is superseded: {path.name}", flush=True)
+                continue
+            if path.name in _protected_snapshot_names(path.parent):
                 continue
             path.unlink()
             result.setdefault("superseded_stalled_deleted", []).append(path.name)
@@ -2015,13 +2210,18 @@ def run_backup(
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
     remove_local_after_upload: bool = True,
     deadline_monotonic: float | None = None,
+    phase: str = "all",
 ) -> dict[str, Any]:
+    if phase not in {"all", "snapshot", "upload"}:
+        raise ValueError("backup phase must be all, snapshot, or upload")
+    upload = upload and phase != "snapshot"
     run_deadline = (
         deadline_monotonic
         if deadline_monotonic is not None
         else time.monotonic() + _configured_backup_timeout_seconds()
     )
     resume_state: dict[str, Any] | None = None
+    nothing_pending = False
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
@@ -2045,6 +2245,9 @@ def run_backup(
         result["attempt_reclamation"] = status
         result["writer_probe_error"] = error
 
+    def record_integrity(value: str, pragma: str, seconds: float) -> None:
+        result.update(local_integrity=value, local_integrity_pragma=pragma, integrity_duration_seconds=seconds)
+
     def record_capacity(raw: int, important: int | None, selected: int, required: int) -> None:
         result.update(
             {
@@ -2066,6 +2269,30 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
+        local = (
+            _local_upload_receipt(resolved_log_path, result, Path(staging_dir))
+            if phase == "upload"
+            else _recent_local_verified_backup(
+                resolved_log_path,
+                resolved_db_path,
+                now=dt.datetime.now().astimezone(),
+                max_age_hours=local_backup_max_age_hours(),
+            )
+            if phase == "snapshot"
+            else _local_upload_receipt(
+                resolved_log_path, result, Path(staging_dir), snapshot_name=f"{resolved_date_stamp}.db.gz"
+            )
+        )
+        if phase == "snapshot" and local is not None:
+            created = _snapshot_created_time(local)
+            now = dt.datetime.fromisoformat(result["attempted_at"])
+            if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
+                result.update(local)
+                return result
+        if phase == "upload" and local is None:
+            nothing_pending = True
+            result["upload_state"] = "nothing_pending"
+            return result
         stalled = _stalled_uploads(resolved_log_path, result, Path(staging_dir)) if upload else []
         candidate = next(
             (
@@ -2076,6 +2303,9 @@ def run_backup(
             ),
             None,
         )
+
+        local_resume = local is not None and not (local.get("uploaded") and local.get("verified"))
+        candidate = local if local_resume else candidate
 
         def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
             if resume is not None:
@@ -2092,6 +2322,10 @@ def run_backup(
                     attempt_reclamation="resumed",
                     writer_probe_error=None,
                     snapshot_created_at=_snapshot_created_time(resume).isoformat(),
+                    local_integrity=resume.get("local_integrity"),
+                    local_integrity_pragma=resume.get("local_integrity_pragma"),
+                    snapshot_duration_seconds=resume.get("snapshot_duration_seconds"),
+                    integrity_duration_seconds=resume.get("integrity_duration_seconds"),
                 )
             target = Path(staging_dir) / f"{resolved_date_stamp}.db.gz"
             if _retained_target_collision(resolved_log_path, target):
@@ -2104,23 +2338,29 @@ def run_backup(
                     date_stamp=resolved_date_stamp,
                     reclamation_status_callback=record_reclamation_status,
                     capacity_status_callback=record_capacity,
+                    integrity_full=True if phase == "snapshot" else None,
+                    integrity_status_callback=record_integrity,
                 )
             except RuntimeError as exc:
                 reason = _redact_upload_secrets(str(exc))
                 floor_breach = "raw free space floor breached" in reason
+                if "Insufficient free space" in reason or floor_breach:
+                    reason += f"; retained gzip snapshots: {[p.name for p in Path(staging_dir).glob('*.db.gz')]}"
                 if floor_breach:
                     reason += f"; retained raw snapshots: {_retained_raw_snapshot_names(Path(staging_dir))}"
                 if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
                     raise RetainedStalledBackupCapacityError(
                         [Path(r["snapshot"]).name for r in stalled], reason=reason
                     ) from exc
-                if floor_breach:
+                if "Insufficient free space" in reason or floor_breach:
                     raise RuntimeError(reason) from exc
                 raise
             result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started
             return artifact
 
-        for resume in [candidate, None] if candidate is not None else [None]:
+        for resume in (
+            [candidate] if phase == "upload" or local_resume else [candidate, None] if candidate is not None else [None]
+        ):
             artifact = prepare_artifact(resume)
             snapshot = artifact.gzip_path
             snapshot_size = snapshot.stat().st_size
@@ -2143,23 +2383,58 @@ def run_backup(
                     ),
                     "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
                     "writer_probe_error": getattr(artifact, "writer_probe_error", None),
+                    "local_integrity": getattr(artifact, "local_integrity", None),
+                    "local_integrity_pragma": getattr(artifact, "local_integrity_pragma", None),
+                    "snapshot_duration_seconds": getattr(artifact, "snapshot_duration_seconds", None),
+                    "integrity_duration_seconds": getattr(artifact, "integrity_duration_seconds", None),
                     "sentinel_snapshot_chunks": artifact.sentinel_chunks,
                     "bytes": snapshot_size,
                 }
             )
+            # create_sqlite_backup_artifact has already proven gzip CRC/ISIZE,
+            # SQLite header, sentinel and raw/gzip equality before dropping raw (#1387).
+            with snapshot.open("rb") as durable:
+                os.fsync(durable.fileno())
+            directory_fd = os.open(snapshot.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            if resume is not None:
+                for key in ("uploaded", "drive_file", "resumable_upload"):
+                    if key in resume:
+                        result[key] = resume[key]
+                resume_state = resume.get("resumable_upload")
+            result.update(local_verified=True, local_artifact=_upload_identity(snapshot), upload_state="pending")
+            _append_json_log(resolved_log_path, result)
             if not upload:
                 break
+            if resume is not None and resume.get("uploaded") is True:
+                uploaded = resume["drive_file"]
+                service = build_drive_service()
+                folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
+                break  # Completed session: retry verification, never POST another upload.
+            result["upload_state"] = "in_progress"
             credentials = get_drive_credentials()
             service = build_drive_service()
             folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
             assert_drive_folder_owned_by_machine(service, folder_id=folder_id, machine_id=resolved_machine_id)
-            if resume is not None and resume["resumable_upload"].get("folder_id") != folder_id:
+            saved_session = resume.get("resumable_upload") if resume else None
+            if saved_session is not None and not _safe_upload_url(saved_session.get("url")):
+                saved_session = None  # Invalid capability cannot authorize a network destination.
+                resume_state = None
+                result.pop("resumable_upload", None)
+            if saved_session is not None and saved_session.get("folder_id") != folder_id:
+                if phase == "upload" or local_resume:
+                    raise RuntimeError("Saved Drive destination changed; local snapshot retained")
                 print("Saved Drive destination changed; preparing a fresh snapshot", flush=True)
                 continue
             upload_identity = _upload_identity(snapshot)
-            if resume is not None and upload_identity != {
-                k: resume["resumable_upload"].get(k) for k in ("path", "size", "sha256")
+            if saved_session is not None and upload_identity != {
+                k: saved_session.get(k) for k in ("path", "size", "sha256")
             }:
+                if phase == "upload" or local_resume:
+                    raise RuntimeError("Saved artifact changed; local snapshot retained")
                 print("Saved artifact changed before resume; preparing a fresh snapshot", flush=True)
                 continue
 
@@ -2177,6 +2452,7 @@ def run_backup(
                             "resumable_upload": resume_state,
                             "error_code": "drive_upload_interrupted",
                             "upload_in_progress": True,
+                            "upload_state": "in_progress",
                         },
                     )
 
@@ -2188,9 +2464,20 @@ def run_backup(
                     machine_id=resolved_machine_id,
                     progress_callback=record_upload_progress,
                     run_deadline=run_deadline,
-                    **({"resume_session_url": resume["resumable_upload"]["url"]} if resume else {}),
+                    **({"resume_session_url": saved_session["url"]} if saved_session else {}),
                 )
             except DriveSessionExpiredError:
+                if phase == "upload" or local_resume:
+                    # Drive confirmed expiration; restart the session for the SAME bytes.
+                    uploaded = upload_file_to_drive_raw(
+                        snapshot,
+                        folder_id,
+                        credentials,
+                        machine_id=resolved_machine_id,
+                        progress_callback=record_upload_progress,
+                        run_deadline=run_deadline,
+                    )
+                    break
                 if resume is None:
                     raise
                 print("Saved Drive session expired; preparing a fresh snapshot", flush=True)
@@ -2204,6 +2491,7 @@ def run_backup(
             # fail or its final receipt can be truncated; an older checkpoint must not revive it.
             result.update({"uploaded": True, "drive_file": uploaded})
             resume_state = None
+            result.pop("resumable_upload", None)
             _append_json_log(resolved_log_path, {**result, "verification_pending": True})
             # The service above has sat idle through an upload that can run for hours; its
             # keep-alive socket is dead by now (2026-09-23: a finished upload was recorded failed
@@ -2252,20 +2540,32 @@ def run_backup(
                                 "verification_error": "snapshot aged beyond weekly backup safety window; VACUUM not authorized",
                             }
                         )
+            result["upload_state"] = "verified" if result["verified"] else "failed"
             if result["verified"]:
+                _append_json_log(resolved_log_path, result)  # remote proof precedes reclamation
+                _reclaim_superseded_local(resolved_log_path, result, snapshot.parent)
+                from . import job_alerts
+
+                job_alerts.report(
+                    "backup-upload-abandoned", None, path=job_alerts.alert_path(db_path=Path(resolved_db_path))
+                )
                 result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
                     snapshot.parent, snapshot
                 )
-                if remove_local_after_upload:
+                if remove_local_after_upload and snapshot.name not in _protected_snapshot_names(snapshot.parent):
                     snapshot.unlink()
                     result["local_removed"] = True
                 if resume is None:
                     _remove_superseded_stalls(stalled, result, snapshot.name[:10])
-                verified_drive_names = _verified_snapshot_names_from_log(resolved_log_path)
+                verified_drive_names = _verified_snapshot_names_from_log(
+                    resolved_log_path, db_path=Path(resolved_db_path)
+                )
                 verified_drive_names.add(snapshot.name)
                 result["local_gzip_retention_deleted"] = prune_local_gzip_snapshots(
                     snapshot.parent,
                     verified_drive_names=verified_drive_names,
+                    protected_names=_protected_snapshot_names(snapshot.parent)
+                    | {p.name for p in snapshot.parent.glob("*.db.gz") if p.name not in verified_drive_names},
                 )
                 if retention_enabled:
                     try:
@@ -2314,13 +2614,18 @@ def run_backup(
     finally:
         result["retained_raw_snapshots"] = _retained_raw_snapshot_names(Path(staging_dir))
         raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
+        if (result.get("error") or result.get("verification_error")) and not (
+            result["uploaded"] and result["verified"]
+        ):
+            result["upload_state"] = "failed"
         if raw.is_file() and not raw.is_symlink():
             result["local_uncompressed_snapshot"] = str(raw)
             result["raw_snapshot_retained_reason"] = "No verified gzip replaced this raw snapshot"
         if resume_state is not None and not result["uploaded"] and not result.get("drive_file"):
             result["resumable_upload"] = resume_state
             result.setdefault("error_code", "drive_upload_interrupted")
-        _append_json_log(resolved_log_path, result)
+        if not nothing_pending:
+            _append_json_log(resolved_log_path, result)
     return result
 
 
@@ -2335,23 +2640,36 @@ def _run_backup_process(timeout_seconds: int) -> int:
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         resolved_db_path = get_db_path()
-        result = run_backup(
-            deadline_monotonic=time.monotonic() + timeout_seconds,
-            staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
-            # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH
-            # is a legacy alias. With neither set, run_backup derives the host folder.
-            folder_parts=(
-                configured_folder.split("/")
-                if (
-                    configured_folder := os.environ.get(
-                        "BRAINLAYER_BACKUP_DRIVE_FOLDER",
-                        os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH"),
+
+        run_deadline = time.monotonic() + timeout_seconds
+
+        def run_phase():
+            return run_backup(
+                deadline_monotonic=run_deadline,
+                phase=os.environ.get("BRAINLAYER_BACKUP_PHASE", "all"),
+                staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
+                # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH
+                # is a legacy alias. With neither set, run_backup derives the host folder.
+                folder_parts=(
+                    configured_folder.split("/")
+                    if (
+                        configured_folder := os.environ.get(
+                            "BRAINLAYER_BACKUP_DRIVE_FOLDER",
+                            os.environ.get("BRAINLAYER_BACKUP_DRIVE_PATH"),
+                        )
                     )
-                )
-                else None
-            ),
-            log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
-        )
+                    else None
+                ),
+                log_path=_backup_log_path(None, db_path=resolved_db_path, env=os.environ),
+            )
+
+        result = run_phase()
+        if os.environ.get("BRAINLAYER_BACKUP_PHASE") == "upload":
+            while result.get("verified"):
+                next_result = run_phase()
+                if next_result.get("snapshot") == result.get("snapshot"):
+                    break
+                result = next_result
     except BackupStoppedError as exc:
         if not getattr(exc, "receipt_logged", False):
             _append_json_log(
@@ -2383,7 +2701,15 @@ def _run_backup_process(timeout_seconds: int) -> int:
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
     print(_redact_upload_secrets(json.dumps(result, sort_keys=True)), flush=True)
-    return 0 if result.get("verified", True) else 1
+    return (
+        0
+        if (
+            result.get("local_verified")
+            if os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
+            else result.get("verified", True) or result.get("upload_state") == "nothing_pending"
+        )
+        else 1
+    )
 
 
 def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None = None) -> int:
@@ -2456,16 +2782,31 @@ def _supervise_backup_process(timeout_seconds: int, *, command: list[str] | None
 
 def main() -> int:
     timeout_seconds = _configured_backup_timeout_seconds()
+    snapshot_phase = os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
+    if snapshot_phase:
+        timeout_seconds = min(
+            timeout_seconds,
+            int(
+                _configured_positive_number(
+                    "BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
+                )
+            ),
+        )
+        if budget := os.environ.get("BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS"):
+            timeout_seconds = min(timeout_seconds, int(budget))
+        if timeout_seconds < 1:
+            raise ValueError("snapshot timeout must be positive")
     if _env_flag_enabled(BACKUP_SUPERVISED_CHILD_ENV):
         return _run_backup_process(timeout_seconds)
     from .job_alerts import report
 
+    key = "backup-snapshot" if snapshot_phase else "backup-daily"
     try:
         code = _supervise_backup_process(timeout_seconds)
     except Exception:
-        report("backup-daily", "Database backup failed; check the backup log")
+        report(key, "Database backup failed; check the backup log")
         raise
-    report("backup-daily", None if code == 0 else "Database backup failed; check the backup log")
+    report(key, None if code == 0 else "Database backup failed; check the backup log")
     return code
 
 

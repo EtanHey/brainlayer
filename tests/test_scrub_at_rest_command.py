@@ -391,6 +391,19 @@ def test_live_apply_quiesces_all_writers_and_preserves_enrichment_pause(db, live
     assert "no-writers" in live_guard.events
 
 
+@pytest.mark.parametrize("age_hours", [0, 12, 23])
+def test_live_scrub_accepts_recent_offsite_proof_without_weekly_local_artifact(db, live_guard, age_hours):
+    from brainlayer import maintenance, scrub_at_rest
+
+    # Uploaded copies may outlive the local gzip and cross local midnight within the 24h gate.
+    created = live_guard.now - dt.timedelta(hours=age_hours)
+    receipt = dict(live_guard.receipt, attempted_at=created.isoformat(), snapshot_created_at=created.isoformat())
+    live_guard.backup.write_text(json.dumps(receipt) + "\n")
+    config = maintenance.MaintenanceConfig(db_path=db.db_path, backup_reuse_max_age_hours=24)
+    scrub_at_rest._live_requirements(config)
+    assert live_guard.events == []
+
+
 @pytest.mark.parametrize("fail_apply", [False, True])
 @pytest.mark.parametrize("operator_disabled", [False, True])
 def test_guarded_restoration_preserves_real_fleet_pause(db, live_guard, monkeypatch, fail_apply, operator_disabled):

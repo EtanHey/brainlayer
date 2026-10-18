@@ -99,9 +99,11 @@ def test_prior_conflict_preserves_confirmed_upload_and_recovery_receipt(tmp_path
             machine_id="Locals-MacBook-Pro",
         )
     receipts = b._read_backup_receipts(receipt_path)
-    assert len(receipts) == 2
-    assert receipts[0]["uploaded"] is True and receipts[0]["verification_pending"] is True
-    assert "resumable_upload" not in receipts[0]
+    assert len(receipts) == 4
+    assert receipts[2]["uploaded"] is True and receipts[2]["verified"] is True
+    assert receipts[0]["local_verified"] is True and receipts[0]["uploaded"] is False
+    assert receipts[1]["uploaded"] is True and receipts[1]["verification_pending"] is True
+    assert "resumable_upload" not in receipts[1]
     receipt = receipts[-1]
     assert receipt["uploaded"] and receipt["verified"]
     assert receipt["drive_file"]["id"] == "drive-file-id"

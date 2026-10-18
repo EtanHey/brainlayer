@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import maintenance_control
+from .backup_daily import DEFAULT_SNAPSHOT_TIMEOUT_SECONDS, local_backup_date
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
@@ -20,13 +21,14 @@ from .maintenance_control import MaintenanceHold
 from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
 
 NAMES = tuple(
-    "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts".split(
+    "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts,backup-snapshot".split(
         ","
     )
 )
 KEYS = {
     "index": "index",
     "backup-daily": "backup-daily",
+    "backup-snapshot": "backup-snapshot",
     "jsonl-backup": "jsonl-backup",
     "maintenance-nightly": "maintenance-light",
     "maintenance-weekly": "maintenance-full",
@@ -53,16 +55,19 @@ class CalendarPlan:
     def select(self, last_weekly=None):
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
-        # Nightly jobs precede the long upload; weekly full needs that night's fresh receipt.
+        # Weekly full follows the local proof; both nightly and weekly put upload last.
         names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
         if weekly:
             names[1] = "maintenance-weekly"
-            names.insert(1, "backup-daily")
-            names += ["decay", "repair-fts"]
+            names.insert(1, "backup-snapshot")
+            names += ["decay", "repair-fts", "backup-daily"]
         else:
             names.append("backup-daily")
         by_name = {s.name: s for s in self.candidates}
-        return [by_name[n] for n in names]
+        selected = [by_name[n] for n in names]
+        if weekly:
+            selected[-1] = replace(selected[-1], env=selected[-1].env | {"BRAINLAYER_BACKUP_PHASE": "upload"})
+        return selected
 
 
 def calendar_steps(python, cli, lib_dir, scheduled_date):
@@ -79,9 +84,17 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
     )
     steps = tuple(
         Step(n, (str(lib_dir / "brainlayer-env-run.sh"), *args), timeout, {"BRAINLAYER_PYTHON": str(python)})
-        for n, (args, timeout) in zip(NAMES, commands)
+        for n, (args, timeout) in zip(NAMES[: len(commands)], commands)
     )
-    steps[1].env["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] = "6"
+    steps[1].env["BRAINLAYER_BACKUP_PHASE"] = "all"
+    steps += (
+        replace(
+            steps[1],
+            name="backup-snapshot",
+            timeout=DEFAULT_SNAPSHOT_TIMEOUT_SECONDS,
+            env=steps[1].env | {"BRAINLAYER_BACKUP_PHASE": "snapshot"},
+        ),
+    )
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
     return CalendarPlan(scheduled_date, steps)
 
@@ -94,6 +107,8 @@ def record(directory, **event):
 
 
 def backup_deadline(step):
+    if step.name == "backup-snapshot":
+        return step.timeout
     if step.name != "backup-daily":
         return step.timeout
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
@@ -104,6 +119,35 @@ def backup_deadline(step):
     if seconds < 1:
         raise ValueError("invalid backup timeout")
     return max(step.timeout, seconds + 90)
+
+
+def _service_name(step):
+    return "backup-daily" if step.name == "backup-snapshot" else step.name
+
+
+def _bounded_snapshot_step(step, now, shutdown_timeout):
+    path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
+    configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", path)
+    requested = float(
+        configured
+        if configured is not None
+        else os.environ.get("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", step.timeout)
+    )
+    if not math.isfinite(requested) or requested <= 0:
+        raise ValueError("invalid snapshot timeout")
+    end = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    seconds = int(min(requested, (end - now).total_seconds() - shutdown_timeout - 1))
+    if seconds < 1:
+        return None
+    return replace(
+        step,
+        timeout=seconds,
+        env=step.env
+        | {
+            "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(seconds),
+            "BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS": str(seconds),
+        },
+    )
 
 
 def _bounded_index_step(step, now, shutdown_timeout):
@@ -251,7 +295,7 @@ async def run_calendar(
 ):
     if not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout)) or defer_after < 1:
         raise ValueError("invalid calendar timing")
-    date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or now_fn().date()
+    date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or local_backup_date(now_fn())
     custody = Custody(directory)
     try:
         custody.__enter__()
@@ -303,8 +347,16 @@ async def run_calendar(
                         )
                         continue
                     step = bounded
+                if step.name == "backup-snapshot":
+                    bounded = _bounded_snapshot_step(step, now_fn(), shutdown_timeout)
+                    if bounded is None:
+                        results[step.name] = finish(
+                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
+                        )
+                        continue
+                    step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
-                if f"com.brainlayer.{step.name}" in disabled or "com.brainlayer.maintenance" in disabled:
+                if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                     code, reason = 75, "disabled"
                 elif not await _window(directory, step, now_fn, sleep_fn, stop):
                     code, missed = (143, False) if stop.is_set() else (75, True)
@@ -314,7 +366,10 @@ async def run_calendar(
                     child_env = (
                         env
                         | step.env
-                        | dict(BRAINLAYER_LAUNCHD_SERVICE=step.name, XPC_SERVICE_NAME=f"com.brainlayer.{step.name}")
+                        | dict(
+                            BRAINLAYER_LAUNCHD_SERVICE=_service_name(step),
+                            XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
+                        )
                     )
                     async with step_hold(client, guard, child_env, step) as held_env:
                         if stop.is_set():

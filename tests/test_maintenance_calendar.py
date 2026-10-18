@@ -18,18 +18,18 @@ def test_plan_keeps_weekly_receipt_dependency_and_nightly_upload_last(tmp_path, 
     weekly = last_weekly is None
     assert names == [
         "index",
-        *(["backup-daily"] if weekly else []),
+        *(["backup-snapshot"] if weekly else []),
         "maintenance-weekly" if weekly else "maintenance-nightly",
         "jsonl-backup",
         "p0-counter",
         "wal-checkpoint",
         *(["decay", "repair-fts"] if weekly else []),
-        *([] if weekly else ["backup-daily"]),
+        *(["backup-daily"] if weekly else ["backup-daily"]),
     ]
     by_name = {step.name: step for step in plan.candidates}
     assert by_name["backup-daily"].argv[-1] == str(tmp_path / "backup-daily.sh")
     assert by_name["backup-daily"].timeout == 28890
-    assert by_name["backup-daily"].env["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] == "6"
+    assert by_name["backup-snapshot"].env["BRAINLAYER_BACKUP_PHASE"] == "snapshot"
     assert by_name["jsonl-backup"].argv[-1] == str(tmp_path / "jsonl-backup.sh")
     assert by_name["jsonl-backup"].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"].endswith("/claude-jsonl")
     for name, mode in [("maintenance-nightly", "--light"), ("maintenance-weekly", "--full")]:
@@ -55,12 +55,11 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
     seen = []
     backups = []
 
-    def backup(config, timeout):
-        assert "backup-daily" in seen  # The failed daily attempt left no reusable receipt.
-        assert not config.backup_log_path.exists()  # No recent verified receipt.
-        assert 0 < timeout <= 7200
-        backups.append(timeout)
-        return dict(verified=receipt == "fresh", uploaded=True, drive_file={"id": "weekly"})
+    snapshot = path / "verified.db.gz"
+    snapshot.write_bytes(b"synthetic verified snapshot")
+    from brainlayer.backup_daily import _upload_identity
+
+    local_receipt = dict(local_verified=True, snapshot=str(snapshot), local_artifact=_upload_identity(snapshot))
 
     async def sleep(seconds):
         clock[0] += dt.timedelta(seconds=seconds)
@@ -68,8 +67,8 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
 
     async def execute(step, env, **kwargs):
         seen.append(step.name)
-        if step.name == "backup-daily":
-            return int(receipt != "recent")
+        if step.name == "backup-snapshot":
+            return int(receipt == "unverified")
         if step.name == "maintenance-weekly":
             cfg = maintenance.MaintenanceConfig(
                 db_path=db,
@@ -86,13 +85,17 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
             os.environ.update(env)
             try:
                 if receipt == "unverified":
-                    with pytest.raises(maintenance.MaintenanceAbort, match="weekly backup was not verified") as exc:
+                    with pytest.raises(
+                        maintenance.MaintenanceAbort, match="local verified snapshot unavailable"
+                    ) as exc:
                         maintenance.run_maintenance("full", config=cfg)
                     assert exc.value.code == 76
                     assert db.stat().st_size == before
                     return exc.value.code
                 result = maintenance.run_maintenance("full", config=cfg)
-                assert result.backup_status == "verified" and result.vacuum_after_bytes < result.vacuum_before_bytes
+                assert (
+                    result.backup_status == "local_verified" and result.vacuum_after_bytes < result.vacuum_before_bytes
+                )
             finally:
                 os.environ.clear()
                 os.environ.update(old)
@@ -107,20 +110,19 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
         "_emit_telemetry",
     ):
         monkeypatch.setattr(maintenance, name, lambda *_: None)
-    if receipt == "recent":
-        monkeypatch.setattr(
-            maintenance, "_recent_verified_backup", lambda *_: dict(verified=True, drive_file={"id": "previous"})
-        )
-    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", backup)
+    monkeypatch.setattr(
+        maintenance, "_recent_weekly_verified_backup", lambda *_: local_receipt if receipt != "unverified" else None
+    )
+    monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_: pytest.fail("second snapshot"))
     plan = calendar_steps(sys.executable, "/unused/cli", path, dt.date(2026, 10, 11))
     rejected = receipt == "unverified" and finish[0] < 6
     assert asyncio.run(
         run_calendar(plan, path / "calendar", path / "logs", now_fn=lambda: clock[0], sleep_fn=sleep)
-    ) == int(rejected or receipt != "recent")
+    ) == int(rejected)
     assert ("maintenance-weekly" in seen) == (finish[0] < 6)
     assert (db.stat().st_size < before) == (finish[0] < 6 and not rejected)
-    assert len(backups) == int(receipt != "recent" and finish[0] < 6)
-    assert seen[-1] == "repair-fts"
+    assert backups == []
+    assert seen[-1] == "backup-daily"
     assert ("maintenance-full" in job_alerts.active_alerts()) == (finish[0] >= 6 or rejected)
     events = [json.loads(l) for l in (path / "calendar" / "runs.jsonl").read_text().splitlines()]
     assert any(e["event"] == "wait-start" for e in events) == (finish[0] < 4)
@@ -144,7 +146,7 @@ def test_calendar_records_actual_window_blocker_and_weekly_substitution(request,
 
     async def execute(step, env, **kwargs):
         seen.append((step.name, clock[0]))
-        if step.name == late_step:
+        if step.name == ("backup-snapshot" if weekly and late_step == "backup-daily" else late_step):
             clock[0] += dt.timedelta(hours=4)
             if late_step == "backup-daily" and not weekly:
                 assert all(name in dict(seen) for name in ("maintenance-nightly", "jsonl-backup", "wal-checkpoint"))
@@ -176,7 +178,6 @@ def test_calendar_records_actual_window_blocker_and_weekly_substitution(request,
 @pytest.mark.parametrize("existing_receipt", ["yesterday", "weekly-safety"])
 def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeypatch, existing_receipt):
     import sqlite3
-    from types import SimpleNamespace
 
     from brainlayer import backup_daily, maintenance, maintenance_calendar
 
@@ -204,26 +205,20 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
         def now(cls, tz=None):
             return clock[0].astimezone(tz)
 
-    # Patch only this module's clock; leave the supervisor's real time functions intact.
-    monkeypatch.setattr(backup_daily, "dt", SimpleNamespace(datetime=ClockDateTime, UTC=dt.UTC, timedelta=dt.timedelta))
     uploads, seen = [], []
-
-    @backup_daily._serialized_backup_run
-    def upload(db_path, staging_dir, log_path):
-        started = clock[0]
-        clock[0] += dt.timedelta(hours=2, minutes=20)
-        receipt = dict(
-            attempted_at=started.isoformat(),
-            snapshot_created_at=started.isoformat(),
-            db=str(db_path),
-            uploaded=True,
-            verified=True,
-            drive_file={"id": "fresh-daily"},
-        )
-        with log_path.open("a") as handle:
-            handle.write(json.dumps(receipt) + "\n")
-        uploads.append(receipt)
-        return receipt
+    snapshot = path / "2026-10-11.db.gz"
+    snapshot.write_bytes(b"synthetic verified snapshot")
+    local = dict(
+        db=str(db),
+        snapshot=str(snapshot),
+        local_verified=True,
+        local_integrity="ok",
+        local_integrity_pragma="integrity_check",
+        uploaded=False,
+        verified=False,
+        local_artifact=backup_daily._upload_identity(snapshot),
+        snapshot_created_at=clock[0].isoformat(),
+    )
 
     cfg = maintenance.MaintenanceConfig(
         db_path=db,
@@ -236,19 +231,22 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
         idle_sample_seconds=0,
         recent_write_grace_seconds=0,
     )
-    expected_id = "fresh-daily" if existing_receipt == "yesterday" else "weekly-safety"
 
     async def execute(step, env, **kwargs):
         seen.append((step.name, clock[0]))
         with monkeypatch.context() as child:
             for key, value in env.items():
                 child.setenv(key, value)
-            if step.name == "backup-daily":
-                assert upload(db_path=db, staging_dir=staging, log_path=log)["drive_file"]["id"] == expected_id
+            if step.name == "backup-snapshot":
+                log.write_text(json.dumps(local) + "\n")
+            elif step.name == "backup-daily":
+                assert db.stat().st_size < before
+                uploads.append(snapshot)
+                clock[0] += dt.timedelta(hours=4)
             elif step.name == "maintenance-weekly":
                 result = maintenance.run_maintenance("full", config=cfg)
-                assert result.backup_status == "verified"
-                assert f"verified_drive_backup={expected_id}" in result.actions
+                assert result.backup_status == "local_verified"
+                assert f"verified_local_backup={snapshot}" in result.actions
         return 0
 
     async def sleep(seconds):
@@ -273,21 +271,21 @@ def test_slow_daily_backup_and_weekly_share_one_verified_upload(request, monkeyp
     )
     assert [name for name, _ in seen] == [
         "index",
-        "backup-daily",
+        "backup-snapshot",
         "maintenance-weekly",
         "jsonl-backup",
         "p0-counter",
         "wal-checkpoint",
         "decay",
         "repair-fts",
+        "backup-daily",
     ]
-    assert len(uploads) == int(existing_receipt == "yesterday")
-    if uploads:
-        assert dict(seen)["maintenance-weekly"] - dict(seen)["backup-daily"] == dt.timedelta(hours=2, minutes=20)
-        assert dict(seen)["maintenance-weekly"].hour == 5
+    assert uploads == [snapshot]
+    assert dict(seen)["maintenance-weekly"].hour == 4
+    assert dict(seen)["backup-daily"].hour == 4
     assert db.stat().st_size < before  # Real fixture VACUUM after verified receipt reuse.
     rows = [json.loads(line) for line in cfg.log_path.read_text().splitlines()]
-    assert any(row.get("backup_status") == "reused_verified" for row in rows)
+    assert any(row.get("backup_status") == "local_verified" for row in rows)
     assert json.loads((path / "calendar" / "state.json").read_text())["last_weekly"] == "2026-10-11"
 
 

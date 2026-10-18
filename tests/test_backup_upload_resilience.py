@@ -159,7 +159,7 @@ def test_unusable_resume_starts_fresh_and_only_removes_proven_stale(lane, change
         result = lane.run("2026-10-18")
     assert result["uploaded"]
     assert len(lane.posts) == len(lane.creations) == 2
-    assert lane.snapshot.exists() is (change in {"digest", "wrong_owner"})
+    assert lane.snapshot.exists() is (change not in {"missing", "expired", "unsafe_url"})
     if change in {"expired", "unsafe_url"}:
         assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
 
@@ -633,8 +633,9 @@ def test_r1_same_day_fresh_snapshot_cannot_overwrite_retained_stalled_copy(lane,
 
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", overwrite)
     monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": False})
-    with pytest.raises(RuntimeError, match="retaining.*2026-10-17.db.gz"):
-        lane.run("2026-10-17")
+    result = lane.run("2026-10-17")
+    assert result["verified"] is False
+    assert len(lane.creations) == 1  # Expired session restarts for the original bytes.
     assert lane.snapshot.read_bytes() == b"abcdef"
 
 

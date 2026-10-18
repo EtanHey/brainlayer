@@ -116,6 +116,18 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     all_errors = all(record.get("error") or record.get("error_type") for record in real)
     latest = real[-1]
     error_type = str(latest["error_type"]) if latest.get("error_type") else None
+    error_reason = latest.get("error") or latest.get("verification_error")
+    if latest.get("verification_error") and error_type is None:
+        error_type = "backup_verification_failed"
+    latest_by_snapshot = {record["snapshot"]: record for record in real if isinstance(record.get("snapshot"), str)}
+    if error_type is None:
+        for pending in reversed(list(latest_by_snapshot.values())):
+            if pending.get("upload_state") in {"failed", "abandoned"} and not (
+                pending.get("uploaded") and pending.get("verified")
+            ):
+                error_type = str(pending.get("error_type") or pending.get("error_code") or "backup_error")
+                error_reason = pending.get("error") or pending.get("verification_error")
+                break
     if "google-drive-mcp/tokens.json" in str(latest.get("error", "")):
         error_type = "drive_credentials_missing"
     elif all_errors and error_type is None:
@@ -142,6 +154,34 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
                 all_errors,
             )
     return None, error_type, all_errors
+
+
+def _local_snapshot(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    real = [r for r in records if r.get("backup_log_provenance") == "real"]
+    latest = {r["snapshot"]: r for r in real if isinstance(r.get("snapshot"), str)}
+    # Cleanup receipts for older copies cannot replace the newest snapshot's display.
+    local = max(
+        (r for r in latest.values() if "local_verified" in r),
+        key=lambda r: backup_daily._snapshot_created_time(r) or datetime.min.replace(tzinfo=UTC),
+        default=None,
+    )
+    if local is None:
+        return None
+    failed = next(
+        (r for r in reversed(list(latest.values())) if r.get("upload_state") in {"failed", "abandoned"}), None
+    )
+    error = failed or (real[-1] if real and (real[-1].get("error") or real[-1].get("verification_error")) else {})
+    created = backup_daily._snapshot_created_time(local)
+    return {
+        "last_at": created.astimezone(UTC).isoformat().replace("+00:00", "Z") if created else None,
+        "destination": Path(local["snapshot"]).name,
+        "local_verified": local.get("local_verified") is True,
+        "uploaded": local.get("uploaded") is True,
+        "upload_state": local.get("upload_state", "pending"),
+        "upload_error": error.get("error") or error.get("verification_error"),
+        "local_integrity": local.get("local_integrity"),
+        "local_integrity_pragma": local.get("local_integrity_pragma"),
+    }
 
 
 def _drive_token_is_usable(path: Path) -> bool:
@@ -182,7 +222,7 @@ def build_backups_section(
     record_input: Callable[..., dict],
     now: datetime,
 ) -> dict[str, Any]:
-    """Return the schema-v1 backup measurement, recording every touched input."""
+    """Return the backup measurement with an optional v2 local snapshot sibling."""
     db_path = Path(env["BRAINLAYER_DB"]).expanduser().resolve() if env.get("BRAINLAYER_DB") else get_db_path()
     jsonl_path = _path(env, "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG", db_path=db_path)
     daily_path = _path(env, "BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG", db_path=db_path)
@@ -357,5 +397,6 @@ def build_backups_section(
             "disabled_dir_present": disabled_present,
         },
         "db_snapshot": snapshot,
+        **({"local_snapshot": _local_snapshot(daily_records)} if _local_snapshot(daily_records) is not None else {}),
         "error_type": error_type,
     }

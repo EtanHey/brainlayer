@@ -627,6 +627,62 @@
             "string",
             "null"
           ]
+        },
+        "local_snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "local_verified",
+            "uploaded",
+            "upload_state",
+            "upload_error"
+          ],
+          "properties": {
+            "last_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "destination": {
+              "type": "string"
+            },
+            "local_verified": {
+              "type": "boolean"
+            },
+            "uploaded": {
+              "type": "boolean"
+            },
+            "upload_state": {
+              "enum": [
+                "pending",
+                "in_progress",
+                "verified",
+                "failed",
+                "abandoned",
+                "superseded"
+              ]
+            },
+            "upload_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "local_integrity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "local_integrity_pragma": {
+              "enum": [
+                "quick_check",
+                "integrity_check",
+                null
+              ]
+            }
+          }
         }
       }
     },

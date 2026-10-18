@@ -17,6 +17,21 @@ def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
 
+def _local_receipt(config, receipt):
+    from brainlayer import backup_daily
+
+    snapshot = config.db_path.with_name("2026-09-27.db.gz")
+    snapshot.write_bytes(b"synthetic verified snapshot")
+    return dict(
+        receipt,
+        snapshot=str(snapshot),
+        local_verified=True,
+        local_integrity="ok",
+        local_integrity_pragma="integrity_check",
+        local_artifact=backup_daily._upload_identity(snapshot),
+    )
+
+
 def _create_enrichment_db(path: Path) -> None:
     conn = apsw.Connection(str(path))
     try:
@@ -195,6 +210,8 @@ def test_weekly_backup_waits_for_daily_then_reuses_verified_receipt(tmp_path, mo
         "drive_file": {"id": "verified-daily"},
     }
 
+    expected_receipt = _local_receipt(config, expected_receipt)
+
     def held(_path):
         calls[0] += 1
         return calls[0] == 1
@@ -218,7 +235,7 @@ def test_weekly_backup_waits_for_daily_then_reuses_verified_receipt(tmp_path, mo
         except OSError as exc:
             scratch_receipt = f"{type(exc).__name__}: {exc}"
         try:
-            read_result = maintenance._recent_verified_backup(config)
+            read_result = maintenance._recent_weekly_verified_backup(config)
         except Exception as exc:
             read_result = f"{type(exc).__name__}: {exc}"
         pytest.fail(
@@ -295,7 +312,18 @@ def test_weekly_backup_without_running_backup_runs_normally(tmp_path, monkeypatc
 
     def backup(_config, timeout_seconds):
         deadlines.append(timeout_seconds)
-        return {"verified": True, "uploaded": True, "drive_file": {"id": "verified-weekly"}}
+        receipt = _local_receipt(
+            config,
+            {
+                "db": str(config.db_path),
+                "snapshot_created_at": config.now_fn().isoformat(),
+                "verified": False,
+                "uploaded": False,
+                "drive_file": {"id": "verified-weekly"},
+            },
+        )
+        _write_jsonl(config.backup_log_path, [receipt])
+        return receipt
 
     monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", backup)
 
@@ -332,19 +360,19 @@ def test_fresh_weekly_backup_uses_supervised_process_and_kills_stuck_group(tmp_p
     assert exc.value.code == 76
     assert observed["args"][-2:] == ["-m", "brainlayer.backup_daily"]
     assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"] == "45"
-    assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] == "6"
+    assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"] == "6"
     assert observed["kwargs"]["start_new_session"] is True
     assert observed["pid"] == 45210
     assert observed["signal"] == maintenance.signal.SIGKILL
 
 
-@pytest.mark.parametrize("broken_reader", ["_backup_lock_is_held", "_recent_verified_backup"])
+@pytest.mark.parametrize("broken_reader", ["_backup_lock_is_held", "_recent_weekly_verified_backup"])
 def test_weekly_backup_read_errors_use_vacuum_skip_code(tmp_path, monkeypatch, broken_reader):
     from brainlayer import maintenance
 
     config = _config(tmp_path, now=dt.datetime(2026, 9, 27, 4, 5, tzinfo=dt.UTC))
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: False)
-    monkeypatch.setattr(maintenance, "_recent_verified_backup", lambda _config: None)
+    monkeypatch.setattr(maintenance, "_recent_weekly_verified_backup", lambda _config: None)
     monkeypatch.setattr(
         maintenance,
         broken_reader,
@@ -401,14 +429,17 @@ def test_weekly_backup_rechecks_after_lock_race(tmp_path, monkeypatch):
             _write_jsonl(
                 config.backup_log_path,
                 [
-                    {
-                        "attempted_at": "2026-09-27T03:17:00+00:00",
-                        "snapshot_created_at": "2026-09-27T03:17:00+00:00",
-                        "db": str(config.db_path),
-                        "uploaded": True,
-                        "verified": True,
-                        "drive_file": {"id": "verified-daily"},
-                    }
+                    _local_receipt(
+                        config,
+                        {
+                            "attempted_at": "2026-09-27T03:17:00+00:00",
+                            "snapshot_created_at": "2026-09-27T03:17:00+00:00",
+                            "db": str(config.db_path),
+                            "uploaded": True,
+                            "verified": True,
+                            "drive_file": {"id": "verified-daily"},
+                        },
+                    )
                 ],
             )
             raise maintenance.BackupAlreadyRunningError("backup already running")

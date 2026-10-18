@@ -207,3 +207,25 @@ def test_cap_job_is_installed_with_the_all_mode():
     assert "install_plist log-cap" in installer
     assert "install_many maintenance-nightly maintenance-weekly health-check log-cap" in installer
     assert "remove_plist log-cap" in installer
+
+
+def test_cap_preserves_pending_local_snapshot_receipt_until_its_upload_verifies(tmp_path):
+    import json
+
+    from brainlayer.log_cap import _cap_file
+
+    log = tmp_path / "backup.jsonl"
+    pending = dict(
+        snapshot="2026-10-18.db.gz", local_verified=True, uploaded=False, verified=False, backup_log_provenance="real"
+    )
+    log.write_text(json.dumps(pending) + "\n" + (json.dumps({"diagnostic": "x" * 80}) + "\n") * 10)
+    with log.open("a") as stream:
+        stream.write(json.dumps({"backup_log_provenance": "real", "error": "later unrelated attempt"}) + "\n")
+    before = log.read_bytes()
+    with pytest.raises(ValueError, match="pending local"):
+        _cap_file(log, max_bytes=500, keep_bytes=200, line_safe=True)
+    assert log.read_bytes() == before
+    with log.open("a") as stream:
+        stream.write(json.dumps(dict(pending, uploaded=True, verified=True)) + "\n")
+    assert _cap_file(log, max_bytes=500, keep_bytes=200, line_safe=True)
+    assert json.loads(log.read_text().splitlines()[-1])["verified"] is True
