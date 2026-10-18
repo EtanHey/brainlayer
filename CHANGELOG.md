@@ -39,6 +39,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.63] - 2026-10-18
+
+### Fixed
+- Remove uncompressed VACUUM backup snapshots only after their gzip replacement is verified and durable (#1387).
+
+### Upgrade notes
+- After its `.db.gz` is durable (F_FULLFSYNC + directory fsync) and proven to match (own run: gzip size + SQLite header; leftovers from earlier runs: full SHA-256 of the decompressed gzip equals the raw), the uncompressed VACUUM snapshot is removed; otherwise both are kept and the receipt / capacity errors name the retained raw.
+- Formula-only release: BrainBar and its cask remain at 1.5.61.
+
 ## [1.5.62] - 2026-10-18
 
 ### Fixed
