@@ -19,7 +19,17 @@ def app_identity(app: Path) -> dict:
     commit = info.get("GitCommit", "")
     if not isinstance(version, str) or not version or not isinstance(commit, str):
         raise ValueError("installed BrainBar identity is missing")
-    return {"version": version, "git_commit": commit}
+    executable = (app / "Contents/MacOS/BrainBar").stat()
+    return {
+        "version": version,
+        "git_commit": commit,
+        "executable_dev": executable.st_dev,
+        "executable_ino": executable.st_ino,
+    }
+
+
+def executable_snapshot(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
 
 
 def run(args, timeout=10):
@@ -71,6 +81,11 @@ def running_bundle_matches(app: Path, *, timeout=10) -> bool:
         # Refuse PID/label replacement while the vnode snapshot was inspected.
         final = loaded(label, remaining())
         final_pid = re.search(r"(?m)^\s*pid\s*=\s*(\d+)\s*$", final.stdout)
-        if final.returncode or not final_pid or final_pid[1] != pid[1] or executable.stat() != info:
+        if (
+            final.returncode
+            or not final_pid
+            or final_pid[1] != pid[1]
+            or executable_snapshot(executable.stat()) != executable_snapshot(info)
+        ):
             return False
     return True

@@ -26,6 +26,7 @@ def _activate(agents: Path, *, timeout_seconds: float = 90.0, verify: bool = Tru
         return subprocess.run(["/bin/launchctl", *args], capture_output=True, text=True, timeout=timeout, check=False)
 
     try:
+        deadline = time.monotonic() + timeout_seconds
         if sys.platform != "darwin":
             raise ValueError("activation requires macOS")
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -63,7 +64,6 @@ def _activate(agents: Path, *, timeout_seconds: float = 90.0, verify: bool = Tru
         if len(bundles) != 1:
             raise ValueError("BrainBar labels must use the same installed app")
         domain = f"gui/{os.getuid()}"
-        deadline = time.monotonic() + timeout_seconds
 
         def remaining():
             seconds = deadline - time.monotonic()
@@ -165,12 +165,32 @@ def _activate(agents: Path, *, timeout_seconds: float = 90.0, verify: bool = Tru
 
 def activate(agents: Path, *, timeout_seconds: float = 90.0, verify: bool = True, automatic: bool = False) -> dict:
     try:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("activation timeout must be finite and positive")
+        deadline = time.monotonic() + timeout_seconds
         if os.environ.get("BRAINLAYER_FORBID_BRAINBAR_SOCKET") and agents == Path.home() / "Library/LaunchAgents":
             raise ValueError("test guard forbids installed BrainBar activation")
         # Shared by manual commands and the supervisor child; no concurrent restart.
         with (agents / ".brainbar-activation.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return _activate(agents, timeout_seconds=timeout_seconds, verify=verify, automatic=automatic)
+            while True:
+                seconds = deadline - time.monotonic()
+                if seconds <= 0:
+                    raise TimeoutError("activation deadline exceeded waiting for activation lock")
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if automatic:
+                        return {
+                            "ok": False,
+                            "stage": "deferred",
+                            "reason": "activation already in progress",
+                            "service_ready": False,
+                            "rollback_attempted": False,
+                            "cleanup_errors": [],
+                        }
+                    time.sleep(min(0.1, seconds))
+            return _activate(agents, timeout_seconds=deadline - time.monotonic(), verify=verify, automatic=automatic)
     except (OSError, ValueError) as exc:
         return {
             "ok": False,

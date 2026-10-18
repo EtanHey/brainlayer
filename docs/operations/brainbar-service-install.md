@@ -38,7 +38,9 @@ Activation leaves both current-bundle loaded labels untouched when MCP verificat
 a probe failure on that current running bundle also preserves the service and reports failure.
 Otherwise it replaces only the current user's cask daemon/UI labels, waits for `/tmp/brainbar.sock`,
 and requires initialize, tools/list and a safe tool call through the installed bridge.
-The startup/MCP budget defaults to 90 seconds; `--timeout` or
+Manual activation waits for a concurrent activation's lock within the same deadline;
+the automatic worker skips a locked tick without consuming its per-build attempt.
+The lock-wait/startup/MCP budget defaults to 90 seconds; `--timeout` or
 `BRAINLAYER_BRAINBAR_ACTIVATION_TIMEOUT_S` sets it independently of setup's 10-second probe.
 `--no-verify` skips MCP probing and reports the result as unverified; the default is `--verify`.
 Disabled labels are reported explicitly, never silently enabled.
@@ -59,8 +61,15 @@ The formula supervisor checks every five seconds for the installed bundle and bo
 plists with neither label loaded. Any active brew entrypoint/Homebrew child defers activation;
 the automatic command checks again before launch mutations. The supervised worker has a
 180-second runtime limit and its activation subprocess a 110-second limit. It records the
-Info.plist GitCommit/version in `supervisor/brainbar-activation.json` **before** attempting
-activation, so failure or supervisor restart does not repeat the attempt for that build.
+app path, Info.plist GitCommit/version and main executable device/inode in
+`supervisor/brainbar-activation.json` **before** attempting activation, so failure or
+supervisor restart does not repeat the attempt for that installed build. Reinstalling
+the same build replaces the executable inode and re-arms activation. When both labels
+already run from the current bundle, the worker records it as ready; a later deliberate
+bootout of that same installation is respected.
+If Homebrew matches persist for more than ten minutes while both labels remain absent,
+one `brainbar-activation-brew` job alert names the matching processes. Activation keeps
+deferring. The episode resets when brew ends or either label is loaded.
 Failure raises the `brainbar-activation` job alert (BrainBar attention/observability); an operator
 can run `brainlayer brainbar activate` to retry. A successful manual verification clears the alert.
 
