@@ -32,6 +32,7 @@ from .backup_daily import (
     BackupAlreadyRunningError,
     _backup_log_path,
     _recent_local_verified_backup,
+    _recent_verified_backup_for_reuse,
     local_backup_date,
     local_backup_max_age_hours,
 )
@@ -1054,6 +1055,18 @@ def _backup_lock_is_held(staging_dir: Path) -> bool:
 
 
 def _recent_verified_backup(config: MaintenanceConfig) -> dict[str, Any] | None:
+    """Keep the offsite-verified receipt contract used by live at-rest scrubbing."""
+    log_path = config.backup_log_path or _backup_log_path(None, db_path=config.db_path)
+    return _recent_verified_backup_for_reuse(
+        log_path,
+        config.db_path,
+        now=config.now_fn(),
+        max_age_hours=config.backup_reuse_max_age_hours,
+    )
+
+
+def _recent_weekly_verified_backup(config: MaintenanceConfig) -> dict[str, Any] | None:
+    """Weekly VACUUM requires tonight's intact local snapshot, before offsite upload."""
     log_path = config.backup_log_path or _backup_log_path(None, db_path=config.db_path)
     return _recent_local_verified_backup(
         log_path,
@@ -1140,7 +1153,7 @@ def _pin_weekly_backup(config: MaintenanceConfig, backup: dict[str, Any] | None)
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise MaintenanceAbort("backup custody unavailable; VACUUM skipped", code=76) from exc
-        latest = _recent_verified_backup(config)
+        latest = _recent_weekly_verified_backup(config)
         if latest is None or latest.get("snapshot") != backup.get("snapshot"):
             raise MaintenanceAbort("local snapshot changed before quiesce; VACUUM skipped", code=76)
         _atomic_write(
@@ -1167,7 +1180,7 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
             raise MaintenanceAbort(f"backup lock unreadable ({type(exc).__name__}); VACUUM skipped", code=76) from exc
         if not held:
             try:
-                receipt = _recent_verified_backup(config)
+                receipt = _recent_weekly_verified_backup(config)
             except OSError as exc:
                 raise MaintenanceAbort(
                     f"backup receipt unreadable ({type(exc).__name__}); VACUUM skipped", code=76
@@ -1187,7 +1200,7 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
             except Exception as exc:
                 raise MaintenanceAbort(f"weekly backup failed ({type(exc).__name__}); VACUUM skipped", code=76) from exc
             else:
-                receipt = _recent_verified_backup(config)
+                receipt = _recent_weekly_verified_backup(config)
                 if receipt is None:
                     raise MaintenanceAbort("weekly local snapshot was not verified; VACUUM skipped", code=76)
                 return receipt
@@ -1267,7 +1280,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
             if (
                 mode == "full"
                 and backup is not None
-                and (_recent_verified_backup(config) or {}).get("snapshot") != backup.get("snapshot")
+                and (_recent_weekly_verified_backup(config) or {}).get("snapshot") != backup.get("snapshot")
             ):
                 backup = None
                 backup_abort = MaintenanceAbort("local snapshot changed before VACUUM; VACUUM skipped", code=76)

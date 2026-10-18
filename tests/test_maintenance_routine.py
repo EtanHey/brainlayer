@@ -235,7 +235,7 @@ def test_weekly_backup_waits_for_daily_then_reuses_verified_receipt(tmp_path, mo
         except OSError as exc:
             scratch_receipt = f"{type(exc).__name__}: {exc}"
         try:
-            read_result = maintenance._recent_verified_backup(config)
+            read_result = maintenance._recent_weekly_verified_backup(config)
         except Exception as exc:
             read_result = f"{type(exc).__name__}: {exc}"
         pytest.fail(
@@ -366,13 +366,13 @@ def test_fresh_weekly_backup_uses_supervised_process_and_kills_stuck_group(tmp_p
     assert observed["signal"] == maintenance.signal.SIGKILL
 
 
-@pytest.mark.parametrize("broken_reader", ["_backup_lock_is_held", "_recent_verified_backup"])
+@pytest.mark.parametrize("broken_reader", ["_backup_lock_is_held", "_recent_weekly_verified_backup"])
 def test_weekly_backup_read_errors_use_vacuum_skip_code(tmp_path, monkeypatch, broken_reader):
     from brainlayer import maintenance
 
     config = _config(tmp_path, now=dt.datetime(2026, 9, 27, 4, 5, tzinfo=dt.UTC))
     monkeypatch.setattr(maintenance, "_backup_lock_is_held", lambda _path: False)
-    monkeypatch.setattr(maintenance, "_recent_verified_backup", lambda _config: None)
+    monkeypatch.setattr(maintenance, "_recent_weekly_verified_backup", lambda _config: None)
     monkeypatch.setattr(
         maintenance,
         broken_reader,

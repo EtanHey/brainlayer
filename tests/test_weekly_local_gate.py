@@ -57,6 +57,18 @@ def test_snapshot_receipt_authorizes_weekly_before_any_drive_call(local_lane, mo
     assert maintenance._weekly_backup(config_for(local_lane, tmp_path))["snapshot"] == receipt["snapshot"]
 
 
+def test_weekly_local_snapshot_does_not_satisfy_live_scrub_offsite_gate(local_lane, monkeypatch, tmp_path):
+    from brainlayer import scrub_at_rest
+
+    receipt = backup.run_backup(**local_lane, phase="snapshot")
+    config = config_for(local_lane, tmp_path)
+    assert maintenance._weekly_backup(config)["snapshot"] == receipt["snapshot"]
+    monkeypatch.setattr(maintenance, "_service_is_deliberately_paused", lambda _: True)
+    with pytest.raises(scrub_at_rest.ScrubAtRestError) as error:
+        scrub_at_rest._live_requirements(config)
+    assert error.value.reason == "verified-backup-required"
+
+
 @pytest.mark.parametrize(
     "damage", ["missing", "changed", "unverified", "other-db", "yesterday", "future", "failed-verification"]
 )
