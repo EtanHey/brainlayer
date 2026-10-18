@@ -2129,16 +2129,29 @@ def run_backup(
             )
             weekly_age = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
             if result["verified"] and weekly_age is not None:
-                created = _snapshot_created_time(result)
-                if created is None or not dt.timedelta(0) <= dt.datetime.now(dt.UTC) - created <= dt.timedelta(
-                    hours=float(weekly_age)
-                ):
+                try:
+                    max_hours = float(weekly_age)
+                    if not math.isfinite(max_hours) or max_hours < 0:
+                        raise ValueError("weekly age must be finite and nonnegative")
+                except (ValueError, TypeError):
                     result.update(
                         {
                             "verified": False,
-                            "verification_error": "snapshot aged beyond weekly backup safety window; VACUUM not authorized",
+                            "verification_error": f"invalid {BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV}; VACUUM not authorized",
                         }
                     )
+                else:
+                    created = _snapshot_created_time(result)
+                    if (
+                        created is None
+                        or not 0 <= (dt.datetime.now(dt.UTC) - created).total_seconds() / 3600 <= max_hours
+                    ):
+                        result.update(
+                            {
+                                "verified": False,
+                                "verification_error": "snapshot aged beyond weekly backup safety window; VACUUM not authorized",
+                            }
+                        )
             if result["verified"]:
                 result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
                     snapshot.parent, snapshot

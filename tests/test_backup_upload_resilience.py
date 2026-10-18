@@ -711,3 +711,26 @@ def test_r2_truncated_verification_receipt_cannot_revive_completed_session(lane,
     assert lane.run("2026-10-18")["verified"]
     assert len(lane.posts) == 2, "crash tail resurrected an already completed upload session"
     assert lane.puts[-1][1] == "bytes 0-5/6"
+
+
+@pytest.mark.parametrize("bad_age", ["invalid", "nan", "inf", "-1"])
+def test_r2_malformed_weekly_age_preserves_upload_and_denies_vacuum(lane, monkeypatch, bad_age):
+    monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", "6")
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "completed"}))
+
+    def verified_then_bad_config(*args, **kwargs):
+        # The outer reuse gate already validated the initial configuration.
+        monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", bad_age)
+        return {"verified": True}
+
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verified_then_bad_config)
+    result = lane.run()
+    assert result["uploaded"] is True and result["drive_file"]["id"] == "completed"
+    assert result["verified"] is False
+    assert "invalid BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS" in result["verification_error"]
+    assert "resumable_upload" not in result and result.get("error_code") != "drive_upload_interrupted"
+    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    assert receipt["uploaded"] is True and receipt["verified"] is False
+    assert receipt["drive_file"]["id"] == "completed"
+    assert "invalid BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS" in receipt["verification_error"]
+    assert lane.snapshot.exists()
