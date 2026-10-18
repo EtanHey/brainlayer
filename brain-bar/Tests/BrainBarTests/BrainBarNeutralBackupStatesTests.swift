@@ -301,7 +301,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
                 }.padding(24).frame(width: 900).background(Color(nsColor: .windowBackgroundColor))
                     .environment(\.colorScheme, scheme)
                 try render(view, to: root.appendingPathComponent("neutral-\(name)\(suffix).png"), width: 900)
-                if name == "idle" || name == "pending" {
+                if ["idle", "idle_old_upload", "pending"].contains(name) {
                     let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: doc.generatedAt)
                     let dashboard = BrainBarDashboardPreview.make(collector: collector,
                         observabilityResult: .readable(doc), now: doc.generatedAt, observabilityCadence: .known(300), colorScheme: scheme)
