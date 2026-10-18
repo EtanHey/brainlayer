@@ -259,7 +259,7 @@ offline applies ignore it. Poll intervals shorten near the deadline. Waiting end
 at N seconds or when only 20 minutes remain in the quiet window, reserving that
 time for the guarded run. A refusal after sleeping reports `verified-backup-timeout`;
 if no wait is possible before the first sleep, it reports `verified-backup-required`,
-as does the default. Receipt freshness continues to use `attempted_at`.
+as does the default. Receipt freshness uses `snapshot_created_at` (the snapshot's VACUUM time), not `attempted_at`.
 It quiesces the fleet/throughput/tier-0 watchdogs, health-check healer, BrainBar UI/daemon,
 hotlane, watcher, drain, index, tier-3 ingest, decay and enrichment using maintenance's service helpers. It checks
 that jobs remain unloaded, BrainBar processes are gone and no writable database
