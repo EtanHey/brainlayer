@@ -20,7 +20,9 @@ rendered as a bare "Stored -> <id>" that an agent could not tell apart from a
 fresh insert.
 """
 
-from unittest.mock import patch
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -30,6 +32,21 @@ from brainlayer.mcp.store_handler import (
     _rejected_store_result,
     _store_receipt,
 )
+
+
+@pytest.fixture(autouse=True)
+def receipt_background_work(monkeypatch):
+    """This module checks receipts/commits, not delayed replay or embedding.
+
+    Keep notification-only background work inside this fixture's lifetime;
+    scheduler execution is covered in test_mcp_deferred_message.py.
+    """
+    from brainlayer.mcp import store_handler
+
+    monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", Mock(return_value=None))
+    # Replace the handler's module reference, never the shared threading module.
+    monkeypatch.setattr(store_handler, "threading", SimpleNamespace(Thread=Mock()))
+
 
 # --- Handler receipts: structured payload carries the same outcome ---
 
@@ -311,3 +328,55 @@ def _response_text(response) -> str:
     if content is None:
         content = response[0]
     return "\n".join(item.text for item in content)
+
+
+@pytest.mark.asyncio
+async def test_legacy_deferral_receipt_stays_within_its_fixture(monkeypatch):
+    """Receipt assertions must not leave a delayed replay behind them."""
+    import apsw
+
+    from brainlayer.mcp import store_handler
+
+    started = []
+    # Record scheduling without running a daemon or letting the RED escape its fixture.
+    monkeypatch.setattr(
+        store_handler,
+        "threading",
+        SimpleNamespace(Thread=lambda **kw: SimpleNamespace(start=lambda: started.append(kw["target"].__name__))),
+    )
+    monkeypatch.setattr(store_handler, "_pending_replay_active", False)
+    monkeypatch.setattr(store_handler, "_interactive_queue_reason", lambda: None)
+    monkeypatch.setattr(store_handler, "_get_store_vector_store", Mock(side_effect=apsw.BusyError("synthetic busy")))
+    monkeypatch.setattr("brainlayer.queue_io.enqueue_store", Mock(side_effect=RuntimeError("synthetic queue outage")))
+
+    response = await store_handler._store("synthetic receipt-only memory", "note")
+
+    receipt = response[1]
+    assert receipt["status"] == "DEFERRED"
+    assert receipt["deferred"]["action"] == "queued_for_replay"
+    path = store_handler._get_pending_store_path()
+    queued = json.loads(path.read_text())
+    assert queued["chunk_id"] == receipt["chunk_id"]
+    assert queued["content"] == "synthetic receipt-only memory"
+    store_handler._schedule_pending_store_replay.assert_called_once_with()
+    assert started == [], "receipt-only tests must not start an unowned replay"
+
+
+@pytest.mark.asyncio
+async def test_receipt_isolation_preserves_failed_store_outcome(monkeypatch):
+    from brainlayer.mcp import store_handler
+
+    monkeypatch.setattr(store_handler, "_interactive_queue_reason", lambda: None)
+    monkeypatch.setattr(
+        store_handler, "_get_store_vector_store", Mock(side_effect=RuntimeError("synthetic write failure"))
+    )
+    queue = Mock(side_effect=AssertionError("failed stores must not be acknowledged as queued"))
+    monkeypatch.setattr(store_handler, "_queue_store", queue)
+
+    response = await store_handler._store("synthetic failed memory", "note")
+
+    assert response.is_error is True
+    assert "ERROR" in _response_text(response)
+    assert "synthetic write failure" in _response_text(response)
+    assert "no chunk_id" in _response_text(response).lower()
+    queue.assert_not_called()

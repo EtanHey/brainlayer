@@ -1551,14 +1551,27 @@ class TestFlushPendingStores:
 
         assert flushed == 0
 
-    def test_legacy_pending_store_receipt_reports_replay_not_drain(self, tmp_path):
-        from brainlayer.mcp.store_handler import _deferred_store_receipt
+    def test_legacy_pending_store_receipt_reports_replay_not_drain(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from brainlayer.mcp import store_handler
 
         pending_path = tmp_path / "pending-stores.jsonl"
+        started = []
+        schedule = MagicMock(return_value=None)
+        monkeypatch.setattr(store_handler, "_schedule_pending_store_replay", schedule)
+        monkeypatch.setattr(
+            store_handler,
+            "threading",
+            SimpleNamespace(Thread=lambda **kw: SimpleNamespace(start=lambda: started.append(kw["target"].__name__))),
+        )
+        monkeypatch.setattr(store_handler, "_pending_replay_active", False)
 
-        receipt = _deferred_store_receipt("manual-promised", pending_path)
+        receipt = store_handler._deferred_store_receipt("manual-promised", pending_path)
 
         assert receipt["deferred"]["action"] == "queued_for_replay"
+        schedule.assert_called_once_with()
+        assert started == [], "receipt-only tests must not start an unowned replay"
 
     def test_legacy_pending_store_enqueue_and_flush_use_shared_file_lock(self, tmp_path):
         pending_path = tmp_path / "pending-stores.jsonl"
