@@ -3640,6 +3640,16 @@
         "target": "subprocess.run"
       }
     },
+    "ab0600dd1da4028c8db201a385ca47f153e40d26e984e2d744ad2428dd66e4b6": {
+      "non_cloud_purpose": "Explicit post-Homebrew local BrainBar activation only: bounded /bin/launchctl lifecycle calls and failure cleanup; no cloud models, enrichment, or network sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>.activate",
+        "path": "src/brainlayer/brainbar_activation.py",
+        "target": "subprocess.SubprocessError"
+      }
+    },
     "abf1c9fa47ecc5a79385f9c45825af864d2a90e90d59c6fd85a90fc7d1863d22": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/cli/__init__.py <module>._run_status_doctor_cli",
       "site": {
@@ -5496,6 +5506,16 @@
         "target": "client.request"
       }
     },
+    "f8c55f059cab056550803c9270a12adfe6a8c6382c60660075b5886deee0c591": {
+      "non_cloud_purpose": "Explicit post-Homebrew local BrainBar activation only: bounded /bin/launchctl lifecycle calls and failure cleanup; no cloud models, enrichment, or network sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/brainbar_activation.py",
+        "target": "import subprocess"
+      }
+    },
     "fa3f5b16bf754ffb6681c1b70e3c8ac635902a35a1b96c60748e62969e1ad363": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/dedupe_merge.py <module>._detect_git_sha subprocess.CalledProcessError.",
       "site": {
@@ -5592,6 +5612,16 @@
         "body_sha256": "1894168298f47563bb47c74859867da43642f11bae3b5944d92c15ed6a85ffe7",
         "kind": "non_python_source",
         "path": "brain-bar/Sources/BrainBar/BrainBusClient.swift"
+      }
+    },
+    "fe88c96dc0fce9576cb55179f87408c552b2d6bc6b00c6ff899b2ea25591d352": {
+      "non_cloud_purpose": "Explicit post-Homebrew local BrainBar activation only: bounded /bin/launchctl lifecycle calls and failure cleanup; no cloud models, enrichment, or network sender.",
+      "site": {
+        "call_sha256": "3193d6094311a0a7784fadd35e3f57c8f5b73a19315e6c78cbb094507ab1c1bc",
+        "kind": "child_process",
+        "owner": "<module>.activate.launchctl",
+        "path": "src/brainlayer/brainbar_activation.py",
+        "target": "subprocess.run"
       }
     },
     "fef7ec01932cf5184a47e49d3d8430e0848fa37550a1b1149b5b1e922d5a9f8e": {

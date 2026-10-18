@@ -76,6 +76,29 @@ def backup_auth_command(
         raise typer.Exit(1)
 
 
+brainbar_app = typer.Typer(help="Activate the installed BrainBar cask after Homebrew returns")
+app.add_typer(brainbar_app, name="brainbar")
+
+
+@brainbar_app.command("activate")
+def brainbar_activate_command(
+    verify: bool = typer.Option(True, "--verify", help="Require real MCP verification (always enabled)."),
+    timeout: float = typer.Option(
+        90.0,
+        "--timeout",
+        envvar="BRAINLAYER_BRAINBAR_ACTIVATION_TIMEOUT_S",
+        help="Startup and MCP deadline in seconds; separate from setup's verification deadline.",
+    ),
+) -> None:
+    """Activate the cask's two LaunchAgents once and emit a JSON receipt."""
+    from ..brainbar_activation import activate
+
+    report = activate(Path.home() / "Library" / "LaunchAgents", timeout_seconds=timeout)
+    typer.echo(json.dumps(report, sort_keys=True))
+    if not report["ok"]:
+        raise typer.Exit(1)
+
+
 @jobs_app.command("restart")
 def jobs_restart_command(
     all_jobs: bool = typer.Option(False, "--all", help="Select loaded BrainLayer jobs."),

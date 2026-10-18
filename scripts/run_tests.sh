@@ -317,6 +317,7 @@ map_changed_files_to_pytests() {
           "$TEST_ROOT/test_cli_enrich.py"
           "$TEST_ROOT/test_cli_index_watchdog.py"
           "$TEST_ROOT/test_cli_jobs.py"
+          "$TEST_ROOT/test_brainbar_activation.py"
           "$TEST_ROOT/test_cli_launchd_mode_a.py"
           "$TEST_ROOT/test_cli_provenance.py"
           "$TEST_ROOT/test_cli_version.py"
