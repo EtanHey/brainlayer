@@ -567,9 +567,26 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         case .supervisor:
             let parent = commandRunner(["/bin/launchctl", "print", "gui/\(uidProvider())/com.brainlayer.maintenance"])
             let history = calendarHistory()
+            let disabledResult = commandRunner(["/bin/launchctl", "print-disabled", "gui/\(uidProvider())"])
+            let disabledLabels: Set<String> = {
+                guard disabledResult.terminationStatus == 0 else { return [] }
+                let pattern = #"["']([^"']+)["']\s*=>\s*(?:true|disabled)\b"#
+                guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+                let text = disabledResult.output as NSString
+                return Set(regex.matches(in: disabledResult.output, range: NSRange(location: 0, length: text.length))
+                    .map { text.substring(with: $0.range(at: 1)) })
+            }()
             let next = nextRun(components: calendarSchedule())
             return Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { job in
                 var result = job.isContinuous ? component(job) : calendarStep(job, parent: parent, history: history, next: next)
+                if !job.isContinuous {
+                    if disabledResult.terminationStatus != 0 {
+                        result = .stateOnly(.probeError("Calendar disabled state unavailable"))
+                    } else {
+                        result.calendarDisabled = result.calendarDisabled || disabledLabels.contains(job.launchdLabel)
+                            || disabledLabels.contains("com.brainlayer.maintenance")
+                    }
+                }
                 result.ownership = .supervisor
                 return (job, result)
             })
@@ -641,7 +658,16 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         observation.calendarStartedAt = run?.startedAt
         if let run, state == .loaded, run.code == 75 {
             observation.calendarDisabled = run.startedAt == nil && (run.reason == "disabled" || (run.reason == nil && calendarIsDisabled(job)))
-            observation.calendarDeferralRecord = calendarAbort(job, run: run)
+            if job == .index {
+                observation.calendarIndexDeferralReason = ["resident-writer-busy": "resident writer busy",
+                    "maintenance-window": "maintenance window"][run.reason ?? ""]
+            }
+            observation.calendarDeferralRecord = observation.calendarIndexDeferralReason == nil ? calendarAbort(job, run: run) : nil
+            if job == .index, observation.calendarIndexDeferralReason == nil,
+               let reason = BrainLayerMaintenanceExit.thisRunsReason(observation.calendarDeferralRecord, lastRunAt: run.startedAt) {
+                observation.calendarIndexDeferralReason = ["resident-writer-busy": "resident writer busy",
+                    "maintenance-window": "maintenance window"][reason]
+            }
             if run.startedAt == nil, job == .maintenanceNightly || job == .maintenanceWeekly {
                 switch run.reason {
                 case "index-overran-window": observation.calendarMissedWindowReason = "Indexing ran past the 04:00–06:00 window"
@@ -668,8 +694,15 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         guard BrainBarBackupSources.isRegularFile(path),
               case let .read(data, stamp) = BrainBarStableFileReader.readTail(path, maxBytes: 64 * 1024),
               stamp <= run.at.addingTimeInterval(BrainLayerMaintenanceExit.recordClockSlack),
-              let last = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last,
-              let row = try? JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any],
+              let last = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).last else { return nil }
+        if job == .index, last.hasPrefix("INDEX_DEFERRED ") {
+            let token = last.split(separator: " ").dropFirst().first.map(String.init)
+            if let reason = ["resident_writer_busy": "resident-writer-busy",
+                             "maintenance_window=04:00-06:00": "maintenance-window"][token ?? ""] {
+                return .aborted(reason: reason, writtenAt: stamp)
+            }
+        }
+        guard let row = try? JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any],
               row["status"] as? String == "aborted", let reason = row["reason"] as? String else { return nil }
         return .aborted(reason: reason, writtenAt: stamp) // verdict also checks the child's start time
     }

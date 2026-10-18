@@ -14,10 +14,14 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     var calendarDisabled = false
     var calendarDeferralRecord: BrainLayerMaintenanceEvidence.RunRecord? = nil
     var calendarMissedWindowReason: String? = nil
+    var calendarIndexDeferralReason: String? = nil
 
     var backupScheduleLine: ObservabilityStatusLine? {
         guard ownership != .legacy else { return nil }
         if ownership == .supervisor, loadState == .loaded, lastExitCode == 75 {
+            if let calendarIndexDeferralReason {
+                return .init(text: "Deferred — " + calendarIndexDeferralReason, tone: .neutral)
+            }
             if case let .deferred(reason) = calendarDeferralVerdict {
                 return .init(text: "Skipped — " + reason, tone: .neutral)
             }
@@ -272,17 +276,20 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         var deferrals: [BrainLayerLaunchdJob: MaintenanceDeferral] = [:]
         do {
             for job in jobs {
-                guard let observation = observations[job], (self == .maintenance || observation.ownership == .supervisor),
-                      (settings[job]?.enabled == true || observation.ownership == .supervisor), observation.loadState == .loaded,
+                guard settings[job]?.enabled != false,
+                      let observation = observations[job], (self == .maintenance || observation.ownership == .supervisor), observation.loadState == .loaded,
                       observation.lastExitCode == BrainLayerMaintenanceExit.deferred else { continue }
                 deferrals[job] = deferral(job, observation: observation, maintenance: maintenance, formatDate: formatDate, now: now)
             }
         }
         let jobReason = jobs.compactMap { job -> String? in
+            // Desired OFF is neutral; sampled operational disable is attention only for desired ON.
+            guard settings[job]?.enabled != false else { return nil }
+            if settings[job]?.enabled != false, observations[job]?.ownership == .supervisor,
+               observations[job]?.calendarDisabled == true { return "\(job.humanGroupLabel) is disabled." }
             // The unified watcher verdict already accounts for missing/error launchd evidence.
             if job == .watch, ingestWatcher != nil { return nil }
             // Ingest configuration is desired state; toggling it does not stop loaded jobs.
-            if self != .ingest, observations[job]?.ownership == .legacy, settings[job]?.enabled != true { return "\(job.humanGroupLabel) is disabled." }
             guard let observation = observations[job] else { return "\(job.humanGroupLabel) status is unavailable." }
             switch observation.loadState {
             case .running:
@@ -335,13 +342,14 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         }.first
         let unknownReason = ownerUnknown ?? watcherUnknown ?? deferralUnknown
         let awaitingRun = jobs.contains { job in
-            guard let observation = observations[job] else { return false }
+            guard settings[job]?.enabled != false, let observation = observations[job] else { return false }
             return observation.loadState == .loaded && observation.runs == 0 && observation.lastExitCode == nil
         }
+        let configuredOff = jobs.filter { settings[$0]?.enabled == false }
         let health: BrainLayerLaunchdGroupHealth = reason != nil ? .unhealthy
             : calendarAttention != nil ? .deferred
             : unknownReason != nil ? .unknown
-            : !skips.isEmpty ? .skipped
+            : !skips.isEmpty || configuredOff.count == jobs.count ? .skipped
             : awaitingRun ? .awaitingRun : .healthy
         // N1 (lead addendum 2026-10-04): a clean exit whose own record carries warnings.
         let warningNotes = self != .maintenance ? [] : jobs.compactMap { job -> String? in
@@ -354,7 +362,6 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         let ownerNotes = jobs.compactMap { observations[$0]?.ownerNote }.reduce(into: [String]()) {
             if !$0.contains($1) { $0.append($1) }
         }
-        let configuredOff = self != .ingest ? [] : jobs.filter { settings[$0]?.enabled == false }
         let configurationNote = configuredOff.isEmpty ? nil
             : "Configured OFF: \(configuredOff.map(\.humanGroupLabel).joined(separator: ", "))."
         return BrainLayerLaunchdGroupStatus(
@@ -390,6 +397,9 @@ private extension BrainLayerLaunchdJobGroup {
         formatDate: (Date) -> String,
         now: Date
     ) -> MaintenanceDeferral {
+        if let reason = observation.calendarIndexDeferralReason {
+            return .skipped("Deferred — " + reason)
+        }
         let label = job.humanGroupLabel
         let when = observation.lastRunAt.map { " at \(formatDate($0))" } ?? ""
         let verdict = observation.ownership == .supervisor ? observation.calendarDeferralVerdict

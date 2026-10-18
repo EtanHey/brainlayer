@@ -208,6 +208,7 @@ private struct BrainBarDashboardContent: View {
     var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
     var jobAttentionReasons: [String] = []
+    var jobsChecking: Bool = false
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -222,7 +223,7 @@ private struct BrainBarDashboardContent: View {
             collector: collector, workspace: workspace, receiptStore: receiptStore,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, calendar: calendar, locale: locale,
-            jobAttentionReasons: jobAttentionReasons,
+            jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
             panelState: panelState ?? standalonePanelState
         )
 #if DEBUG
@@ -245,7 +246,7 @@ private struct BrainBarJobsDashboardContent: View {
     var body: some View {
         BrainBarDashboardContent(collector: collector, workspace: workspace,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, panelState: panelState,
-            jobAttentionReasons: model.dashboardJobAttentionReasons)
+            jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking)
             .onAppear { model.refreshLaunchdStatus() }
             .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
                 model.refreshLaunchdStatus()
@@ -480,6 +481,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         agentActivity: AgentActivitySnapshot,
         now: Date,
         jobAttentionReasons: [String] = [],
+        jobsChecking: Bool = false,
         calendar: Calendar = .current,
         locale: Locale = .current,
         observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence
@@ -520,6 +522,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             )
         } else if let jobReason = jobAttentionReasons.first {
             status = .init(headline: attentionHeadline, reason: jobReason, tone: .amber)
+        } else if jobsChecking, attentionItems.isEmpty {
+            status = .init(headline: "Checking…", reason: nil, tone: .neutral)
         } else if case .unreadable("Loading observability data.") = observability {
             status = .init(headline: "Checking…", reason: nil, tone: .neutral)
         } else {
@@ -925,6 +929,7 @@ private struct BrainBarDashboardView: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     var jobAttentionReasons: [String] = []
+    var jobsChecking: Bool = false
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1048,7 +1053,7 @@ private struct BrainBarDashboardView: View {
             stats: collector.stats,
             agentActivity: collector.agentActivity,
             now: currentNow,
-            jobAttentionReasons: jobAttentionReasons,
+            jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
             calendar: calendar,
             locale: locale,
             observabilityCadence: observabilityCadence

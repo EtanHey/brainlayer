@@ -69,7 +69,7 @@ final class BrainBarSettingsEntryTests: XCTestCase {
         XCTAssertEqual(model.pendingPlainAPIKey, "synthetic-unsaved-draft")
     }
 
-    func testCheckingJobsDoNotInventAttentionButDisabledJobsStillDo() throws {
+    func testCheckingJobsDoNotInventAttentionForExplicitConfigOff() throws {
         let store = BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/unused/synthetic.env"),
             loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) })
         let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
@@ -79,8 +79,45 @@ final class BrainBarSettingsEntryTests: XCTestCase {
         XCTAssertEqual(model.groupStatus(.maintenance).health, .checking)
         XCTAssertTrue(model.dashboardJobAttentionReasons.isEmpty)
         model.config.launchdJobs[.maintenanceWeekly]?.enabled = false
-        XCTAssertEqual(model.groupStatus(.maintenance).health, .unhealthy)
-        XCTAssertEqual(model.dashboardJobAttentionReasons.count, 1)
+        XCTAssertEqual(model.groupStatus(.maintenance).health, .checking)
+        XCTAssertTrue(model.dashboardJobAttentionReasons.isEmpty)
+    }
+
+    private struct Provider: BrainLayerLaunchdStatusSampling {
+        let observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
+        func sample() -> [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState] { observations.mapValues(\.loadState) }
+        func sampleActivity() -> [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] { observations }
+    }
+
+    func testDisabledAttentionAndConfiguredOffStayStableAcrossSampling() async throws {
+        let now = Date()
+        for (job, configuredOff) in [(BrainLayerLaunchdJob.maintenanceWeekly, false), (.maintenanceWeekly, true),
+                                     (.index, false), (.index, true)] {
+            var config = BrainLayerConfig.defaultConfig
+            config.launchdJobs[job]?.enabled = !configuredOff
+            let store = BrainLayerConfigStore(configURL: brainBarTestTemporaryDirectory().appendingPathComponent("unused.env"),
+                loadDocumentOverride: { BrainLayerEnvDocument(config: config) })
+            var observations = Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map {
+                ($0, BrainLayerLaunchdJobObservation(loadState: $0 == .watch ? .running : .loaded,
+                    runs: 1, lastExitCode: 0, lastRunAt: now, nextRunAt: nil, isContinuous: $0 == .watch,
+                    ownership: .supervisor))
+            })
+            observations[job] = .init(loadState: .loaded, runs: nil, lastExitCode: 75,
+                lastRunAt: now, nextRunAt: nil, isContinuous: false, ownership: .supervisor, calendarDisabled: true)
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                launchdStatusProvider: Provider(observations: observations),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
+                initialLaunchdObservations: configuredOff ? [:] : observations, refreshStatusOnLoad: false,
+                initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)),
+                initialMaintenanceEvidence: .init(weeklyCompletion: .completed(now), runRecords: [:]))
+            XCTAssertEqual(model.dashboardJobAttentionReasons.isEmpty, configuredOff)
+            model.refreshLaunchdStatus()
+            XCTAssertEqual(model.dashboardJobAttentionReasons.isEmpty, configuredOff, "Refreshing must retain measured attention")
+            await settle { !model.isRefreshingLaunchdStatus }
+            XCTAssertFalse(model.isRefreshingLaunchdStatus)
+            XCTAssertTrue(model.hasCompletedLaunchdSample)
+            XCTAssertEqual(model.dashboardJobAttentionReasons.isEmpty, configuredOff)
+        }
     }
 
     private func settle(_ ready: () -> Bool) async {
