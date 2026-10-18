@@ -241,33 +241,25 @@ enum BrainBarRenderHarness {
         }
     }
 
-    /// Visible, isolated BrainBar windows for screencapture. No app delegate, DB, socket,
-    /// credential runner, production defaults or timers; the harness exits itself after 20 s.
+    /// Visible windows with private/static readers, no app delegate, DB or credential runner.
+    /// View-local timers read only injected memory; the harness exits itself after 20 s.
     private static func captureDriveConsentWindows(directory: URL) -> Never {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.regular)
             let now = Date()
             let expiry = now.addingTimeInterval(36 * 3_600)
-            let store = BrainLayerConfigStore(
-                configURL: directory.appendingPathComponent("unused.env"),
-                loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) },
-                saveOverride: { _ in }
-            )
             var windows: [NSWindow] = []
             for page in ["dashboard", "backups"] {
                 let state = BrainBarDashboardPanelState()
-                let settings = BrainBarSettingsViewModel(
-                    workspace: BrainBarRecordingWorkspace(), store: store,
-                    launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
-                    runtimeStatusProvider: StaticBrainLayerActiveRuntimeProvider(observation: .unknown("Fixture")),
-                    refreshStatusOnLoad: false, now: { now },
-                    initialObservabilityResult: BrainBarDashboardFixture.healthyObservabilityResult
-                )
+                let fixture = BrainBarDriveConsentCaptureFixture(directory: directory, now: now)
+                let settings = fixture.settings
                 let view = BrainBarUnifiedWindowPreview.make(
-                    collector: BrainBarDashboardFixture.makeCollector(), settingsViewModel: settings,
+                    collector: fixture.collector, settingsViewModel: settings,
                     panelState: state, section: .backups,
-                    driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry)) }
+                    driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry)) },
+                    fixtureDashboard: fixture.dashboard(panelState: state),
+                    databasePath: directory.appendingPathComponent("unused.db").path
                 )
                 if page == "dashboard" { state.select(.dashboard) }
                 let window = BrainBarMainWindow(
