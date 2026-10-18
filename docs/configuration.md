@@ -198,7 +198,28 @@ BrainLayer includes launchd plist templates for automated operation:
 | `com.brainlayer.maintenance-nightly` | Nightly | Light maintenance |
 | `com.brainlayer.maintenance-weekly` | Weekly | Full maintenance |
 
-Weekly maintenance waits up to two hours for an in-flight daily DB backup. A recent, verified daily backup is reused because daily and weekly Drive retention policies are the same. A fresh backup uses the daily process supervisor with a deadline at the end of the quiet window. After the backup wait, it reruns the quiet-window, queue-idle, and writer gates. If the wait times out or the backup is unverified, light maintenance continues, VACUUM is skipped, and the job exits **76**. If a post-backup gate fails, the job skips service bootout and all database maintenance, records the failed gate, and exits **76**. The maintenance log records the backup status. `--full --dry-run` reports a held backup lock without waiting or running backup work.
+Weekly calendar runs use index → `backup-snapshot` → full maintenance → JSONL backup,
+counters, checkpoint, decay and FTS checks → `backup-daily` in upload-only mode. Snapshot and upload use the existing
+calendar process-group supervisor sequentially; the upload keeps the existing job/history/log name; no detached worker is created. Nightly runs retain
+maintenance first and DB upload last. `BRAINLAYER_BACKUP_PHASE=snapshot` writes a durable local
+receipt after gzip CRC/ISIZE and SQLite header/sentinel checks; `upload` drains retained snapshots
+from those same bytes, preserving resumable sessions and retrying completed-session verification.
+The default `all` phase keeps the combined daily command.
+
+Weekly VACUUM requires a local verified snapshot of the same database, created since local midnight
+and at most six hours old. The receipt binds SHA-256, size and path; missing, altered, unverified,
+future or yesterday's copies cannot authorize VACUUM. Remote upload is not part of that gate.
+Calendar runs without that proof skip VACUUM with exit **76**. A standalone full run may create a
+local snapshot under the daily supervisor within the remaining quiet window. A held backup lock
+still waits up to two hours. Quiet-window, queue-idle and writer checks run again after backup;
+post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
+
+Unuploaded gzip snapshots remain until their own upload verifies, regardless of newer snapshots;
+capacity errors list retained archives. Observability's optional `db_snapshot.local_verified`,
+`uploaded` and `upload_state` fields distinguish local safety from offsite coverage. Existing
+`verified` keeps its uploaded-and-verified meaning. BrainBar needs the tracked Swift follow-up to
+render local-verified/pending as neutral; old clients still show that state as unverified.
+`--full --dry-run` reports a held backup lock without starting backup work.
 
 Scheduled FTS row-count checks use a read-only connection and do not acquire the maintenance writer lock. Full FTS rebuilds require an explicit offline database copy path.
 

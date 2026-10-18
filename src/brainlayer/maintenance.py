@@ -31,7 +31,8 @@ from .backup_daily import (
     WEEKLY_RETENTION,
     BackupAlreadyRunningError,
     _backup_log_path,
-    _recent_verified_backup_for_reuse,
+    _local_snapshot_intact,
+    _recent_local_verified_backup,
 )
 from .drain import BurnDrainResult, burn_drain_once
 from .drive_credentials import _atomic_write
@@ -1053,7 +1054,7 @@ def _backup_lock_is_held(staging_dir: Path) -> bool:
 
 def _recent_verified_backup(config: MaintenanceConfig) -> dict[str, Any] | None:
     log_path = config.backup_log_path or _backup_log_path(None, db_path=config.db_path)
-    return _recent_verified_backup_for_reuse(
+    return _recent_local_verified_backup(
         log_path,
         config.db_path,
         now=config.now_fn(),
@@ -1077,6 +1078,7 @@ def _run_bounded_weekly_backup(config: MaintenanceConfig, timeout_seconds: int) 
     env = os.environ.copy()
     env.update(
         {
+            "BRAINLAYER_BACKUP_PHASE": "snapshot",
             "BRAINLAYER_DB": str(config.db_path),
             "BRAINLAYER_BACKUP_STAGING_DIR": str(config.backup_staging_dir),
             "BRAINLAYER_BACKUP_LOG_PATH": str(config.backup_log_path or _backup_log_path(None, db_path=config.db_path)),
@@ -1142,6 +1144,8 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
             if receipt is not None and WEEKLY_RETENTION == DAILY_RETENTION:
                 _write_log(config.log_path, {"mode": "full", "backup_status": "reused_verified", "waited": waited})
                 return receipt
+            if os.environ.get("BRAINLAYER_CALENDAR_STEP"):
+                raise MaintenanceAbort("tonight's local verified snapshot unavailable; VACUUM skipped", code=76)
             remaining_window = _remaining_quiet_window_seconds(config)
             if remaining_window < 1:
                 raise MaintenanceAbort("no quiet-window time remains for fresh backup; VACUUM skipped", code=76)
@@ -1152,15 +1156,10 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
             except Exception as exc:
                 raise MaintenanceAbort(f"weekly backup failed ({type(exc).__name__}); VACUUM skipped", code=76) from exc
             else:
-                drive_file = backup.get("drive_file")
-                if (
-                    backup.get("verified") is not True
-                    or backup.get("uploaded") is not True
-                    or not isinstance(drive_file, dict)
-                    or not isinstance(drive_file.get("id"), str)
-                ):
-                    raise MaintenanceAbort("weekly backup was not verified; VACUUM skipped", code=76)
-                return backup
+                receipt = _recent_verified_backup(config)
+                if receipt is None:
+                    raise MaintenanceAbort("weekly local snapshot was not verified; VACUUM skipped", code=76)
+                return receipt
         waited = True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -1233,8 +1232,12 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         _quiesce_services(tuple(loaded_before), booted_out)
         if not post_backup_gates_failed:
             result.checkpoint = _checkpoint_full(config.db_path)
+        if mode == "full" and backup is not None and not _local_snapshot_intact(backup):
+            backup = None
+            backup_abort = MaintenanceAbort("local snapshot changed before VACUUM; VACUUM skipped", code=76)
+            result.backup_status = "unavailable"
         if mode == "full" and backup is not None:
-            result.actions.append(f"verified_drive_backup={backup.get('drive_file', {}).get('id')}")
+            result.actions.append(f"verified_local_backup={backup.get('snapshot')}")
             result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path)
             result.checkpoint = _checkpoint_full(config.db_path)
         if mode == "burn":

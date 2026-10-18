@@ -20,13 +20,14 @@ from .maintenance_control import MaintenanceHold
 from .supervisor_guard import Custody, gated_spawn, guard_lease, launch_guard, start_time, stop_group
 
 NAMES = tuple(
-    "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts".split(
+    "index,backup-daily,maintenance-nightly,jsonl-backup,p0-counter,wal-checkpoint,maintenance-weekly,decay,repair-fts,backup-snapshot".split(
         ","
     )
 )
 KEYS = {
     "index": "index",
     "backup-daily": "backup-daily",
+    "backup-snapshot": "backup-daily",
     "jsonl-backup": "jsonl-backup",
     "maintenance-nightly": "maintenance-light",
     "maintenance-weekly": "maintenance-full",
@@ -53,16 +54,19 @@ class CalendarPlan:
     def select(self, last_weekly=None):
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
-        # Nightly jobs precede the long upload; weekly full needs that night's fresh receipt.
+        # Weekly full follows the local proof; both nightly and weekly put upload last.
         names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
         if weekly:
             names[1] = "maintenance-weekly"
-            names.insert(1, "backup-daily")
-            names += ["decay", "repair-fts"]
+            names.insert(1, "backup-snapshot")
+            names += ["decay", "repair-fts", "backup-daily"]
         else:
             names.append("backup-daily")
         by_name = {s.name: s for s in self.candidates}
-        return [by_name[n] for n in names]
+        selected = [by_name[n] for n in names]
+        if weekly:
+            selected[-1] = replace(selected[-1], env=selected[-1].env | {"BRAINLAYER_BACKUP_PHASE": "upload"})
+        return selected
 
 
 def calendar_steps(python, cli, lib_dir, scheduled_date):
@@ -79,9 +83,10 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
     )
     steps = tuple(
         Step(n, (str(lib_dir / "brainlayer-env-run.sh"), *args), timeout, {"BRAINLAYER_PYTHON": str(python)})
-        for n, (args, timeout) in zip(NAMES, commands)
+        for n, (args, timeout) in zip(NAMES[: len(commands)], commands)
     )
-    steps[1].env["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] = "6"
+    steps[1].env["BRAINLAYER_BACKUP_PHASE"] = "all"
+    steps += (replace(steps[1], name="backup-snapshot", env=steps[1].env | {"BRAINLAYER_BACKUP_PHASE": "snapshot"}),)
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
     return CalendarPlan(scheduled_date, steps)
 
@@ -94,7 +99,7 @@ def record(directory, **event):
 
 
 def backup_deadline(step):
-    if step.name != "backup-daily":
+    if step.name not in {"backup-daily", "backup-snapshot"}:
         return step.timeout
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
     configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", path)
@@ -304,7 +309,10 @@ async def run_calendar(
                         continue
                     step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
-                if f"com.brainlayer.{step.name}" in disabled or "com.brainlayer.maintenance" in disabled:
+                if (
+                    f"com.brainlayer.{'backup-daily' if step.name in {'backup-snapshot'} else step.name}" in disabled
+                    or "com.brainlayer.maintenance" in disabled
+                ):
                     code, reason = 75, "disabled"
                 elif not await _window(directory, step, now_fn, sleep_fn, stop):
                     code, missed = (143, False) if stop.is_set() else (75, True)

@@ -619,6 +619,20 @@
             },
             "verified": {
               "type": "boolean"
+            },
+            "local_verified": {
+              "type": "boolean"
+            },
+            "uploaded": {
+              "type": "boolean"
+            },
+            "upload_state": {
+              "enum": [
+                "pending",
+                "in_progress",
+                "verified",
+                "failed"
+              ]
             }
           }
         },

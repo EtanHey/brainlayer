@@ -116,6 +116,16 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     all_errors = all(record.get("error") or record.get("error_type") for record in real)
     latest = real[-1]
     error_type = str(latest["error_type"]) if latest.get("error_type") else None
+    if latest.get("verification_error"):
+        error_type = str(latest["verification_error"])
+    if latest.get("local_verified") and latest.get("upload_state") == "failed" and latest.get("error"):
+        error_type = str(latest["error"])
+    latest_by_snapshot = {record["snapshot"]: record for record in real if isinstance(record.get("snapshot"), str)}
+    if error_type is None:
+        for pending in reversed(list(latest_by_snapshot.values())):
+            if pending.get("upload_state") == "failed" and not (pending.get("uploaded") and pending.get("verified")):
+                error_type = str(pending.get("error") or pending.get("verification_error") or "backup_error")
+                break
     if "google-drive-mcp/tokens.json" in str(latest.get("error", "")):
         error_type = "drive_credentials_missing"
     elif all_errors and error_type is None:
@@ -129,12 +139,24 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
             destination = drive_file
         else:
             destination = None
-        successful = record.get("verified") is True and record.get("uploaded") is True
+        local = record.get("local_verified") is True
+        if local and not destination:
+            destination = Path(record["snapshot"]).name
+        successful = local or (record.get("verified") is True and record.get("uploaded") is True)
         if attempted_at and successful and isinstance(destination, str) and destination:
             return (
                 {
                     "last_at": attempted_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
                     "destination": destination,
+                    **(
+                        {
+                            "local_verified": True,
+                            "uploaded": record.get("uploaded") is True,
+                            "upload_state": record.get("upload_state", "pending"),
+                        }
+                        if local
+                        else {}
+                    ),
                     "verified": record.get("verified") is True
                     and ("drive_md5_match" not in record or record.get("drive_md5_match") is True),
                 },

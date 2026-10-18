@@ -83,6 +83,7 @@ def _cap_file(path: Path, *, max_bytes: int, keep_bytes: int, line_safe: bool = 
             # Daily receipts carry provenance; JSONL archive receipts do not.
             # Preserve the latest real receipt even after diagnostic/test records.
             latest_real = None
+            snapshots = {}
             with os.fdopen(os.dup(fd), "rb") as records:
                 records.seek(0)
                 while True:
@@ -94,8 +95,16 @@ def _cap_file(path: Path, *, max_bytes: int, keep_bytes: int, line_safe: bool = 
                         record = json.loads(line)
                     except (ValueError, UnicodeDecodeError):
                         continue
+                    if isinstance(record, dict) and isinstance(record.get("snapshot"), str):
+                        snapshots[record["snapshot"]] = (offset, record)
                     if isinstance(record, dict) and record.get("backup_log_provenance") == "real":
                         latest_real = offset
+            for offset, record in snapshots.values():
+                if record.get("local_verified") is True and not (record.get("uploaded") and record.get("verified")):
+                    if opened_stat.st_size - offset > max_bytes:
+                        raise ValueError(f"cap would erase pending local snapshot receipt: {path}")
+                    if offset < opened_stat.st_size - len(tail):
+                        tail = os.pread(fd, opened_stat.st_size - offset, offset)
             if latest_real is not None and latest_real < opened_stat.st_size - len(tail):
                 if opened_stat.st_size - latest_real > max_bytes:
                     raise ValueError(f"cap would erase last real-provenance receipt: {path}")
