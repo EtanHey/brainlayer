@@ -358,6 +358,7 @@ async def test_legacy_deferral_receipt_stays_within_its_fixture(monkeypatch):
     queued = json.loads(path.read_text())
     assert queued["chunk_id"] == receipt["chunk_id"]
     assert queued["content"] == "synthetic receipt-only memory"
+    store_handler._schedule_pending_store_replay.assert_called_once_with()
     assert started == [], "receipt-only tests must not start an unowned replay"
 
 

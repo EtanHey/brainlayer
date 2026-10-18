@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -13,7 +14,7 @@ from brainlayer.mcp._format import format_store_result
 
 @pytest.fixture
 def owned_legacy_replay(monkeypatch, tmp_path, isolate_brainlayer_runtime_paths):
-    """Run the real scheduler, then join every owned thread before paths restore."""
+    """Own synthetic replay work; register every blocking collaborator's gate."""
     from brainlayer.mcp import store_handler
 
     @contextmanager
@@ -23,6 +24,7 @@ def owned_legacy_replay(monkeypatch, tmp_path, isolate_brainlayer_runtime_paths)
         db_path.parent.mkdir()
         path = db_path.parent / "pending-stores.jsonl"
         threads, errors, delays, resolved_paths = [], [], [], []
+        cleanup_gates = []
         sleeping, release = threading.Event(), threading.Event()
         real_path = store_handler._get_pending_store_path
 
@@ -54,8 +56,9 @@ def owned_legacy_replay(monkeypatch, tmp_path, isolate_brainlayer_runtime_paths)
         with monkeypatch.context() as scope:
             scope.setenv("BRAINLAYER_DB", str(db_path))
             scope.setattr(store_handler, "_get_pending_store_path", checked_path)
-            scope.setattr(store_handler, "threading", SimpleNamespace(Thread=owned_thread))
-            scope.setattr(store_handler, "time", SimpleNamespace(sleep=controlled_sleep))
+            scope.setattr(store_handler, "threading", SimpleNamespace(**{**vars(threading), "Thread": owned_thread}))
+            scope.setattr(store_handler, "time", SimpleNamespace(**{**vars(time), "sleep": controlled_sleep}))
+            failures = []
             try:
                 yield SimpleNamespace(
                     path=path,
@@ -64,16 +67,39 @@ def owned_legacy_replay(monkeypatch, tmp_path, isolate_brainlayer_runtime_paths)
                     delays=delays,
                     sleeping=sleeping,
                     resolved_paths=resolved_paths,
+                    cleanup_gates=cleanup_gates,
                 )
+            except BaseException as exc:
+                failures.append(exc)
             finally:
                 release.set()
-                # Iteration includes any successor registered by the last-empty-check race.
-                for thread in threads:
-                    thread.join(timeout=2)
-                assert all(not thread.is_alive() for thread in threads), "owned replay outlived private paths"
-                if errors:
-                    raise errors[0]
-                assert store_handler._pending_replay_active is False
+                index = 0
+                # A joined parent has already registered any successor before returning.
+                while index < len(threads):
+                    thread = threads[index]
+                    try:
+                        thread.join(timeout=2)
+                    except BaseException as exc:
+                        failures.append(exc)
+                    if thread.is_alive():
+                        failures.append(AssertionError("owned replay exceeded its join bound"))
+                        for gate in cleanup_gates:
+                            gate.set()
+                        # The bound reports failure; it never permits path restoration.
+                        # Collaborators here are synthetic and cooperatively releasable.
+                        while thread.is_alive():
+                            try:
+                                thread.join()
+                            except BaseException as exc:
+                                failures.append(exc)
+                    index += 1
+                failures.extend(errors)
+                if store_handler._pending_replay_active:
+                    failures.append(AssertionError("owned replay remained active after joins"))
+                if len(failures) == 1:
+                    raise failures[0]
+                if failures:
+                    raise BaseExceptionGroup("owned replay cleanup failures", failures)
 
     return own
 
@@ -90,6 +116,8 @@ def test_real_replay_finishes_before_private_paths_restore(owned_legacy_replay, 
     flushed = []
 
     with owned_legacy_replay() as replay:
+        assert store_handler.time.monotonic is time.monotonic
+        assert store_handler.threading.Event is threading.Event
         replay.path.write_text("synthetic pending item\n" if pending else "")
 
         def flush(actual_store, embed_fn):
@@ -149,6 +177,67 @@ def test_real_replay_joins_successor_after_last_empty_check(owned_legacy_replay,
     assert replay.path.read_text() == ""
     open_writer.assert_called_once_with(replay.db_path)
     store.close.assert_called_once_with()
+
+
+def test_failed_owner_joins_blocked_worker_before_paths_restore(owned_legacy_replay, monkeypatch):
+    from brainlayer import runtime_store
+    from brainlayer.mcp import store_handler
+
+    gate, closing = threading.Event(), threading.Event()
+    proof = {}
+    store = Mock()
+    monkeypatch.setattr(runtime_store, "open_writer_store", Mock(return_value=store))
+    original_join = None
+    thread = None
+    failure = None
+    try:
+        with owned_legacy_replay() as replay:
+            replay.path.write_text("synthetic pending item\n")
+            replay.cleanup_gates.append(gate)
+            monkeypatch.setattr(store_handler, "_flush_pending_stores", lambda *_: replay.path.write_text(""))
+
+            def blocked_close():
+                closing.set()
+                assert gate.wait(timeout=2), "owner failed to release its controlled collaborator"
+                proof["worker_saw_private_paths"] = os.environ["BRAINLAYER_DB"] == str(replay.db_path)
+                proof["worker_saw_provenance"] = os.environ["BRAINLAYER_TEST_PATH_PROVENANCE"] == "pytest"
+                raise LookupError("synthetic worker failure")
+
+            store.close.side_effect = blocked_close
+            store_handler._schedule_pending_store_replay()
+            assert replay.sleeping.wait(timeout=2)
+            thread = replay.threads[0]
+            original_join = thread.join
+
+            def forced_timed_join(timeout=None):
+                if timeout is not None:
+                    assert closing.wait(timeout=2)
+                    assert thread.is_alive()
+                    proof["forced_timeout_with_live_worker"] = True
+                    return  # Deterministic timeout injection; no elapsed-time race.
+                original_join()
+
+            monkeypatch.setattr(thread, "join", forced_timed_join)
+            raise ValueError("synthetic owner failure")
+    except BaseException as exc:
+        failure = exc
+        proof["worker_alive_after_context"] = thread is not None and thread.is_alive()
+    finally:
+        # RED containment only: never let the intentionally broken helper leak a worker.
+        gate.set()
+        if original_join is not None:
+            original_join()
+        print("forced cleanup proof:", proof)
+
+    assert proof["worker_alive_after_context"] is False
+    assert proof["worker_saw_private_paths"] is True
+    assert proof["worker_saw_provenance"] is True
+    assert isinstance(failure, BaseExceptionGroup)
+    assert [(type(exc), str(exc)) for exc in failure.exceptions] == [
+        (ValueError, "synthetic owner failure"),
+        (AssertionError, "owned replay exceeded its join bound"),
+        (LookupError, "synthetic worker failure"),
+    ]
 
 
 def test_deferred_store_receipt_reads_as_success_and_forbids_restore() -> None:
