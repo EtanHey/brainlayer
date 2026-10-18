@@ -1,6 +1,5 @@
 """Caller-level regressions adapted from ID-R1-SOL1/SOL2 synthetic reproductions."""
 
-import json
 from unittest.mock import Mock
 
 import pytest
