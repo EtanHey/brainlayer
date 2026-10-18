@@ -22,7 +22,14 @@ struct BrainBarWindowRootView: View {
          panelState: BrainBarDashboardPanelState = BrainBarDashboardPanelState()) {
         self.workspace = workspace
 #if BRAINBAR_UI
-        settingsViewFactory = { AnyView(BrainBarSettingsView(workspace: workspace, databasePath: $0, activationRevision: $1, navigation: $2, showsSidebar: false)) }
+        settingsViewFactory = { path, revision, navigation in
+            if let model = runtime.jobsModel {
+                return AnyView(BrainBarSettingsView(viewModel: model, navigation: navigation,
+                    showsSidebar: false, activationRevision: revision))
+            }
+            return AnyView(BrainBarSettingsView(workspace: workspace, databasePath: path,
+                activationRevision: revision, navigation: navigation, showsSidebar: false))
+        }
 #endif
         self.runtime = runtime
         self.managesWindowFrame = managesWindowFrame
@@ -116,16 +123,24 @@ struct BrainBarWindowRootView: View {
     @ViewBuilder
     private var runtimeDashboardContent: some View {
         if let collector = runtime.collector {
-            BrainBarDashboardContent(
-                collector: collector,
-                workspace: workspace,
-                hotkeyStatus: runtime.hotkeyStatus.statusLine,
-                dbPath: runtime.databasePath,
-                panelState: panelState
-            )
+#if BRAINBAR_UI
+            if let jobsModel = runtime.jobsModel {
+                BrainBarJobsDashboardContent(collector: collector, model: jobsModel, workspace: workspace,
+                    hotkeyStatus: runtime.hotkeyStatus.statusLine, dbPath: runtime.databasePath, panelState: panelState)
+            } else {
+                dashboard(collector)
+            }
+#else
+            dashboard(collector)
+#endif
         } else {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Opening database and warming the dashboard...")
         }
+    }
+
+    private func dashboard(_ collector: StatsCollector) -> some View {
+        BrainBarDashboardContent(collector: collector, workspace: workspace,
+            hotkeyStatus: runtime.hotkeyStatus.statusLine, dbPath: runtime.databasePath, panelState: panelState)
     }
 
 #if BRAINBAR_UI
@@ -192,6 +207,7 @@ private struct BrainBarDashboardContent: View {
     var calendar: Calendar = .current
     var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
+    var jobAttentionReasons: [String] = []
 
     var body: some View {
         if collector.snapshotFreshnessState.isLoading {
@@ -206,6 +222,7 @@ private struct BrainBarDashboardContent: View {
             collector: collector, workspace: workspace, receiptStore: receiptStore,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
             referenceNow: referenceNow, calendar: calendar, locale: locale,
+            jobAttentionReasons: jobAttentionReasons,
             panelState: panelState ?? standalonePanelState
         )
 #if DEBUG
@@ -214,6 +231,31 @@ private struct BrainBarDashboardContent: View {
         return view
     }
 }
+
+#if BRAINBAR_UI
+/// Dashboard and Jobs observe the same model and consume the same group verdicts.
+private struct BrainBarJobsDashboardContent: View {
+    @ObservedObject var collector: StatsCollector
+    @ObservedObject var model: BrainBarSettingsViewModel
+    let workspace: any BrainBarWorkspaceActing
+    let hotkeyStatus: String
+    let dbPath: String?
+    let panelState: BrainBarDashboardPanelState
+
+    var body: some View {
+        BrainBarDashboardContent(collector: collector, workspace: workspace,
+            hotkeyStatus: hotkeyStatus, dbPath: dbPath, panelState: panelState,
+            jobAttentionReasons: model.dashboardJobAttentionReasons)
+            .onAppear { model.refreshLaunchdStatus() }
+            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
+                model.refreshLaunchdStatus()
+            }
+            .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
+                if refreshing { model.refreshLaunchdStatus() }
+            }
+    }
+}
+#endif
 
 enum BrainBarHeroBackupTruth: Sendable, Equatable {
     case measured(ObservabilityBackupStatus)
@@ -437,23 +479,15 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         stats: DashboardStats,
         agentActivity: AgentActivitySnapshot,
         now: Date,
+        jobAttentionReasons: [String] = [],
         calendar: Calendar = .current,
         locale: Locale = .current,
         observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence
     ) -> Self {
-        let snapshotAttentionCount: Int = switch snapshotFreshness {
-        case .stale, .error: 1
-        case .loading, .live: 0
-        }
         let snapshotIsLive: Bool = if case .live = snapshotFreshness { true } else { false }
         let otherLiveHeroAttention = snapshotIsLive
             && hero.healthTone != .green
             && hero.healthReason != hero.backupFailureReason
-        let attentionCount =
-            (hero.backupFailureReason == nil ? 0 : 1)
-            + (otherLiveHeroAttention ? 1 : 0)
-            + (agentActivity.isMeasured ? 0 : 1)
-            + snapshotAttentionCount
         var attentionItems: [String] = []
         if let backupFailureReason = hero.backupFailureReason {
             attentionItems.append(backupFailureReason)
@@ -472,19 +506,22 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if !agentActivity.isMeasured {
             attentionItems.append("Agent activity could not be measured.")
         }
-        let attentionHeadline = attentionCount == 1
+        attentionItems.append(contentsOf: jobAttentionReasons.filter { !attentionItems.contains($0) })
+        let attentionHeadline = attentionItems.count == 1
             ? "1 thing needs you"
-            : "\(attentionCount) things need you"
+            : "\(attentionItems.count) things need you"
 
         let status: BrainBarOnePageStatus
-        if case .unreadable("Loading observability data.") = observability {
-            status = .init(headline: "Checking…", reason: nil, tone: .neutral)
-        } else if let backupFailureReason = hero.backupFailureReason {
+        if let backupFailureReason = hero.backupFailureReason {
             status = .init(
                 headline: attentionHeadline,
                 reason: backupFailureReason,
                 tone: .amber
             )
+        } else if let jobReason = jobAttentionReasons.first {
+            status = .init(headline: attentionHeadline, reason: jobReason, tone: .amber)
+        } else if case .unreadable("Loading observability data.") = observability {
+            status = .init(headline: "Checking…", reason: nil, tone: .neutral)
         } else {
             switch snapshotFreshness {
             case .loading:
@@ -887,6 +924,7 @@ private struct BrainBarDashboardView: View {
     var referenceNow: Date? = nil
     var calendar: Calendar = .current
     var locale: Locale = .current
+    var jobAttentionReasons: [String] = []
     @ObservedObject var panelState: BrainBarDashboardPanelState
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1010,6 +1048,7 @@ private struct BrainBarDashboardView: View {
             stats: collector.stats,
             agentActivity: collector.agentActivity,
             now: currentNow,
+            jobAttentionReasons: jobAttentionReasons,
             calendar: calendar,
             locale: locale,
             observabilityCadence: observabilityCadence
@@ -3243,6 +3282,7 @@ enum BrainBarDashboardPreview {
         locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil,
         disablesAnimations: Bool = true,
+        jobAttentionReasons: [String] = [],
         observabilityCadence: ObservabilityCadence? = nil
     ) -> AnyView {
         let dashboard =
@@ -3258,7 +3298,8 @@ enum BrainBarDashboardPreview {
                     referenceNow: now,
                     calendar: calendar,
                     locale: locale,
-                    panelState: panelState
+                    panelState: panelState,
+                    jobAttentionReasons: jobAttentionReasons
                 )
             }
             .environment(\.colorScheme, .dark)
