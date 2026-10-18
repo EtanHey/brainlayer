@@ -812,6 +812,16 @@
         "target": "ctypes.CDLL"
       }
     },
+    "2bb09499f9acf2a30a25502cdedea8038706202945be453be98b730e04a7b3c4": {
+      "non_cloud_purpose": "Local handling of gunzip -t integrity-check failures during raw/gzip backup cleanup; preserves the raw snapshot on failure and invokes no cloud or model transport.",
+      "site": {
+        "call_sha256": "f82ee95bab737d14b1ddd79947559cb871c531c1fb0856738cc42cbe0e169067",
+        "kind": "callable_reference",
+        "owner": "<module>._cleanup_raw_snapshots",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.CalledProcessError"
+      }
+    },
     "2caff6dab225bf4212fa3e41a296db0ef64c88ff06c33d887fe5bb0ba291c423": {
       "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/eval/phoenix_gate/phoenix_client.py <module>.PhoenixRestClient._quote_id urllib.parse.quote.",
       "site": {
