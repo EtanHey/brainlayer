@@ -111,7 +111,7 @@ def test_sunday_full_waits_runs_real_vacuum_or_alerts_overrun(request, monkeypat
     ):
         monkeypatch.setattr(maintenance, name, lambda *_: None)
     monkeypatch.setattr(
-        maintenance, "_recent_verified_backup", lambda *_: local_receipt if receipt != "unverified" else None
+        maintenance, "_recent_weekly_verified_backup", lambda *_: local_receipt if receipt != "unverified" else None
     )
     monkeypatch.setattr(maintenance, "_run_bounded_weekly_backup", lambda *_: pytest.fail("second snapshot"))
     plan = calendar_steps(sys.executable, "/unused/cli", path, dt.date(2026, 10, 11))

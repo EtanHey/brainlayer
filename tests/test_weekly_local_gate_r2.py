@@ -294,7 +294,9 @@ def test_same_local_date_remains_eligible_across_utc_rollover(local_lane, tmp_pa
     local_clock(zone, dt.datetime(2026, 10, day, 2, 59))
     receipt = backup.run_backup(**local_lane, phase="snapshot")
     local_clock(zone, dt.datetime(2026, 10, day, 3, 15))
-    assert maintenance._recent_verified_backup(config_for(local_lane, tmp_path))["snapshot"] == receipt["snapshot"]
+    assert (
+        maintenance._recent_weekly_verified_backup(config_for(local_lane, tmp_path))["snapshot"] == receipt["snapshot"]
+    )
 
 
 @pytest.mark.parametrize("zone", ["Asia/Jerusalem", "UTC"])
