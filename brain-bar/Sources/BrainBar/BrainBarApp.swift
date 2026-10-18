@@ -83,8 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         flushPendingBrainBarURLs()
 
-        // Google Drive access for backups: checked at launch and every 30 minutes, so the day-6
-        // "expires in N h" banner appears without anyone opening Backups.
+        // Google Drive access for backups: checked at launch and every 30 minutes, so the
+        // reconnect deadline appears at least 48 hours before expiry without opening Backups.
         runtime.driveAuth.install(runner: ProcessBrainLayerCLIRunner())
         Task { [driveAuth = runtime.driveAuth] in await driveAuth.refreshStatus() }
         driveAuthTimer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in

@@ -31,13 +31,13 @@ final class BrainBarDriveAuthTests: XCTestCase {
 
     func test_each_status_state_presents_what_to_do() {
         let valid = present(.init(state: .valid, reason: nil, expiresAt: date("2026-10-05T09:00:00Z")))
-        XCTAssertEqual(valid.line, "Connected: renews by 2026-10-05T09:00:00Z")
+        XCTAssertEqual(valid.line, "Connected: reconnect by 2026-10-05T09:00:00Z")
         XCTAssertEqual(valid.tone, .connected)
         XCTAssertFalse(valid.showsReconnect)
         XCTAssertFalse(valid.needsAttention)
 
         let expiring = present(.init(state: .expiring, reason: nil, expiresAt: date("2026-09-30T17:30:00Z")))
-        XCTAssertEqual(expiring.line, "Drive access expires in 6 h. Reconnect")
+        XCTAssertEqual(expiring.line, "1 thing needs you: reconnect Drive by 2026-09-30T17:30:00Z")
         XCTAssertEqual(expiring.tone, .expiring)
         XCTAssertTrue(expiring.showsReconnect && expiring.reconnectEnabled && expiring.needsAttention)
 
@@ -55,6 +55,23 @@ final class BrainBarDriveAuthTests: XCTestCase {
         XCTAssertEqual(unknown.line, "Drive status unknown — brainlayer CLI not found")
         XCTAssertFalse(unknown.showsReconnect, "no button that cannot work")
         XCTAssertFalse(unknown.needsAttention)
+    }
+
+    func test_deadline_warns_at_least_48_hours_before_expiry_even_with_an_older_cli_valid_state() {
+        for state in [DriveAuthStatus.State.valid, .expiring] {
+            for seconds: TimeInterval in [49 * 3_600, 48 * 3_600, 36 * 3_600, 1] {
+                let expiry = now.addingTimeInterval(seconds)
+                let presentation = present(.init(state: state, reason: nil, expiresAt: expiry))
+                XCTAssertEqual(presentation.line, "1 thing needs you: reconnect Drive by \(ISO8601DateFormatter().string(from: expiry))")
+                XCTAssertEqual(presentation.tone, .expiring)
+                XCTAssertTrue(presentation.needsAttention && presentation.reconnectEnabled)
+            }
+        }
+        XCTAssertFalse(present(.init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(49 * 3_600 + 1))).needsAttention)
+        let expired = present(.init(state: .valid, reason: nil, expiresAt: now))
+        XCTAssertEqual(expired.tone, .attention)
+        XCTAssertTrue(expired.needsAttention)
+        XCTAssertFalse(present(.init(state: .valid, reason: nil, expiresAt: nil)).needsAttention)
     }
 
     // MARK: reconnect contract (`--json`): the four outcomes

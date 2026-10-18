@@ -98,16 +98,26 @@ struct DriveAuthPresentation: Equatable, Sendable {
         var detail = status.reason
         let tone: Tone
         var showsReconnect = true
-        switch status.state {
+        // Re-evaluate the clock on presentation too: a cached/older CLI status may still
+        // say valid when the 48-hour reminder window opens, or when consent expires.
+        // Start one hour early so the app's 30-minute status poll can surface the
+        // reminder with at least 48 hours left, rather than up to a poll interval late.
+        let state: DriveAuthStatus.State
+        if [.valid, .expiring].contains(status.state), let expiry = status.expiresAt {
+            let remaining = expiry.timeIntervalSince(now)
+            state = remaining <= 0 ? .invalid : (remaining <= 49 * 3_600 ? .expiring : status.state)
+        } else {
+            state = status.state
+        }
+        switch state {
         case .valid:
-            line = status.expiresAt.map { "Connected: renews by \(formatDate($0))" } ?? "Connected"
+            line = status.expiresAt.map { "Connected: reconnect by \(formatDate($0))" } ?? "Connected"
             detail = nil
             tone = .connected
             showsReconnect = false
         case .expiring:
-            // The app stays in Google's Testing mode, so consent lasts 7 days; day 6 asks again.
-            let hours = status.expiresAt.map { max(1, Int(($0.timeIntervalSince(now) / 3_600).rounded(.up))) }
-            line = hours.map { "Drive access expires in \($0) h. Reconnect" } ?? "Drive access expires soon. Reconnect"
+            line = status.expiresAt.map { "1 thing needs you: reconnect Drive by \(formatDate($0))" }
+                ?? "1 thing needs you: reconnect Drive before access expires"
             tone = .expiring
         case .missing:
             line = "Google Drive is not connected. Backups can't upload."
