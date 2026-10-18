@@ -289,3 +289,29 @@ physical erasure of old WAL/free pages, embeddings, source transcripts or backup
 During the entire command, SQLite diagnostics log only error codes/classes, including
 file handlers; the process's normal SQLite callback is restored after stores close.
 Failures retain value-free causal error categories and cleanup notes.
+
+### Daily Drive upload recovery
+
+`backup-daily` probes an interrupted resumable upload before retransmitting bytes.
+Network failures use exponential delays (30 seconds up to 5 minutes), bounded by
+`BRAINLAYER_DRIVE_UPLOAD_RETRY_BUDGET_SECONDS` (default **1200**, per period without
+confirmed progress). An explicit `BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS`
+additionally caps attempts; without it, uploads allow 30 attempts. Metadata-read
+retries retain their existing default of three attempts. HTTP 401/403 and other
+client errors fail immediately; transient HTTP 429/5xx retain short bounded retries.
+The whole-backup timeout still applies.
+
+A stalled daily receipt records `resumable_upload` with the session URL,
+destination folder ID, and the artifact's absolute path, byte count, and pre-upload
+SHA-256. Receipts containing this private upload capability are restricted to mode 0600. The next upload run
+requires the same DB, machine, target folder, provenance, and unchanged artifact,
+then asks Drive for its current offset. A completed session goes through the usual
+verification. An expired session (404/410) starts a fresh snapshot and upload.
+See the [Drive resumable upload protocol](https://developers.google.com/workspace/drive/api/guides/manage-uploads#resume-upload).
+
+Before a fresh snapshot, reclamation only considers older dated `.db.gz` files
+directly in the staging directory whose stalled receipt and current SHA-256 prove
+ownership. Uploaded/verified paths, symlinks, hard links, changed bytes, malformed
+receipts, and legacy receipts without identity evidence are retained. Each removal
+is logged in `superseded_stalled_deleted`; uncertainty emits a warning. This does
+not change Drive retention, successful-copy retention, or restore formats.

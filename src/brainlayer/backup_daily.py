@@ -34,6 +34,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -73,6 +74,7 @@ BACKUP_DRIVE_RETENTION_ENV = "BRAINLAYER_BACKUP_DRIVE_RETENTION"
 DRIVE_UPLOAD_DEADLINE_FLOOR_ENV = "BRAINLAYER_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS"
 DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV = "BRAINLAYER_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND"
 DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV = "BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS"
+DRIVE_UPLOAD_RETRY_BUDGET_ENV = "BRAINLAYER_DRIVE_UPLOAD_RETRY_BUDGET_SECONDS"
 DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_SCOPES = drive_credentials.DRIVE_SCOPES
 DEFAULT_LOCAL_COMPRESSED_KEEP = 3
@@ -182,6 +184,8 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
+        if payload.get("resumable_upload"):
+            os.fchmod(handle.fileno(), 0o600)  # The session URL is a private upload capability.
         fcntl.flock(handle, fcntl.LOCK_EX)
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
         handle.flush()  # Flush before close releases the lock shared with log_cap.
@@ -221,8 +225,9 @@ class BackupStoppedError(BaseException):
 class DriveUploadStalledError(RuntimeError):
     error_code = "drive_upload_stalled"
 
-    def __init__(self, *, bytes_confirmed: int, total_bytes: int, attempts: int):
+    def __init__(self, *, bytes_confirmed: int, total_bytes: int, attempts: int, session_url: str | None = None):
         self.bytes_confirmed = bytes_confirmed
+        self.session_url = session_url
         super().__init__(
             f"{self.error_code}: confirmed {bytes_confirmed}/{total_bytes} bytes after {attempts} stalled attempts"
         )
@@ -1164,6 +1169,14 @@ def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machin
         )
 
 
+class DriveSessionExpiredError(RuntimeError):
+    """Drive no longer recognizes the saved upload session (404/410)."""
+
+
+class _DriveRetryableHTTPError(RuntimeError):
+    pass
+
+
 def upload_file_to_drive_raw(
     file_path: Path,
     folder_id: str,
@@ -1172,33 +1185,34 @@ def upload_file_to_drive_raw(
     machine_id: str,
     chunk_size: int = 8 * 1024 * 1024,
     max_attempts: int = 30,
+    resume_session_url: str | None = None,
 ) -> dict[str, Any]:
-    """Upload large backups with Drive's raw resumable protocol."""
+    """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
     file_path = Path(file_path)
     total = file_path.stat().st_size
-    metadata = {
-        "name": file_path.name,
-        "parents": [folder_id],
-        "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
-    }
-    init = requests.post(
-        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-        # md5Checksum is REQUIRED: retention coverage compares it against the surviving
-        # object. Without it the integrity branch silently becomes dead code (PR #815 review).
-        "&fields=id,name,size,md5Checksum,appProperties",
-        headers={
-            "Authorization": f"Bearer {credentials.token}",
-            "Content-Type": "application/json; charset=UTF-8",
-            "X-Upload-Content-Type": "application/gzip",
-            "X-Upload-Content-Length": str(total),
-        },
-        data=json.dumps(metadata),
-        timeout=60,
-    )
-    init.raise_for_status()
-    upload_url = init.headers["Location"]
+    upload_url = resume_session_url
+    if upload_url is None:
+        init = requests.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+            "&fields=id,name,size,md5Checksum,appProperties",
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Type": "application/gzip",
+                "X-Upload-Content-Length": str(total),
+            },
+            data=json.dumps(
+                {
+                    "name": file_path.name,
+                    "parents": [folder_id],
+                    "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
+                }
+            ),
+            timeout=60,
+        )
+        init.raise_for_status()
+        upload_url = init.headers["Location"]
 
-    sent = 0
     deadline_floor = _configured_positive_number(
         DRIVE_UPLOAD_DEADLINE_FLOOR_ENV,
         DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS,
@@ -1207,146 +1221,103 @@ def upload_file_to_drive_raw(
     minimum_rate = _configured_positive_number(
         DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV, DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND
     )
-    stall_limit = _drive_upload_stall_max_attempts()
-    stalled_attempts = 0
+    budget = _configured_positive_number(DRIVE_UPLOAD_RETRY_BUDGET_ENV, 20 * 60)
+    # Preserve the explicit operator attempt cap, without changing metadata-read retries.
+    stall_limit = (
+        _drive_upload_stall_max_attempts() if os.environ.get(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV) else max_attempts
+    )
+    sent = stalled_attempts = http_attempts = 0
+    slept = 0.0
+    stall_started: float | None = None
+    probe = resume_session_url is not None
+    recovering = False
     session = requests.Session()
+
+    def backoff() -> None:
+        nonlocal slept
+        elapsed = max(slept, time.monotonic() - stall_started) if stall_started is not None else slept
+        if stalled_attempts >= stall_limit or elapsed >= budget:
+            raise DriveUploadStalledError(
+                bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts, session_url=upload_url
+            )
+        delay = min(300, 30 * 2 ** min(max(0, stalled_attempts - 1), 4), budget - elapsed)
+        print(
+            f"drive upload stalled; confirmed={sent}/{total} attempt={stalled_attempts}/{stall_limit}; "
+            f"sleeping {delay}s",
+            flush=True,
+        )
+        _sleep(delay)
+        slept += delay
+
     try:
         with file_path.open("rb") as handle:
-            while sent < total:
-                handle.seek(sent)
-                expected = min(chunk_size, total - sent)
-                chunk = handle.read(expected)
-                if len(chunk) != expected:
-                    raise RuntimeError(
-                        f"Backup file changed during upload: expected {expected} bytes, got {len(chunk)}"
-                    )
-                start = sent
-                end = sent + len(chunk) - 1
-                headers = {
-                    "Authorization": f"Bearer {credentials.token}",
-                    "Content-Length": str(len(chunk)),
-                    "Content-Range": f"bytes {start}-{end}/{total}",
-                }
-                for attempt in range(1, max_attempts + 1):
-                    try:
-                        deadline = max(deadline_floor, len(chunk) / minimum_rate)
-                        response = _drive_put_with_deadline(
-                            session, upload_url, headers=headers, data=chunk, deadline=deadline
-                        )
-                        if response.status_code in {200, 201}:
-                            return response.json()
-                        if response.status_code == 308:
-                            uploaded_range = response.headers.get("Range")
-                            confirmed = (
-                                int(uploaded_range.rsplit("-", 1)[1]) + 1
-                                if uploaded_range and "-" in uploaded_range
-                                else sent
-                            )
-                            if confirmed < sent or confirmed > total:
-                                raise RuntimeError(
-                                    f"Drive upload returned invalid confirmed offset {confirmed}; "
-                                    f"expected {sent}..{total}"
-                                )
-                            if confirmed == sent:
-                                raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
-                            sent = confirmed
-                            stalled_attempts = 0
-                            print(f"drive upload progress: {sent}/{total} bytes", flush=True)
-                            break
-                        if response.status_code in {429, 500, 502, 503, 504}:
-                            raise RuntimeError(f"retryable HTTP {response.status_code}: {response.text[:200]}")
-                        response.raise_for_status()
-                    except BackupTimeoutError:
-                        raise  # the whole-run deadline is not a network blip
-                    except (_DriveRequestDeadlineExceeded, *_DRIVE_TRANSIENT_NETWORK_ERRORS) as transient:
-                        # The response was lost, not refused: Drive may hold this chunk, or the
-                        # whole file. Ask the session before sending a single byte again.
-                        print(
-                            f"drive upload chunk={start}-{end} interrupted: {type(transient).__name__}: "
-                            f"{transient}; querying session offset",
-                            flush=True,
-                        )
-                        previously_confirmed = sent
-                        stalled_attempts += 1
-                        query_headers = {
+            while sent < total or probe:
+                is_probe = probe
+                if is_probe:
+                    chunk = b""
+                    content_range = f"bytes */{total}"
+                else:
+                    handle.seek(sent)
+                    expected = min(chunk_size, total - sent)
+                    chunk = handle.read(expected)
+                    if len(chunk) != expected:
+                        raise RuntimeError("Backup file changed during upload")
+                    content_range = f"bytes {sent}-{sent + len(chunk) - 1}/{total}"
+                try:
+                    response = _drive_put_with_deadline(
+                        session,
+                        upload_url,
+                        headers={
                             "Authorization": f"Bearer {credentials.token}",
-                            "Content-Length": "0",
-                            "Content-Range": f"bytes */{total}",
-                        }
-                        while True:
-                            session = requests.Session()
-                            try:
-                                status = _drive_put_with_deadline(
-                                    session, upload_url, headers=query_headers, data=b"", deadline=deadline_floor
-                                )
-                                if status.status_code in {200, 201}:
-                                    return status.json()
-                                if status.status_code in {429, 500, 502, 503, 504}:
-                                    raise requests.RequestException(f"offset query HTTP {status.status_code}")
-                                if status.status_code != 308:
-                                    status.raise_for_status()
-                                uploaded_range = status.headers.get("Range")
-                                confirmed = (
-                                    int(uploaded_range.rsplit("-", 1)[1]) + 1
-                                    if uploaded_range and "-" in uploaded_range
-                                    else 0
-                                )
-                                if confirmed < sent or confirmed > total:
-                                    raise RuntimeError(
-                                        f"Drive offset query returned invalid confirmed offset {confirmed}; "
-                                        f"expected {sent}..{total}"
-                                    )
-                                sent = confirmed
-                                break
-                            except BackupTimeoutError:
-                                raise  # the whole-run deadline is not a network blip
-                            except (
-                                _DriveRequestDeadlineExceeded,
-                                requests.RequestException,
-                                *_DRIVE_TRANSIENT_NETWORK_ERRORS,
-                            ) as query_error:
-                                session.close()
-                                stalled_attempts += 1
-                                if stalled_attempts >= stall_limit:
-                                    raise DriveUploadStalledError(
-                                        bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts
-                                    ) from query_error
-                                sleep_seconds = min(60, 2**stalled_attempts)
-                                print(
-                                    f"drive upload offset query retry attempt={stalled_attempts}/{stall_limit}: "
-                                    f"{query_error}; sleeping {sleep_seconds}s",
-                                    flush=True,
-                                )
-                                _sleep(sleep_seconds)
-                        if sent > previously_confirmed:
-                            stalled_attempts = 0
-                            print(f"drive upload progress: {sent}/{total} bytes", flush=True)
-                            break
-                        if stalled_attempts >= stall_limit:
-                            raise DriveUploadStalledError(
-                                bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts
-                            )
-                        sleep_seconds = min(60, 2**stalled_attempts)
-                        print(
-                            f"drive upload stalled; confirmed={sent}/{total} "
-                            f"attempt={stalled_attempts}/{stall_limit}; sleeping {sleep_seconds}s",
-                            flush=True,
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range": content_range,
+                        },
+                        data=chunk,
+                        deadline=max(deadline_floor, len(chunk) / minimum_rate),
+                    )
+                    if response.status_code in {200, 201}:
+                        return response.json()
+                    if is_probe and response.status_code in {404, 410}:
+                        raise DriveSessionExpiredError("Drive upload session expired")
+                    if response.status_code in {429, 500, 502, 503, 504}:
+                        raise _DriveRetryableHTTPError(f"Drive HTTP {response.status_code}")
+                    response.raise_for_status()  # Auth/consent and other 4xx fail immediately.
+                    if response.status_code != 308:
+                        raise RuntimeError(f"Unexpected Drive status {response.status_code}")
+                    uploaded_range = response.headers.get("Range")
+                    confirmed = int(uploaded_range.rsplit("-", 1)[1]) + 1 if uploaded_range else 0
+                    if confirmed < sent or confirmed > total:
+                        raise RuntimeError(
+                            f"Drive returned invalid confirmed offset {confirmed}; expected {sent}..{total}"
                         )
-                        _sleep(sleep_seconds)
-                        break
-                    except Exception as exc:
-                        if attempt >= max_attempts:
-                            raise
-                        sleep_seconds = min(60, 2 ** min(attempt, 6))
-                        print(
-                            f"drive upload retry chunk={start}-{end} attempt={attempt}/{max_attempts}: {exc}; "
-                            f"sleeping {sleep_seconds}s",
-                            flush=True,
-                        )
-                        _sleep(sleep_seconds)
+                    http_attempts = 0
+                    if confirmed > sent:
+                        sent = confirmed
+                        stalled_attempts, slept, stall_started = 0, 0.0, None
+                        print(f"drive upload progress: {sent}/{total} bytes", flush=True)
+                    elif not is_probe or confirmed == total:
+                        raise _DriveRequestDeadlineExceeded("Drive upload returned no newly confirmed bytes")
+                    elif recovering:
+                        backoff()
+                    probe, recovering = confirmed == total, False
+                except BackupTimeoutError:
+                    raise
+                except (_DriveRequestDeadlineExceeded, *_DRIVE_TRANSIENT_NETWORK_ERRORS):
+                    stall_started = time.monotonic() if stall_started is None else stall_started
+                    stalled_attempts += 1
+                    recovering = True
+                    session.close()
+                    session = requests.Session()
+                    if is_probe:
+                        backoff()
+                    probe = True
+                except _DriveRetryableHTTPError:
+                    http_attempts += 1
+                    if http_attempts >= max_attempts:
+                        raise
+                    _sleep(min(60, 2 ** min(http_attempts, 6)))
     finally:
         session.close()
-
     raise RuntimeError("Drive upload ended without final response")
 
 
@@ -1681,6 +1652,96 @@ def _serialized_backup_run(func: Callable[..., dict[str, Any]]) -> Callable[...,
     return wrapped
 
 
+def _upload_identity(path: Path) -> dict[str, Any]:
+    with path.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    return {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": digest}
+
+
+def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path) -> list[dict[str, Any]]:
+    """Latest receipt per artifact; uncertainty disables reclamation, never broadens it."""
+    if not log_path.exists():
+        return []
+    try:
+        receipts = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+        latest = {r["snapshot"]: r for r in receipts if isinstance(r, dict) and isinstance(r.get("snapshot"), str)}
+        protected = {
+            str(Path(r["snapshot"]).resolve())
+            for r in receipts
+            if isinstance(r, dict)
+            and (r.get("uploaded") is True or r.get("verified") is True)
+            and isinstance(r.get("snapshot"), str)
+        }
+        candidates = []
+        for name, receipt in reversed(list(latest.items())):
+            path = Path(name)
+            state = receipt.get("resumable_upload")
+            if (
+                str(path.resolve()) in protected
+                or receipt.get("uploaded") is not False
+                or receipt.get("verified") is not False
+                or receipt.get("error_code") != "drive_upload_stalled"
+                or dt.datetime.fromisoformat(receipt["attempted_at"])
+                >= dt.datetime.fromisoformat(context["attempted_at"])
+                or any(
+                    receipt.get(k) != context.get(k)
+                    for k in ("db", "machine_id", "drive_folder", "backup_log_provenance")
+                )
+            ):
+                continue
+            if (
+                not isinstance(state, dict)
+                or path.is_symlink()
+                or not path.is_file()
+                or path.parent.resolve() != staging_dir.resolve()
+                or _parse_snapshot_date(path.name) is None
+                or path.name != f"{path.name[:10]}.db.gz"
+                or path.stat().st_nlink != 1
+                or _upload_identity(path) != {k: state.get(k) for k in ("path", "size", "sha256")}
+            ):
+                print(f"Retaining stalled backup with unconfirmed identity: {path.name}", flush=True)
+                continue
+            candidates.append(receipt)
+        return candidates
+    except (OSError, ValueError, TypeError, KeyError):
+        print("Cannot validate stalled-backup receipts; retaining local artifacts", flush=True)
+        return []
+
+
+def _safe_upload_url(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "www.googleapis.com"
+        and parsed.path == "/upload/drive/v3/files"
+        and "upload_id=" in parsed.query
+    )
+
+
+def _remove_superseded_stalls(receipts: list[dict[str, Any]], result: dict[str, Any], date_stamp: str) -> None:
+    for receipt in receipts:
+        path = Path(receipt["snapshot"])
+        try:
+            if (
+                path.name[:10] >= date_stamp
+                or path.is_symlink()
+                or path.stat().st_nlink != 1
+                or _upload_identity(path) != {k: receipt["resumable_upload"].get(k) for k in ("path", "size", "sha256")}
+            ):
+                print(f"Retaining stalled backup without proof it is superseded: {path.name}", flush=True)
+                continue
+            path.unlink()
+            result.setdefault("superseded_stalled_deleted", []).append(path.name)
+            print(f"Removed superseded stalled backup: {path.name}", flush=True)
+        except OSError:
+            print(f"Could not reclaim stalled backup: {path.name}; retaining it", flush=True)
+
+
 @_serialized_backup_run
 def run_backup(
     db_path: Path | None = None,
@@ -1737,51 +1798,88 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
-        artifact = create_sqlite_backup_artifact(
-            resolved_db_path,
-            staging_dir,
-            date_stamp=resolved_date_stamp,
-            reclamation_status_callback=record_reclamation_status,
-            capacity_status_callback=record_capacity,
-        )
-        snapshot = artifact.gzip_path
-        snapshot_size = snapshot.stat().st_size
-        result.update(
-            {
-                "snapshot": str(snapshot),
-                "local_uncompressed_snapshot": (
-                    str(artifact.uncompressed_path) if artifact.uncompressed_path else None
-                ),
-                "local_retention_deleted": artifact.local_retention_deleted,
-                "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
-                "surviving_attempts": getattr(artifact, "surviving_attempts", []),
-                "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
-                "surviving_attempt_growth_reserve_bytes": getattr(
-                    artifact,
-                    "surviving_attempt_growth_reserve_bytes",
-                    0,
-                ),
-                "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
-                "writer_probe_error": getattr(artifact, "writer_probe_error", None),
-                "sentinel_snapshot_chunks": artifact.sentinel_chunks,
-                "bytes": snapshot_size,
-            }
-        )
-        if upload:
+        stalled = _stalled_uploads(resolved_log_path, result, Path(staging_dir)) if upload else []
+        candidate = next((r for r in stalled if _safe_upload_url(r["resumable_upload"].get("url"))), None)
+
+        def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
+            if resume is not None:
+                return SQLiteBackupArtifact(
+                    gzip_path=Path(resume["snapshot"]),
+                    uncompressed_path=None,
+                    sentinel_chunks=resume["sentinel_snapshot_chunks"],
+                    local_retention_deleted=[],
+                    stale_attempts_deleted=[],
+                    surviving_attempts=[],
+                    surviving_attempt_bytes=0,
+                    surviving_attempt_growth_reserve_bytes=0,
+                    attempt_reclamation="resumed",
+                    writer_probe_error=None,
+                )
+            _remove_superseded_stalls(stalled, result, resolved_date_stamp)
+            artifact = create_sqlite_backup_artifact(
+                resolved_db_path,
+                staging_dir,
+                date_stamp=resolved_date_stamp,
+                reclamation_status_callback=record_reclamation_status,
+                capacity_status_callback=record_capacity,
+            )
+            return artifact
+
+        for resume in [candidate, None] if candidate is not None else [None]:
+            artifact = prepare_artifact(resume)
+            snapshot = artifact.gzip_path
+            snapshot_size = snapshot.stat().st_size
+            result.update(
+                {
+                    "snapshot": str(snapshot),
+                    "local_uncompressed_snapshot": (
+                        str(artifact.uncompressed_path) if artifact.uncompressed_path else None
+                    ),
+                    "local_retention_deleted": artifact.local_retention_deleted,
+                    "stale_attempts_deleted": getattr(artifact, "stale_attempts_deleted", []),
+                    "surviving_attempts": getattr(artifact, "surviving_attempts", []),
+                    "surviving_attempt_bytes": getattr(artifact, "surviving_attempt_bytes", 0),
+                    "surviving_attempt_growth_reserve_bytes": getattr(
+                        artifact,
+                        "surviving_attempt_growth_reserve_bytes",
+                        0,
+                    ),
+                    "attempt_reclamation": getattr(artifact, "attempt_reclamation", "unknown"),
+                    "writer_probe_error": getattr(artifact, "writer_probe_error", None),
+                    "sentinel_snapshot_chunks": artifact.sentinel_chunks,
+                    "bytes": snapshot_size,
+                }
+            )
+            if not upload:
+                break
             credentials = get_drive_credentials()
             service = build_drive_service()
             folder_id = ensure_drive_folder_chain(service, resolved_folder_parts)
-            assert_drive_folder_owned_by_machine(
-                service,
-                folder_id=folder_id,
-                machine_id=resolved_machine_id,
-            )
-            uploaded = upload_file_to_drive_raw(
-                snapshot,
-                folder_id,
-                credentials,
-                machine_id=resolved_machine_id,
-            )
+            assert_drive_folder_owned_by_machine(service, folder_id=folder_id, machine_id=resolved_machine_id)
+            if resume is not None and resume["resumable_upload"].get("folder_id") != folder_id:
+                print("Saved Drive destination changed; preparing a fresh snapshot", flush=True)
+                continue
+            upload_identity = _upload_identity(snapshot)
+            if resume is not None and upload_identity != {
+                k: resume["resumable_upload"].get(k) for k in ("path", "size", "sha256")
+            }:
+                print("Saved artifact changed before resume; preparing a fresh snapshot", flush=True)
+                continue
+            try:
+                uploaded = upload_file_to_drive_raw(
+                    snapshot,
+                    folder_id,
+                    credentials,
+                    machine_id=resolved_machine_id,
+                    **({"resume_session_url": resume["resumable_upload"]["url"]} if resume else {}),
+                )
+            except DriveSessionExpiredError:
+                if resume is None:
+                    raise
+                print("Saved Drive session expired; preparing a fresh snapshot", flush=True)
+                continue
+            break
+        if upload:
             file_id = uploaded.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
@@ -1849,6 +1947,8 @@ def run_backup(
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
+            if exc.session_url:
+                result["resumable_upload"] = {"url": exc.session_url, "folder_id": folder_id, **upload_identity}
             result.update(
                 {
                     "error_type": exc.error_code,
