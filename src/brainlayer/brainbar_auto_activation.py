@@ -88,11 +88,15 @@ class AutoActivator:
         # Recover before activation can report a new failure on the same alert key.
         self.state.with_suffix(".scan.json").unlink(missing_ok=True)
         reason = active_alerts().get("brainbar-activation", "")
-        if reason.startswith(
+        migration = self.state.with_suffix(".scan-migration.json")
+        migrate_legacy = not migration.exists()
+        if migrate_legacy:
+            # Consume even without a legacy alert, before later work can raise an OSError.
+            _atomic_write_json(migration, {"completed": True})
+        if (migrate_legacy and reason.startswith("BrainBar activation monitor refused: [Errno")) or reason.startswith(
             (
                 "BrainBar activation process scan failed for >=12 ticks:",
                 "BrainBar activation monitor refused: Command '['/bin/ps',",
-                "BrainBar activation monitor refused: [Errno",
             )
         ):
             report("brainbar-activation", None)

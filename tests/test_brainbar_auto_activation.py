@@ -487,3 +487,71 @@ def test_successful_scan_resets_counter_before_later_tick_error(monitor):
         worker.tick()
     assert not failures.exists()
     assert not calls and not alerts
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_non_scan_errno_never_flaps_after_one_shot_migration(monitor, monkeypatch, legacy):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    notifications = []
+    if legacy:
+        job_alerts.report(
+            "brainbar-activation", "BrainBar activation monitor refused: [Errno 11] old scan", notify=lambda _: None
+        )
+
+    def report(key, reason):
+        alerts.append((key, reason))
+        return job_alerts.report(key, reason, notify=notifications.append)
+
+    monkeypatch.setattr(auto, "report", report)
+
+    def fail_identity(app):
+        raise PermissionError(13, "fixture identity denied")
+
+    def fail_scan():
+        raise OSError("fixture scan unavailable")
+
+    with monkeypatch.context() as scan_patch:
+        scan_patch.setattr(auto, "brew_processes", fail_scan)
+        worker.tick()
+    assert not worker.state.with_suffix(".scan-migration.json").exists()
+    monkeypatch.setattr(auto, "app_identity", fail_identity)
+    for _ in range(3):
+        with pytest.raises(PermissionError) as failure:
+            auto.AutoActivator(worker.agents, worker.state).tick()
+        report("brainbar-activation", f"BrainBar activation monitor refused: {failure.value}")
+        assert "[Errno 13]" in job_alerts.active_alerts()["brainbar-activation"]
+    assert sum(reason is None for _, reason in alerts) == int(legacy)
+    assert sum(reason is not None for _, reason in alerts) == 3
+    assert len(notifications) == 1 + int(legacy)
+    assert worker.state.with_suffix(".scan-migration.json").is_file()
+    assert not calls
+
+
+def test_unwritable_migration_never_clears_or_flaps(monitor, monkeypatch):
+    from brainlayer import job_alerts
+
+    worker, _, calls, alerts = monitor
+    reason = "BrainBar activation monitor refused: [Errno 11] old scan"
+    job_alerts.report("brainbar-activation", reason, notify=lambda _: None)
+    notifications = []
+
+    def report(key, reason):
+        alerts.append((key, reason))
+        return job_alerts.report(key, reason, notify=notifications.append)
+
+    def unwritable(path, payload):
+        assert path == worker.state.with_suffix(".scan-migration.json")
+        raise PermissionError(13, "fixture migration denied")
+
+    monkeypatch.setattr(auto, "report", report)
+    monkeypatch.setattr(auto, "_atomic_write_json", unwritable)
+    for _ in range(3):
+        with pytest.raises(PermissionError) as failure:
+            auto.AutoActivator(worker.agents, worker.state).tick()
+        report("brainbar-activation", f"BrainBar activation monitor refused: {failure.value}")
+        assert job_alerts.active_alerts()["brainbar-activation"] == reason
+    assert len(alerts) == 3 and all(reason is not None for _, reason in alerts)
+    assert not notifications and not calls
+    assert not worker.state.with_suffix(".scan-migration.json").exists()
