@@ -147,7 +147,16 @@ def test_unusable_resume_starts_fresh_and_only_removes_proven_stale(lane, change
     else:
         lane.outcomes.append(_DriveResponse(404))
     lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
-    result = lane.run("2026-10-18")
+
+    def verify(*args, **kwargs):
+        if change in {"expired", "unsafe_url"}:
+            assert lane.snapshot.exists()
+        return {"verified": True}
+
+    from unittest.mock import patch
+
+    with patch.object(backup, "verify_sqlite_backup_artifact", verify):
+        result = lane.run("2026-10-18")
     assert result["uploaded"]
     assert len(lane.posts) == len(lane.creations) == 2
     assert lane.snapshot.exists() is (change in {"digest", "wrong_owner"})
@@ -288,3 +297,51 @@ def test_artifact_rechecked_after_destination_lookup_before_resumed_put(lane, mo
     lane.run("2026-10-18")
     assert len(lane.posts) == 2
     assert lane.puts[-1][1] == "bytes 0-5/6"
+
+
+@pytest.mark.parametrize("failure", ["capacity", "create", "upload", "verify"])
+def test_r1_stalled_copy_survives_until_newer_drive_copy_verifies(lane, monkeypatch, failure):
+    stalled(lane)
+    lane.outcomes.append(_DriveResponse(404))
+    if failure in {"capacity", "create"}:
+
+        def fail_create(*args, **kwargs):
+            assert lane.snapshot.exists(), "only retained copy was deleted before create"
+            raise RuntimeError("Insufficient free space for backup" if failure == "capacity" else "VACUUM failed")
+
+        monkeypatch.setattr(backup, "create_sqlite_backup_artifact", fail_create)
+    elif failure == "upload":
+        lane.outcomes.extend([ConnectionError("offline"), _DriveResponse(308)] * 2)
+    else:
+        lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
+        monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": False})
+    if failure == "verify":
+        assert lane.run("2026-10-18")["verified"] is False
+    else:
+        with pytest.raises(RuntimeError):
+            lane.run("2026-10-18")
+    assert lane.snapshot.read_bytes() == b"abcdef"
+    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    assert not receipt.get("superseded_stalled_deleted")
+    if failure == "capacity":
+        assert lane.snapshot.name in receipt["error_type"]
+
+
+@pytest.mark.parametrize("abandon", ["expired", "unsafe_url"])
+def test_r1_reclamation_follows_new_upload_and_verification(lane, monkeypatch, abandon):
+    receipt = stalled(lane)
+    if abandon == "unsafe_url":
+        receipt["resumable_upload"]["url"] = "https://evil.test/steal"
+        lane.log.write_text(json.dumps(receipt) + "\n")
+    else:
+        lane.outcomes.append(_DriveResponse(404))
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
+
+    def verify(*args, **kwargs):
+        assert lane.snapshot.exists(), "stale backup deleted before Drive verification"
+        return {"verified": True}
+
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verify)
+    result = lane.run("2026-10-18")
+    assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
+    assert not lane.snapshot.exists()

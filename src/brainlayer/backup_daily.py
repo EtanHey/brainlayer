@@ -1169,6 +1169,14 @@ def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machin
         )
 
 
+class RetainedStalledBackupCapacityError(RuntimeError):
+    error_code = "retained_stalled_backup_capacity"
+
+    def __init__(self, names: list[str]):
+        self.error_type = f"RetainedStalledBackupCapacityError[{','.join(names)}]"
+        super().__init__(f"Insufficient capacity; retaining stalled backups: {', '.join(names)}")
+
+
 class DriveSessionExpiredError(RuntimeError):
     """Drive no longer recognizes the saved upload session (404/410)."""
 
@@ -1815,14 +1823,18 @@ def run_backup(
                     attempt_reclamation="resumed",
                     writer_probe_error=None,
                 )
-            _remove_superseded_stalls(stalled, result, resolved_date_stamp)
-            artifact = create_sqlite_backup_artifact(
-                resolved_db_path,
-                staging_dir,
-                date_stamp=resolved_date_stamp,
-                reclamation_status_callback=record_reclamation_status,
-                capacity_status_callback=record_capacity,
-            )
+            try:
+                artifact = create_sqlite_backup_artifact(
+                    resolved_db_path,
+                    staging_dir,
+                    date_stamp=resolved_date_stamp,
+                    reclamation_status_callback=record_reclamation_status,
+                    capacity_status_callback=record_capacity,
+                )
+            except RuntimeError as exc:
+                if stalled and "Insufficient free space" in str(exc):
+                    raise RetainedStalledBackupCapacityError([Path(r["snapshot"]).name for r in stalled]) from exc
+                raise
             return artifact
 
         for resume in [candidate, None] if candidate is not None else [None]:
@@ -1912,6 +1924,8 @@ def run_backup(
                 if remove_local_after_upload:
                     snapshot.unlink()
                     result["local_removed"] = True
+                if resume is None:
+                    _remove_superseded_stalls(stalled, result, snapshot.name[:10])
                 verified_drive_names = _verified_snapshot_names_from_log(resolved_log_path)
                 verified_drive_names.add(snapshot.name)
                 result["local_gzip_retention_deleted"] = prune_local_gzip_snapshots(
@@ -1942,7 +1956,7 @@ def run_backup(
         exc.receipt_logged = True
         raise
     except Exception as exc:
-        result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        result.update({"error_type": getattr(exc, "error_type", type(exc).__name__), "error": str(exc)})
         error_code = getattr(exc, "error_code", None)
         if isinstance(error_code, str):
             result["error_code"] = error_code

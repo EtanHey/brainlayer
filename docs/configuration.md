@@ -309,9 +309,12 @@ then asks Drive for its current offset. A completed session goes through the usu
 verification. An expired session (404/410) starts a fresh snapshot and upload.
 See the [Drive resumable upload protocol](https://developers.google.com/workspace/drive/api/guides/manage-uploads#resume-upload).
 
-Before a fresh snapshot, reclamation only considers older dated `.db.gz` files
+After a newer snapshot is uploaded and verified on Drive in the same run,
+reclamation only considers older dated `.db.gz` files
 directly in the staging directory whose stalled receipt and current SHA-256 prove
 ownership. Uploaded/verified paths, symlinks, hard links, changed bytes, malformed
 receipts, and legacy receipts without identity evidence are retained. Each removal
 is logged in `superseded_stalled_deleted`; uncertainty emits a warning. This does
 not change Drive retention, successful-copy retention, or restore formats.
+Insufficient snapshot capacity fails explicitly and names retained stalled files;
+these files are never removed to make space.
