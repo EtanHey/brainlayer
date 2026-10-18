@@ -263,12 +263,13 @@ def finish_backlog_pass(tmp_path, *, files=1, chunks=1000, unknown=0, deferred=F
     return alarm, json.loads(cp.backlog_path.read_text())
 
 
-def test_r1_partial_inventory_cannot_reset_stall(tmp_path):
+def test_r2_partial_inventory_holds_stall_and_best(tmp_path):
     for _ in range(3):
         finish_backlog_pass(tmp_path, files=5, chunks=500)
     alarm, state = finish_backlog_pass(tmp_path, files=5, chunks=101, unknown=4)
-    assert state["stalled_passes"] == 3
-    assert alarm
+    assert state["stalled_passes"] == 2
+    assert state["best_backlog"]["chunks_remaining"] == 500
+    assert not alarm
 
 
 def test_r1_interleaved_deferrals_preserve_stall_and_baseline(tmp_path):
@@ -402,3 +403,40 @@ def test_r1_real_embedder_resource_errors_never_quarantine(calendar_fixture, mon
         assert not state["failures"] and not state["quarantined"]
     assert encoder.calls == 4
     assert checkpoint(db) == {}
+
+
+def test_r2_cursor_unknown_fifty_does_not_advance_stall(tmp_path):
+    for chunks in (10000, 9500, 9000, 8500):
+        alarm, state = finish_backlog_pass(tmp_path, files=51, chunks=chunks, unknown=50)
+        assert not alarm and state["stalled_passes"] == 0
+        assert state["best_backlog"] is None
+
+
+def test_r2_first_complete_measurement_establishes_best(tmp_path):
+    for chunks in (10000, 9500, 9000):
+        finish_backlog_pass(tmp_path, files=51, chunks=chunks, unknown=50)
+    alarm, state = finish_backlog_pass(tmp_path, files=51, chunks=4400)
+    assert not alarm and state["stalled_passes"] == 0
+    assert state["best_backlog"]["chunks_remaining"] == 4400
+
+
+def test_r2_quarantined_unknown_does_not_hide_measured_convergence(tmp_path, capsys):
+    db = tmp_path / "probe.db"
+    db.write_bytes(b"fixture")
+    bad, good = tmp_path / "bad.jsonl", tmp_path / "good.jsonl"
+    for path in (bad, good):
+        path.write_text("{}\n")
+    for number, chunks in enumerate((900, 700, 500, 300, 100)):
+        cp = cli._CalendarIndexCheckpoint(db, tmp_path, None, False)
+        cp.begin([bad, good])
+        cp.measured(good, chunks)
+        if number < 3:
+            cp.failed(bad, ValueError("deterministic parse failure"))
+        alarm = cp.finish()
+        state = json.loads(cp.backlog_path.read_text())
+        assert state["stalled_passes"] == 0
+        assert alarm == (number >= 2)
+        assert state["uncounted_files"] == int(number < 2)
+    output = capsys.readouterr().out
+    assert "INDEX_FILE_QUARANTINED" in output
+    assert "INDEX_BACKLOG_STALLED" not in output

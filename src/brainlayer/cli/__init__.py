@@ -395,7 +395,7 @@ class _CalendarIndexCheckpoint:
                 continue
             files += 1
             if item["total"] is None:
-                unknown += 1
+                unknown += int(not self.quarantined(Path(key)))
             else:
                 chunks += max(0, item["total"] - saved.get("next_chunk", 0))
         return dict(files_remaining=files, chunks_remaining=chunks, uncounted_files=unknown)
@@ -413,25 +413,27 @@ class _CalendarIndexCheckpoint:
         backlog = self.backlog()
         stalled = self.previous.get("stalled_passes", 0)
         best = self.previous.get("best_backlog")
-        # Migrate an older non-deferred measurement without treating a deferral
-        # as a completed pass. New sidecars preserve this baseline explicitly.
-        if best is None and self.previous and not self.previous.get("deferred"):
+        # Only complete non-deferred measurements can establish or advance the
+        # held minimum. Unknown lower bounds carry both count and baseline.
+        if (
+            best is None
+            and self.previous
+            and not self.previous.get("deferred")
+            and self.previous["uncounted_files"] == 0
+        ):
             best = {key: self.previous[key] for key in self.backlog_keys()}
-        if not deferred:
-            if not backlog["files_remaining"] or best is None or not best["files_remaining"]:
+        measured = backlog["uncounted_files"] == 0
+        if not deferred and measured:
+            if not backlog["files_remaining"]:
                 stalled, best = 0, backlog
+            elif best is None or best["uncounted_files"] or not best["files_remaining"]:
+                best = backlog
             else:
-                measured = backlog["uncounted_files"] == 0
-                # Unknown chunks are only a lower bound. Compare complete work
-                # counts, then file counts for ties, against the held minimum.
-                smaller = (
-                    measured
-                    and best["uncounted_files"] == 0
-                    and (backlog["chunks_remaining"], backlog["files_remaining"])
-                    < (best["chunks_remaining"], best["files_remaining"])
+                smaller = (backlog["chunks_remaining"], backlog["files_remaining"]) < (
+                    best["chunks_remaining"], best["files_remaining"]
                 )
                 stalled = 0 if smaller else stalled + 1
-                if smaller or (measured and best["uncounted_files"] > 0):
+                if smaller:
                     best = backlog
         quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
         state = dict(
@@ -453,12 +455,8 @@ class _CalendarIndexCheckpoint:
             # Calendar finish() alone owns rc75 streak escalation. An unstarted busy
             # pass is not evidence of non-converging work and must not alarm twice.
             return False
-        if stalled >= self.limit("BRAINLAYER_INDEX_STALL_PASSES") or quarantined:
-            code = (
-                "INDEX_BACKLOG_STALLED"
-                if stalled >= self.limit("BRAINLAYER_INDEX_STALL_PASSES")
-                else "INDEX_FILE_QUARANTINED"
-            )
+        if quarantined or (measured and stalled >= self.limit("BRAINLAYER_INDEX_STALL_PASSES")):
+            code = "INDEX_FILE_QUARANTINED" if quarantined else "INDEX_BACKLOG_STALLED"
             rprint(f"[bold red]{code}[/] attention_required=true")
             return True
         return False

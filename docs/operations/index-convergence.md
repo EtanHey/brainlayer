@@ -18,11 +18,16 @@ fully measured pair. Growth never moves that baseline upward: files 5,4,6,5,7
 with equal chunk counts stall after the improvement to 4. A partial inventory's
 lower chunk bound or falling uncounted count never establishes progress. The first
 fully measured pass after a partial baseline establishes a comparable pair without
-resetting an existing stall count.
+incrementing or resetting an existing stall count. Incomplete passes carry both the
+stall count and best baseline unchanged and emit no backlog-stall alarm, like deferrals.
+Quarantined files remain in `files_remaining`, but their unknown totals do not count
+in `uncounted_files`; quarantine itself forces `INDEX_FILE_QUARANTINED` and rc1,
+with priority over a backlog-stall label.
 
 After an initial non-deferred baseline, `BRAINLAYER_INDEX_STALL_PASSES` non-improving
-non-deferred passes (default **3**) produce `INDEX_BACKLOG_STALLED` and rc1, which
+fully measured, non-deferred passes (default **3**) produce `INDEX_BACKLOG_STALLED` and rc1, which
 the calendar records as failed/attention. Genuine improvement resets the streak.
+A dip followed by a decline still above the held minimum can fire the alarm.
 Zero remaining files resets both the streak and comparison baseline; later new
 work starts a new measurement cycle. Flat churn that consumes inputs but leaves
 the same backlog still counts as stalled. No custom alarm delivery is required
