@@ -52,12 +52,14 @@ class CalendarPlan:
     def select(self, last_weekly=None):
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
-        # Keep the command registry/bindings stable; schedule the long Drive upload last.
+        # Nightly jobs precede the long upload; weekly full needs that night's fresh receipt.
         names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
         if weekly:
             names[1] = "maintenance-weekly"
+            names.insert(1, "backup-daily")
             names += ["decay", "repair-fts"]
-        names.append("backup-daily")
+        else:
+            names.append("backup-daily")
         by_name = {s.name: s for s in self.candidates}
         return [by_name[n] for n in names]
 
@@ -78,6 +80,7 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
         Step(n, (str(lib_dir / "brainlayer-env-run.sh"), *args), timeout, {"BRAINLAYER_PYTHON": str(python)})
         for n, (args, timeout) in zip(NAMES, commands)
     )
+    steps[1].env["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] = "6"
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
     return CalendarPlan(scheduled_date, steps)
 
