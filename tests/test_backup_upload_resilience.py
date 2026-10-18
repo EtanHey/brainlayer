@@ -159,9 +159,9 @@ def test_unusable_resume_starts_fresh_and_only_removes_proven_stale(lane, change
         result = lane.run("2026-10-18")
     assert result["uploaded"]
     assert len(lane.posts) == len(lane.creations) == 2
-    assert lane.snapshot.exists() is (change != "missing")
+    assert lane.snapshot.exists() is (change not in {"missing", "expired", "unsafe_url"})
     if change in {"expired", "unsafe_url"}:
-        assert not result.get("superseded_stalled_deleted")
+        assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
 
 
 def test_verified_copy_and_unrecorded_artifact_survive_stale_cleanup(lane):
@@ -174,7 +174,7 @@ def test_verified_copy_and_unrecorded_artifact_survive_stale_cleanup(lane):
     lane.log.write_text(lane.log.read_text() + json.dumps(protected) + "\n")
     lane.outcomes.extend([_DriveResponse(410), _DriveResponse(200, payload={"id": "new"})])
     lane.run("2026-10-18")
-    assert lane.snapshot.exists()
+    assert not lane.snapshot.exists()
     assert verified.read_bytes() == b"verified"
     assert unknown.read_bytes() == b"unknown"
 
@@ -343,8 +343,8 @@ def test_r1_reclamation_follows_new_upload_and_verification(lane, monkeypatch, a
 
     monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verify)
     result = lane.run("2026-10-18")
-    assert not result.get("superseded_stalled_deleted")
-    assert lane.snapshot.exists()
+    assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
+    assert not lane.snapshot.exists()
 
 
 @pytest.mark.parametrize("hours", [36, 96])

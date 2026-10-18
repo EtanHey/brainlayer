@@ -619,6 +619,33 @@
             },
             "verified": {
               "type": "boolean"
+            }
+          }
+        },
+        "error_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "local_snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "local_verified",
+            "uploaded",
+            "upload_state",
+            "upload_error"
+          ],
+          "properties": {
+            "last_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "destination": {
+              "type": "string"
             },
             "local_verified": {
               "type": "boolean"
@@ -631,7 +658,9 @@
                 "pending",
                 "in_progress",
                 "verified",
-                "failed"
+                "failed",
+                "abandoned",
+                "superseded"
               ]
             },
             "upload_error": {
@@ -639,14 +668,21 @@
                 "string",
                 "null"
               ]
+            },
+            "local_integrity": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "local_integrity_pragma": {
+              "enum": [
+                "quick_check",
+                "integrity_check",
+                null
+              ]
             }
           }
-        },
-        "error_type": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       }
     },

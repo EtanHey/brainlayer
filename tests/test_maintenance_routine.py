@@ -23,7 +23,12 @@ def _local_receipt(config, receipt):
     snapshot = config.db_path.with_name("2026-09-27.db.gz")
     snapshot.write_bytes(b"synthetic verified snapshot")
     return dict(
-        receipt, snapshot=str(snapshot), local_verified=True, local_artifact=backup_daily._upload_identity(snapshot)
+        receipt,
+        snapshot=str(snapshot),
+        local_verified=True,
+        local_integrity="ok",
+        local_integrity_pragma="integrity_check",
+        local_artifact=backup_daily._upload_identity(snapshot),
     )
 
 
@@ -355,7 +360,7 @@ def test_fresh_weekly_backup_uses_supervised_process_and_kills_stuck_group(tmp_p
     assert exc.value.code == 76
     assert observed["args"][-2:] == ["-m", "brainlayer.backup_daily"]
     assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_TIMEOUT_SECONDS"] == "45"
-    assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] == "6"
+    assert observed["kwargs"]["env"]["BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"] == "6"
     assert observed["kwargs"]["start_new_session"] is True
     assert observed["pid"] == 45210
     assert observed["signal"] == maintenance.signal.SIGKILL

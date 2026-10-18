@@ -27,7 +27,7 @@ NAMES = tuple(
 KEYS = {
     "index": "index",
     "backup-daily": "backup-daily",
-    "backup-snapshot": "backup-daily",
+    "backup-snapshot": "backup-snapshot",
     "jsonl-backup": "jsonl-backup",
     "maintenance-nightly": "maintenance-light",
     "maintenance-weekly": "maintenance-full",
@@ -86,7 +86,11 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
         for n, (args, timeout) in zip(NAMES[: len(commands)], commands)
     )
     steps[1].env["BRAINLAYER_BACKUP_PHASE"] = "all"
-    steps += (replace(steps[1], name="backup-snapshot", env=steps[1].env | {"BRAINLAYER_BACKUP_PHASE": "snapshot"}),)
+    steps += (
+        replace(
+            steps[1], name="backup-snapshot", timeout=5400, env=steps[1].env | {"BRAINLAYER_BACKUP_PHASE": "snapshot"}
+        ),
+    )
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
     return CalendarPlan(scheduled_date, steps)
 
@@ -99,7 +103,9 @@ def record(directory, **event):
 
 
 def backup_deadline(step):
-    if step.name not in {"backup-daily", "backup-snapshot"}:
+    if step.name == "backup-snapshot":
+        return step.timeout
+    if step.name != "backup-daily":
         return step.timeout
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
     configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", path)
@@ -109,6 +115,35 @@ def backup_deadline(step):
     if seconds < 1:
         raise ValueError("invalid backup timeout")
     return max(step.timeout, seconds + 90)
+
+
+def _service_name(step):
+    return "backup-daily" if step.name == "backup-snapshot" else step.name
+
+
+def _bounded_snapshot_step(step, now, shutdown_timeout):
+    path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
+    configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", path)
+    requested = float(
+        configured
+        if configured is not None
+        else os.environ.get("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", step.timeout)
+    )
+    if not math.isfinite(requested) or requested <= 0:
+        raise ValueError("invalid snapshot timeout")
+    end = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    seconds = int(min(requested, step.timeout, (end - now).total_seconds() - shutdown_timeout))
+    if seconds < 1:
+        return None
+    return replace(
+        step,
+        timeout=seconds,
+        env=step.env
+        | {
+            "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(seconds),
+            "BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS": str(seconds),
+        },
+    )
 
 
 def _bounded_index_step(step, now, shutdown_timeout):
@@ -308,11 +343,16 @@ async def run_calendar(
                         )
                         continue
                     step = bounded
+                if step.name == "backup-snapshot":
+                    bounded = _bounded_snapshot_step(step, now_fn(), shutdown_timeout)
+                    if bounded is None:
+                        results[step.name] = finish(
+                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
+                        )
+                        continue
+                    step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
-                if (
-                    f"com.brainlayer.{'backup-daily' if step.name in {'backup-snapshot'} else step.name}" in disabled
-                    or "com.brainlayer.maintenance" in disabled
-                ):
+                if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                     code, reason = 75, "disabled"
                 elif not await _window(directory, step, now_fn, sleep_fn, stop):
                     code, missed = (143, False) if stop.is_set() else (75, True)
@@ -322,7 +362,10 @@ async def run_calendar(
                     child_env = (
                         env
                         | step.env
-                        | dict(BRAINLAYER_LAUNCHD_SERVICE=step.name, XPC_SERVICE_NAME=f"com.brainlayer.{step.name}")
+                        | dict(
+                            BRAINLAYER_LAUNCHD_SERVICE=_service_name(step),
+                            XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
+                        )
                     )
                     async with step_hold(client, guard, child_env, step) as held_env:
                         if stop.is_set():
