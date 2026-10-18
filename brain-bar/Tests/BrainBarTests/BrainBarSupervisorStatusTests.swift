@@ -144,13 +144,15 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
 
     func testWindowAttributionRequiresRecordedReasonAndNoSpawn() throws {
         let directory = try journal("migrated").deletingLastPathComponent()
+        let logs = directory.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
         for (reason, spawn) in [("", false), ("invented", false), ("index-overran-window", true)] {
             let prefix = spawn ? "{\"event\":\"spawn\",\"step\":\"maintenance-weekly\",\"ts\":1784466000,\"pid\":4242}\n" : ""
             try Data((prefix + """
             {"event":"finished","step":"maintenance-weekly","ts":1784466060,"status":"deferred","returncode":75,"reason":"\(reason)"}
 
             """).utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
-            let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory)).sampleActivity()
+            let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory), logs: logs).sampleActivity()
             let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
                 observations: observations, formatDate: { _ in "today" })
             XCTAssertTrue(status.attentionReason?.contains("reason unavailable") == true)
