@@ -144,3 +144,126 @@ def test_changed_raw_is_retained_and_same_date_only_copy_is_not_overwritten(raw_
     with pytest.raises(ValueError, match="changed"):
         backup._remove_raw_with_verified_gzip(output, raw)
     assert raw.read_bytes() == b"replacement"
+
+
+@pytest.mark.parametrize("own_run", [False, True])
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_gzip_and_directory_durable_before_raw_unlink(raw_lane, monkeypatch, own_run, platform):
+    source, output = raw_lane
+    raw = output / "2026-10-16.db"
+    raw.write_bytes(source.read_bytes())
+    raw.with_suffix(".db.gz").write_bytes(gzip.compress(source.read_bytes()))
+    events = []
+    unlink = backup.os.unlink
+    monkeypatch.setattr(backup.sys, "platform", platform)
+    monkeypatch.setattr(backup.fcntl, "F_FULLFSYNC", 51, raising=False)
+    monkeypatch.setattr(backup.fcntl, "fcntl", lambda fd, op: events.append(("fullsync", os.fstat(fd).st_ino, op)))
+    monkeypatch.setattr(backup.os, "fsync", lambda fd: events.append(("fsync", os.fstat(fd).st_ino)))
+
+    def record_unlink(name, **kwargs):
+        events.append(("unlink", name))
+        unlink(name, **kwargs)
+
+    monkeypatch.setattr(backup.os, "unlink", record_unlink)
+    backup._remove_raw_with_verified_gzip(output, raw, **({"own_run": True} if own_run else {}))
+    compressed_inode = raw.with_suffix(".db.gz").stat().st_ino
+    assert events == [
+        ("fullsync", compressed_inode, 51) if platform == "darwin" else ("fsync", compressed_inode),
+        ("fsync", output.stat().st_ino),
+        ("unlink", raw.name),
+    ]
+
+
+@pytest.mark.parametrize("capacity", [True, False])
+@pytest.mark.parametrize("same_size", [True, False])
+def test_mismatched_prior_pair_retained_and_named_in_receipt(raw_lane, monkeypatch, capacity, same_size):
+    source, output = raw_lane
+    raw = output / "2026-10-16.db"
+    original = source.read_bytes()
+    raw.write_bytes(original)
+    # Same size and valid SQLite header still cannot establish an earlier run's binding.
+    different = original[:-1] + bytes([original[-1] ^ 1]) if same_size else b"other snapshot"
+    compressed = raw.with_suffix(".db.gz")
+    compressed.write_bytes(gzip.compress(different))
+    compressed_bytes = compressed.read_bytes()
+    if not capacity:
+        monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=0))
+    log = output / "receipt.jsonl"
+    args = dict(db_path=source, staging_dir=output, date_stamp="2026-10-17", upload=False, log_path=log)
+    if capacity:
+        backup.run_backup(**args)
+    else:
+        with pytest.raises(RuntimeError, match=raw.name):
+            backup.run_backup(**args)
+    assert raw.read_bytes() == original
+    assert compressed.read_bytes() == compressed_bytes
+    receipt = json.loads(log.read_text().splitlines()[-1])
+    assert raw.name in receipt["retained_raw_snapshots"]
+
+
+@pytest.mark.parametrize("content", [b"not SQLite", b"SQLite format 3\x00short"])
+def test_own_run_requires_sqlite_header_and_isize(raw_lane, content):
+    source, output = raw_lane
+    raw = output / "2026-10-17.db"
+    raw.write_bytes(source.read_bytes())
+    content = content.ljust(raw.stat().st_size, b"x") if content == b"not SQLite" else content
+    raw.with_suffix(".db.gz").write_bytes(gzip.compress(content))
+    with pytest.raises(ValueError, match="binding"):
+        backup._remove_raw_with_verified_gzip(output, raw, own_run=True)
+    assert raw.exists()
+
+
+@pytest.mark.parametrize("phase", ["gzip", "directory"])
+def test_durability_failure_keeps_both_files(raw_lane, monkeypatch, phase):
+    source, output = raw_lane
+    raw = output / "2026-10-16.db"
+    raw.write_bytes(source.read_bytes())
+    compressed = raw.with_suffix(".db.gz")
+    compressed.write_bytes(gzip.compress(source.read_bytes()))
+    monkeypatch.setattr(backup.sys, "platform", "linux")
+
+    def fail_sync(fd):
+        import stat
+
+        is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+        if is_directory == (phase == "directory"):
+            raise OSError("sync failed")
+
+    monkeypatch.setattr(backup.os, "fsync", fail_sync)
+    with pytest.raises(OSError, match="sync failed"):
+        backup._remove_raw_with_verified_gzip(output, raw)
+    assert raw.exists() and compressed.exists()
+
+
+def test_compression_floor_breach_names_retained_raw_with_stalled_gzip(raw_lane, monkeypatch):
+    source, output = raw_lane
+    raw = output / "2026-10-17.db"
+    stalled_gzip = output / "2026-10-16.db.gz"
+    stalled_gzip.write_bytes(b"retained stalled gzip")
+    monkeypatch.setattr(
+        backup, "_stalled_uploads", lambda *a: [{"snapshot": str(stalled_gzip), "resumable_upload": {}}]
+    )
+    monkeypatch.setattr(
+        backup, "_copy_with_raw_floor", lambda *a: (_ for _ in ()).throw(RuntimeError("raw free space floor breached"))
+    )
+    log = output / "receipt.jsonl"
+    with pytest.raises(backup.RetainedStalledBackupCapacityError, match=raw.name):
+        backup.run_backup(source, staging_dir=output, date_stamp="2026-10-17", log_path=log)
+    assert raw.exists() and stalled_gzip.exists()
+    receipt = json.loads(log.read_text().splitlines()[-1])
+    assert raw.name in receipt["error"]
+    assert raw.name in receipt["retained_raw_snapshots"]
+
+
+def test_hashing_reads_in_bounded_chunks():
+    import hashlib
+
+    class GuardedStream:
+        remaining = 3
+
+        def read(self, size):
+            assert 0 < size <= backup.COPY_CHUNK_BYTES
+            self.remaining -= 1
+            return b"block" if self.remaining >= 0 else b""
+
+    assert backup._stream_sha256(GuardedStream()) == hashlib.sha256(b"block" * 3).digest()

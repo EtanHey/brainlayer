@@ -784,27 +784,70 @@ def _peak_backup_required_bytes(db_size: int, gzip_size: int, raw_reclaimed: int
     return max(compression_peak, verify_peak) + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES
 
 
-def _remove_raw_with_verified_gzip(output_dir: Path, raw: Path) -> None:
-    """Unlink only a stable, singly owned snapshot beside its integrity-tested gzip."""
+def _stream_sha256(source: Any) -> bytes:
+    digest = hashlib.sha256()
+    while chunk := source.read(COPY_CHUNK_BYTES):
+        digest.update(chunk)
+    return digest.digest()
+
+
+def _remove_raw_with_verified_gzip(output_dir: Path, raw: Path, *, own_run: bool = False) -> None:
+    """Prove the pair is bound and durable before unlinking its singly owned raw."""
     if raw.parent != output_dir or _parse_uncompressed_snapshot_date(raw.name) is None:
         raise ValueError("Raw snapshot is outside the backup directory or has an invalid name")
     directory = os.open(output_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
 
-        def identity(name: str) -> tuple[int, ...]:
-            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        def file_identity(info: os.stat_result) -> tuple[int, ...]:
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                raise ValueError(f"Retaining non-regular or linked snapshot: {name}")
+                raise ValueError(f"Retaining non-regular or linked snapshot: {raw.name}")
             return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+        def identity(name: str) -> tuple[int, ...]:
+            return file_identity(os.stat(name, dir_fd=directory, follow_symlinks=False))
 
         gzip_name = f"{raw.name}.gz"
         raw_identity, gzip_identity = identity(raw.name), identity(gzip_name)
+
+        def require_unchanged() -> None:
+            if raw_identity != identity(raw.name) or gzip_identity != identity(gzip_name):
+                raise ValueError(f"Snapshot changed during integrity check: {raw.name}")
+
         _gunzip_test(output_dir / gzip_name)
-        if raw_identity != identity(raw.name) or gzip_identity != identity(gzip_name):
-            raise ValueError(f"Snapshot changed during integrity check: {raw.name}")
-        os.unlink(raw.name, dir_fd=directory)
+        require_unchanged()
+        with os.fdopen(os.open(gzip_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory), "rb") as compressed:
+            if file_identity(os.fstat(compressed.fileno())) != gzip_identity:
+                raise ValueError(f"Snapshot changed before binding check: {raw.name}")
+            compressed.seek(-4, os.SEEK_END)
+            isize = int.from_bytes(compressed.read(4), "little")
+            if isize != raw_identity[2] % (1 << 32):
+                raise ValueError(f"Raw/gzip snapshot binding failed (ISIZE): {raw.name}")
+            compressed.seek(0)
+            with gzip.GzipFile(fileobj=compressed, mode="rb") as restored:
+                if restored.read(16) != b"SQLite format 3\x00":
+                    raise ValueError(f"Raw/gzip snapshot binding failed (SQLite header): {raw.name}")
+                if not own_run:
+                    # A same-date gzip may predate this raw. Prove every byte, not just its name/size.
+                    with os.fdopen(os.open(raw.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory), "rb") as original:
+                        if file_identity(os.fstat(original.fileno())) != raw_identity:
+                            raise ValueError(f"Snapshot changed before binding check: {raw.name}")
+                        raw_hash = _stream_sha256(original)
+                    restored.seek(0)
+                    if _stream_sha256(restored) != raw_hash:
+                        raise ValueError(f"Raw/gzip snapshot binding failed (SHA-256): {raw.name}")
+            if sys.platform == "darwin":
+                fcntl.fcntl(compressed.fileno(), fcntl.F_FULLFSYNC)
+            else:
+                os.fsync(compressed.fileno())
+            os.fsync(directory)
+            require_unchanged()
+            os.unlink(raw.name, dir_fd=directory)
     finally:
         os.close(directory)
+
+
+def _retained_raw_snapshot_names(output_dir: Path) -> list[str]:
+    return sorted(path.name for path in output_dir.glob("*.db") if _parse_uncompressed_snapshot_date(path.name))
 
 
 def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
@@ -817,7 +860,7 @@ def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
             deleted.append(raw.name)
         except BackupTimeoutError:
             raise
-        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError):
+        except (OSError, EOFError, ValueError, RuntimeError, subprocess.CalledProcessError):
             retained_raw.append(raw.name)
     return deleted, retained_raw
 
@@ -963,7 +1006,7 @@ def create_sqlite_backup_artifact(
             _copy_with_raw_floor(src, dst, output_dir)
         shutil.move(str(temp_gz), final_gz)
 
-        _remove_raw_with_verified_gzip(output_dir, final_raw)
+        _remove_raw_with_verified_gzip(output_dir, final_raw, own_run=True)
         deleted.append(final_raw.name)
 
     return SQLiteBackupArtifact(
@@ -2064,10 +2107,15 @@ def run_backup(
                 )
             except RuntimeError as exc:
                 reason = _redact_upload_secrets(str(exc))
+                floor_breach = "raw free space floor breached" in reason
+                if floor_breach:
+                    reason += f"; retained raw snapshots: {_retained_raw_snapshot_names(Path(staging_dir))}"
                 if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
                     raise RetainedStalledBackupCapacityError(
                         [Path(r["snapshot"]).name for r in stalled], reason=reason
                     ) from exc
+                if floor_breach:
+                    raise RuntimeError(reason) from exc
                 raise
             result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started
             return artifact
@@ -2264,6 +2312,7 @@ def run_backup(
             )
         raise
     finally:
+        result["retained_raw_snapshots"] = _retained_raw_snapshot_names(Path(staging_dir))
         raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
         if raw.is_file() and not raw.is_symlink():
             result["local_uncompressed_snapshot"] = str(raw)
