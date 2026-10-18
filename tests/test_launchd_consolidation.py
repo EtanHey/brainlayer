@@ -291,12 +291,17 @@ def test_transaction_verifies_real_private_supervisor_and_reaps_owned_groups(sho
         assert journal["phase"] == "migrated"
         assert journal["group_custody"][NEW] == str(control)
         states = SupervisorCommands(control / "control.sock", runner).request()
-        pids.extend(state["pid"] for state in states.values())
+        if sys.platform == "darwin":
+            assert states["brainbar-activation"]["configured"] is True
+            assert states["brainbar-activation"]["interval"] == 5
+        pids.extend(state["pid"] for name, state in states.items() if name != "brainbar-activation")
         assert len(pids) == 2 and all(pid_alive(pid) for pid in pids)
         assert not (agents / f"{OLD}.plist").exists()
         invoke((home, agents, env), runner, "keg2", verify=None, alive=lambda pid: pid != 4242 and pid_alive(pid))
         updated = SupervisorCommands(control / "control.sock", runner).request()
-        replacements = [state["pid"] for state in updated.values()]
+        if sys.platform == "darwin":
+            assert updated["brainbar-activation"]["configured"] is True
+        replacements = [state["pid"] for name, state in updated.items() if name != "brainbar-activation"]
         assert len(processes) == 2 and all(pid_alive(pid) for pid in replacements)
         assert not (set(pids) & set(replacements))
         assert all(not pid_alive(pid) for pid in pids)

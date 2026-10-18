@@ -50,6 +50,7 @@ class _Harness:
         self.quarantine = tmp_path / "quarantine"
         self.app_path = tmp_path / "Applications" / "BrainBar.app"
         self.brew_log = tmp_path / "brew.log"
+        self.cli_log = tmp_path / "cli.log"
         self.git_log = tmp_path / "git.log"
         self.launchctl_log = tmp_path / "launchctl.log"
         self.sudo_log = tmp_path / "sudo.log"
@@ -91,7 +92,14 @@ exit 0
         if formula:
             _write_exec(
                 self.bin_dir / "brainlayer",
-                f"#!/usr/bin/env bash\nprintf 'brainlayer {formula}\\n'\n",
+                f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {self.cli_log!s}
+if [[ "$1" == "brainbar" ]]; then
+  [[ "$2" != "verify-running" ]] || exit "${{BRAINLAYER_TEST_RUNNING_IDENTITY_EXIT:-0}}"
+  exit 0
+fi
+printf 'brainlayer {formula}\\n'
+""",
             )
         _write_exec(
             self.bin_dir / "git",
@@ -745,3 +753,21 @@ def test_dedupe_brainbar_script_is_dry_run_safe_and_preserves_canonical_app() ->
     assert 'rm -rf "$CANONICAL_APP"' not in script
     assert 'run mv "$bundle" "$DEST_BACKUP/bundles/$(echo "$bundle" | tr \'/ \' \'__\')" || true' not in script
     assert 'run mv "$file" "$DEST_BACKUP/LaunchAgents/" || true' not in script
+
+
+def test_update_activates_after_install_and_requires_running_identity(tmp_path):
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered=None)
+    result = h.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = h.cli_log.read_text()
+    assert "brainbar activate --verify" in calls
+    assert f"brainbar verify-running --app {h.app_path}" in calls
+
+
+def test_running_identity_failure_cannot_be_stale_green(tmp_path):
+    h = _Harness(tmp_path)
+    h.install_stubs(offered="1.5.8", registered=None)
+    result = h.run(BRAINLAYER_TEST_RUNNING_IDENTITY_EXIT="1")
+    assert result.returncode != 0
+    assert "green at" not in result.stdout

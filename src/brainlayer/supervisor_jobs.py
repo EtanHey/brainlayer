@@ -12,6 +12,7 @@ import json
 import math
 import os
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -123,6 +124,34 @@ def load_components(path: Path, socket_path: Path) -> dict[str, Component]:
         if interval and not run_at_load:
             child.retry_at = time.monotonic() + interval
         components[ALIASES[label]] = child
+    return with_brainbar_monitor(components, socket_path)
+
+
+def with_brainbar_monitor(components, path):
+    if sys.platform == "darwin":
+        observability_env = components.get("observability", Component(("unused",))).env
+        monitor_env = {
+            key: observability_env[key]
+            for key in ("BRAINLAYER_DB", "BRAINLAYER_JOB_ALERT_PATH")
+            if key in observability_env
+        }
+        if "BRAINLAYER_FORBID_BRAINBAR_SOCKET" in os.environ:
+            monitor_env["BRAINLAYER_FORBID_BRAINBAR_SOCKET"] = os.environ["BRAINLAYER_FORBID_BRAINBAR_SOCKET"]
+        components["brainbar-activation"] = Component(
+            (
+                sys.executable,
+                "-m",
+                "brainlayer.brainbar_auto_activation",
+                "--state",
+                str(path.with_name("brainbar-activation.json")),
+            ),
+            env=monitor_env,
+            interval=5,
+            run_timeout=180,
+            exit_timeout=2,
+            stdout=path.with_name("brainbar-activation.log"),
+            stderr=path.with_name("brainbar-activation.err.log"),
+        )
     return components
 
 

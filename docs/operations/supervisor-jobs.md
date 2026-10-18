@@ -50,3 +50,10 @@ sibling keg CLI and packaged wrappers. Override `--lib-dir`/`--state-dir`/`--log
 `jobs component NAME status|restart|env|logs` uses legacy plists until archival, then owner-only control;
 `--socket`/`--manifest` select fixtures. Restart honors OFF/disable/pause; env/log actions return paths only.
 JSON traces the legacy label, evidence source and definition; live keg verification remains separate.
+
+
+BrainBar cask recovery is a formula-supervised `brainbar-activation` interval worker.
+The cask upgrade stops BrainBar; the supervisor re-activates it automatically after brew exits.
+It attempts each Info.plist GitCommit/version once, with durable failure suppression and a
+visible `brainbar-activation` job alert. Manual retry: `brainlayer brainbar activate`.
+See [activation and deploy-local-prod](brainbar-service-install.md#supervisor-recovery-and-deploy-local-prod-step).

@@ -19,6 +19,9 @@ This covers prospective ambiguous names without creating probe files or relaxing
 
 ## Homebrew cask upgrades: defer activation
 
+The cask upgrade stops BrainBar; the supervisor re-activates it automatically after
+Homebrew returns. Manual: `brainlayer brainbar activate`.
+This requires the released formula's always-on supervisor to be running.
 Upgrade the `brainlayer` formula to a release with `brainbar activate` first. Run these
 steps in order, stopping on any non-zero exit:
 
@@ -31,10 +34,14 @@ brainlayer setup --no-migrate-mcp --verify-mcp
 For a first install/reinstall, replace the first command with `brew install --cask brainbar`.
 Postflight writes the two cask LaunchAgent plists and migrates MCP configuration without
 launching or verifying BrainBar. Homebrew can then finish its own approval inheritance.
-Activation replaces only the current user's cask daemon/UI labels, waits for `/tmp/brainbar.sock`,
+Activation leaves both current-bundle loaded labels untouched when MCP verification passes;
+a probe failure on that current running bundle also preserves the service and reports failure.
+Otherwise it replaces only the current user's cask daemon/UI labels, waits for `/tmp/brainbar.sock`,
 and requires initialize, tools/list and a safe tool call through the installed bridge.
 The startup/MCP budget defaults to 90 seconds; `--timeout` or
 `BRAINLAYER_BRAINBAR_ACTIVATION_TIMEOUT_S` sets it independently of setup's 10-second probe.
+`--no-verify` skips MCP probing and reports the result as unverified; the default is `--verify`.
+Disabled labels are reported explicitly, never silently enabled.
 This command covers the cask's default socket, not custom service-renderer socket paths.
 
 A non-zero activation result includes JSON `stage`, `reason` and `cleanup_errors` fields.
@@ -44,3 +51,31 @@ Stop deployment and investigate the receipt; do not loop activation. This change
 not guarantee uninterrupted service or no consent prompt on macOS 26/27: approved-predecessor
 upgrade, failure recovery and real native MCP evidence remain release acceptance gates.
 Other package jobs retain their own deployment restart/verification procedure.
+
+
+### Supervisor recovery and deploy-local-prod step
+
+The formula supervisor checks every five seconds for the installed bundle and both cask
+plists with neither label loaded. Any active brew entrypoint/Homebrew child defers activation;
+the automatic command checks again before launch mutations. The supervised worker has a
+180-second runtime limit and its activation subprocess a 110-second limit. It records the
+Info.plist GitCommit/version in `supervisor/brainbar-activation.json` **before** attempting
+activation, so failure or supervisor restart does not repeat the attempt for that build.
+Failure raises the `brainbar-activation` job alert (BrainBar attention/observability); an operator
+can run `brainlayer brainbar activate` to retry. A successful manual verification clears the alert.
+
+In deploy-local-prod, immediately after the cask installation/upgrade returns, insert:
+
+```sh
+brainlayer brainbar activate --verify
+brainlayer brainbar verify-running --app /Applications/BrainBar.app
+brainlayer setup --no-migrate-mcp --verify-mcp
+```
+
+Stop on a non-zero result. `verify-running` binds both launchd PIDs' mapped executable
+inode/device to the installed bundle before reporting its GitCommit/version; a process name,
+path or leftover socket alone cannot pass. `scripts/brainlayer-update-brainbar.sh` runs these
+activation/identity steps itself, including when optional summary checks are skipped.
+The tap change must merge atomically with the formula+cask bump to the release proved to
+contain this implementation. The lead coordinates that bump after release; no versions are
+changed in these implementation PRs. Native no-consent/real-MCP acceptance remains outstanding.

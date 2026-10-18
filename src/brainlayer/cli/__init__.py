@@ -82,7 +82,8 @@ app.add_typer(brainbar_app, name="brainbar")
 
 @brainbar_app.command("activate")
 def brainbar_activate_command(
-    verify: bool = typer.Option(True, "--verify", help="Require real MCP verification (always enabled)."),
+    verify: bool = typer.Option(True, "--verify/--no-verify", help="Require real MCP verification after activation."),
+    automatic: bool = typer.Option(False, "--automatic", hidden=True),
     timeout: float = typer.Option(
         90.0,
         "--timeout",
@@ -93,7 +94,31 @@ def brainbar_activate_command(
     """Activate the cask's two LaunchAgents once and emit a JSON receipt."""
     from ..brainbar_activation import activate
 
-    report = activate(Path.home() / "Library" / "LaunchAgents", timeout_seconds=timeout)
+    report = activate(
+        Path.home() / "Library" / "LaunchAgents", timeout_seconds=timeout, verify=verify, automatic=automatic
+    )
+    if report["ok"] and verify and not automatic:
+        from ..job_alerts import report as report_alert
+
+        report_alert("brainbar-activation", None)
+    typer.echo(json.dumps(report, sort_keys=True))
+    if not report["ok"]:
+        raise typer.Exit(1)
+
+
+@brainbar_app.command("verify-running")
+def brainbar_verify_running_command(
+    app_path: Path = typer.Option(Path("/Applications/BrainBar.app"), "--app"),
+) -> None:
+    """Read-only check that both running executables belong to this installed build."""
+    from ..brainbar_identity import app_identity, running_bundle_matches
+
+    try:
+        identity = app_identity(app_path)
+        ok = running_bundle_matches(app_path)
+        report = {"ok": ok, **identity, "reason": "" if ok else "running_bundle_mismatch"}
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        report = {"ok": False, "reason": str(exc)}
     typer.echo(json.dumps(report, sort_keys=True))
     if not report["ok"]:
         raise typer.Exit(1)
