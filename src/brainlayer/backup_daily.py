@@ -67,6 +67,7 @@ BACKUP_ATTEMPT_MAX_AGE_ENV = "BRAINLAYER_BACKUP_ATTEMPT_MAX_AGE_SECONDS"
 BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
+BACKUP_RESUME_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
 BACKUP_SQLITE_CHECK_TIMEOUT_ENV = "BRAINLAYER_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS"
@@ -125,6 +126,7 @@ class SQLiteBackupArtifact:
     surviving_attempt_growth_reserve_bytes: int
     attempt_reclamation: str
     writer_probe_error: str | None
+    snapshot_created_at: str | None = None
 
 
 def _today() -> str:
@@ -181,6 +183,7 @@ def default_drive_folder_parts(machine_id: str) -> list[str]:
 
 
 def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
+    payload.setdefault("snapshot_created_at", None)
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -834,6 +837,7 @@ def create_sqlite_backup_artifact(
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
         raw_snapshot = Path(tmp) / f"{date_stamp}.db"
+        snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         _require_raw_floor(output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot)
@@ -865,6 +869,7 @@ def create_sqlite_backup_artifact(
         surviving_attempt_growth_reserve_bytes=surviving_attempt_growth_reserve_bytes,
         attempt_reclamation=attempt_reclamation,
         writer_probe_error=writer_probe_error,
+        snapshot_created_at=snapshot_created_at,
     )
 
 
@@ -1582,6 +1587,28 @@ def prune_drive_backups(
     return trashed
 
 
+def _snapshot_created_time(receipt: Mapping[str, Any]) -> dt.datetime | None:
+    """Exact VACUUM time, or conservative UTC midnight for a legacy dated artifact."""
+    try:
+        if "snapshot_created_at" in receipt:
+            value = dt.datetime.fromisoformat(receipt["snapshot_created_at"])
+            return value.astimezone(dt.UTC) if value.tzinfo is not None else None
+        snapshot = receipt.get("snapshot")
+        date = _parse_snapshot_date(Path(snapshot).name) if isinstance(snapshot, str) else None
+        return dt.datetime.combine(date, dt.time(), dt.UTC) if date else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _resume_fresh_enough(receipt: Mapping[str, Any], now: dt.datetime) -> bool:
+    created = _snapshot_created_time(receipt)
+    hours = _configured_positive_number(BACKUP_RESUME_MAX_AGE_HOURS_ENV, 36)
+    weekly = os.environ.get(BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV)
+    if weekly is not None:
+        hours = min(hours, float(weekly))
+    return created is not None and dt.timedelta(0) <= now - created < dt.timedelta(hours=hours)
+
+
 def _recent_verified_backup_for_reuse(
     log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
 ) -> dict[str, Any] | None:
@@ -1593,12 +1620,12 @@ def _recent_verified_backup_for_reuse(
     for line in reversed(lines):
         try:
             receipt = json.loads(line)
-            attempted = dt.datetime.fromisoformat(receipt["attempted_at"])
+            created = _snapshot_created_time(receipt)
         except (ValueError, KeyError, TypeError):
             continue
-        if attempted.tzinfo is None:
+        if created is None:
             continue
-        age = now - attempted.astimezone(dt.UTC)
+        age = now - created
         drive_file = receipt.get("drive_file")
         if (
             receipt.get("db") == str(db_path)
@@ -1807,7 +1834,15 @@ def run_backup(
             }
         )
         stalled = _stalled_uploads(resolved_log_path, result, Path(staging_dir)) if upload else []
-        candidate = next((r for r in stalled if _safe_upload_url(r["resumable_upload"].get("url"))), None)
+        candidate = next(
+            (
+                r
+                for r in stalled
+                if _safe_upload_url(r["resumable_upload"].get("url"))
+                and _resume_fresh_enough(r, dt.datetime.fromisoformat(result["attempted_at"]))
+            ),
+            None,
+        )
 
         def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
             if resume is not None:
@@ -1822,7 +1857,9 @@ def run_backup(
                     surviving_attempt_growth_reserve_bytes=0,
                     attempt_reclamation="resumed",
                     writer_probe_error=None,
+                    snapshot_created_at=_snapshot_created_time(resume).isoformat(),
                 )
+            create_started = dt.datetime.now(dt.UTC).isoformat()
             try:
                 artifact = create_sqlite_backup_artifact(
                     resolved_db_path,
@@ -1835,6 +1872,7 @@ def run_backup(
                 if stalled and "Insufficient free space" in str(exc):
                     raise RetainedStalledBackupCapacityError([Path(r["snapshot"]).name for r in stalled]) from exc
                 raise
+            result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started
             return artifact
 
         for resume in [candidate, None] if candidate is not None else [None]:
@@ -1844,6 +1882,8 @@ def run_backup(
             result.update(
                 {
                     "snapshot": str(snapshot),
+                    "snapshot_created_at": getattr(artifact, "snapshot_created_at", None)
+                    or result.get("snapshot_created_at"),
                     "local_uncompressed_snapshot": (
                         str(artifact.uncompressed_path) if artifact.uncompressed_path else None
                     ),

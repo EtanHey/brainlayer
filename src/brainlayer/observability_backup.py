@@ -121,7 +121,7 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     elif all_errors and error_type is None:
         error_type = "backup_error"
     for record in reversed(real):
-        attempted_at = _jsonl_backup_attempt_time(record)
+        attempted_at = backup_daily._snapshot_created_time(record)
         drive_file = record.get("drive_file")
         if isinstance(drive_file, dict):
             destination = drive_file.get("name")

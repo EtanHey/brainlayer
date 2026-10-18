@@ -2667,6 +2667,7 @@ def test_lock_refusal_does_not_replace_running_backup_observability():
     success = {
         "backup_log_provenance": "real",
         "attempted_at": "2026-09-22T02:00:00+00:00",
+        "snapshot_created_at": "2026-09-22T02:00:00+00:00",
         "verified": True,
         "uploaded": True,
         "drive_file": "verified.db.gz",

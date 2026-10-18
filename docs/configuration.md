@@ -318,3 +318,10 @@ is logged in `superseded_stalled_deleted`; uncertainty emits a warning. This doe
 not change Drive retention, successful-copy retention, or restore formats.
 Insufficient snapshot capacity fails explicitly and names retained stalled files;
 these files are never removed to make space.
+
+Daily receipts record `snapshot_created_at` at VACUUM start; resumed receipts
+preserve it. Verified-backup reuse and observability age the snapshot, rather
+than its later upload attempt. Legacy dated snapshots use conservative UTC
+midnight; unknown creation times fail closed. Resume requires an age below
+`BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS` (default **36**). Weekly maintenance's
+`BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS` further limits that age.

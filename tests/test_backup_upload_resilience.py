@@ -345,3 +345,57 @@ def test_r1_reclamation_follows_new_upload_and_verification(lane, monkeypatch, a
     result = lane.run("2026-10-18")
     assert result["superseded_stalled_deleted"] == [lane.snapshot.name]
     assert not lane.snapshot.exists()
+
+
+@pytest.mark.parametrize("hours", [36, 96])
+def test_r1_old_snapshot_not_relabelled_by_recent_attempt(lane, hours):
+    import datetime as dt
+
+    receipt = stalled(lane)
+    receipt["snapshot_created_at"] = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours)).isoformat()
+    lane.log.write_text(json.dumps(receipt) + "\n")
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "fresh"}))
+    result = lane.run("2026-10-18")
+    assert len(lane.posts) == 2
+    assert result["snapshot_created_at"] != receipt["snapshot_created_at"]
+
+
+def test_r1_weekly_resume_obeys_snapshot_freshness_window(lane, monkeypatch):
+    import datetime as dt
+
+    receipt = stalled(lane)
+    receipt["snapshot_created_at"] = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=8)).isoformat()
+    lane.log.write_text(json.dumps(receipt) + "\n")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", "6")
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "fresh"}))
+    assert lane.run("2026-10-18")["verified"]
+    assert len(lane.posts) == 2
+
+
+def test_r1_reuse_and_observability_age_snapshot_not_verification(lane):
+    import datetime as dt
+    from brainlayer.observability_backup import _daily_snapshot
+
+    now = dt.datetime.now(dt.UTC)
+    old = (now - dt.timedelta(days=4)).isoformat()
+    receipt = {
+        "attempted_at": now.isoformat(),
+        "snapshot_created_at": old,
+        "db": str(lane.root / "unused.db"),
+        "snapshot": str(lane.snapshot),
+        "uploaded": True,
+        "verified": True,
+        "drive_file": {"id": "old", "name": lane.snapshot.name},
+        "backup_log_provenance": "real",
+    }
+    lane.log.write_text(json.dumps(receipt) + "\n")
+    assert backup._recent_verified_backup_for_reuse(lane.log, lane.root / "unused.db", now=now, max_age_hours=6) is None
+    assert _daily_snapshot([receipt])[0]["last_at"] == old.replace("+00:00", "Z")
+
+
+def test_r1_resumed_receipt_preserves_original_snapshot_time(lane):
+    receipt = stalled(lane)
+    assert receipt["snapshot_created_at"]
+    lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
+    result = lane.run("2026-10-18")
+    assert result["snapshot_created_at"] == receipt["snapshot_created_at"]
