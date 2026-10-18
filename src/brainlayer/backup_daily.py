@@ -200,6 +200,46 @@ def _redact_upload_exception(exc: BaseException) -> None:
         exc = exc.__cause__ or exc.__context__
 
 
+def _receipt_append_prefix(fd: int) -> str:
+    """Repair only an incomplete final append while holding the log's exclusive lock."""
+    size = os.fstat(fd).st_size
+    if not size or os.pread(fd, 1, size - 1) == b"\n":
+        return ""
+    start = size
+    tail = b""
+    while start:
+        previous = max(0, start - 8192)
+        tail = os.pread(fd, start - previous, previous) + tail
+        start = previous
+        if b"\n" in tail:
+            break
+    boundary = tail.rfind(b"\n") + 1
+    try:
+        json.loads(tail[boundary:])
+    except (ValueError, UnicodeDecodeError):
+        os.ftruncate(fd, start + boundary)
+        return ""
+    return "\n"  # Preserve a complete legacy record lacking a line terminator.
+
+
+def _read_backup_receipts(path: Path) -> list[dict[str, Any]]:
+    raw_lines = path.read_bytes().splitlines(keepends=True)
+    receipts = []
+    for index, line in enumerate(raw_lines):
+        if not line.strip():
+            continue
+        try:
+            receipt = json.loads(line)
+            if not isinstance(receipt, dict):
+                raise ValueError("backup receipt is not an object")
+        except (ValueError, UnicodeDecodeError):
+            if index == len(raw_lines) - 1 and not line.endswith(b"\n"):
+                break  # A killed writer cannot invalidate the preceding durable session.
+            raise
+        receipts.append(receipt)
+    return receipts
+
+
 def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
     payload = {
         key: _redact_upload_secrets(value) if "error" in key and isinstance(value, str) else value
@@ -208,12 +248,14 @@ def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
     payload.setdefault("snapshot_created_at", None)
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
+    with path.open("a+", encoding="utf-8") as handle:
         if payload.get("resumable_upload"):
             os.fchmod(handle.fileno(), 0o600)  # The session URL is a private upload capability.
         fcntl.flock(handle, fcntl.LOCK_EX)
-        handle.write(json.dumps(payload, sort_keys=True) + "\n")
-        handle.flush()  # Flush before close releases the lock shared with log_cap.
+        prefix = _receipt_append_prefix(handle.fileno())
+        handle.write(prefix + json.dumps(payload, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())  # Persist before close releases the lock shared with log_cap.
 
 
 def _backup_log_path(
@@ -1665,13 +1707,12 @@ def _recent_verified_backup_for_reuse(
     log_path: Path, db_path: Path, *, now: dt.datetime, max_age_hours: float
 ) -> dict[str, Any] | None:
     try:
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
+        receipts = _read_backup_receipts(log_path)
+    except (OSError, ValueError):
         return None
     now = now.astimezone(dt.UTC)
-    for line in reversed(lines):
+    for receipt in reversed(receipts):
         try:
-            receipt = json.loads(line)
             created = _snapshot_created_time(receipt)
         except (ValueError, KeyError, TypeError):
             continue
@@ -1750,7 +1791,7 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
     if not log_path.exists():
         return []
     try:
-        receipts = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+        receipts = _read_backup_receipts(log_path)
         latest = {r["snapshot"]: r for r in receipts if isinstance(r, dict) and isinstance(r.get("snapshot"), str)}
         protected = {
             str(Path(r["snapshot"]).resolve())

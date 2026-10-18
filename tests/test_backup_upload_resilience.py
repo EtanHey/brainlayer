@@ -505,3 +505,54 @@ def test_r1_failure_traceback_and_retry_log_redact_session_url(lane, monkeypatch
     with pytest.raises(RuntimeError):
         backup._retry_transient_drive_call(network_fail, what="Drive probe")
     assert "upload_id=test" not in capsys.readouterr().out
+
+
+def test_r1_receipt_append_writes_whole_line_flushes_and_fsyncs(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    events = []
+    real_open = Path.open
+
+    class TrackedHandle:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def __getattr__(self, key):
+            return getattr(self.handle, key)
+
+        def write(self, line):
+            events.append(("write", line))
+            return self.handle.write(line)
+
+        def flush(self):
+            events.append(("flush", None))
+            return self.handle.flush()
+
+    monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs: TrackedHandle(real_open(path, *args, **kwargs)))
+    real_fsync = backup.os.fsync
+
+    def fsync(fd):
+        events.append(("fsync", None))
+        real_fsync(fd)
+
+    monkeypatch.setattr(backup.os, "fsync", fsync)
+    backup._append_json_log(tmp_path / "receipt.jsonl", {"error": "example"})
+    assert [event[0] for event in events] == ["write", "flush", "fsync"]
+    assert events[0][1].endswith("\n") and json.loads(events[0][1])["error"] == "example"
+
+
+def test_r1_truncated_final_receipt_preserves_last_durable_session(lane):
+    stalled(lane)
+    lane.log.write_text(lane.log.read_text() + '{"resumable_upload":')
+    lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
+    assert lane.run("2026-10-18")["verified"]
+    assert len(lane.posts) == 1
+    # Appending after the crash tail must preserve independently parseable JSONL.
+    receipts = [json.loads(line) for line in lane.log.read_text().splitlines()]
+    assert receipts[-1]["verified"]
