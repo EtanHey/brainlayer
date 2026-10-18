@@ -558,7 +558,9 @@ def test_r2_resource_fault_skips_file_but_later_files_progress(calendar_fixture,
     assert len(saved) == 1 and next(iter(saved)).endswith("b.jsonl")
     assert next(iter(saved.values()))["done"]
     assert "resource_files=1" in result.output
-    assert "INDEX_RESOURCE_SKIPPED" in result.output and "a.jsonl" in result.output
+    assert "INDEX_RESOURCE_SKIPPED" in result.output
+    # Rich may soft-wrap a long temporary path in the middle of its filename.
+    assert "a.jsonl" in "".join(result.output.split()), result.output
     state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
     assert not state["failures"] and not state["quarantined"]
     if stage == "parse":
