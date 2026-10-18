@@ -13,6 +13,7 @@ from pathlib import Path
 from .brainbar_identity import JOBS, app_identity, loaded, running_bundle_matches
 from .deploy_drift import _atomic_write_json
 from .job_alerts import report
+from .pipeline.secret_scrub import scrub_secrets
 
 
 def process_table():
@@ -29,14 +30,16 @@ def brew_processes():
     matches = []
     for row in rows:
         fields = row.split(None, 3)
-        if len(fields) != 4:
+        if len(fields) != 4 or not fields[0].isascii() or not fields[0].isdecimal():
             raise ValueError("unreadable process table")
         tokens = fields[3].split()
         if Path(fields[2]).name == "brew" or any(
             Path(token).name in {"brew", "brew.rb"} or "/Homebrew/" in token or "/homebrew/Library/Homebrew/" in token
             for token in tokens
         ):
-            matches.append(row.strip())
+            # argv is detection-only: Homebrew curl headers can carry tokens.
+            executable = scrub_secrets(Path(fields[2]).name).text[:128]
+            matches.append(f"{fields[0]} {executable}")
     return matches
 
 
@@ -75,9 +78,12 @@ class AutoActivator:
                 since, prior = now, {}
             alerted = prior.get("alerted", False)
             if now - since > 600 and not alerted:
+                names = processes[:5]
+                if len(processes) > 5:
+                    names.append(f"+{len(processes) - 5} more")
                 report(
                     "brainbar-activation-brew",
-                    "BrainBar activation deferred by Homebrew for >10 minutes: " + "; ".join(processes),
+                    "BrainBar activation deferred by Homebrew for >10 minutes: " + "; ".join(names),
                 )
                 alerted = True
             _atomic_write_json(path, {"since": since, "alerted": alerted})

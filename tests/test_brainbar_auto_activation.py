@@ -241,7 +241,7 @@ def test_brew_deferral_alert_is_durable_names_all_matches_and_recovers(monitor, 
     worker, _, calls, alerts = monitor
     now = [1000.0]
     monkeypatch.setattr(auto.time, "time", lambda: now[0])
-    processes = ["42 1 brew brew upgrade", "43 1 ruby /Homebrew/brew.rb reinstall"]
+    processes = ["42 brew", "43 ruby"]
     monkeypatch.setattr(auto, "brew_processes", lambda: processes)
     # Brew can already have removed the cask plists; monitoring must still work.
     for path in worker.agents.glob("*.plist"):
@@ -285,4 +285,55 @@ def test_brew_deferral_requires_continuous_absence(monitor, monkeypatch, interru
 def test_process_scan_reports_every_matching_process(monkeypatch):
     rows = ["42 1 brew brew upgrade", "43 1 ruby /Homebrew/brew.rb reinstall"]
     monkeypatch.setattr(auto, "process_table", lambda: "\n".join(rows + ["44 1 python python worker.py"]))
-    assert auto.brew_processes() == rows
+    assert auto.brew_processes() == ["42 brew", "43 ruby"]
+
+
+@pytest.mark.parametrize("token", ["ghp_" + "A" * 36, "opaque-synthetic-credential-123456789"])
+def test_brew_deferral_discards_argv_before_every_alert_sink(tmp_path, monkeypatch, caplog, token):
+    from brainlayer import job_alerts
+
+    rows = [
+        f"{pid} 1 /opt/homebrew/Library/Homebrew/shims/shared/curl "
+        f'/opt/homebrew/Library/Homebrew/shims/shared/curl --header "Authorization: token {token}" '
+        f"https://fixture.invalid/?access_token={token}"
+        for pid in range(42, 49)
+    ]
+    monkeypatch.setattr(auto, "process_table", lambda: "\n".join(rows))
+    monkeypatch.setattr(auto, "loaded", lambda *a: SimpleNamespace(returncode=113))
+    now = [1000.0]
+    monkeypatch.setattr(auto.time, "time", lambda: now[0])
+    reasons, notifications = [], []
+    alert_file = tmp_path / "job-alerts.json"
+
+    def report(key, reason):
+        reasons.append(reason)
+        return job_alerts.report(key, reason, path=alert_file, notify=notifications.append)
+
+    monkeypatch.setattr(auto, "report", report)
+    worker = auto.AutoActivator(tmp_path / "agents", tmp_path / "state.json")
+    worker.tick()
+    now[0] += 601
+    worker.tick()
+    assert reasons and notifications and caplog.records and alert_file.is_file()
+    for value in [
+        *reasons,
+        *notifications,
+        alert_file.read_text(),
+        caplog.text,
+        repr([r.args for r in caplog.records]),
+    ]:
+        assert token not in value
+        assert "Authorization" not in value and "fixture.invalid" not in value
+        assert "/Homebrew/" not in value
+    assert auto.brew_processes() == [f"{pid} curl" for pid in range(42, 49)]
+    assert reasons == [
+        "BrainBar activation deferred by Homebrew for >10 minutes: 42 curl; 43 curl; 44 curl; 45 curl; 46 curl; +2 more"
+    ]
+
+
+def test_process_scan_scrubs_and_bounds_executable_basename(monkeypatch):
+    token = "ghp_" + "B" * 36
+    monkeypatch.setattr(auto, "process_table", lambda: f"42 1 /private/{token} /Homebrew/child --secret private")
+    assert auto.brew_processes() == ["42 [REDACTED:github]"]
+    monkeypatch.setattr(auto, "process_table", lambda: f"42 1 /private/{'x' * 300} /Homebrew/child")
+    assert auto.brew_processes() == ["42 " + "x" * 128]
