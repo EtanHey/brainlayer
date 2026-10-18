@@ -102,6 +102,16 @@
         "target": "import ssl"
       }
     },
+    "0aa9c0a1ef873504b2828ebecd0b9949f33eeca1399c78bdfb5804eae68de048": {
+      "non_cloud_purpose": "Resolve a stable local macOS LocalHostName via pinned /usr/sbin/scutil, with portable CI fallback; no network or model endpoint.",
+      "site": {
+        "call_sha256": "ae58c7d7a396a54a13a41bf5bce5fea8ec6b37cf74e633afb74876891669cefe",
+        "kind": "child_process",
+        "owner": "<module>.resolve_machine_id",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
+      }
+    },
     "0ab7f79347ca25c3b4dba2b5e569eb33f51ac2b6cd02f060dc1761724f78eb1b": {
       "non_cloud_purpose": "Existing local hostname metadata or AF_UNIX BrainBar/MCP helper transport; not an Internet model endpoint. Site: src/brainlayer/health_check.py <module>.send_brainbar_search_canary socket.socket.",
       "site": {
@@ -850,16 +860,6 @@
         "owner": "<module>.Bridge.__enter__",
         "path": "scripts/harness_probe.py",
         "target": "subprocess.Popen"
-      }
-    },
-    "2d59cd22d1a8ba719145c15300e8f4c51b9e58cdaf48fce5f78c59b232418e7f": {
-      "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
-      "site": {
-        "call_sha256": "360492f7d7b55e2445320a0edad1aa4ad5de15b8ee37c0733ab2d1bf89bdb573",
-        "kind": "child_process",
-        "owner": "<module>.resolve_machine_id",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "subprocess.run"
       }
     },
     "2d81f86c7f960dd55f7655138bd445cc16fce8cf165a4cacde02e26c8b9514b8": {

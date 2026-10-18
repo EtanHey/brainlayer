@@ -11,6 +11,9 @@ struct BrainBarWindowRootView: View {
     @ObservedObject private var panelState: BrainBarDashboardPanelState
 
     @StateObject private var windowObserver: BrainBarWindowObserver
+#if DEBUG
+    fileprivate var fixtureDashboard: AnyView?
+#endif
 #if BRAINBAR_UI
     private var settingsViewFactory: (String, Int, BrainBarSettingsNavigation) -> AnyView
 #endif
@@ -109,6 +112,16 @@ struct BrainBarWindowRootView: View {
 
     @ViewBuilder
     private var dashboardContent: some View {
+#if DEBUG
+        if let fixtureDashboard { fixtureDashboard }
+        else { runtimeDashboardContent }
+#else
+        runtimeDashboardContent
+#endif
+    }
+
+    @ViewBuilder
+    private var runtimeDashboardContent: some View {
         if let collector = runtime.collector {
 #if BRAINBAR_UI
             if let jobsModel = runtime.jobsModel {
@@ -187,6 +200,9 @@ private struct BrainBarDashboardContent: View {
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
+#if DEBUG
+    var observabilityCadence: ObservabilityCadence? = nil
+#endif
     var referenceNow: Date? = nil
     var calendar: Calendar = .current
     var locale: Locale = .current
@@ -197,20 +213,22 @@ private struct BrainBarDashboardContent: View {
         if collector.snapshotFreshnessState.isLoading {
             BrainBarLoadingView(title: "BrainBar", subtitle: "Connecting to daemon and loading dashboard data...")
         } else {
-            BrainBarDashboardView(
-                collector: collector,
-                workspace: workspace,
-                receiptStore: receiptStore,
-                hotkeyStatus: hotkeyStatus,
-                dbPath: dbPath,
-                observabilityResult: observabilityResult,
-                referenceNow: referenceNow,
-                calendar: calendar,
-                locale: locale,
-                jobAttentionReasons: jobAttentionReasons,
-                panelState: panelState ?? standalonePanelState
-            )
+            dashboard
         }
+    }
+
+    private var dashboard: some View {
+        var view = BrainBarDashboardView(
+            collector: collector, workspace: workspace, receiptStore: receiptStore,
+            hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
+            referenceNow: referenceNow, calendar: calendar, locale: locale,
+            jobAttentionReasons: jobAttentionReasons,
+            panelState: panelState ?? standalonePanelState
+        )
+#if DEBUG
+        view.observabilityCadenceOverride = observabilityCadence
+#endif
+        return view
     }
 }
 
@@ -900,6 +918,9 @@ private struct BrainBarDashboardView: View {
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
+#if DEBUG
+    var observabilityCadenceOverride: ObservabilityCadence? = nil
+#endif
     var referenceNow: Date? = nil
     var calendar: Calendar = .current
     var locale: Locale = .current
@@ -918,7 +939,13 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
+#if DEBUG
+    private var observabilityCadence: ObservabilityCadence {
+        observabilityCadenceOverride ?? ObservabilityReader.installedHealthCheckCadence
+    }
+#else
     private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
+#endif
     @State private var vectorDetailHeight: CGFloat = 0
     @State private var ingestHelpPresented = false
     @State private var lastSearchReceipt: BrainBarOperationReceipt?
@@ -1023,7 +1050,8 @@ private struct BrainBarDashboardView: View {
             now: currentNow,
             jobAttentionReasons: jobAttentionReasons,
             calendar: calendar,
-            locale: locale
+            locale: locale,
+            observabilityCadence: observabilityCadence
         )
     }
 
@@ -3254,7 +3282,8 @@ enum BrainBarDashboardPreview {
         locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil,
         disablesAnimations: Bool = true,
-        jobAttentionReasons: [String] = []
+        jobAttentionReasons: [String] = [],
+        observabilityCadence: ObservabilityCadence? = nil
     ) -> AnyView {
         let dashboard =
             ZStack {
@@ -3265,6 +3294,7 @@ enum BrainBarDashboardPreview {
                     receiptStore: receiptStore,
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
+                    observabilityCadence: observabilityCadence,
                     referenceNow: now,
                     calendar: calendar,
                     locale: locale,
@@ -3291,25 +3321,29 @@ enum BrainBarUnifiedWindowPreview {
         settingsViewModel: BrainBarSettingsViewModel,
         panelState: BrainBarDashboardPanelState,
         section: BrainBarSettingsSection = .jobs,
-        driveAuth: ((BrainBarDriveAuthModel) -> Void)? = nil
+        driveAuth: ((BrainBarDriveAuthModel) -> Void)? = nil,
+        fixtureDashboard: AnyView? = nil,
+        databasePath: String = "/tmp/brainbar-render-fixture.db"
     ) -> AnyView {
         let runtime = BrainBarRuntime()
         runtime.install(
             collector: collector,
             database: nil,
-            databasePath: "/tmp/brainbar-render-fixture.db"
+            databasePath: databasePath
         )
         driveAuth?(runtime.driveAuth)
         panelState.select(BrainBarSidebarItem(section: section))
         let navigation = panelState.settingsNavigation
-        return AnyView(
-            BrainBarWindowRootView(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
+        var root = BrainBarWindowRootView(workspace: BrainBarRecordingWorkspace(), runtime: runtime,
                 managesWindowFrame: false,
                 panelState: panelState,
                 settingsViewFactory: { _, _, _ in
                     AnyView(BrainBarSettingsView(viewModel: settingsViewModel, navigation: navigation, showsSidebar: false))
                 }
             )
+        root.fixtureDashboard = fixtureDashboard
+        return AnyView(
+            root
             .environment(\.colorScheme, .dark)
             .transaction { $0.disablesAnimations = true }
         )

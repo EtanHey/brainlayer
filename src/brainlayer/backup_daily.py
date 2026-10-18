@@ -51,6 +51,9 @@ CANONICAL_FOLDER_PARTS = ["Brain Drive", "06_ARCHIVE", "backups", "brainlayer-db
 DEFAULT_FOLDER_PARTS = CANONICAL_FOLDER_PARTS
 BACKUP_MACHINE_ID_ENV = "BRAINLAYER_MACHINE_ID"
 DRIVE_MACHINE_PROPERTY = "brainlayer_machine"
+# Verified prior IDs only (2026-10-17 lane-ops receipts). Never infer aliases from
+# a router hostname or adopt another machine's legacy folder by prefix matching.
+PRIOR_MACHINE_IDS = {"Locals-MacBook-Pro": ("Locals-MBP.lan",)}
 DEFAULT_STAGING_DIR = Path.home() / ".local" / "share" / "brainlayer" / "backups"
 MIN_RAW_FREE_BYTES = 2 * 1024 * 1024 * 1024
 COPY_CHUNK_BYTES = 1024 * 1024
@@ -146,7 +149,7 @@ def resolve_machine_id(env: Mapping[str, str] | None = None) -> str:
 
     try:
         completed = subprocess.run(
-            ["scutil", "--get", "LocalHostName"],
+            ["/usr/sbin/scutil" if sys.platform == "darwin" else "scutil", "--get", "LocalHostName"],
             check=False,
             capture_output=True,
             text=True,
@@ -156,6 +159,11 @@ def resolve_machine_id(env: Mapping[str, str] | None = None) -> str:
         completed = None
     if completed is not None and completed.returncode == 0 and completed.stdout.strip():
         return _validate_machine_id(completed.stdout)
+
+    if sys.platform == "darwin":
+        raise InvalidMachineIdError(
+            f"Cannot resolve stable LocalHostName via /usr/sbin/scutil; set {BACKUP_MACHINE_ID_ENV} explicitly"
+        )
 
     # Non-macOS development and CI hosts do not ship scutil. gethostname is a
     # portability fallback, not the production identity source.
@@ -1037,15 +1045,52 @@ def ensure_drive_folder_chain(service: Any, folder_parts: list[str]) -> str:
     return parent_id
 
 
-def assert_drive_folder_owned_by_machine(service: Any, *, folder_id: str, machine_id: str) -> None:
-    """Refuse a target folder containing snapshots owned by another host."""
-    other_machine_ids: set[str] = set()
+def _machine_ids(machine_id: str) -> set[str]:
+    resolved = _validate_machine_id(machine_id)
+    return {resolved, *PRIOR_MACHINE_IDS.get(resolved, ())}
+
+
+def _find_drive_folder_ids(service: Any, folder_parts: list[str], *, parent_id: str | None = None) -> list[str]:
+    """Resolve existing chains only, including duplicate names; never create one."""
+    parents: list[str | None] = [parent_id]
+    for name in folder_parts:
+        found: list[str] = []
+        for parent in parents:
+            query = (
+                f"name = '{_escape_drive_query_value(name)}' and mimeType = '{DRIVE_FOLDER_MIME}' and trashed = false"
+            )
+            if parent is not None:
+                query += f" and '{_escape_drive_query_value(parent)}' in parents"
+            page_token = None
+            while True:
+                result = (
+                    service.files()
+                    .list(
+                        q=query,
+                        spaces="drive",
+                        fields="nextPageToken,files(id)",
+                        pageSize=1000,
+                        pageToken=page_token,
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                )
+                found.extend(item["id"] for item in result.get("files", []))
+                page_token = result.get("nextPageToken")
+                if not page_token:
+                    break
+        parents = list(dict.fromkeys(found))
+    return [parent for parent in parents if parent is not None]
+
+
+def _list_drive_backup_files(service: Any, folder_id: str) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
     page_token = None
     while True:
         result = (
             service.files()
             .list(
-                q=f"'{folder_id}' in parents and trashed = false",
+                q=f"'{_escape_drive_query_value(folder_id)}' in parents and trashed = false",
                 spaces="drive",
                 fields="nextPageToken,files(id,name,appProperties)",
                 pageSize=1000,
@@ -1054,19 +1099,63 @@ def assert_drive_folder_owned_by_machine(service: Any, *, folder_id: str, machin
             )
             .execute()
         )
-        for item in result.get("files", []):
-            if _parse_snapshot_date(item.get("name", "")) is None:
-                continue
-            properties = item.get("appProperties")
-            owner = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
-            # Snapshots predating FU #99 belong to the canonical M4. A new host
-            # must never silently adopt the legacy pool.
-            resolved_owner = owner if isinstance(owner, str) and owner else CANONICAL_MACHINE_ID
-            if resolved_owner != machine_id:
-                other_machine_ids.add(resolved_owner)
+        files.extend(result.get("files", []))
         page_token = result.get("nextPageToken")
         if not page_token:
-            break
+            return files
+
+
+def list_machine_drive_backups(service: Any, *, machine_id: str) -> list[dict[str, Any]]:
+    """Read-only recovery/retention inventory across this machine's known IDs."""
+    inventory: dict[str, dict[str, Any]] = {}
+    for owner in sorted(_machine_ids(machine_id)):
+        for folder_id in _find_drive_folder_ids(service, default_drive_folder_parts(owner)):
+            files = _list_drive_backup_files(service, folder_id)
+            _assert_backup_owners(files, folder_id=folder_id, machine_id=machine_id)
+            inventory.update((item["id"], item) for item in files if _parse_snapshot_date(item.get("name", "")))
+    return list(inventory.values())
+
+
+def _list_machine_retention_backups(service: Any, *, folder_id: str, machine_id: str) -> list[dict[str, Any]]:
+    """Bind mutation to the uploaded folder and known prior-ID siblings only."""
+    folder_ids = [folder_id]
+    prior_ids = _machine_ids(machine_id) - {_validate_machine_id(machine_id)}
+    if prior_ids:
+        metadata = _execute_drive_read(
+            service.files().get(fileId=folder_id, fields="parents", supportsAllDrives=True),
+            what="Drive retention parent lookup",
+        )
+        parents = metadata.get("parents", [])
+        if not isinstance(parents, list) or len(parents) != 1 or not isinstance(parents[0], str) or not parents[0]:
+            raise ValueError("Cannot establish an unambiguous Drive retention parent")
+        for prior_id in sorted(prior_ids):
+            folder_ids.extend(
+                _find_drive_folder_ids(service, [default_drive_folder_parts(prior_id)[-1]], parent_id=parents[0])
+            )
+    inventory: dict[str, dict[str, Any]] = {}
+    for candidate in dict.fromkeys(folder_ids):
+        files = _list_drive_backup_files(service, candidate)
+        _assert_backup_owners(files, folder_id=candidate, machine_id=machine_id)
+        inventory.update((item["id"], item) for item in files if _parse_snapshot_date(item.get("name", "")))
+    return list(inventory.values())
+
+
+def assert_drive_folder_owned_by_machine(service: Any, *, folder_id: str, machine_id: str) -> None:
+    """Refuse a target folder containing snapshots owned by another host."""
+    _assert_backup_owners(_list_drive_backup_files(service, folder_id), folder_id=folder_id, machine_id=machine_id)
+
+
+def _assert_backup_owners(files: list[dict[str, Any]], *, folder_id: str, machine_id: str) -> None:
+    other_machine_ids: set[str] = set()
+    for item in files:
+        if _parse_snapshot_date(item.get("name", "")) is None:
+            continue
+        properties = item.get("appProperties")
+        owner = properties.get(DRIVE_MACHINE_PROPERTY) if isinstance(properties, dict) else None
+        # Untagged legacy snapshots belong only to the canonical M4.
+        resolved_owner = owner if isinstance(owner, str) and owner else CANONICAL_MACHINE_ID
+        if resolved_owner not in _machine_ids(machine_id):
+            other_machine_ids.add(resolved_owner)
     if other_machine_ids:
         raise DriveFolderOwnedByOtherMachineError(
             folder_id=folder_id,
@@ -1474,30 +1563,20 @@ def verify_drive_upload(
 def prune_drive_backups(
     service: Any,
     *,
-    folder_parts: list[str] = DEFAULT_FOLDER_PARTS,
+    folder_parts: list[str] | None = None,
+    machine_id: str | None = None,
+    selected_folder_id: str | None = None,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
 ) -> list[str]:
     """Trash Drive snapshots older than the explicitly enabled retention window."""
-    folder_id = ensure_drive_folder_chain(service, folder_parts)
-    files: list[dict[str, str]] = []
-    page_token = None
-    while True:
-        result = (
-            service.files()
-            .list(
-                q=f"'{folder_id}' in parents and trashed = false",
-                spaces="drive",
-                fields="nextPageToken,files(id,name)",
-                pageSize=1000,
-                pageToken=page_token,
-                supportsAllDrives=True,
-            )
-            .execute()
+    if machine_id is not None and folder_parts is None:
+        folder_id = selected_folder_id or ensure_drive_folder_chain(service, default_drive_folder_parts(machine_id))
+        files = _list_machine_retention_backups(service, folder_id=folder_id, machine_id=machine_id)
+    else:
+        folder_id = ensure_drive_folder_chain(
+            service, folder_parts if folder_parts is not None else DEFAULT_FOLDER_PARTS
         )
-        files.extend(result.get("files", []))
-        page_token = result.get("nextPageToken")
-        if not page_token:
-            break
+        files = _list_drive_backup_files(service, folder_id)
     dated = []
     for item in files:
         parsed = _parse_snapshot_date(
@@ -1726,6 +1805,8 @@ def run_backup(
                     file_id=file_id,
                 )
             )
+            # Keep the confirmed upload addressable even if cleanup/retention fails.
+            result.update({"uploaded": True, "drive_file": uploaded})
             if result["verified"]:
                 result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
                     snapshot.parent, snapshot
@@ -1735,30 +1816,23 @@ def run_backup(
                     result["local_removed"] = True
                 verified_drive_names = _verified_snapshot_names_from_log(resolved_log_path)
                 verified_drive_names.add(snapshot.name)
-                local_gzip_deleted = prune_local_gzip_snapshots(
+                result["local_gzip_retention_deleted"] = prune_local_gzip_snapshots(
                     snapshot.parent,
                     verified_drive_names=verified_drive_names,
                 )
-                deleted = (
-                    prune_drive_backups(
-                        service,
-                        folder_parts=resolved_folder_parts,
-                        retention_policy=retention_policy,
-                    )
-                    if retention_enabled
-                    else []
-                )
-            else:
-                local_gzip_deleted = []
-                deleted = []
-            result.update(
-                {
-                    "uploaded": True,
-                    "drive_file": uploaded,
-                    "retention_deleted": deleted,
-                    "local_gzip_retention_deleted": local_gzip_deleted,
-                }
-            )
+                if retention_enabled:
+                    try:
+                        result["retention_deleted"] = prune_drive_backups(
+                            service,
+                            folder_parts=resolved_folder_parts if folder_parts is not None else None,
+                            machine_id=resolved_machine_id,
+                            selected_folder_id=folder_id,
+                            retention_policy=retention_policy,
+                        )
+                    except Exception as exc:
+                        result.update({"retention_error_type": type(exc).__name__, "retention_error": str(exc)})
+                        raise
+
     except BackupStoppedError as exc:
         result.update(
             {

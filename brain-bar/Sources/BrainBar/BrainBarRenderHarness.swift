@@ -200,6 +200,9 @@ enum BrainBarRenderHarness {
 
     static func runIfRequested() {
         runJobHealthQAIfRequested()
+        if let path = ProcessInfo.processInfo.environment["BRAINBAR_DRIVE_CONSENT_CAPTURE"] {
+            captureDriveConsentWindows(directory: URL(fileURLWithPath: path))
+        }
         guard let path = ProcessInfo.processInfo.environment[environmentVariable] else { return }
         do {
             guard !path.isEmpty, NSString(string: path).isAbsolutePath else {
@@ -261,6 +264,61 @@ enum BrainBarRenderHarness {
                 to: .standardError,
                 context: "render error"
             )
+            Darwin.exit(EXIT_FAILURE)
+        }
+    }
+
+    /// Visible windows with private/static readers, no app delegate, DB or credential runner.
+    /// View-local timers read only injected memory; the harness exits itself after 20 s.
+    private static func captureDriveConsentWindows(directory: URL) -> Never {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            NSApplication.shared.setActivationPolicy(.regular)
+            let now = Date()
+            let expiry = now.addingTimeInterval(36 * 3_600)
+            var windows: [NSWindow] = []
+            for page in ["dashboard", "backups"] {
+                let state = BrainBarDashboardPanelState()
+                let fixture = BrainBarDriveConsentCaptureFixture(directory: directory, now: now)
+                let settings = fixture.settings
+                let view = BrainBarUnifiedWindowPreview.make(
+                    collector: fixture.collector, settingsViewModel: settings,
+                    panelState: state, section: .backups,
+                    driveAuth: { $0.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry)) },
+                    fixtureDashboard: fixture.dashboard(panelState: state),
+                    databasePath: directory.appendingPathComponent("unused.db").path
+                )
+                if page == "dashboard" { state.select(.dashboard) }
+                let window = BrainBarMainWindow(
+                    contentRect: NSRect(x: 80, y: 80, width: 960, height: 900),
+                    styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false
+                )
+                window.title = "BrainBar — Drive consent QA (\(page))"
+                if page == "backups" {
+                    let drive = BrainBarDriveAuthModel(runner: nil)
+                    drive.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: expiry))
+                    let navigation = BrainBarSettingsNavigation(selected: .backups)
+                    window.contentView = NSHostingView(rootView:
+                        BrainBarSettingsView(viewModel: settings, navigation: navigation, showsSidebar: true)
+                            .environment(\.brainBarDriveAuth, drive)
+                            .environment(\.colorScheme, .dark)
+                            .allowsHitTesting(false)
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { navigation.select(.backups) }
+                } else {
+                    window.contentView = NSHostingView(rootView: view.allowsHitTesting(false))
+                }
+                window.makeKeyAndOrderFront(nil)
+                windows.append(window)
+                try String(window.windowNumber).write(to: directory.appendingPathComponent("\(page).window-id"),
+                                                       atomically: true, encoding: .utf8)
+            }
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { Darwin.exit(EXIT_SUCCESS) }
+            withExtendedLifetime(windows) { NSApplication.shared.run() }
+            Darwin.exit(EXIT_SUCCESS)
+        } catch {
+            fputs("Drive consent capture failed: \(error.localizedDescription)\n", stderr)
             Darwin.exit(EXIT_FAILURE)
         }
     }
