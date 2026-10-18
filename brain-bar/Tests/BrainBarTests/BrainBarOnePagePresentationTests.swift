@@ -340,6 +340,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             try store.save(.defaultConfig)
             let now = BrainBarOnePageTestFixture.now
             let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
+                launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
+                embeddingResidencyProbe: StaticBrainBarEmbeddingResidencyProbe(state: .unmeasurable),
                 initialLaunchdObservations: observations, refreshStatusOnLoad: false, now: { now },
                 initialWatcherHealth: .readable(.init(updatedAt: now, pollCount: 50)))
             let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
@@ -383,6 +385,18 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testCalendarCheckingIsNeutralUntilFirstSample() throws {
+        let presentation = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
+            now: BrainBarOnePageTestFixture.now, jobsChecking: true)
+        XCTAssertEqual(presentation.status.headline, "Checking…")
+        XCTAssertEqual(presentation.status.tone, .neutral)
+        XCTAssertTrue(presentation.attentionItems.isEmpty)
+        let failed = try makePresentation(result: BrainBarOnePageTestFixture.healthyResult(),
+            now: BrainBarOnePageTestFixture.now, jobAttentionReasons: ["Index failed"], jobsChecking: true)
+        XCTAssertEqual(failed.status.tone, .amber)
+    }
+
+    @MainActor
     func testCalendarRecoveryClearsDashboardAttention() throws {
         let status = BrainLayerLaunchdGroupStatus(health: .healthy, attentionReason: nil,
             lastRunText: "today", nextRunText: "tomorrow")
@@ -400,7 +414,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         snapshotFreshness: SnapshotFreshnessState? = nil,
         collector providedCollector: StatsCollector? = nil,
         jobAttentionReasons: [String] = [],
-        heroResult: ObservabilityReadResult? = nil
+        heroResult: ObservabilityReadResult? = nil,
+        jobsChecking: Bool = false
     ) throws -> BrainBarOnePagePresentation {
         let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
         let flow = DashboardFlowSummary.derive(
@@ -426,6 +441,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             agentActivity: agentActivity,
             now: now,
             jobAttentionReasons: jobAttentionReasons,
+            jobsChecking: jobsChecking,
             calendar: BrainBarOnePageTestFixture.calendar,
             locale: Locale(identifier: "en_US"),
             observabilityCadence: .known(300)

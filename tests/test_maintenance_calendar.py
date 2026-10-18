@@ -111,3 +111,49 @@ def test_calendar_records_actual_window_blocker_and_weekly_substitution(request,
         "index-overran-window" if late_step == "index" else "quiet-window-missed" if late_step else None
     )
     assert weekly["status"] == ("deferred" if late_step else "ok")
+
+
+@pytest.mark.parametrize(
+    "message,code,expected",
+    [
+        ("INDEX_DEFERRED resident_writer_busy committed_chunks=0", 75, "resident-writer-busy"),
+        ("INDEX_DEFERRED maintenance_window=04:00-06:00", 75, "maintenance-window"),
+        ("INDEX_DEFERRED invented", 75, None),
+        ("INDEX_DEFERRED resident_writer_busy", 1, None),
+        ("", 75, None),
+        ("INDEX_DEFERRED ", 75, None),
+    ],
+)
+def test_index_deferral_reason_is_current_run_and_allowlisted(request, monkeypatch, message, code, expected):
+    from brainlayer import maintenance_calendar
+    from brainlayer.maintenance_calendar import Step
+
+    path, _, _, _ = request.getfixturevalue("control")
+    monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(path / "alerts.json"))
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(path / "fixture.env"))
+    (path / "fixture.env").write_text("")
+    logs = path / "logs"
+    logs.mkdir()
+    (logs / "index.out.log").write_text("INDEX_DEFERRED resident_writer_busy\n")
+
+    async def execute(step, env, **kwargs):
+        with (logs / "index.out.log").open("a") as handle:
+            handle.write(message + "\n")
+        return code
+
+    monkeypatch.setattr(maintenance_calendar, "_execute_step", execute)
+    result = asyncio.run(
+        run_calendar(
+            [Step("index", (sys.executable, "-c", "pass"), 60)],
+            path / "calendar",
+            logs,
+            now_fn=lambda: dt.datetime(2026, 10, 12, 3, 15),
+        )
+    )
+    assert result == int(code == 1)
+    row = next(
+        json.loads(line)
+        for line in (path / "calendar" / "runs.jsonl").read_text().splitlines()
+        if json.loads(line)["event"] == "finished"
+    )
+    assert row.get("reason") == expected

@@ -142,6 +142,74 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         XCTAssertFalse(recoveredStatus.note?.contains("Nightly skipped") == true)
     }
 
+    func testIndexDeferralJournalReasonsAreNeutralButFailuresRemainAttention() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let logs = directory.appendingPathComponent("logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        for (reason, code, expected) in [("resident-writer-busy", 75, "resident writer busy"),
+                                         ("maintenance-window", 75, "maintenance window"),
+                                         ("resident-writer-busy", 1, ""), ("invented", 75, "")] {
+            try Data("""
+            {"event":"spawn","step":"index","ts":1784466000,"pid":4242}
+            {"event":"finished","step":"index","ts":1784466060,"status":"\(code == 75 ? "deferred" : "failed")","returncode":\(code),"reason":"\(reason)"}
+
+            """.utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
+            let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory), logs: logs).sampleActivity()
+            let status = BrainLayerLaunchdJobGroup.ingest.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+                observations: observations, formatDate: { _ in "today" })
+            if expected.isEmpty {
+                XCTAssertTrue([BrainLayerLaunchdGroupHealth.unhealthy, .deferred].contains(status.health))
+            } else {
+                XCTAssertEqual(status.health, .skipped)
+                XCTAssertTrue(status.attentionReason?.contains("Deferred — " + expected) == true)
+                XCTAssertEqual(observations[.index]?.backupScheduleLine?.text, "Deferred — " + expected)
+            }
+        }
+    }
+
+    func testLegacyIndexDeferralRequiresThisRunsAllowlistedStdout() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let logs = directory.appendingPathComponent("logs")
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let start = Date(timeIntervalSince1970: 1784466000)
+        let run = BrainBarCalendarHistory.Run(at: start.addingTimeInterval(60), code: 75, status: "deferred", startedAt: start)
+        for (line, current) in [("INDEX_DEFERRED resident_writer_busy", true),
+                                ("INDEX_DEFERRED maintenance_window=04:00-06:00", true),
+                                ("INDEX_DEFERRED resident_writer_busy", false), ("INDEX_DEFERRED invented", true)] {
+            let path = logs.appendingPathComponent("index.out.log")
+            try Data((line + "\n").utf8).write(to: path)
+            try FileManager.default.setAttributes([.modificationDate: current ? run.at : start.addingTimeInterval(-600)], ofItemAtPath: path.path)
+            let observations = Self.supervised(history: .init(runs: ["index": run]), logs: logs).sampleActivity()
+            let status = BrainLayerLaunchdJobGroup.ingest.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+                observations: observations, formatDate: { _ in "today" })
+            XCTAssertEqual(status.health == .skipped, current && !line.contains("invented"))
+        }
+    }
+
+    func testConfiguredOffDoesNotPromoteAbsentOrHistoricalJobEvidence() {
+        var settings = BrainLayerConfig.defaultConfig.launchdJobs
+        settings[.watch]?.enabled = false
+        settings[.index]?.enabled = false
+        let observations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation] = [
+            .watch: .stateOnly(.unloaded), .index: .stateOnly(.failed("previous exit 1"))]
+        let status = BrainLayerLaunchdJobGroup.ingest.status(settings: settings,
+            observations: observations, formatDate: { _ in "today" })
+        XCTAssertEqual(status.health, .skipped)
+        XCTAssertNil(status.attentionReason)
+    }
+
+    func testLaunchdDisabledNeverRunCalendarJobNeedsAttention() {
+        let provider = BrainLayerLaunchdStatusProvider(commandRunner: { command in
+            .init(terminationStatus: 0, output: command.contains("print-disabled")
+                ? "\"com.brainlayer.jsonl-backup\" => true" : "runs = 0")
+        }, ownership: { .supervisor }, calendarHistory: { .empty },
+        calendarSchedule: { DateComponents(hour: 3, minute: 0) }, calendarIsDisabled: { _ in false })
+        let observations = provider.sampleActivity()
+        XCTAssertEqual(observations[.jsonlBackup]?.calendarDisabled, true)
+        XCTAssertEqual(BrainLayerLaunchdJobGroup.backups.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: observations, formatDate: { _ in "today" }).health, .unhealthy)
+    }
+
     func testWindowAttributionRequiresRecordedReasonAndNoSpawn() throws {
         let directory = try journal("migrated").deletingLastPathComponent()
         let logs = directory.appendingPathComponent("logs", isDirectory: true)
@@ -160,12 +228,17 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         }
     }
 
-    func testDisabledNoSpawnCalendar75IsNeutralSkipped() {
+    func testDisabledNoSpawnCalendar75NeedsAttentionUnlessConfiguredOff() {
         let history = BrainBarCalendarHistory(runs: ["jsonl-backup": .init(at: Date(), code: 75, status: "deferred")])
         let observations = Self.supervised(history: history, disabled: true).sampleActivity()
         XCTAssertEqual(observations[.jsonlBackup]?.backupScheduleLine?.text, "Skipped — disabled")
         XCTAssertEqual(observations[.jsonlBackup]?.backupScheduleLine?.tone, .neutral)
         XCTAssertEqual(BrainLayerLaunchdJobGroup.backups.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: observations, formatDate: { $0.description }).health, .unhealthy)
+        var settings = BrainLayerConfig.defaultConfig.launchdJobs
+        settings[.jsonlBackup]?.enabled = false
+        settings[.backupDaily]?.enabled = false
+        XCTAssertEqual(BrainLayerLaunchdJobGroup.backups.status(settings: settings,
             observations: observations, formatDate: { $0.description }).health, .skipped)
     }
 
@@ -281,7 +354,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
     static func supervised(history: BrainBarCalendarHistory = .empty, logs: URL? = nil, disabled: Bool = false) -> BrainLayerLaunchdStatusProvider {
         BrainLayerLaunchdStatusProvider(commandRunner: { command in
             if command.first == "/bin/launchctl" {
-                XCTAssertTrue(command.last!.hasSuffix("/com.brainlayer.maintenance"))
+                if command.contains("print") { XCTAssertTrue(command.last!.hasSuffix("/com.brainlayer.maintenance")) }
                 return .init(terminationStatus: 0, output: "runs = 0")
             }
             return .init(terminationStatus: 0, output: """

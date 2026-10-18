@@ -130,6 +130,28 @@ async def pulse(guard, stop, interval):
         await asyncio.sleep(interval)
 
 
+def _index_deferral_reason(path, offset):
+    """Only this invocation's bounded stdout tail can explain an index exit 75."""
+    try:
+        with path.open("rb") as handle:
+            end = handle.seek(0, 2)
+            start = max(offset, end - 64 * 1024)
+            handle.seek(start)
+            data = handle.read(64 * 1024)
+        if start > offset:
+            data = data.partition(b"\n")[2]  # Never accept a truncated line.
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        last = next((line for line in reversed(lines) if line.startswith("INDEX_DEFERRED ")), "")
+        fields = last.split()
+        token = fields[1] if len(fields) > 1 else ""
+        return {
+            "resident_writer_busy": "resident-writer-busy",
+            "maintenance_window=04:00-06:00": "maintenance-window",
+        }.get(token)
+    except OSError:
+        return None
+
+
 async def _execute_step(step, env, *, directory, logs, custody, guard, stop, guard_timeout, shutdown_timeout):
     child, gate = None, None
     try:
@@ -270,7 +292,9 @@ async def run_calendar(
                 if step.name == "index":
                     bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
                     if bounded is None:
-                        results[step.name] = finish(directory, state, step, 75, date, defer_after)
+                        results[step.name] = finish(
+                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
+                        )
                         continue
                     step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
@@ -291,6 +315,10 @@ async def run_calendar(
                             code = 143
                         else:
                             started = now_fn()
+                            index_log = logs / "index.out.log"
+                            index_offset = (
+                                index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
+                            )
                             code = await _execute_step(
                                 step,
                                 held_env,
@@ -304,6 +332,8 @@ async def run_calendar(
                             )
                             ended = now_fn()
                             if step.name == "index":
+                                if code == 75:
+                                    reason = _index_deferral_reason(index_log, index_offset)
                                 # Only attribute the miss to indexing when its measured interval
                                 # crossed this day's window end. Backup delays get a generic reason.
                                 window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
