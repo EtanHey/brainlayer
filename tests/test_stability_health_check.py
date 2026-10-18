@@ -198,6 +198,69 @@ def _expected_writer_pidfile(pidfile_dir: Path, db_path: Path) -> Path:
     return pidfile_dir / f"brainlayer-writer-{path_hash}-{resolved_path.name}.pid"
 
 
+@pytest.mark.parametrize("failure", [None, "backup", "job"])
+def test_48_hour_idle_machine_uses_liveness_and_preserves_real_failures(tmp_path, failure):
+    """Old sources/offsets and flat write counters are normal on the idle M1."""
+    now = datetime(2026, 10, 18, 18, tzinfo=UTC)
+    old = (now - timedelta(hours=49)).timestamp()
+    db = tmp_path / "brainlayer.db"
+    _make_db(db, total=3, vector_rows=3)
+    source = tmp_path / "session.jsonl"
+    offsets = tmp_path / "offsets.json"
+    for path in (source, offsets):
+        path.write_text("{}\n")
+        os.utime(path, (old, old))
+    watcher = tmp_path / "watcher-health.json"
+    drain = tmp_path / "drain-health.json"
+    backup = tmp_path / "jsonl-backup.log"
+    alerts = tmp_path / "job-alerts.json"
+    alerts.write_text(json.dumps({"maintenance-full": "quiet window missed"} if failure == "job" else {}))
+    config = HealthCheckConfig(
+        db_path=db,
+        state_path=tmp_path / "health-state.json",
+        job_opt_path=None,
+        job_alert_path=alerts,
+        badge_state_path=tmp_path / "badge-state.json",
+        watcher_health_path=watcher,
+        drain_health_path=drain,
+        offsets_path=offsets,
+        jsonl_backup_log_path=backup,
+        source_jsonl_globs=[str(source)],
+        queue_dir=tmp_path / "queue",
+        pending_stores_path=tmp_path / "pending-stores.jsonl",
+        pause_sentinel_path=tmp_path / "pause.sentinel",
+    )
+    for tick in range(3):
+        sample = now + timedelta(minutes=5 * tick)
+        watcher.write_text(json.dumps({"updated_at": sample.isoformat(), "poll_count": 100 + tick}))
+        drain.write_text(json.dumps({"updated_at": sample.isoformat(), "drain_cycles": 100 + tick, "drained_total": 0}))
+        backup.write_text(
+            json.dumps(
+                {
+                    "attempted_at": sample.isoformat(),
+                    "status": "failed" if failure == "backup" else "no-op",
+                    "verified": failure != "backup",
+                    "message": "no new transcripts; already covered",
+                }
+            )
+            + "\n"
+        )
+        result = run_health_check(
+            config,
+            now_fn=lambda: sample,
+            ps_output_fn=lambda: "123 python scripts/hotlane_brainbar_daemon.py --backlog-batch 4\n",
+            socket_request_fn=_empty_canary,
+            command_runner=lambda args: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        expected = {"backup": "jsonl_backup_attempt_failed", "job": "job_alert_maintenance-full"}.get(failure)
+        assert [issue.code for issue in result.issues] == ([expected] if expected else [])
+        assert result.ok is (failure is None)
+        assert result.canary_status == "empty"
+        badge = json.loads(config.badge_state_path.read_text())["alerts"]
+        assert badge["badge_on"] is (failure is not None)
+        assert [issue["code"] for issue in badge["active"]] == ([expected] if expected else [])
+
+
 def _write_writer_pidfile(pidfile_dir: Path, db_path: Path, *, pid: int, start_time: str | None = None) -> Path:
     pidfile_dir.mkdir(parents=True, exist_ok=True)
     lines = [str(pid)]
