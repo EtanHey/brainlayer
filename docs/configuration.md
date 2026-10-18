@@ -227,7 +227,8 @@ Observability keeps `backups.db_snapshot` at the last offsite uploaded-and-verif
 existing BrainBar behavior. Schema v2 adds the optional sibling `backups.local_snapshot` with
 `local_verified`, `uploaded`, `upload_state`, `upload_error` and local integrity evidence. Upload failures
 still set `backups.error_type`; #1398 will render the sibling's pending state neutrally. Schema v1 is frozen.
-The snapshot step has a separate timeout (`BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS`) and is also
+The snapshot step has a separate timeout (`BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS`, default **45 minutes**,
+three times a measured 14m18s snapshot rounded up to five minutes) and is also
 clipped to finish its process-group cleanup before 06:00. Both phases honor the existing
 `BRAINLAYER_LAUNCHD_BACKUP_DAILY_ENABLED` gate; snapshot failures have their own alert key.
 `--full --dry-run` reports a held backup lock without starting backup work.

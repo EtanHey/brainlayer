@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import maintenance_control
+from .backup_daily import DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
@@ -88,7 +89,10 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
     steps[1].env["BRAINLAYER_BACKUP_PHASE"] = "all"
     steps += (
         replace(
-            steps[1], name="backup-snapshot", timeout=5400, env=steps[1].env | {"BRAINLAYER_BACKUP_PHASE": "snapshot"}
+            steps[1],
+            name="backup-snapshot",
+            timeout=DEFAULT_SNAPSHOT_TIMEOUT_SECONDS,
+            env=steps[1].env | {"BRAINLAYER_BACKUP_PHASE": "snapshot"},
         ),
     )
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
@@ -132,7 +136,7 @@ def _bounded_snapshot_step(step, now, shutdown_timeout):
     if not math.isfinite(requested) or requested <= 0:
         raise ValueError("invalid snapshot timeout")
     end = now.replace(hour=6, minute=0, second=0, microsecond=0)
-    seconds = int(min(requested, step.timeout, (end - now).total_seconds() - shutdown_timeout))
+    seconds = int(min(requested, (end - now).total_seconds() - shutdown_timeout - 1))
     if seconds < 1:
         return None
     return replace(

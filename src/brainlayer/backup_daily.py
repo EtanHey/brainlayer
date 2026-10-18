@@ -69,6 +69,8 @@ BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 BACKUP_RESUME_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS"
+# Real 20.56 GB copy snapshot: 858.5s. Three times that, rounded up to five minutes.
+DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 2700
 BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
@@ -473,6 +475,7 @@ def _raise_backup_stopped(signum, frame) -> None:  # noqa: ARG001
 def _sqlite_pragma_check(db_path: Path, pragma_name: str) -> str:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
+        # Bound integrity-check memory while avoiding tiny-cache index thrashing.
         conn.execute("PRAGMA cache_size=-131072")
         rows = conn.execute(f"PRAGMA {pragma_name}").fetchall()
         row = rows[0] if len(rows) == 1 else None
@@ -2777,7 +2780,12 @@ def main() -> int:
     snapshot_phase = os.environ.get("BRAINLAYER_BACKUP_PHASE") == "snapshot"
     if snapshot_phase:
         timeout_seconds = min(
-            timeout_seconds, int(_configured_positive_number("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", 5400))
+            timeout_seconds,
+            int(
+                _configured_positive_number(
+                    "BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
+                )
+            ),
         )
         if budget := os.environ.get("BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS"):
             timeout_seconds = min(timeout_seconds, int(budget))

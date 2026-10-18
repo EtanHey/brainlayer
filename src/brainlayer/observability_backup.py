@@ -159,7 +159,12 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
 def _local_snapshot(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     real = [r for r in records if r.get("backup_log_provenance") == "real"]
     latest = {r["snapshot"]: r for r in real if isinstance(r.get("snapshot"), str)}
-    local = next((r for r in reversed(real) if "local_verified" in r and isinstance(r.get("snapshot"), str)), None)
+    # Cleanup receipts for older copies cannot replace the newest snapshot's display.
+    local = max(
+        (r for r in latest.values() if "local_verified" in r),
+        key=lambda r: backup_daily._snapshot_created_time(r) or datetime.min.replace(tzinfo=UTC),
+        default=None,
+    )
     if local is None:
         return None
     failed = next(

@@ -308,6 +308,10 @@ def test_new_offsite_verified_copy_covers_abandoned_failure_without_deleting_cha
     records = backup._read_backup_receipts(local_lane["log_path"])
     assert _daily_snapshot(records)[1] is None
     assert old_path.read_bytes() == b"changed bytes retained"
+    from brainlayer.observability_backup import _local_snapshot
+
+    assert _local_snapshot(records)["destination"] == Path(receipt["snapshot"]).name
+    assert _local_snapshot(records)["upload_state"] == "verified"
 
 
 @pytest.mark.parametrize("damage", ["quick-only", "uploaded-unverified"])
@@ -321,3 +325,13 @@ def test_weak_or_unverified_latest_proof_cannot_authorize_weekly(local_lane, tmp
     monkeypatch.setenv("BRAINLAYER_CALENDAR_STEP", "1")
     with pytest.raises(maintenance.MaintenanceAbort):
         maintenance._weekly_backup(config_for(local_lane, tmp_path))
+
+
+def test_default_snapshot_cap_has_measured_headroom_and_shutdown_reserve(tmp_path, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(tmp_path / "missing.env"))
+    plan = calendar.calendar_steps("python", "cli", tmp_path, dt.date.today())
+    step = next(s for s in plan.select() if s.name == "backup-snapshot")
+    assert step.timeout == 2700  # measured 858.494s; 3x rounded up to five minutes
+    bounded = calendar._bounded_snapshot_step(step, dt.datetime(2026, 10, 18, 5, 59), 2)
+    assert bounded.timeout <= 57  # include scheduling headroom beyond group shutdown
