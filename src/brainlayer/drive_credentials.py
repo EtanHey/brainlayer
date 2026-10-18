@@ -167,15 +167,16 @@ def load_credentials(
                 consent_time = dt.datetime.fromisoformat(str(consented).replace("Z", "+00:00")).astimezone(dt.UTC)
             except ValueError:
                 raise DriveCredentialError("BrainLayer Drive consent metadata is invalid") from None
-            remaining = consent_time + dt.timedelta(days=7) - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
+            expires = consent_time + dt.timedelta(days=7)
+            remaining = expires - (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
             if remaining <= dt.timedelta(0):
-                _report_consent(alert_reporter, "Drive access expired: Reconnect in BrainBar")
-                raise DriveCredentialError("Drive access expired: Reconnect in BrainBar")
-            if remaining < dt.timedelta(days=1):
-                _report_consent(
-                    alert_reporter,
-                    "Google Drive access for BrainLayer backups expires tomorrow: click Reconnect in BrainBar",
-                )
+                reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
+                _report_consent(alert_reporter, reason)
+                raise DriveCredentialError(reason)
+            if remaining <= dt.timedelta(hours=48):
+                reason = f"Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"
+                _report_consent(alert_reporter, reason)
+                LOGGER.warning(reason)
         if not token_data.get("refresh_token"):
             raise DriveCredentialError("BrainLayer Drive token lacks refresh authorization; run brainlayer backup auth")
         try:
@@ -240,23 +241,22 @@ def credential_status(*, now: dt.datetime | None = None, **kwargs: Any) -> dict[
         days_left = max(0.0, (expires - current).total_seconds() / 86400) if expires else None
         timing = {"expires_at": expires.isoformat() if expires else None, "days_left": days_left}
         if expires and current >= expires:
-            _report_consent(
-                kwargs.get("alert_reporter", job_alerts.report), "Drive access expired: Reconnect in BrainBar"
-            )
-            return {"state": "invalid", "reason": "Drive access expired: Reconnect in BrainBar", **timing}
+            reason = f"Drive access expired at {expires.isoformat()}: Reconnect in BrainBar"
+            _report_consent(kwargs.get("alert_reporter", job_alerts.report), reason)
+            return {"state": "invalid", "reason": reason, **timing}
         load_credentials(**kwargs, migrate=False, persist_refresh=False, now=now)
     except TransportError:
         return {
-            "state": "expiring" if days_left is not None and days_left < 1 else "valid",
+            "state": "expiring" if days_left is not None and days_left <= 2 else "valid",
             "reason": "status checked offline; last known state",
             **timing,
         }
     except DriveCredentialError as exc:
         return {"state": "invalid", "reason": str(exc), "expires_at": None, "days_left": None}
-    if days_left is not None and days_left < 1:
+    if days_left is not None and days_left <= 2:
         return {
             "state": "expiring",
-            "reason": "Google Drive access for BrainLayer backups expires tomorrow: click Reconnect in BrainBar",
+            "reason": f"Drive access expires at {expires.isoformat()}: Reconnect in BrainBar",
             **timing,
         }
     return {"state": "valid", "reason": "BrainLayer Drive authorization is ready", **timing}
