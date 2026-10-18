@@ -12,8 +12,12 @@ from pathlib import Path
 
 from .brainbar_identity import JOBS, app_identity, loaded, running_bundle_matches
 from .deploy_drift import _atomic_write_json
-from .job_alerts import report
+from .job_alerts import active_alerts, report
 from .pipeline.secret_scrub import scrub_secrets
+
+
+class ProcessScanUnavailable(Exception):
+    """Detection is unknown; only the safe exception class name may escape."""
 
 
 def process_table():
@@ -58,13 +62,40 @@ class AutoActivator:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return
-            self._tick()
+            failures = self.state.with_suffix(".scan.json")
+            try:
+                self._tick()
+            except ProcessScanUnavailable as exc:
+                prior = json.loads(failures.read_text()) if failures.exists() else {}
+                count = min(prior.get("failures", 0) + 1, 12)
+                _atomic_write_json(failures, {"failures": count})
+                if count >= 12:
+                    try:
+                        absent = all(loaded(label).returncode == 113 for label, _ in JOBS)
+                    except (OSError, subprocess.SubprocessError, RuntimeError):
+                        return  # Unknown launchd state is not evidence BrainBar is down.
+                    if absent:
+                        report("brainbar-activation", f"BrainBar activation process scan failed for >=12 ticks: {exc}")
 
     def _defer_for_brew(self):
         # Separate from the per-build attempt: brew may have removed both plists.
         path = self.state.with_suffix(".brew.json")
         prior = json.loads(path.read_text()) if path.exists() else {}
-        processes = brew_processes()
+        try:
+            processes = brew_processes()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ProcessScanUnavailable(type(exc).__name__) from None
+        # Recover before activation can report a new failure on the same alert key.
+        self.state.with_suffix(".scan.json").unlink(missing_ok=True)
+        reason = active_alerts().get("brainbar-activation", "")
+        if reason.startswith(
+            (
+                "BrainBar activation process scan failed for >=12 ticks:",
+                "BrainBar activation monitor refused: Command '['/bin/ps',",
+                "BrainBar activation monitor refused: [Errno",
+            )
+        ):
+            report("brainbar-activation", None)
         absent = bool(processes) and all(loaded(label).returncode == 113 for label, _ in JOBS)
         if not absent:
             if prior:
