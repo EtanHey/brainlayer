@@ -493,12 +493,14 @@ extension WatcherLaunchdEvidence {
 /// "Healthy".
 struct BrainBarBackupsHealth: Equatable, Sendable {
     enum Badge: Equatable, Sendable {
-        case checking, healthy, awaitingRun, expiring, attention, unknown, skipped, deferred
+        case checking, healthy, awaitingRun, expiring, attention, unknown, skipped, deferred, idle, uploading
 
         var title: String {
             switch self {
             case .checking: "Checking…"
             case .healthy: "Healthy"
+            case .idle: "Idle — no new transcripts"
+            case .uploading: "Upload in progress"
             case .awaitingRun: "Awaiting next run"
             case .expiring: "Drive access expiring"
             case .attention: "Needs attention"
@@ -539,6 +541,10 @@ struct BrainBarBackupsHealth: Equatable, Sendable {
         case .expiring: return .init(badge: .expiring, reason: drive?.line)
         case .unknown: return .init(badge: .unknown, reason: drive?.line)
         case .attention, .connected, nil: break
+        }
+        if job.health == .healthy || job.health == .awaitingRun {
+            if status?.uploadInProgress == true { return .init(badge: .uploading, reason: status?.snapshotUpload?.text) }
+            if status?.upload.tone == .neutral { return .init(badge: .idle, reason: status?.upload.text) }
         }
         return switch job.health {
         case .checking: .init(badge: .checking, reason: nil)

@@ -628,3 +628,42 @@ def _command_env(tmp_path: Path) -> tuple[dict[str, str], object]:
         }
 
     return env, recorder
+
+
+def test_verified_no_op_exposes_explicit_receipt_without_inventing_upload() -> None:
+    result, _ = _build("no-op-dev")
+    assert result["transcript_attempt"] == {
+        "at": "2026-09-13T10:00:00Z",
+        "status": "no-op",
+        "verified": True,
+        "uploaded": False,
+    }
+    assert result["last_verified_upload"] is None
+    assert result["surviving_archives_30d"] == 0
+    schema = json.loads((FIXTURES / "observability-schema.v2.json").read_text())
+    jsonschema.validate(result, {"$defs": schema["$defs"], "$ref": "#/$defs/backups"})
+    legacy, _ = _build("legacy-no-op-dev")
+    assert "transcript_attempt" not in legacy
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"attempted_at": "2026-09-13T13:00:00Z"},
+        {"attempted_at": "2026-09-10T10:00:00Z"},
+        {"verified": False},
+        {"uploaded": True},
+        {"status": "failed"},
+    ],
+)
+def test_invalid_no_op_never_exposes_neutral_evidence(tmp_path, mutation) -> None:
+    latest = json.loads((FIXTURES / "logs/no-op-dev/jsonl-backup.log").read_text())
+    log = tmp_path / "jsonl-backup.log"
+    log.write_text(json.dumps({**latest, **mutation}) + "\n")
+    env = {**_env("no-op-dev"), "BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG": str(log)}
+    result = build_backups_section(
+        env=env,
+        now=NOW,
+        record_input=lambda path, **kwargs: {"path": str(path), "status": kwargs.get("status", "read")},
+    )
+    assert "transcript_attempt" not in result

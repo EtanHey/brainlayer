@@ -36,10 +36,10 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         locale: Locale = .current,
         jobStatus: ObservabilityStatusLine? = nil
     ) -> Self {
-        let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale, jobStatus: jobStatus)
+        let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale, jobStatus: jobStatus, now: now)
         let rel = { (date: Date) in relative(date, now: now, locale: locale) }
 
-        let upload: String = switch backups.lastVerifiedUpload {
+        var upload: String = switch backups.lastVerifiedUpload {
         case let value? where value.verified: "Verified \(rel(value.at))"
         case let value?: "Uploaded \(rel(value.at)), not verified"
         case nil: "No verified upload yet"
@@ -49,12 +49,17 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         case let value?: "Saved \(rel(value.lastAt)), not verified"
         case nil: "No verified copy yet"
         }
+        let idle = backups.verifiedIdle(now: now)
+        if idle { upload = lines.upload.text }
         let job: String = if let jobStatus { jobStatus.text }
             else if backups.launchd?.bootstrapped == true { "Scheduled" }
             else if backups.launchd?.disabledDirPresent == true { "Paused by a safety stop" }
             else { "Not scheduled" }
         let threshold = backups.thresholdHours.map { "\(Int($0)) hours" }
         let freshness: String = switch backups.freshness {
+        case _ where backups.localSnapshot?.uploadState == "nothing_pending": "Local snapshot freshness unknown"
+        case "fresh" where backups.hasRecentVerifiedNoOp(now: now): "Fresh verified no-op; database copy checked separately"
+        case "fresh" where backups.localSnapshot != nil: "Recent transcript attempt; database copies checked separately"
         case "fresh": threshold.map { "Both copies are under \($0) old" } ?? "Both copies are recent"
         case "stale": threshold.map { "A copy is older than \($0)" } ?? "A copy is out of date"
         default: "Unknown"
@@ -70,7 +75,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         case let count?: ObservabilityPresentation.number(count, locale: locale)
         }
 
-        let checks = [
+        var checks = [
             Check(id: "upload", title: "Transcripts in Google Drive", value: upload, tone: lines.upload.tone),
             Check(id: "snapshot", title: "Database copy", value: snapshot, tone: lines.snapshot.tone),
             Check(id: "job", title: "Daily transcript backup", value: job, tone: lines.job.tone),
@@ -78,8 +83,13 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             Check(id: "retention", title: "Safe cleanup", value: retention, tone: lines.retention.tone),
             Check(id: "archives", title: "Verified archives, last 30 days", value: archives, tone: lines.archives.tone),
         ]
+        if let annotation = lines.snapshotUpload {
+            checks.insert(.init(id: "snapshot-upload", title: "Local database snapshot", value: annotation.text, tone: annotation.tone), at: 2)
+        }
         let failing = checks.filter { $0.tone == .red }.count
-        let summary: String = if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"
+        let summary: String = if failing == 0 && lines.uploadInProgress { "Upload in progress" }
+            else if failing == 0 && idle { "Idle — no new transcripts" }
+            else if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"
             : jobStatus?.text.hasPrefix("Deferred") == true ? "Deferred" : "Job schedule unknown" } else { switch failing {
         case 0: "All \(checks.count) checks pass"
         case 1: "1 of \(checks.count) checks needs attention"
@@ -138,6 +148,10 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             rows.append(.init(label: "Database copy file", value: snapshot.destination))
             rows.append(.init(label: "Last database copy", value: exact(snapshot.lastAt)))
         }
+        if let local = backups.localSnapshot {
+            if let destination = local.destination { rows.append(.init(label: "Local database snapshot", value: destination)) }
+            if let at = local.lastAt { rows.append(.init(label: "Local snapshot created", value: exact(at))) }
+        }
         let label = backups.launchd?.label ?? "com.brainlayer.jsonl-backup"
         let jobState = if backups.launchd?.bootstrapped == true { "loaded" }
             else if backups.launchd?.disabledDirPresent == true { "not loaded · parked in .disabled-retention-P0" }
@@ -182,7 +196,7 @@ struct BrainBarBackupChecksCard: View {
 
     var body: some View {
         let failing = checks.checks.contains { $0.tone == .red }
-        let verdictTone: ObservabilityStatusTone = failing ? .red : checks.scheduleUnknown ? .neutral : .green
+        let verdictTone: ObservabilityStatusTone = failing ? .red : checks.scheduleUnknown || checks.checks.contains { $0.tone == .neutral } ? .neutral : .green
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Recovery checks").font(.system(size: 13, weight: .semibold))

@@ -218,6 +218,39 @@ struct ObservabilityDocument: Codable, Sendable {
         let lastVerifiedUpload: LastVerifiedUpload?
         let dbSnapshot: DBSnapshot?
         let launchd: Launchd?
+        var transcriptAttempt: TranscriptAttempt? = nil
+        var localSnapshot: LocalSnapshot? = nil
+
+        func isRecent(_ date: Date, now: Date) -> Bool {
+            guard let thresholdHours, thresholdHours > 0 else { return false }
+            return (0...thresholdHours * 3600).contains(now.timeIntervalSince(date))
+        }
+
+        func hasRecentVerifiedNoOp(now: Date) -> Bool {
+            guard let attempt = transcriptAttempt, attempt.status == "no-op",
+                  attempt.verified, !attempt.uploaded, isRecent(attempt.at, now: now) else { return false }
+            return true
+        }
+
+        func verifiedIdle(now: Date) -> Bool {
+            state == "measured" && freshness == "fresh" && retentionInvariant == "PASS" &&
+                (errorType == nil || errorType == "") && hasRecentVerifiedNoOp(now: now) &&
+                lastVerifiedUpload?.verified != false
+        }
+
+        func localUploadPending(now: Date) -> Bool {
+            guard let value = localSnapshot, value.localVerified,
+                  !value.uploaded, let lastAt = value.lastAt,
+                  ["pending", "in_progress"].contains(value.uploadState),
+                  value.uploadError == nil || value.uploadError == "",
+                  isRecent(lastAt, now: now) else { return false }
+            return true
+        }
+    }
+    struct TranscriptAttempt: Codable, Sendable {
+        let at: Date
+        let status: String
+        let verified, uploaded: Bool
     }
     struct LastVerifiedUpload: Codable, Sendable {
         let at: Date, ageHours: Double
@@ -228,6 +261,14 @@ struct ObservabilityDocument: Codable, Sendable {
         let lastAt: Date
         let destination: String
         let verified: Bool
+    }
+    struct LocalSnapshot: Codable, Sendable {
+        let lastAt: Date?
+        let destination: String?
+        let localVerified, uploaded: Bool
+        let uploadState: String
+        let uploadError: String?
+        let localIntegrity, localIntegrityPragma: String?
     }
     struct Launchd: Codable, Sendable {
         let label: String
@@ -346,9 +387,11 @@ struct ObservabilityBackupStatus: Equatable, Sendable {
     let error: ObservabilityStatusLine?
     /// `error` is a job alert (#1031): the failed job's own sentence for Etan.
     var errorIsJobAlert = false
+    var snapshotUpload: ObservabilityStatusLine? = nil
+    var uploadInProgress = false
 
     var lines: [ObservabilityStatusLine] {
-        [upload, snapshot, job, freshness, retention, archives] + [error].compactMap { $0 }
+        [upload, snapshot] + [snapshotUpload].compactMap { $0 } + [job, freshness, retention, archives] + [error].compactMap { $0 }
     }
 
     /// The one red line that speaks for the backups: a job alert, the failed job's own sentence,
@@ -426,7 +469,7 @@ enum ObservabilityPresentation {
         let backupTone: ObservabilityCardTone = document.backups.freshness == "unknown" ||
             document.backups.retentionInvariant == "unknown" ? .neutral :
             (document.backups.freshness == "stale" || document.backups.retentionInvariant == "FAIL" ? .amber : .standard)
-        let backupStatus = backupStatus(for: document.backups, locale: locale)
+        let backupStatus = backupStatus(for: document.backups, locale: locale, now: now)
         let backups = card(
             "Backups", "Where copies are, when they last verified, and whether recovery is healthy",
             document.backups.state, document.backups.reason, stale, tone: backupTone,
@@ -470,21 +513,47 @@ enum ObservabilityPresentation {
     static func backupStatus(
         for backups: ObservabilityDocument.Backups,
         locale: Locale = .current,
-        jobStatus: ObservabilityStatusLine? = nil
+        jobStatus: ObservabilityStatusLine? = nil,
+        now: Date = Date()
     ) -> ObservabilityBackupStatus {
-        let upload = backups.lastVerifiedUpload.map { value in
+        let idle = backups.verifiedIdle(now: now)
+        var upload = backups.lastVerifiedUpload.map { value in
             ObservabilityStatusLine(
                 text: "\(value.verified ? "Last verified transcript upload" : "Last transcript upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · transcript archive \(value.archiveId)",
                 tone: value.verified ? .green : .red
             )
         } ?? .init(text: "No verified transcript upload on record", tone: .red)
 
+        if idle, let attempt = backups.transcriptAttempt {
+            upload = .init(text: "Idle — verified no-op at \(localDate(attempt.at)); no new transcripts", tone: .neutral)
+        }
+
         let snapshot = backups.dbSnapshot.map { value in
             ObservabilityStatusLine(
                 text: "Latest DB snapshot (\(value.verified ? "verified" : "NOT verified")): \(localDate(value.lastAt)) → \(value.destination)",
-                tone: value.verified ? .green : .red
-            )
+                tone: value.verified ? .green : .red)
         } ?? .init(text: "No verified DB snapshot on record", tone: .red)
+        let snapshotUpload: ObservabilityStatusLine?
+        if let value = backups.localSnapshot {
+            if let error = value.uploadError, !error.isEmpty {
+                snapshotUpload = .init(text: "DB upload \(value.uploadState): \(error)", tone: .red)
+            } else if ["failed", "abandoned"].contains(value.uploadState) {
+                snapshotUpload = .init(text: "DB upload \(value.uploadState): No failure reason provided", tone: .red)
+            } else if value.uploadState == "superseded", backups.dbSnapshot?.verified == true {
+                snapshotUpload = .init(text: "Local snapshot superseded by a verified offsite copy", tone: .neutral)
+            } else if value.uploadState == "nothing_pending" {
+                snapshotUpload = .init(text: "No pending upload; local snapshot freshness unverified", tone: .neutral)
+            } else if backups.localUploadPending(now: now) {
+                snapshotUpload = .init(text: "Local snapshot verified, upload in progress", tone: .neutral)
+            } else if !value.localVerified || value.lastAt.map({ !backups.isRecent($0, now: now) }) != false ||
+                        !value.uploaded || value.uploadState != "verified" {
+                snapshotUpload = .init(text: "Local DB snapshot missing verification or stale", tone: .red)
+            } else {
+                snapshotUpload = nil
+            }
+        } else {
+            snapshotUpload = nil
+        }
 
         let job: ObservabilityStatusLine
         let jobLabel = backups.launchd?.label ?? "com.brainlayer.jsonl-backup"
@@ -501,6 +570,11 @@ enum ObservabilityPresentation {
         let threshold = backups.thresholdHours.map { number(Int($0), locale: locale) } ?? "unknown"
         let freshness: ObservabilityStatusLine
         switch backups.freshness {
+        case _ where backups.localSnapshot?.uploadState == "nothing_pending":
+            freshness = .init(text: "Local snapshot freshness unknown — no pending upload is not fresh proof", tone: .red)
+        case "fresh" where backups.hasRecentVerifiedNoOp(now: now): freshness = .init(text: "Fresh verified transcript no-op; DB copy checked separately", tone: .neutral)
+        case "fresh" where backups.localSnapshot != nil:
+            freshness = .init(text: "Latest transcript backup attempt is fresh; DB copies checked separately", tone: .green)
         case "fresh": freshness = .init(text: "Backup freshness (DB + transcript): fresh (within \(threshold) h)", tone: .green)
         case "stale": freshness = .init(text: "Backup freshness (DB + transcript): stale (> \(threshold) h)", tone: .red)
         default: freshness = .init(text: "Backup freshness (DB + transcript): unknown", tone: .red)
@@ -515,7 +589,7 @@ enum ObservabilityPresentation {
         if let archiveCount = backups.survivingArchives30D {
             archives = .init(
                 text: "\(number(archiveCount, locale: locale)) verified transcript \(archiveCount == 1 ? "archive" : "archives") in the last 30 days",
-                tone: archiveCount > 0 ? .green : .red
+                tone: idle ? .neutral : archiveCount > 0 ? .green : .red
             )
         } else {
             archives = .init(text: "Verified transcript archives in the last 30 days: unknown", tone: .red)
@@ -536,7 +610,7 @@ enum ObservabilityPresentation {
         return .init(
             upload: upload, snapshot: snapshot, job: job, freshness: freshness,
             retention: retention, archives: archives, error: error,
-            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true
+            errorIsJobAlert: backups.errorType?.hasPrefix(jobAlertPrefix) == true, snapshotUpload: snapshotUpload, uploadInProgress: backups.localUploadPending(now: now)
         )
     }
 

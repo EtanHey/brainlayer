@@ -283,7 +283,7 @@ enum BrainBarHeroBackupTruth: Sendable, Equatable {
                     : "unmeasurable — \(document.backups.reason)"
                 return .unavailable(detail ?? reason)
             }
-            let status = ObservabilityPresentation.backupStatus(for: document.backups)
+            let status = ObservabilityPresentation.backupStatus(for: document.backups, now: now)
             return snapshot.isStale ? .stale(status, ageText: snapshot.ageText) : .measured(status)
         case let .unreadable(reason):
             return reason == "Loading observability data." ? .checking(reason) : .unavailable(reason)
@@ -568,16 +568,14 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if case let .readable(document) = observability, document.backups.state == "measured" {
             let snapshot = document.backups.dbSnapshot
             let upload = document.backups.lastVerifiedUpload
-            backupLines = [
-                .init(
+            let shared = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: now)
+            let databaseLine = ObservabilityStatusLine(
                     text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
-                    tone: snapshot?.verified == true ? .green : .red
-                ),
-                .init(
-                    text: "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
-                    tone: upload?.verified == true ? .green : .red
-                ),
-            ]
+                    tone: shared.snapshot.tone)
+            let transcriptLine = ObservabilityStatusLine(
+                    text: document.backups.verifiedIdle(now: now) ? "Transcripts · \(shared.upload.text)" : "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
+                    tone: shared.upload.tone)
+            backupLines = [databaseLine] + [shared.snapshotUpload].compactMap { $0 } + [transcriptLine]
         } else {
             backupLines = [
                 .init(text: "Database · Drive · status unavailable", tone: .red),
@@ -1009,7 +1007,7 @@ private struct BrainBarDashboardView: View {
     private var jobAlert: (text: String, reason: String, document: ObservabilityDocument)? {
         guard case let .readable(document) = effectiveObservabilityResult,
               let reason = BrainBarJobAlerts.rawReason(document) else { return nil }
-        let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale)
+        let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: currentNow)
         guard status.errorIsJobAlert, let error = status.error, error.tone == .red else { return nil }
         return (error.text, reason, document)
     }

@@ -340,7 +340,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     var backupStatus: ObservabilityBackupStatus? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return ObservabilityPresentation.backupStatus(for: document.backups, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine)
+        return ObservabilityPresentation.backupStatus(for: document.backups, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: now())
     }
 
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
@@ -1271,6 +1271,7 @@ private struct BrainBarJobGroupCard: View {
         let (symbol, color): (String, Color) = switch backupsHealth.badge {
         case .checking: (Self.symbol(.checking), Self.color(.checking))
         case .healthy: (Self.symbol(.healthy), Self.color(.healthy))
+        case .idle, .uploading: ("info.circle.fill", Color.brainBarTextMuted)
         case .awaitingRun: (Self.symbol(.awaitingRun), Self.color(.awaitingRun))
         case .expiring: ("clock.badge.exclamationmark.fill", Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
         case .attention: (Self.symbol(.unhealthy), Self.color(.unhealthy))
