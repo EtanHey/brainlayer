@@ -784,6 +784,44 @@ def _peak_backup_required_bytes(db_size: int, gzip_size: int, raw_reclaimed: int
     return max(compression_peak, verify_peak) + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES
 
 
+def _remove_raw_with_verified_gzip(output_dir: Path, raw: Path) -> None:
+    """Unlink only a stable, singly owned snapshot beside its integrity-tested gzip."""
+    if raw.parent != output_dir or _parse_uncompressed_snapshot_date(raw.name) is None:
+        raise ValueError("Raw snapshot is outside the backup directory or has an invalid name")
+    directory = os.open(output_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+
+        def identity(name: str) -> tuple[int, ...]:
+            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError(f"Retaining non-regular or linked snapshot: {name}")
+            return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+        gzip_name = f"{raw.name}.gz"
+        raw_identity, gzip_identity = identity(raw.name), identity(gzip_name)
+        _gunzip_test(output_dir / gzip_name)
+        if raw_identity != identity(raw.name) or gzip_identity != identity(gzip_name):
+            raise ValueError(f"Snapshot changed during integrity check: {raw.name}")
+        os.unlink(raw.name, dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
+def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
+    deleted, retained_raw = [], []
+    for raw in sorted(output_dir.glob("*.db")):
+        if _parse_uncompressed_snapshot_date(raw.name) is None:
+            continue
+        try:
+            _remove_raw_with_verified_gzip(output_dir, raw)
+            deleted.append(raw.name)
+        except BackupTimeoutError:
+            raise
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError):
+            retained_raw.append(raw.name)
+    return deleted, retained_raw
+
+
 def _require_raw_floor(path: Path, *, forthcoming: int = 0) -> None:
     free = shutil.disk_usage(path).free
     if free < MIN_RAW_FREE_BYTES + forthcoming:
@@ -809,7 +847,11 @@ def create_sqlite_backup_artifact(
     reclamation_status_callback: Callable[[str, str | None], None] | None = None,
     capacity_status_callback: Callable[[int, int | None, int, int], None] | None = None,
 ) -> SQLiteBackupArtifact:
-    """Create a restorable `.db.gz` snapshot through BrainBar's single-writer socket."""
+    """Create an integrity-tested gzip; retain raw only if gzip creation/checking fails.
+
+    The legacy keep_uncompressed/local_uncompressed_keep arguments are accepted for
+    caller compatibility; they cannot authorize retaining duplicates or pruning only copies.
+    """
     db_path = Path(db_path).expanduser()
     output_dir = Path(output_dir).expanduser()
     date_stamp = date_stamp or _today()
@@ -818,6 +860,9 @@ def create_sqlite_backup_artifact(
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    if _parse_uncompressed_snapshot_date(f"{date_stamp}.db") is None or output_dir.is_symlink():
+        raise ValueError("Backup requires a dated snapshot in a non-symlink backup directory")
+    deleted, retained_raw = _cleanup_raw_snapshots(output_dir)
     for name, size in _owned_temp_inventory(output_dir):
         print(f"Backup crash remnant: name={name} bytes={size}; retained until a newer backup verifies", flush=True)
     writer_probe_error: str | None = None
@@ -847,9 +892,8 @@ def create_sqlite_backup_artifact(
         surviving_attempt_bytes += attempt_size
         surviving_attempt_growth_reserve_bytes += max(0, db_size - attempt_size)
     estimated_gzip = _estimated_gzip_bytes(output_dir, db_size)
-    raw_reclaimed = (
-        _raw_bytes_pruned_before_verify(output_dir, date_stamp, local_uncompressed_keep) if keep_uncompressed else 0
-    )
+    # Only proven duplicates were reclaimed above; never budget deletion of an only copy.
+    raw_reclaimed = 0
     required_bytes = (
         _peak_backup_required_bytes(db_size, estimated_gzip, raw_reclaimed, full=_should_run_full_verify(date_stamp))
         + surviving_attempt_growth_reserve_bytes
@@ -898,16 +942,17 @@ def create_sqlite_backup_artifact(
             f"important_usage={important_free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES}; "
             f"{reason}; "
             f"{len(surviving_attempt_paths)} recent attempts reserve "
-            f"{surviving_attempt_growth_reserve_bytes} growth bytes"
+            f"{surviving_attempt_growth_reserve_bytes} growth bytes; retained raw snapshots: {retained_raw}"
         )
     final_gz = output_dir / f"{date_stamp}.db.gz"
     final_raw = output_dir / f"{date_stamp}.db"
     sentinel_chunks = 0
-    uncompressed_path: Path | None = None
+    if final_raw.exists() or final_raw.is_symlink():
+        raise FileExistsError(f"Retaining existing raw snapshot without a verified gzip: {final_raw}")
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
-        raw_snapshot = Path(tmp) / f"{date_stamp}.db"
+        raw_snapshot = final_raw
         snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
         request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
         _require_raw_floor(output_dir)
@@ -918,20 +963,12 @@ def create_sqlite_backup_artifact(
             _copy_with_raw_floor(src, dst, output_dir)
         shutil.move(str(temp_gz), final_gz)
 
-        if keep_uncompressed:
-            temp_raw = Path(tmp) / final_raw.name
-            shutil.move(str(raw_snapshot), temp_raw)
-            shutil.move(str(temp_raw), final_raw)
-            uncompressed_path = final_raw
+        _remove_raw_with_verified_gzip(output_dir, final_raw)
+        deleted.append(final_raw.name)
 
-    deleted = (
-        prune_local_uncompressed_snapshots(output_dir, keep_latest=local_uncompressed_keep) if keep_uncompressed else []
-    )
-    if uncompressed_path is not None and uncompressed_path.name in deleted:
-        uncompressed_path = None
     return SQLiteBackupArtifact(
         gzip_path=final_gz,
-        uncompressed_path=uncompressed_path,
+        uncompressed_path=None,
         sentinel_chunks=sentinel_chunks,
         local_retention_deleted=deleted,
         stale_attempts_deleted=stale_attempts_deleted,
@@ -1999,11 +2036,12 @@ def run_backup(
 
         def prepare_artifact(resume: dict[str, Any] | None) -> SQLiteBackupArtifact:
             if resume is not None:
+                raw_deleted, _ = _cleanup_raw_snapshots(Path(staging_dir))
                 return SQLiteBackupArtifact(
                     gzip_path=Path(resume["snapshot"]),
                     uncompressed_path=None,
                     sentinel_chunks=resume["sentinel_snapshot_chunks"],
-                    local_retention_deleted=[],
+                    local_retention_deleted=raw_deleted,
                     stale_attempts_deleted=[],
                     surviving_attempts=[],
                     surviving_attempt_bytes=0,
@@ -2226,6 +2264,10 @@ def run_backup(
             )
         raise
     finally:
+        raw = Path(staging_dir) / f"{resolved_date_stamp}.db"
+        if raw.is_file() and not raw.is_symlink():
+            result["local_uncompressed_snapshot"] = str(raw)
+            result["raw_snapshot_retained_reason"] = "No verified gzip replaced this raw snapshot"
         if resume_state is not None and not result["uploaded"] and not result.get("drive_file"):
             result["resumable_upload"] = resume_state
             result.setdefault("error_code", "drive_upload_interrupted")
