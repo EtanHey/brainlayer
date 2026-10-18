@@ -34,7 +34,6 @@ from rich.table import Table
 from .. import __version__
 from ..config import DEFAULT_REALTIME_ENRICH_SINCE_HOURS
 from ..paths import get_db_path
-from ..pipeline import chunk as index_pipeline
 from ..retired_services import RETIRED_ENRICHMENT_LABELS
 
 app = typer.Typer(
@@ -141,6 +140,10 @@ class _CalendarIndexCheckpoint:
     """Durable input offsets plus a separate, visible per-pass convergence record."""
 
     def __init__(self, db: Path, source: Path, project: str | None, force: bool):
+        # Keep root --version/help free of the pipeline package's heavy imports.
+        from ..pipeline.chunk import INDEX_PIPELINE_VERSION
+
+        self.pipeline_version = INDEX_PIPELINE_VERSION
         identity = hashlib.sha256(f"{db.resolve()}\0{source.resolve()}\0{project}".encode()).hexdigest()[:16]
         self.path = db.parent / f"index-checkpoint-{identity}.json"
         self.backlog_path = db.parent / f"index-backlog-{identity}.json"
@@ -213,7 +216,7 @@ class _CalendarIndexCheckpoint:
                     raise ValueError("invalid best backlog")
                 if (
                     previous.get("database") == self.database
-                    and previous.get("pipeline_version") == index_pipeline.INDEX_PIPELINE_VERSION
+                    and previous.get("pipeline_version") == self.pipeline_version
                 ):
                     self.previous = previous
                     self.failures = previous.get("failures", {})
@@ -272,7 +275,7 @@ class _CalendarIndexCheckpoint:
         old = saved.get("signature", [])
         # Only a verified same-inode/device, newline-terminated prefix may retain offsets.
         if (
-            saved.get("pipeline_version") == index_pipeline.INDEX_PIPELINE_VERSION
+            saved.get("pipeline_version") == self.pipeline_version
             and len(old) == 4
             and old[0] == signature[0]
             and old[3] == signature[3]
@@ -315,7 +318,7 @@ class _CalendarIndexCheckpoint:
                 stream.seek(signature[1] - 1)
             boundary = not signature[1] or stream.read(1) == b"\n"
         self.files[key] = dict(
-            pipeline_version=index_pipeline.INDEX_PIPELINE_VERSION,
+            pipeline_version=self.pipeline_version,
             signature=signature,
             next_chunk=next_chunk,
             done=done,
@@ -342,7 +345,7 @@ class _CalendarIndexCheckpoint:
         )
 
     def failure_matches(self, path, old):
-        if old.get("pipeline_version") != index_pipeline.INDEX_PIPELINE_VERSION:
+        if old.get("pipeline_version") != self.pipeline_version:
             return False
         signature, prior = self.signature(path), old.get("signature", [])
         if prior == signature:
@@ -392,7 +395,7 @@ class _CalendarIndexCheckpoint:
             else 1
         )
         self.failures[key] = dict(
-            pipeline_version=index_pipeline.INDEX_PIPELINE_VERSION,
+            pipeline_version=self.pipeline_version,
             signature=signature,
             prefix_sha256=self.hashes.get((str(path), tuple(signature), signature[1])),
             error=token,
@@ -454,7 +457,7 @@ class _CalendarIndexCheckpoint:
         quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
         state = dict(
             database=self.database,
-            pipeline_version=index_pipeline.INDEX_PIPELINE_VERSION,
+            pipeline_version=self.pipeline_version,
             **backlog,
             stalled_passes=stalled,
             best_backlog=best,
