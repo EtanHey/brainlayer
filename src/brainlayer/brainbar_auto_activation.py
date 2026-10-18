@@ -69,18 +69,13 @@ class AutoActivator:
                 prior = json.loads(failures.read_text()) if failures.exists() else {}
                 count = min(prior.get("failures", 0) + 1, 12)
                 _atomic_write_json(failures, {"failures": count})
-                if count >= 12 and all(loaded(label).returncode == 113 for label, _ in JOBS):
-                    report("brainbar-activation", f"BrainBar activation process scan failed for >=12 ticks: {exc}")
-            else:
-                failures.unlink(missing_ok=True)
-                reason = active_alerts().get("brainbar-activation", "")
-                if reason.startswith(
-                    (
-                        "BrainBar activation process scan failed for >=12 ticks:",
-                        "BrainBar activation monitor refused: Command '['/bin/ps',",
-                    )
-                ):
-                    report("brainbar-activation", None)
+                if count >= 12:
+                    try:
+                        absent = all(loaded(label).returncode == 113 for label, _ in JOBS)
+                    except (OSError, subprocess.SubprocessError, RuntimeError):
+                        return  # Unknown launchd state is not evidence BrainBar is down.
+                    if absent:
+                        report("brainbar-activation", f"BrainBar activation process scan failed for >=12 ticks: {exc}")
 
     def _defer_for_brew(self):
         # Separate from the per-build attempt: brew may have removed both plists.
@@ -90,6 +85,17 @@ class AutoActivator:
             processes = brew_processes()
         except (OSError, subprocess.SubprocessError) as exc:
             raise ProcessScanUnavailable(type(exc).__name__) from None
+        # Recover before activation can report a new failure on the same alert key.
+        self.state.with_suffix(".scan.json").unlink(missing_ok=True)
+        reason = active_alerts().get("brainbar-activation", "")
+        if reason.startswith(
+            (
+                "BrainBar activation process scan failed for >=12 ticks:",
+                "BrainBar activation monitor refused: Command '['/bin/ps',",
+                "BrainBar activation monitor refused: [Errno",
+            )
+        ):
+            report("brainbar-activation", None)
         absent = bool(processes) and all(loaded(label).returncode == 113 for label, _ in JOBS)
         if not absent:
             if prior:

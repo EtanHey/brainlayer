@@ -408,7 +408,7 @@ def test_successful_scan_clears_only_scan_alerts(monitor, monkeypatch, reason, c
     assert ("brainbar-activation" not in job_alerts.active_alerts()) == cleared
 
 
-def test_second_scan_failure_never_launches_and_counts_failed_ticks(monitor, monkeypatch):
+def test_second_scan_failure_never_launches_and_successful_scan_resets_count(monitor, monkeypatch):
     worker, _, calls, alerts = monitor
     scans = 0
 
@@ -424,7 +424,66 @@ def test_second_scan_failure_never_launches_and_counts_failed_ticks(monitor, mon
         auto.AutoActivator(worker.agents, worker.state).tick()
     assert not calls and not alerts and not worker.state.exists()
     worker.tick()
-    assert len(alerts) == 1 and "OSError" in alerts[0][1]
     assert not calls and not worker.state.exists()
+    assert not alerts
+    assert json.loads(worker.state.with_suffix(".scan.json").read_text()) == {"failures": 1}
+
+
+@pytest.mark.parametrize(
+    "scan_reason",
+    [
+        "BrainBar activation process scan failed for >=12 ticks: TimeoutExpired",
+        "BrainBar activation monitor refused: Command '['/bin/ps', '-axo']' timed out after 5 seconds",
+        "BrainBar activation monitor refused: [Errno 11] Resource temporarily unavailable",
+    ],
+)
+def test_scan_recovery_keeps_new_activation_failure_visible(monitor, monkeypatch, scan_reason):
+    from brainlayer import job_alerts
+
+    worker, _, calls, _ = monitor
+    job_alerts.report("brainbar-activation", scan_reason, notify=lambda _: None)
+    monkeypatch.setattr(auto, "report", lambda key, reason: job_alerts.report(key, reason, notify=lambda _: None))
     worker.tick()
-    assert all(reason is not None for _, reason in alerts)
+    assert len(calls) == 1
+    assert (
+        job_alerts.active_alerts()["brainbar-activation"]
+        == "BrainBar activation failed: blocked; run brainlayer brainbar activate"
+    )
+    worker.tick()
+    assert len(calls) == 1
+    assert "activation failed: blocked" in job_alerts.active_alerts()["brainbar-activation"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("launchctl private-argv"),
+        auto.subprocess.TimeoutExpired(["launchctl", "private-argv"], 5),
+        RuntimeError("launchctl private-argv"),
+    ],
+)
+def test_scan_failure_with_unknown_loaded_state_does_not_alert(monitor, monkeypatch, error):
+    worker, _, calls, alerts = monitor
+    worker.state.with_suffix(".scan.json").write_text('{"failures":11}')
+
+    def fail_scan():
+        raise OSError("ps private-argv")
+
+    def fail_loaded(label):
+        raise error
+
+    monkeypatch.setattr(auto, "brew_processes", fail_scan)
+    monkeypatch.setattr(auto, "loaded", fail_loaded)
+    worker.tick()
+    assert not alerts and not calls and not worker.state.exists()
+
+
+def test_successful_scan_resets_counter_before_later_tick_error(monitor):
+    worker, _, calls, alerts = monitor
+    failures = worker.state.with_suffix(".scan.json")
+    failures.write_text('{"failures":11}')
+    (worker.agents / f"{JOBS[0][0]}.plist").write_text("invalid plist")
+    with pytest.raises(plistlib.InvalidFileException):
+        worker.tick()
+    assert not failures.exists()
+    assert not calls and not alerts
