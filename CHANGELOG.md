@@ -39,6 +39,17 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.62] - 2026-10-18
+
+### Fixed
+- Resume stalled Drive backup uploads and preserve local snapshots until a newer backup is uploaded and verified (#1384).
+
+### Upgrade notes
+- The next backup run resumes a stalled upload of the same unchanged snapshot when it is less than 36 hours old (default); its upload session is saved privately with mode 0600.
+- A stalled local backup is deleted only after a newer backup is uploaded and verified. If disk capacity is insufficient, the run fails with an explicit error naming the retained file instead of deleting it.
+- Receipts carry `snapshot_created_at`; backup reuse and observability measure age from that snapshot time. Legacy receipts fall back to the filename date at UTC midnight.
+- Formula-only release: BrainBar and its cask remain at 1.5.61.
+
 ## [1.5.61] - 2026-10-18
 
 ### Fixed
