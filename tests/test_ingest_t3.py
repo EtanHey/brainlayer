@@ -1018,6 +1018,65 @@ def test_s2_precomputed_vectors_reject_mismatched_scrubbed_content():
         index_new.index_chunks_to_sqlite([chunk], "source.sqlite", store=Store(), precomputed_embeddings=computed)
 
 
+@pytest.mark.parametrize("mixed", [False, True])
+@pytest.mark.parametrize("scrub_to_empty", [False, True])
+def test_empty_t3_inputs_are_handled_before_embedding_and_budget(tmp_path, monkeypatch, mixed, scrub_to_empty):
+    from brainlayer import index_new
+    from brainlayer.ingest import t3
+    from brainlayer.vector_store import VectorStore
+
+    blank = "synthetic body removed by scrub" if scrub_to_empty else " \n"
+    bodies = [blank]
+    if mixed:
+        bodies = ["First surviving synthetic T3 input.", blank, "Last surviving synthetic T3 input."]
+    chunks = [
+        Chunk(
+            body,
+            ContentType.USER_MESSAGE,
+            ContentValue.HIGH,
+            {"chunk_id": f"t3:empty-fixture:{i}", "created_at": "2026-10-18T00:00:00Z", "allow_duplicate": True},
+            len(body),
+        )
+        for i, body in enumerate(bodies)
+    ]
+    if scrub_to_empty:
+        real_scrub = index_new.scrub_for_storage
+        monkeypatch.setattr(
+            index_new,
+            "scrub_for_storage",
+            lambda text, metadata: ("", metadata) if text == blank else real_scrub(text, metadata),
+        )
+    embedded = []
+
+    def embed(chunks, **kwargs):
+        embedded.extend(chunks)
+        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    destination = tmp_path / "copy.db"
+    VectorStore(destination).close()
+    expected = [c for c in chunks if c.content != blank]
+    budget = t3._IndexBudget(remaining=len(chunks))
+    assert t3._index_chunks(
+        chunks, source_file="fixture.sqlite", project=None, db_path=destination, budget=budget
+    ) == len(expected)
+    assert {c.metadata["chunk_id"] for c in embedded} == {c.metadata["chunk_id"] for c in expected}
+    assert budget.remaining == 1 and budget.deferred == 0
+    with VectorStore(destination, readonly=True) as store:
+        assert dict(store.conn.execute("SELECT id, content FROM chunks")) == {
+            c.metadata["chunk_id"]: c.content for c in expected
+        }
+        assert store.conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    embedded.clear()
+    replay_budget = t3._IndexBudget(remaining=2)
+    assert (
+        t3._index_chunks(chunks, source_file="fixture.sqlite", project=None, db_path=destination, budget=replay_budget)
+        == 0
+    )
+    assert not embedded
+    assert replay_budget.remaining == 2 and replay_budget.deferred == 0
+
+
 def test_s2_cap_indexes_newest_messages_first(tmp_path, monkeypatch):
     from brainlayer import index_new
     from brainlayer.ingest import t3

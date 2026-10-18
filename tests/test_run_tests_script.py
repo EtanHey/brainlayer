@@ -2016,6 +2016,7 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
 
 
 IDX_FOCUSED_MAPPINGS = (
+    ("ingest/t3", ("test_ingest_t3.py",)),
     (
         "index_new",
         ("test_source_class.py", "test_ingest_t3.py", "test_context_pipeline.py", "test_index_empty_content.py"),
