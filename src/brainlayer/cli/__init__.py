@@ -361,12 +361,12 @@ class _CalendarIndexCheckpoint:
     def summary(self):
         return " ".join(f"{key}={value}" for key, value in self.backlog().items())
 
-    def finish(self):
+    def finish(self, *, deferred=False):
         from ..drive_credentials import _atomic_write
 
         backlog = self.backlog()
         stalled = 0
-        if backlog["files_remaining"] and self.previous:
+        if backlog["files_remaining"] and self.previous and not deferred and not self.previous.get("deferred"):
             smaller = any(backlog[key] < self.previous.get(key, backlog[key]) for key in backlog)
             if not smaller:
                 stalled = self.previous.get("stalled_passes", 0) + 1
@@ -375,6 +375,7 @@ class _CalendarIndexCheckpoint:
             database=self.database,
             **backlog,
             stalled_passes=stalled,
+            deferred=deferred,
             quarantined=quarantined,
             failures=self.failures,
             catalog=self.catalog,
@@ -383,6 +384,10 @@ class _CalendarIndexCheckpoint:
         rprint(f"INDEX_BACKLOG {self.summary()} stalled_passes={stalled} quarantined_files={len(quarantined)}")
         for path in quarantined:
             rprint(f"INDEX_QUARANTINED file={path}")
+        if deferred:
+            # Calendar finish() alone owns rc75 streak escalation. An unstarted busy
+            # pass is not evidence of non-converging work and must not alarm twice.
+            return False
         if stalled >= self.limit("BRAINLAYER_INDEX_STALL_PASSES") or quarantined:
             code = (
                 "INDEX_BACKLOG_STALLED"
@@ -3907,6 +3912,7 @@ def index_fast(
     checkpoint = None
     skipped_empty_chunks = 0
     rejected_chunks = 0
+    pass_deferred = False
 
     def note_skipped_empty(count: int) -> None:
         nonlocal skipped_empty_chunks
@@ -4218,6 +4224,7 @@ def index_fast(
                     current_file=current_file,
                     checkpoint=checkpoint,
                 ) from e
+            pass_deferred = True
             rprint(
                 "[yellow]INDEX_DEFERRED resident_writer_busy[/] "
                 f"committed_chunks={total_chunks} files_completed={files_completed} "
@@ -4248,7 +4255,7 @@ def index_fast(
         raise typer.Exit(1)
     finally:
         rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks} rejected_chunks={rejected_chunks}")
-        if checkpoint is not None and checkpoint.finish():
+        if checkpoint is not None and checkpoint.finish(deferred=pass_deferred):
             raise typer.Exit(1)
 
 

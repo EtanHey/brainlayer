@@ -18,6 +18,13 @@ A reduction in remaining files, known chunks, or uncounted files resets that str
 Zero remaining files also resets it. No custom alarm delivery is required for this
 nonzero calendar result to remain visible.
 
+Index rc75 deferrals use the calendar's existing `defer_after` streak (default 3
+consecutive nights), reported through the `index` job-alert key. Rc0, including a
+checkpointed yield, resets the deferral streak and clears its notice. A deferred
+pass does not advance the CLI backlog-stall streak: the calendar owns that cause,
+so persistent writer contention produces one deferral escalation, not a second
+backlog alarm. Real rc1 non-convergence still follows the failed-job report path.
+
 An append resumes at the saved input offset only on the same device/inode, with at
 least the saved byte length, a newline-terminated saved prefix, and a matching SHA-256
 of that prefix. Truncation, replacement, or prefix rewrite replays from zero. Older

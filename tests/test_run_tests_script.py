@@ -2022,6 +2022,15 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
 
 
 IDX_FOCUSED_MAPPINGS = (
+    (
+        "maintenance_calendar",
+        (
+            "test_maintenance_calendar.py",
+            "test_maintenance_calendar_leases.py",
+            "test_index_calendar_custody.py",
+            "test_index_calendar_deferrals.py",
+        ),
+    ),
     ("ingest/t3", ("test_ingest_t3.py", "test_health_check.py", "test_paths.py")),
     (
         "index_new",
