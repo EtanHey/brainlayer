@@ -1700,9 +1700,15 @@ def _snapshot_created_time(receipt: Mapping[str, Any]) -> dt.datetime | None:
         if "snapshot_created_at" in receipt:
             value = dt.datetime.fromisoformat(receipt["snapshot_created_at"])
             return value.astimezone(dt.UTC) if value.tzinfo is not None else None
-        snapshot = receipt.get("snapshot")
-        date = _parse_snapshot_date(Path(snapshot).name) if isinstance(snapshot, str) else None
-        return dt.datetime.combine(date, dt.time(), dt.UTC) if date else None
+        drive_file = receipt.get("drive_file")
+        drive_name = drive_file.get("name") if isinstance(drive_file, dict) else drive_file
+        # Recovery receipts across a prior machine identity may have only a Drive
+        # filename. Its artifact date is conservative; attempted_at would relabel old bytes.
+        for name in (receipt.get("snapshot"), drive_name):
+            date = _parse_snapshot_date(Path(name).name) if isinstance(name, str) else None
+            if date is not None:
+                return dt.datetime.combine(date, dt.time(), dt.UTC)
+        return None
     except (ValueError, TypeError):
         return None
 
