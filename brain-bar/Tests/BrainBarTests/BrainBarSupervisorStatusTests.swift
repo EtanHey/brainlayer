@@ -70,6 +70,47 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         XCTAssertNil(history.runs["decay"])
     }
 
+    func testReorderedCalendarKeepsMaintenanceAndJSONLResultsBeforeLongDailyUpload() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let file = directory.appendingPathComponent("runs.jsonl")
+        try Data("""
+        {"event":"runner","ts":1784466000}
+        {"event":"spawn","step":"index","ts":1784466001,"pid":4241}
+        {"event":"finished","step":"index","ts":1784466060,"status":"ok","returncode":0}
+        {"event":"spawn","step":"maintenance-weekly","ts":1784466100,"pid":4242}
+        {"event":"finished","step":"maintenance-weekly","ts":1784466160,"status":"ok","returncode":0,"replaces":"maintenance-nightly"}
+        {"event":"spawn","step":"jsonl-backup","ts":1784466200,"pid":4243}
+        {"event":"finished","step":"jsonl-backup","ts":1784466260,"status":"ok","returncode":0}
+        {"event":"spawn","step":"backup-daily","ts":1784466300,"pid":4244}
+
+        """.utf8).write(to: file)
+        for dailyFinished in [false, true] {
+            if dailyFinished {
+                let handle = try FileHandle(forWritingTo: file)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: Data("""
+                {"event":"finished","step":"backup-daily","ts":1784480700,"status":"failed","returncode":1}
+
+                """.utf8))
+                try handle.close()
+            }
+            let history = BrainBarCalendarHistory.read(directory: directory)
+            XCTAssertNil(history.error)
+            XCTAssertEqual(history.runs["maintenance-weekly"]?.startedAt, Date(timeIntervalSince1970: 1784466100))
+            XCTAssertEqual(history.runs["jsonl-backup"]?.startedAt, Date(timeIntervalSince1970: 1784466200))
+            let observations = Self.supervised(history: history).sampleActivity()
+            XCTAssertEqual(observations[.maintenanceWeekly]?.lastExitCode, 0)
+            XCTAssertEqual(observations[.maintenanceWeekly]?.ownerNote, "Nightly skipped: weekly ran instead")
+            XCTAssertEqual(observations[.jsonlBackup]?.lastExitCode, 0)
+            XCTAssertEqual(observations[.jsonlBackup]?.loadState, .loaded)
+            if dailyFinished {
+                guard case .failed = observations[.backupDaily]?.loadState else {
+                    return XCTFail("Daily upload failure must stay attached to the daily step")
+                }
+            }
+        }
+    }
+
     @MainActor
     func testFailedCalendarStepCannotBeGreenOnJobsOrBackups() throws {
         for (status, code) in [("failed", Int32(1)), ("failed", 0), ("ok", 9)] {
