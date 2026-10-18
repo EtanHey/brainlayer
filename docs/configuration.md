@@ -325,3 +325,10 @@ than its later upload attempt. Legacy dated snapshots use conservative UTC
 midnight; unknown creation times fail closed. Resume requires an age below
 `BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS` (default **36**). Weekly maintenance's
 `BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS` further limits that age.
+
+The upload session is checkpointed privately before sending bytes, so even a
+supervisor exit retains a probeable session. Timeout, stop, and mid-upload auth
+failures preserve its identity and confirmed offset. Recovery sleeps and request
+timeouts share the remaining whole-run deadline, reserving five seconds to write
+the receipt. Session-creation POST network failures use the same bounded backoff;
+HTTP client/auth failures still stop immediately.

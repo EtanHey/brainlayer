@@ -31,7 +31,7 @@ def lane(tmp_path, monkeypatch):
         puts.append((url, headers["Content-Range"]))
         assert outcomes, "unexpected upload request"
         response = outcomes.pop(0)
-        if isinstance(response, Exception):
+        if isinstance(response, BaseException):
             raise response
         return response
 
@@ -197,7 +197,7 @@ def test_configured_network_budget_expires_and_saves_resume_state(lane, monkeypa
     with pytest.raises(backup.DriveUploadStalledError):
         lane.run()
     assert sum(sleeps) == pytest.approx(90, abs=0.01)
-    assert json.loads(lane.log.read_text())["resumable_upload"]["url"] == URL
+    assert json.loads(lane.log.read_text().splitlines()[-1])["resumable_upload"]["url"] == URL
 
 
 def test_mutation_during_stall_cannot_rebind_session_to_different_bytes(lane):
@@ -399,3 +399,76 @@ def test_r1_resumed_receipt_preserves_original_snapshot_time(lane):
     lane.outcomes.extend([_DriveResponse(308), _DriveResponse(200, payload={"id": "done"})])
     result = lane.run("2026-10-18")
     assert result["snapshot_created_at"] == receipt["snapshot_created_at"]
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "stop", "auth"])
+def test_r1_every_prefix_interruption_retains_private_resume_state(lane, interruption):
+    import signal
+
+    lane.outcomes.append(_DriveResponse(308, headers={"Range": "bytes=0-2"}))
+    error = {
+        "timeout": backup.BackupTimeoutError("wall deadline"),
+        "stop": backup.BackupStoppedError(signal.SIGTERM),
+        "auth": RuntimeError("HTTP 401"),
+    }[interruption]
+    lane.outcomes.append(error)
+    with pytest.raises(type(error)):
+        lane.run()
+    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    assert receipt["resumable_upload"]["url"] == URL
+    assert receipt["bytes_confirmed"] == 3
+    assert lane.log.stat().st_mode & 0o077 == 0
+    lane.outcomes.extend(
+        [_DriveResponse(308, headers={"Range": "bytes=0-2"}), _DriveResponse(200, payload={"id": "done"})]
+    )
+    assert lane.run("2026-10-18")["verified"]
+    assert len(lane.posts) == 1
+
+
+def test_r1_session_is_durable_before_first_chunk_for_supervisor_exit(lane, monkeypatch):
+    def interrupted(*args, **kwargs):
+        receipt = json.loads(lane.log.read_text().splitlines()[-1])
+        assert receipt["resumable_upload"]["url"] == URL
+        raise backup.BackupTimeoutError("supervisor exit")
+
+    monkeypatch.setattr(backup, "_drive_put_with_deadline", interrupted)
+    with pytest.raises(backup.BackupTimeoutError):
+        lane.run()
+
+
+def test_r1_session_init_dns_outage_uses_network_backoff(lane, monkeypatch):
+    original = backup.requests.post
+    attempts = []
+
+    def post(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise backup.requests.ConnectionError("DNS offline")
+        return original(*args, **kwargs)
+
+    monkeypatch.delenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS")
+    monkeypatch.setattr(backup.requests, "post", post)
+    sleeps = []
+    monkeypatch.setattr(backup, "_sleep", sleeps.append)
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "done"}))
+    assert lane.run()["verified"]
+    assert sleeps == [30, 60]
+
+
+def test_r1_recovery_budget_reserves_receipt_time_before_run_deadline(lane, monkeypatch):
+    monkeypatch.delenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS")
+    monkeypatch.setenv("BRAINLAYER_BACKUP_TIMEOUT_SECONDS", "20")
+    clock = [100.0]
+    monkeypatch.setattr(backup.time, "monotonic", lambda: clock[0])
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(backup, "_sleep", sleep)
+    lane.outcomes.extend([ConnectionError("offline")] * 50)
+    with pytest.raises((backup.BackupTimeoutError, backup.DriveUploadStalledError)):
+        lane.run()
+    assert sum(sleeps) <= 15
+    assert json.loads(lane.log.read_text().splitlines()[-1])["resumable_upload"]["url"] == URL

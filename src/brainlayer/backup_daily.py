@@ -1199,32 +1199,13 @@ def upload_file_to_drive_raw(
     chunk_size: int = 8 * 1024 * 1024,
     max_attempts: int = 30,
     resume_session_url: str | None = None,
+    progress_callback: Callable[[str, int], None] | None = None,
+    run_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Upload unchanged bytes; probe ambiguous writes before retransmitting them."""
     file_path = Path(file_path)
     total = file_path.stat().st_size
     upload_url = resume_session_url
-    if upload_url is None:
-        init = requests.post(
-            "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
-            "&fields=id,name,size,md5Checksum,appProperties",
-            headers={
-                "Authorization": f"Bearer {credentials.token}",
-                "Content-Type": "application/json; charset=UTF-8",
-                "X-Upload-Content-Type": "application/gzip",
-                "X-Upload-Content-Length": str(total),
-            },
-            data=json.dumps(
-                {
-                    "name": file_path.name,
-                    "parents": [folder_id],
-                    "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
-                }
-            ),
-            timeout=60,
-        )
-        init.raise_for_status()
-        upload_url = init.headers["Location"]
 
     deadline_floor = _configured_positive_number(
         DRIVE_UPLOAD_DEADLINE_FLOOR_ENV,
@@ -1235,6 +1216,14 @@ def upload_file_to_drive_raw(
         DRIVE_UPLOAD_MIN_BYTES_PER_SECOND_ENV, DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND
     )
     budget = _configured_positive_number(DRIVE_UPLOAD_RETRY_BUDGET_ENV, 20 * 60)
+    run_deadline = run_deadline if run_deadline is not None else time.monotonic() + _configured_backup_timeout_seconds()
+
+    def request_deadline(desired: float) -> float:
+        remaining = run_deadline - time.monotonic() - 5  # reserve receipt flush/fsync before supervisor/ALRM
+        if remaining <= 0:
+            raise BackupTimeoutError("Drive recovery stopped before run deadline to persist receipt")
+        return min(desired, remaining)
+
     # Preserve the explicit operator attempt cap, without changing metadata-read retries.
     stall_limit = (
         _drive_upload_stall_max_attempts() if os.environ.get(DRIVE_UPLOAD_STALL_MAX_ATTEMPTS_ENV) else max_attempts
@@ -1253,7 +1242,7 @@ def upload_file_to_drive_raw(
             raise DriveUploadStalledError(
                 bytes_confirmed=sent, total_bytes=total, attempts=stalled_attempts, session_url=upload_url
             )
-        delay = min(300, 30 * 2 ** min(max(0, stalled_attempts - 1), 4), budget - elapsed)
+        delay = min(300, 30 * 2 ** min(max(0, stalled_attempts - 1), 4), budget - elapsed, request_deadline(budget))
         print(
             f"drive upload stalled; confirmed={sent}/{total} attempt={stalled_attempts}/{stall_limit}; "
             f"sleeping {delay}s",
@@ -1263,6 +1252,37 @@ def upload_file_to_drive_raw(
         slept += delay
 
     try:
+        while upload_url is None:
+            try:
+                init = requests.post(
+                    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+                    "&fields=id,name,size,md5Checksum,appProperties",
+                    headers={
+                        "Authorization": f"Bearer {credentials.token}",
+                        "Content-Type": "application/json; charset=UTF-8",
+                        "X-Upload-Content-Type": "application/gzip",
+                        "X-Upload-Content-Length": str(total),
+                    },
+                    data=json.dumps(
+                        {
+                            "name": file_path.name,
+                            "parents": [folder_id],
+                            "appProperties": {DRIVE_MACHINE_PROPERTY: _validate_machine_id(machine_id)},
+                        }
+                    ),
+                    timeout=request_deadline(60),
+                )
+                init.raise_for_status()
+                upload_url = init.headers["Location"]
+            except BackupTimeoutError:
+                raise
+            except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, requests.Timeout):
+                stall_started = time.monotonic() if stall_started is None else stall_started
+                stalled_attempts += 1
+                backoff()
+        stalled_attempts, slept, stall_started = 0, 0.0, None
+        if progress_callback is not None:
+            progress_callback(upload_url, sent)
         with file_path.open("rb") as handle:
             while sent < total or probe:
                 is_probe = probe
@@ -1286,7 +1306,7 @@ def upload_file_to_drive_raw(
                             "Content-Range": content_range,
                         },
                         data=chunk,
-                        deadline=max(deadline_floor, len(chunk) / minimum_rate),
+                        deadline=request_deadline(max(deadline_floor, len(chunk) / minimum_rate)),
                     )
                     if response.status_code in {200, 201}:
                         return response.json()
@@ -1306,6 +1326,8 @@ def upload_file_to_drive_raw(
                     http_attempts = 0
                     if confirmed > sent:
                         sent = confirmed
+                        if progress_callback is not None:
+                            progress_callback(upload_url, sent)
                         stalled_attempts, slept, stall_started = 0, 0.0, None
                         print(f"drive upload progress: {sent}/{total} bytes", flush=True)
                     elif not is_probe or confirmed == total:
@@ -1328,7 +1350,7 @@ def upload_file_to_drive_raw(
                     http_attempts += 1
                     if http_attempts >= max_attempts:
                         raise
-                    _sleep(min(60, 2 ** min(http_attempts, 6)))
+                    _sleep(min(60, 2 ** min(http_attempts, 6), request_deadline(60)))
     finally:
         session.close()
     raise RuntimeError("Drive upload ended without final response")
@@ -1715,7 +1737,7 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
                 str(path.resolve()) in protected
                 or receipt.get("uploaded") is not False
                 or receipt.get("verified") is not False
-                or receipt.get("error_code") != "drive_upload_stalled"
+                or not isinstance(receipt.get("resumable_upload"), dict)
                 or dt.datetime.fromisoformat(receipt["attempted_at"])
                 >= dt.datetime.fromisoformat(context["attempted_at"])
                 or any(
@@ -1788,7 +1810,14 @@ def run_backup(
     upload: bool = True,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
     remove_local_after_upload: bool = True,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
+    run_deadline = (
+        deadline_monotonic
+        if deadline_monotonic is not None
+        else time.monotonic() + _configured_backup_timeout_seconds()
+    )
+    resume_state: dict[str, Any] | None = None
     resolved_db_path = db_path or get_db_path()
     resolved_date_stamp = date_stamp or _today()
     resolved_log_path = _backup_log_path(log_path, db_path=resolved_db_path)
@@ -1917,12 +1946,32 @@ def run_backup(
             }:
                 print("Saved artifact changed before resume; preparing a fresh snapshot", flush=True)
                 continue
+
+            def record_upload_progress(url: str, confirmed: int) -> None:
+                nonlocal resume_state
+                next_state = {"url": url, "folder_id": folder_id, **upload_identity}
+                first = resume_state != next_state
+                resume_state = next_state
+                result["bytes_confirmed"] = confirmed
+                if first:
+                    _append_json_log(
+                        resolved_log_path,
+                        {
+                            **result,
+                            "resumable_upload": resume_state,
+                            "error_code": "drive_upload_interrupted",
+                            "upload_in_progress": True,
+                        },
+                    )
+
             try:
                 uploaded = upload_file_to_drive_raw(
                     snapshot,
                     folder_id,
                     credentials,
                     machine_id=resolved_machine_id,
+                    progress_callback=record_upload_progress,
+                    run_deadline=run_deadline,
                     **({"resume_session_url": resume["resumable_upload"]["url"]} if resume else {}),
                 )
             except DriveSessionExpiredError:
@@ -2001,8 +2050,6 @@ def run_backup(
         if isinstance(error_code, str):
             result["error_code"] = error_code
         if isinstance(exc, DriveUploadStalledError):
-            if exc.session_url:
-                result["resumable_upload"] = {"url": exc.session_url, "folder_id": folder_id, **upload_identity}
             result.update(
                 {
                     "error_type": exc.error_code,
@@ -2012,6 +2059,9 @@ def run_backup(
             )
         raise
     finally:
+        if resume_state is not None and not result["verified"]:
+            result["resumable_upload"] = resume_state
+            result.setdefault("error_code", "drive_upload_interrupted")
         _append_json_log(resolved_log_path, result)
     return result
 
@@ -2028,6 +2078,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
     try:
         resolved_db_path = get_db_path()
         result = run_backup(
+            deadline_monotonic=time.monotonic() + timeout_seconds,
             staging_dir=Path(os.environ.get("BRAINLAYER_BACKUP_STAGING_DIR", str(DEFAULT_STAGING_DIR))),
             # Prefer BRAINLAYER_BACKUP_DRIVE_FOLDER; BRAINLAYER_BACKUP_DRIVE_PATH
             # is a legacy alias. With neither set, run_backup derives the host folder.

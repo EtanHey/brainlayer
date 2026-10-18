@@ -219,7 +219,7 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_keeps_raw_snapshot(
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials, *, machine_id):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, *, machine_id, **kwargs):  # noqa: ARG001
         uploads.append(Path(file_path))
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -263,7 +263,7 @@ def test_run_backup_full_verify_downloads_drive_copy_and_md5_compares(tmp_path, 
     monkeypatch.setattr(backup_daily, "verify_drive_upload", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_daily, "prune_drive_backups", lambda *args, **kwargs: [])
 
-    def fake_upload(file_path, folder_id, credentials, *, machine_id):  # noqa: ARG001
+    def fake_upload(file_path, folder_id, credentials, *, machine_id, **kwargs):  # noqa: ARG001
         uploaded_bytes["drive-file-id"] = Path(file_path).read_bytes()
         return {"id": "drive-file-id", "name": Path(file_path).name, "size": str(Path(file_path).stat().st_size)}
 
@@ -443,7 +443,7 @@ def test_run_backup_wires_verified_log_provenance_into_local_gzip_pruning(tmp_pa
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials, *, machine_id: {
+        lambda file_path, folder_id, credentials, *, machine_id, **kwargs: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -1854,7 +1854,7 @@ def test_drive_upload_that_blocks_forever_fails_loudly_with_confirmed_bytes(tmp_
 
     assert time.monotonic() - started < 1
     assert any(value == "bytes */6" for value in ranges)
-    logged = json.loads(log_path.read_text(encoding="utf-8"))
+    logged = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
     assert logged["error_type"] == "drive_upload_stalled"
     assert logged["error_code"] == "drive_upload_stalled"
     assert logged["bytes_confirmed"] == 3
@@ -2034,7 +2034,7 @@ def _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service):
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials, *, machine_id: {
+        lambda file_path, folder_id, credentials, *, machine_id, **kwargs: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -2124,7 +2124,7 @@ def test_run_backup_unverified_upload_skips_drive_and_local_gzip_pruning(tmp_pat
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials, *, machine_id: {
+        lambda file_path, folder_id, credentials, *, machine_id, **kwargs: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -2192,7 +2192,7 @@ def test_run_backup_appends_result_to_file_log(tmp_path, monkeypatch):
     monkeypatch.setattr(
         backup_daily,
         "upload_file_to_drive_raw",
-        lambda file_path, folder_id, credentials, *, machine_id: {
+        lambda file_path, folder_id, credentials, *, machine_id, **kwargs: {
             "id": "drive-file-id",
             "name": Path(file_path).name,
             "size": str(Path(file_path).stat().st_size),
@@ -2290,7 +2290,7 @@ def test_run_backup_logs_degraded_writer_probe_when_artifact_creation_fails(tmp_
             log_path=log_path,
         )
 
-    logged = json.loads(log_path.read_text(encoding="utf-8"))
+    logged = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
     assert logged["attempt_reclamation"] == "degraded"
     assert logged["writer_probe_error"] == "RuntimeError: daemon unavailable"
     assert logged["error_type"] == "RuntimeError"

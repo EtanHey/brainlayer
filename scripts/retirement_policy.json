@@ -2406,6 +2406,16 @@
         "path": "brain-bar/Sources/BrainBarDaemon/BrainBusClient.swift"
       }
     },
+    "6f9e4a98af6f5066a1a7c3d934021074e0a7f3c3bc5a57262bb52e1e089c3fee": {
+      "non_cloud_purpose": "Drive backup resumable session creation and network timeout classification under a bounded recovery budget; no model API.",
+      "site": {
+        "call_sha256": "b0566914dfd9eeb91911f122eb459a80f5663e97b9cdb8f19d998abe0884fafa",
+        "kind": "callable_reference",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.Timeout"
+      }
+    },
     "7000b1aac5396c337df05ca3ffdf0a27e49df836f2693add674f75bbf49a09bf": {
       "non_cloud_purpose": "Operator-only live Codex App MCP probe over the existing daemon AF_UNIX WebSocket control socket. Uses local thread/start, turn/start, thread/read and own-turn interrupt; does not create a listener or connect an Internet model endpoint. The installed agent retains its own provider configuration and may invoke its model provider; no BrainLayer production model backend is restored. Site: <module>.AppSocket.__init__ self.send.",
       "site": {
@@ -3430,16 +3440,6 @@
         "owner": "<module>.replay_pre_push",
         "path": "scripts/ci_ratchet_table.py",
         "target": "subprocess.run"
-      }
-    },
-    "a18d1427efc7ddc4b18aa9c58355d26796f3dac77a44a48b00a71b10793e899a": {
-      "non_cloud_purpose": "Create a Google Drive resumable backup upload session; backup artifact transport, no LLM.",
-      "site": {
-        "call_sha256": "18414e9ebd0a4527add992831d21ebb9f8125402f1ac0a95ad1ced1e26595b28",
-        "kind": "generic_send",
-        "owner": "<module>.upload_file_to_drive_raw",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "requests.post"
       }
     },
     "a19f15c518ba4a9d9e5d70747f377879d8050b298da3efbe74d440d24c2ffce1": {
@@ -4834,6 +4834,16 @@
         "owner": "<module>.helper_started_at",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
+      }
+    },
+    "ddd3ce0283349eeebe4ea16ba63d1a009ab519c300b5ca4a5c5f618a1ed3109d": {
+      "non_cloud_purpose": "Drive backup resumable session creation and network timeout classification under a bounded recovery budget; no model API.",
+      "site": {
+        "call_sha256": "4049e49df5e328f380d3c2e4090bce3d3b05c78e1fa5d35aba7159c06a75accf",
+        "kind": "generic_send",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.post"
       }
     },
     "de00ab5510da36ed21719375c85227f6fce4dbaf23348c6e8d035077341724c0": {
