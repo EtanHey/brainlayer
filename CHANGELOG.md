@@ -39,6 +39,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.64] - 2026-10-18
+
+### Added
+- Add explicit MCP-verified BrainBar activation and supervisor recovery after deferred cask activation (#1392).
+
+### Fixed
+- Verify running BrainBar executable identity against the installed bundle and re-arm automatic activation after reinstall (#1393).
+
+### Upgrade notes
+- New `brainlayer brainbar activate` (MCP-verified, idempotent). The BrainLayer supervisor re-activates BrainBar automatically after a cask upgrade or reinstall (once per installed build; never while Homebrew is running; failure raises a job alert).
+- Pairs with the upcoming tap cask change whose postflight no longer launches BrainBar (#1391), so macOS can carry the previous version's approval forward and upgrades need no click. Native no-consent/real-MCP acceptance remains outstanding; this release alone does not guarantee no consent prompt.
+- Automatic activation requires the formula's always-on supervisor and both cask labels to be unloaded. Manual activation and `brainbar verify-running` provide explicit activation and installed-build verification after Homebrew returns.
+- Formula-only release: BrainBar and its cask remain at 1.5.61.
+
 ## [1.5.63] - 2026-10-18
 
 ### Fixed
