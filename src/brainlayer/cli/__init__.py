@@ -203,6 +203,12 @@ class _CalendarIndexCheckpoint:
                     type(previous.get(k)) is not int for k in ("files_remaining", "chunks_remaining", "uncounted_files")
                 ):
                     raise ValueError("invalid backlog counters")
+                best = previous.get("best_backlog")
+                if best is not None and (
+                    not isinstance(best, dict)
+                    or any(type(best.get(k)) is not int or best[k] < 0 for k in self.backlog_keys())
+                ):
+                    raise ValueError("invalid best backlog")
                 if previous.get("database") == self.database:
                     self.previous = previous
                     self.failures = previous.get("failures", {})
@@ -373,20 +379,42 @@ class _CalendarIndexCheckpoint:
     def summary(self):
         return " ".join(f"{key}={value}" for key, value in self.backlog().items())
 
+    @staticmethod
+    def backlog_keys():
+        return ("files_remaining", "chunks_remaining", "uncounted_files")
+
     def finish(self, *, deferred=False):
         from ..drive_credentials import _atomic_write
 
         backlog = self.backlog()
-        stalled = 0
-        if backlog["files_remaining"] and self.previous and not deferred and not self.previous.get("deferred"):
-            smaller = any(backlog[key] < self.previous.get(key, backlog[key]) for key in backlog)
-            if not smaller:
-                stalled = self.previous.get("stalled_passes", 0) + 1
+        stalled = self.previous.get("stalled_passes", 0)
+        best = self.previous.get("best_backlog")
+        # Migrate an older non-deferred measurement without treating a deferral
+        # as a completed pass. New sidecars preserve this baseline explicitly.
+        if best is None and self.previous and not self.previous.get("deferred"):
+            best = {key: self.previous[key] for key in self.backlog_keys()}
+        if not deferred:
+            if not backlog["files_remaining"] or best is None or not best["files_remaining"]:
+                stalled, best = 0, backlog
+            else:
+                measured = backlog["uncounted_files"] == 0
+                # Unknown chunks are only a lower bound. Compare complete work
+                # counts, then file counts for ties, against the held minimum.
+                smaller = (
+                    measured
+                    and best["uncounted_files"] == 0
+                    and (backlog["chunks_remaining"], backlog["files_remaining"])
+                    < (best["chunks_remaining"], best["files_remaining"])
+                )
+                stalled = 0 if smaller else stalled + 1
+                if smaller or (measured and best["uncounted_files"] > 0):
+                    best = backlog
         quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
         state = dict(
             database=self.database,
             **backlog,
             stalled_passes=stalled,
+            best_backlog=best,
             deferred=deferred,
             quarantined=quarantined,
             failures=self.failures,

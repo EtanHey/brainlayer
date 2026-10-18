@@ -250,3 +250,52 @@ def test_all_rejected_batch_never_loads_encoder(calendar_fixture, monkeypatch):
     assert next(iter(checkpoint(db).values()))["next_chunk"] == 1
     with ReadonlyStore(db) as store:
         assert store.conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (0,)
+
+
+def finish_backlog_pass(tmp_path, *, files=1, chunks=1000, unknown=0, deferred=False):
+    """Review probes exercise real sidecar reloads, without a DB/model/socket."""
+    db = tmp_path / "probe.db"
+    if not db.exists():
+        db.write_bytes(b"fixture")
+    cp = cli._CalendarIndexCheckpoint(db, tmp_path, None, False)
+    cp.backlog = lambda: dict(files_remaining=files, chunks_remaining=chunks, uncounted_files=unknown)
+    alarm = cp.finish(deferred=deferred)
+    return alarm, json.loads(cp.backlog_path.read_text())
+
+
+def test_r1_partial_inventory_cannot_reset_stall(tmp_path):
+    for _ in range(3):
+        finish_backlog_pass(tmp_path, files=5, chunks=500)
+    alarm, state = finish_backlog_pass(tmp_path, files=5, chunks=101, unknown=4)
+    assert state["stalled_passes"] == 3
+    assert alarm
+
+
+def test_r1_interleaved_deferrals_preserve_stall_and_baseline(tmp_path):
+    counts = []
+    alarms = []
+    for kind in "NNDNNDNNDNN":
+        alarm, state = finish_backlog_pass(tmp_path, deferred=kind == "D")
+        counts.append(state["stalled_passes"])
+        alarms.append(alarm)
+    assert counts == [0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7]
+    assert alarms == [False, False, False, False, True, False, True, True, False, True, True]
+    # A deferred lower count is not the baseline for the next real pass.
+    other = tmp_path / "shrinking"
+    other.mkdir()
+    finish_backlog_pass(other, chunks=500)
+    finish_backlog_pass(other, chunks=1, deferred=True)
+    alarm, state = finish_backlog_pass(other, chunks=400)
+    assert not alarm and state["stalled_passes"] == 0
+
+
+def test_r1_noisy_growth_compares_with_best_backlog(tmp_path):
+    outcomes = [finish_backlog_pass(tmp_path, files=n) for n in (5, 4, 6, 5, 7)]
+    assert [state["stalled_passes"] for _, state in outcomes] == [0, 0, 1, 2, 3]
+    assert outcomes[-1][0]
+
+
+def test_r1_measured_convergence_and_new_work_cycle_remain_healthy(tmp_path):
+    for chunks in (1000, 900, 800, 700, 0, 600, 500, 400):
+        alarm, state = finish_backlog_pass(tmp_path, files=int(chunks > 0), chunks=chunks)
+        assert not alarm and state["stalled_passes"] == 0
