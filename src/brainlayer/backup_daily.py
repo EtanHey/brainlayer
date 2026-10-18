@@ -17,6 +17,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -182,7 +183,28 @@ def default_drive_folder_parts(machine_id: str) -> list[str]:
     return [*CANONICAL_FOLDER_PARTS[:-1], f"brainlayer-db-{resolved}"]
 
 
+def _redact_upload_secrets(value: str) -> str:
+    def redact_url(match: re.Match[str]) -> str:
+        url = match.group(0)
+        return "[redacted-session-url]" if "upload_id" in url.lower() or "/upload/drive/" in url else url
+
+    value = re.sub(r"https?://[^\s\"'<>]+", redact_url, value)
+    return re.sub(r"(?i)(upload_id(?:=|%3d))[^&\s\"'<>;]+", r"\1[REDACTED]", value)
+
+
+def _redact_upload_exception(exc: BaseException) -> None:
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        exc.args = tuple(_redact_upload_secrets(arg) if isinstance(arg, str) else arg for arg in exc.args)
+        exc = exc.__cause__ or exc.__context__
+
+
 def _append_json_log(path: Path, payload: dict[str, Any]) -> None:
+    payload = {
+        key: _redact_upload_secrets(value) if "error" in key and isinstance(value, str) else value
+        for key, value in payload.items()
+    }
     payload.setdefault("snapshot_created_at", None)
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -348,10 +370,12 @@ def _retry_transient_drive_call(call: Callable[[], Any], *, what: str) -> Any:
             raise  # the whole-run deadline is not a network blip
         except (*_DRIVE_TRANSIENT_NETWORK_ERRORS, TransportError) as exc:
             if attempt >= limit:
-                raise RuntimeError(f"{what} failed after {attempt} attempts: {type(exc).__name__}: {exc}") from exc
+                raise RuntimeError(
+                    f"{what} failed after {attempt} attempts: {type(exc).__name__}: {_redact_upload_secrets(str(exc))}"
+                ) from exc
             sleep_seconds = min(60, 2**attempt)
             print(
-                f"{what} retry attempt={attempt}/{limit}: {type(exc).__name__}: {exc}; sleeping {sleep_seconds}s",
+                f"{what} retry attempt={attempt}/{limit}: {type(exc).__name__}: {_redact_upload_secrets(str(exc))}; sleeping {sleep_seconds}s",
                 flush=True,
             )
             _sleep(sleep_seconds)
@@ -583,7 +607,10 @@ def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path)
         try:
             shutil.rmtree(directory)
         except OSError as exc:
-            print(f"Backup temp cleanup deferred: name={directory.name} error={exc}", flush=True)
+            print(
+                f"Backup temp cleanup deferred: name={directory.name} error={_redact_upload_secrets(str(exc))}",
+                flush=True,
+            )
         else:
             removed.append(directory.name)
     return removed
@@ -675,7 +702,7 @@ def _request_macos_purge(path: Path, amount_bytes: int) -> None:
     except BackupTimeoutError:
         raise
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"macOS CacheDelete request unavailable: {exc}") from exc
+        raise RuntimeError(f"macOS CacheDelete request unavailable: {_redact_upload_secrets(str(exc))}") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
         raise RuntimeError(f"macOS CacheDelete request failed: {detail or f'exit {completed.returncode}'}")
@@ -756,7 +783,7 @@ def create_sqlite_backup_artifact(
         raise
     except (OSError, RuntimeError, ValueError) as exc:
         writer_started_at = None
-        writer_probe_error = f"{type(exc).__name__}: {exc}"
+        writer_probe_error = f"{type(exc).__name__}: {_redact_upload_secrets(str(exc))}"
         print(f"BrainBar attempt reclamation degraded: {writer_probe_error}", flush=True)
     attempt_reclamation = "armed" if writer_started_at is not None else "degraded"
     if reclamation_status_callback is not None:
@@ -799,7 +826,7 @@ def create_sqlite_backup_artifact(
         try:
             _request_macos_purge(output_dir, request_bytes)
         except RuntimeError as exc:
-            purge_error = str(exc)
+            purge_error = _redact_upload_secrets(str(exc))
         raw_free_bytes = shutil.disk_usage(output_dir).free
         for _ in range(60):
             if raw_free_bytes >= required_bytes:
@@ -972,12 +999,12 @@ def request_brainbar_vacuum_into(
                 existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
             if attempt >= max_attempts:
                 print(
-                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}",
+                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}",
                     flush=True,
                 )
                 break
             print(
-                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {exc}{existing_target_note}; "
+                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}; "
                 f"retrying in {retry_backoff_seconds}s",
                 flush=True,
             )
@@ -1351,6 +1378,9 @@ def upload_file_to_drive_raw(
                     if http_attempts >= max_attempts:
                         raise
                     _sleep(min(60, 2 ** min(http_attempts, 6), request_deadline(60)))
+    except BaseException as exc:
+        _redact_upload_exception(exc)
+        raise
     finally:
         session.close()
     raise RuntimeError("Drive upload ended without final response")
@@ -1533,7 +1563,7 @@ def verify_sqlite_backup_artifact(
             result["verified"] = True
     except Exception as exc:
         result.setdefault("gzip_test", False)
-        result["verification_error"] = str(exc)
+        result["verification_error"] = _redact_upload_secrets(str(exc))
     return result
 
 
@@ -1898,7 +1928,7 @@ def run_backup(
                     capacity_status_callback=record_capacity,
                 )
             except RuntimeError as exc:
-                if stalled and "Insufficient free space" in str(exc):
+                if stalled and "Insufficient free space" in _redact_upload_secrets(str(exc)):
                     raise RetainedStalledBackupCapacityError([Path(r["snapshot"]).name for r in stalled]) from exc
                 raise
             result["snapshot_created_at"] = getattr(artifact, "snapshot_created_at", None) or create_started
@@ -2031,21 +2061,28 @@ def run_backup(
                             retention_policy=retention_policy,
                         )
                     except Exception as exc:
-                        result.update({"retention_error_type": type(exc).__name__, "retention_error": str(exc)})
+                        result.update(
+                            {
+                                "retention_error_type": type(exc).__name__,
+                                "retention_error": _redact_upload_secrets(str(exc)),
+                            }
+                        )
                         raise
 
     except BackupStoppedError as exc:
         result.update(
             {
                 "error_type": type(exc).__name__,
-                "error": str(exc),
+                "error": _redact_upload_secrets(str(exc)),
                 "stop_signal": signal.Signals(exc.signum).name,
             }
         )
         exc.receipt_logged = True
         raise
     except Exception as exc:
-        result.update({"error_type": getattr(exc, "error_type", type(exc).__name__), "error": str(exc)})
+        result.update(
+            {"error_type": getattr(exc, "error_type", type(exc).__name__), "error": _redact_upload_secrets(str(exc))}
+        )
         error_code = getattr(exc, "error_code", None)
         if isinstance(error_code, str):
             result["error_code"] = error_code
@@ -2105,7 +2142,7 @@ def _run_backup_process(timeout_seconds: int) -> int:
                     "uploaded": False,
                     "backup_log_provenance": _backup_log_provenance(),
                     "error_type": "BackupStoppedError",
-                    "error": str(exc),
+                    "error": _redact_upload_secrets(str(exc)),
                     "stop_signal": signal.Signals(exc.signum).name,
                 },
             )
@@ -2114,14 +2151,17 @@ def _run_backup_process(timeout_seconds: int) -> int:
         print(f"brainlayer backup timed out after {timeout_seconds}s", flush=True)
         return 124
     except Exception as exc:
-        print(f"brainlayer backup failed: {exc}\n{traceback.format_exc()}", flush=True)
+        print(
+            f"brainlayer backup failed: {_redact_upload_secrets(str(exc))}\n{_redact_upload_secrets(traceback.format_exc())}",
+            flush=True,
+        )
         return 1
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_alarm_handler)
         signal.signal(signal.SIGTERM, previous_term_handler)
         signal.signal(signal.SIGINT, previous_int_handler)
-    print(json.dumps(result, sort_keys=True), flush=True)
+    print(_redact_upload_secrets(json.dumps(result, sort_keys=True)), flush=True)
     return 0 if result.get("verified", True) else 1
 
 

@@ -472,3 +472,36 @@ def test_r1_recovery_budget_reserves_receipt_time_before_run_deadline(lane, monk
         lane.run()
     assert sum(sleeps) <= 15
     assert json.loads(lane.log.read_text().splitlines()[-1])["resumable_upload"]["url"] == URL
+
+
+def test_r1_http_error_and_receipt_redact_session_credentials(lane):
+    response = backup.requests.Response()
+    response.status_code = 401
+    response.url = URL
+    lane.outcomes.extend([_DriveResponse(308, headers={"Range": "bytes=0-2"}), response])
+    with pytest.raises(backup.requests.HTTPError) as error:
+        lane.run()
+    assert URL not in str(error.value)
+    assert "upload_id=test" not in str(error.value)
+    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    assert "upload_id=test" not in receipt["error"]
+    assert receipt["resumable_upload"]["url"] == URL
+
+
+def test_r1_failure_traceback_and_retry_log_redact_session_url(lane, monkeypatch, capsys):
+    def fail(**kwargs):
+        raise RuntimeError(f"for url: {URL}; upload_id=test")
+
+    monkeypatch.setattr(backup, "run_backup", fail)
+    monkeypatch.setattr(backup, "get_db_path", lambda: lane.root / "unused.db")
+    assert backup._run_backup_process(20) == 1
+    output = capsys.readouterr().out
+    assert URL not in output and "upload_id=test" not in output
+    monkeypatch.setenv("BRAINLAYER_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS", "2")
+
+    def network_fail():
+        raise ConnectionError(f"for url: {URL}")
+
+    with pytest.raises(RuntimeError):
+        backup._retry_transient_drive_call(network_fail, what="Drive probe")
+    assert "upload_id=test" not in capsys.readouterr().out
