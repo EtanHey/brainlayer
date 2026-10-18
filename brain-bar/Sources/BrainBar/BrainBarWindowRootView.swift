@@ -568,12 +568,12 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if case let .readable(document) = observability, document.backups.state == "measured" {
             let snapshot = document.backups.dbSnapshot
             let upload = document.backups.lastVerifiedUpload
-            let shared = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: now)
+            let shared = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: now, calendar: calendar)
             let databaseLine = ObservabilityStatusLine(
                     text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
                     tone: shared.snapshot.tone)
             let transcriptLine = ObservabilityStatusLine(
-                    text: document.backups.verifiedIdle(now: now) ? "Transcripts · \(shared.upload.text)" : "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
+                    text: document.backups.verifiedIdle(now: now) ? "Transcripts · Drive · no changes\(upload.map { " since " + backupMoment($0.at, now: now, calendar: calendar, locale: locale, prefix: "") } ?? "")" : "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
                     tone: shared.upload.tone)
             backupLines = [databaseLine] + [shared.snapshotUpload].compactMap { $0 } + [transcriptLine]
         } else {
@@ -714,16 +714,16 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         return "\(seconds / 3_600) h"
     }
 
-    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale, prefix: String = "last good ") -> String {
         if calendar.isDate(date, inSameDayAs: now) {
-            return "last good today \(shortTime(date, calendar: calendar, locale: locale))"
+            return "\(prefix)today \(shortTime(date, calendar: calendar, locale: locale))"
         }
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.locale = locale
         formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "MMM d 'at' HH:mm"
-        return "last good \(formatter.string(from: date))"
+        return "\(prefix)\(formatter.string(from: date))"
     }
 }
 
@@ -3286,7 +3286,8 @@ enum BrainBarDashboardPreview {
         panelState: BrainBarDashboardPanelState? = nil,
         disablesAnimations: Bool = true,
         jobAttentionReasons: [String] = [],
-        observabilityCadence: ObservabilityCadence? = nil
+        observabilityCadence: ObservabilityCadence? = nil,
+        colorScheme: ColorScheme = .dark
     ) -> AnyView {
         let dashboard =
             ZStack {
@@ -3305,7 +3306,7 @@ enum BrainBarDashboardPreview {
                     jobAttentionReasons: jobAttentionReasons
                 )
             }
-            .environment(\.colorScheme, .dark)
+            .environment(\.colorScheme, colorScheme)
         if disablesAnimations {
             // Suppress SwiftUI animations so every value lands at its final state
             // immediately — no mid-animation capture. (The read-only

@@ -1240,7 +1240,8 @@ private struct BrainBarDriveAwareBackupsGroup: View {
     }
 }
 
-private struct BrainBarJobGroupCard: View {
+// Internal so isolated native tests can render the actual Jobs card without launching the app.
+struct BrainBarJobGroupCard: View {
     let group: BrainLayerLaunchdJobGroup
     @ObservedObject var viewModel: BrainBarSettingsViewModel
     /// The Backups page passes its combined verdict; other groups show launchd health alone.
@@ -1286,7 +1287,7 @@ private struct BrainBarJobGroupCard: View {
         let (symbol, color): (String, Color) = switch backupsHealth.badge {
         case .checking: (Self.symbol(.checking), Self.color(.checking))
         case .healthy: (Self.symbol(.healthy), Self.color(.healthy))
-        case .idle, .uploading: ("info.circle.fill", Color.brainBarTextMuted)
+        case .idle, .queued, .uploading: ("info.circle.fill", Color.brainBarTextMuted)
         case .awaitingRun: (Self.symbol(.awaitingRun), Self.color(.awaitingRun))
         case .expiring: ("clock.badge.exclamationmark.fill", Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
         case .attention: (Self.symbol(.unhealthy), Self.color(.unhealthy))

@@ -34,9 +34,10 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         _ backups: ObservabilityDocument.Backups,
         now: Date,
         locale: Locale = .current,
-        jobStatus: ObservabilityStatusLine? = nil
+        jobStatus: ObservabilityStatusLine? = nil,
+        calendar: Calendar = .current
     ) -> Self {
-        let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale, jobStatus: jobStatus, now: now)
+        let lines = ObservabilityPresentation.backupStatus(for: backups, locale: locale, jobStatus: jobStatus, now: now, calendar: calendar)
         let rel = { (date: Date) in relative(date, now: now, locale: locale) }
 
         var upload: String = switch backups.lastVerifiedUpload {
@@ -44,26 +45,18 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         case let value?: "Uploaded \(rel(value.at)), not verified"
         case nil: "No verified upload yet"
         }
-        let snapshot: String = switch backups.dbSnapshot {
+        var snapshot: String = switch backups.dbSnapshot {
         case let value? where value.verified: "Verified \(rel(value.lastAt))"
         case let value?: "Saved \(rel(value.lastAt)), not verified"
         case nil: "No verified copy yet"
         }
+        if lines.snapshot.tone == .red, backups.dbSnapshot?.verified == true { snapshot = lines.snapshot.text }
         let idle = backups.verifiedIdle(now: now)
         if idle { upload = lines.upload.text }
         let job: String = if let jobStatus { jobStatus.text }
             else if backups.launchd?.bootstrapped == true { "Scheduled" }
             else if backups.launchd?.disabledDirPresent == true { "Paused by a safety stop" }
             else { "Not scheduled" }
-        let threshold = backups.thresholdHours.map { "\(Int($0)) hours" }
-        let freshness: String = switch backups.freshness {
-        case _ where backups.localSnapshot?.uploadState == "nothing_pending": "Local snapshot freshness unknown"
-        case "fresh" where backups.hasRecentVerifiedNoOp(now: now): "Fresh verified no-op; database copy checked separately"
-        case "fresh" where backups.localSnapshot != nil: "Recent transcript attempt; database copies checked separately"
-        case "fresh": threshold.map { "Both copies are under \($0) old" } ?? "Both copies are recent"
-        case "stale": threshold.map { "A copy is older than \($0)" } ?? "A copy is out of date"
-        default: "Unknown"
-        }
         let retention: String = switch backups.retentionInvariant {
         case "PASS": "On"
         case "FAIL": "Failing"
@@ -79,7 +72,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             Check(id: "upload", title: "Transcripts in Google Drive", value: upload, tone: lines.upload.tone),
             Check(id: "snapshot", title: "Database copy", value: snapshot, tone: lines.snapshot.tone),
             Check(id: "job", title: "Daily transcript backup", value: job, tone: lines.job.tone),
-            Check(id: "freshness", title: "Up to date", value: freshness, tone: lines.freshness.tone),
+            Check(id: "freshness", title: lines.freshnessCheckTitle, value: lines.freshnessCheckValue, tone: lines.freshness.tone),
             Check(id: "retention", title: "Safe cleanup", value: retention, tone: lines.retention.tone),
             Check(id: "archives", title: "Verified archives, last 30 days", value: archives, tone: lines.archives.tone),
         ]
@@ -87,7 +80,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             checks.insert(.init(id: "snapshot-upload", title: "Local database snapshot", value: annotation.text, tone: annotation.tone), at: 2)
         }
         let failing = checks.filter { $0.tone == .red }.count
-        let summary: String = if failing == 0 && lines.uploadInProgress { "Upload in progress" }
+        let summary: String = if failing == 0 && lines.uploadInProgress { lines.uploadQueued ? "Upload queued" : "Upload in progress" }
             else if failing == 0 && idle { "Idle — no new transcripts" }
             else if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"
             : jobStatus?.text.hasPrefix("Deferred") == true ? "Deferred" : "Job schedule unknown" } else { switch failing {
@@ -104,7 +97,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
 
         return .init(
             summary: summary, checks: checks, alert: alert, alertTone: alertTone,
-            details: details(backups, lines: lines, locale: locale, jobStatus: jobStatus),
+            details: details(backups, lines: lines, locale: locale, calendar: calendar, jobStatus: jobStatus),
             attentionSentence: attention, scheduleUnknown: jobStatus?.tone == .neutral
         )
     }
@@ -112,11 +105,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
     /// "1 hour ago", "3 days ago"; anything under a minute, or in the future (a clock skew), is
     /// "just now".
     static func relative(_ date: Date, now: Date, locale: Locale = .current) -> String {
-        guard now.timeIntervalSince(date) >= 60 else { return "just now" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = locale
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: now)
+        ObservabilityPresentation.relative(date, now: now, locale: locale)
     }
 
     /// The status line's sentence, except that an unrecognised error code reads as a plain
@@ -134,10 +123,17 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         _ backups: ObservabilityDocument.Backups,
         lines: ObservabilityBackupStatus,
         locale: Locale,
+        calendar: Calendar,
         jobStatus: ObservabilityStatusLine?
     ) -> [Detail] {
         func exact(_ date: Date) -> String {
-            date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            return formatter.string(from: date)
         }
         var rows: [Detail] = []
         if let upload = backups.lastVerifiedUpload {

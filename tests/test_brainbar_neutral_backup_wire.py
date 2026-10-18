@@ -64,9 +64,23 @@ def producer_documents(root: Path) -> list[dict]:
                 },
             )
         if name == "verified_bundle":
-            attempts = [{"attempted_at": "2026-09-13T10:00:00Z", "status": "uploaded", "verified": True, "uploaded": True, "archive_id": "synthetic-current-archive"}]
+            attempts = [
+                {
+                    "attempted_at": "2026-09-13T10:00:00Z",
+                    "status": "uploaded",
+                    "verified": True,
+                    "uploaded": True,
+                    "archive_id": "synthetic-current-archive",
+                }
+            ]
         alert = Path(env["BRAINLAYER_JOB_ALERT_PATH"])
-        alert.write_text(json.dumps({"maintenance-weekly": "Weekly maintenance missed its quiet window"} if name == "m1_weekly_alert" else {}))
+        alert.write_text(
+            json.dumps(
+                {"maintenance-weekly": "Weekly maintenance missed its quiet window"}
+                if name == "m1_weekly_alert"
+                else {}
+            )
+        )
         transcript.write_text("".join(json.dumps(row) + "\n" for row in attempts))
         receipts = [dict(prior)]
         if name == "stale_offsite":
@@ -79,7 +93,11 @@ def producer_documents(root: Path) -> list[dict]:
                 "local_verified": name != "abandoned",
                 "uploaded": name in {"verified", "verified_bundle"},
                 "verified": name in {"verified", "verified_bundle"},
-                "upload_state": "in_progress" if name == "stale_offsite" else "verified" if name == "verified_bundle" else name,
+                "upload_state": "in_progress"
+                if name == "stale_offsite"
+                else "verified"
+                if name == "verified_bundle"
+                else name,
                 "local_integrity": "ok",
                 "local_integrity_pragma": "integrity_check",
             }

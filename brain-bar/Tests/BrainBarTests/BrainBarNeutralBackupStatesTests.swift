@@ -141,7 +141,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         for locale in [Locale(identifier: "en_US"), Locale(identifier: "fr_FR")] {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(secondsFromGMT: -12 * 3600)!
-            let checks = BrainBarBackupChecks.derive(doc.backups, now: now, locale: locale)
+            let checks = BrainBarBackupChecks.derive(doc.backups, now: now, locale: locale, calendar: calendar)
             let formatter = DateFormatter()
             formatter.calendar = calendar
             formatter.timeZone = calendar.timeZone
@@ -150,6 +150,15 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             XCTAssertEqual(checks.checks[0].value, "No new transcripts since \(formatter.string(from: doc.backups.lastVerifiedUpload!.at)) · checked \(BrainBarBackupChecks.relative(doc.backups.transcriptAttempt!.at, now: now, locale: locale))")
             XCTAssertEqual(checks.checks.first { $0.id == "freshness" }?.title, "Transcript coverage")
             XCTAssertFalse(checks.checks.map(\.value).joined().contains("no-op"))
+            let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
+            let flow = DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now)
+            let hero = BrainBarHeroPresentation.derive(flow: flow, stats: collector.stats,
+                backupTruth: BrainBarHeroBackupTruth.derive(from: .readable(doc), now: now, cadence: .known(300)))
+            let dashboard = BrainBarOnePagePresentation.derive(snapshotFreshness: collector.snapshotFreshnessState,
+                hero: hero, observability: .readable(doc), stats: collector.stats, agentActivity: collector.agentActivity,
+                now: now, calendar: calendar, locale: locale, observabilityCadence: .known(300))
+            formatter.dateFormat = "MMM d 'at' HH:mm"
+            XCTAssertEqual(dashboard.backupLines.last?.text, "Transcripts · Drive · no changes since \(formatter.string(from: doc.backups.lastVerifiedUpload!.at))")
         }
     }
 
@@ -208,6 +217,8 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
                 XCTAssertEqual(status.snapshotUpload?.tone, .red)
                 XCTAssertEqual(status.snapshotUpload?.text, "Last offsite DB copy is 30 days old; upload still pending")
                 XCTAssertFalse(status.uploadInProgress)
+                let job = BrainLayerLaunchdGroupStatus(health: .healthy, attentionReason: nil, lastRunText: "", nextRunText: "")
+                XCTAssertEqual(BrainBarBackupsHealth.derive(job: job, drive: nil, status: status, statusUnavailableReason: "").badge, .attention)
                 XCTAssertNotNil(checks.attentionSentence)
             case "m1_weekly_alert":
                 XCTAssertEqual(status.lines.filter { $0.tone == .red }.map(\.text), ["Weekly maintenance missed its quiet window"])
@@ -235,7 +246,7 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
             let lines = ObservabilityPresentation.backupStatus(for: doc.backups, now: now)
             let healthy = BrainLayerLaunchdGroupStatus(health: .healthy, attentionReason: nil, lastRunText: "", nextRunText: "")
             let badge = BrainBarBackupsHealth.derive(job: healthy, drive: nil, status: lines, statusUnavailableReason: "missing")
-            XCTAssertEqual(badge.badge, state == nil ? .idle : .uploading)
+            XCTAssertEqual(badge.badge, state == nil ? .idle : state == "pending" ? .queued : .uploading)
             let failed = BrainLayerLaunchdGroupStatus(health: .unhealthy,
                 attentionReason: "Weekly maintenance missed its quiet window", lastRunText: "", nextRunText: "")
             XCTAssertEqual(BrainBarBackupsHealth.derive(job: failed, drive: nil, status: lines, statusUnavailableReason: "").badge, .attention)
@@ -258,44 +269,69 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
 
     func testNeutralChecksRenderInIsolatedNativeView() throws {
         if ProcessInfo.processInfo.environment["CI"] == "true" { throw XCTSkip("Native render runs locally") }
-        for state in [nil, "pending", "in_progress", "failed", "abandoned", "nothing_pending"] as [String?] {
-            let doc = try document(attempt: true, pending: state, error: state == "failed" ? "DriveUploadError" : nil, historicalUpload: true)
-            let checks = BrainBarBackupChecks.derive(doc.backups, now: now, locale: Locale(identifier: "en_US"))
-            let lines = ObservabilityPresentation.backupStatus(for: doc.backups, now: now)
-            let view = VStack(alignment: .leading, spacing: 18) {
-                Text(state ?? "Verified idle no-op").font(.title2)
-                BrainBarBackupChecksCard(checks: checks, hiddenAlert: nil, detailsExpanded: .constant(true), copy: { _ in })
-                ObservabilityStatusRows(lines: lines.lines)
-            }.padding(24).frame(width: 900).background(Color(nsColor: .windowBackgroundColor))
-                .environment(\.colorScheme, .dark)
-            let host = NSHostingView(rootView: view)
-            host.frame = NSRect(x: 0, y: 0, width: 900, height: host.fittingSize.height)
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
-            host.layoutSubtreeIfNeeded()
-            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-            XCTAssertGreaterThan(png.count, 10_000)
-            let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-                .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            try png.write(to: root.appendingPathComponent("neutral-\(state ?? "idle").png"))
-            if state == nil || state == "pending" {
-                let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
-                let dashboard = NSHostingView(rootView: BrainBarDashboardPreview.make(collector: collector,
-                    observabilityResult: .readable(doc), now: now, observabilityCadence: .known(300)))
-                dashboard.frame = NSRect(x: 0, y: 0, width: 960, height: 640)
-                dashboard.layoutSubtreeIfNeeded()
-                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
-                dashboard.layoutSubtreeIfNeeded()
-                let image = try XCTUnwrap(dashboard.bitmapImageRepForCachingDisplay(in: dashboard.bounds))
-                dashboard.cacheDisplay(in: dashboard.bounds, to: image)
-                let data = try XCTUnwrap(image.representation(using: .png, properties: [:]))
-                XCTAssertGreaterThan(data.count, 10_000)
-                try data.write(to: root.appendingPathComponent("neutral-dashboard-\(state ?? "idle").png"))
+        let fixture = try XCTUnwrap(Bundle.module.resourceURL).appendingPathComponent("Fixtures/neutral-backup-states-v2.json")
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [[String: Any]])
+        let temporary = brainBarTestTemporaryDirectory().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let url = temporary.appendingPathComponent("observability.json")
+        var documents: [(String, ObservabilityDocument)] = []
+        for item in cases {
+            try JSONSerialization.data(withJSONObject: XCTUnwrap(item["document"])).write(to: url)
+            guard case let .readable(doc) = ObservabilityReader.read(url: url) else { return XCTFail("Render fixture failed to decode") }
+            let name = try XCTUnwrap(item["name"] as? String)
+            documents.append((name, doc))
+        }
+        // No real producer emits this state yet; exercise the defensive decoder branch directly.
+        documents.append(("nothing_pending", try document(attempt: true, pending: "nothing_pending", historicalUpload: true)))
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for (name, original) in documents {
+            let doc = name == "verified" ? try XCTUnwrap(documents.first { $0.0 == "verified_bundle" }?.1) : original
+            for scheme in name == "idle" || name == "pending" ? [ColorScheme.dark, .light] : [.dark] {
+                let suffix = scheme == .light ? "-light" : ""
+                let checks = BrainBarBackupChecks.derive(doc.backups, now: doc.generatedAt, locale: BrainBarDashboardPreview.goldenLocale,
+                    calendar: BrainBarDashboardPreview.goldenCalendar)
+                let lines = ObservabilityPresentation.backupStatus(for: doc.backups, now: doc.generatedAt)
+                let view = VStack(alignment: .leading, spacing: 18) {
+                    Text(name).font(.title2)
+                    BrainBarBackupChecksCard(checks: checks, hiddenAlert: nil, detailsExpanded: .constant(true), copy: { _ in })
+                    ObservabilityStatusRows(lines: lines.lines)
+                }.padding(24).frame(width: 900).background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, scheme)
+                try render(view, to: root.appendingPathComponent("neutral-\(name)\(suffix).png"), width: 900)
+                if name == "idle" || name == "pending" {
+                    let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: doc.generatedAt)
+                    let dashboard = BrainBarDashboardPreview.make(collector: collector,
+                        observabilityResult: .readable(doc), now: doc.generatedAt, observabilityCadence: .known(300), colorScheme: scheme)
+                    try render(dashboard, to: root.appendingPathComponent("neutral-dashboard-\(name)\(suffix).png"), width: 960, height: 640)
+                }
+                if scheme == .dark, ["idle", "in_progress", "m1_weekly_alert", "stale_offsite"].contains(name) {
+                    let health = BrainBarBackupsHealth.derive(job: .init(health: .healthy, attentionReason: nil, lastRunText: "", nextRunText: ""),
+                        drive: nil, status: lines, statusUnavailableReason: "Missing")
+                    let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(),
+                        store: BrainLayerConfigStore(configURL: temporary.appendingPathComponent("synthetic.env")),
+                        initialLaunchdStates: [.backupDaily: .loaded, .jsonlBackup: .loaded], refreshStatusOnLoad: false,
+                        now: { doc.generatedAt }, initialObservabilityResult: .readable(doc))
+                    let card = BrainBarJobGroupCard(group: .backups, viewModel: viewModel, backupsHealth: health, backupsReason: health.reason)
+                        .padding(24).frame(width: 600).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, .dark)
+                    try render(card, to: root.appendingPathComponent("neutral-jobs-\(name).png"), width: 600)
+                }
             }
         }
     }
 
+    private func render<V: View>(_ view: V, to url: URL, width: CGFloat, height: CGFloat? = nil) throws {
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height ?? host.fittingSize.height)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        XCTAssertGreaterThan(png.count, 10_000)
+        try png.write(to: url)
+    }
 }
