@@ -100,6 +100,66 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             observations: observations, formatDate: { $0.description }).health.title, "Deferred")
     }
 
+    func testRecordedWindowReasonAndWeeklySubstitutionReachJobs() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let file = directory.appendingPathComponent("runs.jsonl")
+        for (reason, expected) in [
+            ("index-overran-window", "Indexing ran past the 04:00–06:00 window"),
+            ("quiet-window-missed", "The 04:00–06:00 maintenance window was missed"),
+        ] {
+            try Data("""
+            {"event":"finished","step":"maintenance-weekly","ts":1784466060,"status":"deferred","returncode":75,"reason":"\(reason)","replaces":"maintenance-nightly"}
+
+            """.utf8).write(to: file)
+            let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory)).sampleActivity()
+            let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+                observations: observations, formatDate: { _ in "today" })
+            XCTAssertEqual(status.health, .deferred)
+            XCTAssertTrue(status.attentionReason?.contains(expected) == true)
+            XCTAssertFalse(status.attentionReason?.contains("reason unavailable") == true)
+            XCTAssertTrue(status.note?.contains("Nightly skipped: weekly scheduled instead") == true)
+        }
+        try Data("""
+        {"event":"spawn","step":"maintenance-weekly","ts":1784466000,"pid":4242}
+        {"event":"finished","step":"maintenance-weekly","ts":1784466060,"status":"ok","returncode":0,"replaces":"maintenance-nightly"}
+
+        """.utf8).write(to: file)
+        let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory)).sampleActivity()
+        let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: observations, formatDate: { _ in "today" })
+        XCTAssertEqual(status.health, .awaitingRun)
+        XCTAssertNil(status.attentionReason)
+        XCTAssertTrue(status.note?.contains("Nightly skipped: weekly ran instead") == true)
+        // A subsequent nightly run must clear the earlier substitution note.
+        let nightly = "{\"event\":\"finished\",\"step\":\"maintenance-nightly\",\"ts\":1784552460,\"status\":\"ok\",\"returncode\":0}\n"
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(nightly.utf8))
+        try handle.close()
+        let recovered = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory)).sampleActivity()
+        let recoveredStatus = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+            observations: recovered, formatDate: { _ in "today" })
+        XCTAssertFalse(recoveredStatus.note?.contains("Nightly skipped") == true)
+    }
+
+    func testWindowAttributionRequiresRecordedReasonAndNoSpawn() throws {
+        let directory = try journal("migrated").deletingLastPathComponent()
+        let logs = directory.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        for (reason, spawn) in [("", false), ("invented", false), ("index-overran-window", true)] {
+            let prefix = spawn ? "{\"event\":\"spawn\",\"step\":\"maintenance-weekly\",\"ts\":1784466000,\"pid\":4242}\n" : ""
+            try Data((prefix + """
+            {"event":"finished","step":"maintenance-weekly","ts":1784466060,"status":"deferred","returncode":75,"reason":"\(reason)"}
+
+            """).utf8).write(to: directory.appendingPathComponent("runs.jsonl"))
+            let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory), logs: logs).sampleActivity()
+            let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
+                observations: observations, formatDate: { _ in "today" })
+            XCTAssertTrue(status.attentionReason?.contains("reason unavailable") == true)
+            XCTAssertFalse(status.attentionReason?.contains("Indexing ran past") == true)
+        }
+    }
+
     func testDisabledNoSpawnCalendar75IsNeutralSkipped() {
         let history = BrainBarCalendarHistory(runs: ["jsonl-backup": .init(at: Date(), code: 75, status: "deferred")])
         let observations = Self.supervised(history: history, disabled: true).sampleActivity()

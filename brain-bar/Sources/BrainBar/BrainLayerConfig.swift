@@ -640,11 +640,24 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         )
         observation.calendarStartedAt = run?.startedAt
         if let run, state == .loaded, run.code == 75 {
-            observation.calendarDisabled = run.startedAt == nil && calendarIsDisabled(job)
+            observation.calendarDisabled = run.startedAt == nil && (run.reason == "disabled" || (run.reason == nil && calendarIsDisabled(job)))
             observation.calendarDeferralRecord = calendarAbort(job, run: run)
+            if run.startedAt == nil, job == .maintenanceNightly || job == .maintenanceWeekly {
+                switch run.reason {
+                case "index-overran-window": observation.calendarMissedWindowReason = "Indexing ran past the 04:00–06:00 window"
+                case "quiet-window-missed": observation.calendarMissedWindowReason = "The 04:00–06:00 maintenance window was missed"
+                default: break // Old/unproven exit 75 must keep its reason-unavailable verdict.
+                }
+            }
         }
         observation.ownerNote = "com.brainlayer.maintenance · " + (run.map { "last result: \($0.status)" }
             ?? "Scheduled, not yet run under the supervisor")
+        if job == .maintenanceWeekly, let run, run.replaces == "maintenance-nightly",
+           history.runs["maintenance-nightly"].map({ $0.at < run.at }) ?? true {
+            observation.ownerNote = run.code == 0 && run.status == "ok" && run.startedAt != nil
+                ? "Nightly skipped: weekly ran instead"
+                : "Nightly skipped: weekly scheduled instead"
+        }
         return observation
     }
 
