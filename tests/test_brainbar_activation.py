@@ -243,3 +243,53 @@ def test_lock_failure_has_complete_receipt(tmp_path):
     result = activation.activate(tmp_path / "missing")
     assert not result["ok"] and result["cleanup_errors"] == []
     assert result["rollback_attempted"] is False
+
+
+@pytest.mark.parametrize("release", [True, False])
+def test_manual_lock_wait_uses_its_activation_deadline(installed, monkeypatch, release):
+    agents, calls, _ = installed
+    now, attempts, budgets = [0.0], [], []
+    monkeypatch.setattr(activation.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(activation.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    def flock(*args):
+        attempts.append(now[0])
+        if not release or len(attempts) == 1:
+            raise BlockingIOError("held by supervisor")
+
+    monkeypatch.setattr(activation.fcntl, "flock", flock)
+    monkeypatch.setattr(activation, "_activate", lambda *a, **kw: budgets.append(kw["timeout_seconds"]) or {"ok": True})
+    result = activation.activate(agents, timeout_seconds=0.25)
+    assert len(attempts) > 1 and not calls
+    if release:
+        assert result["ok"] and 0 < budgets[0] < 0.25
+    else:
+        assert result["stage"] == "activation_lock" and "deadline" in result["reason"]
+        assert not budgets and now[0] == 0.25
+
+
+def test_automatic_lock_contention_defers_without_waiting_or_failure(installed, monkeypatch):
+    agents, calls, _ = installed
+
+    def held(*args):
+        raise BlockingIOError("held by manual activation")
+
+    monkeypatch.setattr(activation.fcntl, "flock", held)
+    monkeypatch.setattr(activation.time, "sleep", lambda _: pytest.fail("automatic activation must not wait"))
+    result = activation.activate(agents, automatic=True)
+    assert result["stage"] == "deferred" and not calls and result["cleanup_errors"] == []
+
+
+def test_manual_activation_proceeds_after_real_flock_is_released(installed, monkeypatch):
+    agents, calls, _ = installed
+    waits = []
+    with (agents / ".brainbar-activation.lock").open("a") as holder:
+        activation.fcntl.flock(holder, activation.fcntl.LOCK_EX | activation.fcntl.LOCK_NB)
+
+        def release(seconds):
+            waits.append(seconds)
+            activation.fcntl.flock(holder, activation.fcntl.LOCK_UN)
+
+        monkeypatch.setattr(activation.time, "sleep", release)
+        assert activation.activate(agents)["ok"]
+    assert len(waits) == 1 and calls
