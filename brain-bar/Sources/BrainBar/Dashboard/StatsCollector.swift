@@ -1041,11 +1041,12 @@ extension StatsCollector {
         heartbeat: DashboardHeartbeat = .empty,
         lastDataFetchedAt: Date?,
         lastFetchError: String? = nil,
-        snapshotFreshnessState: SnapshotFreshnessState = .live(ageSeconds: 0)
+        snapshotFreshnessState: SnapshotFreshnessState = .live(ageSeconds: 0),
+        collector isolatedCollector: StatsCollector? = nil
     ) -> StatsCollector {
-        // targetPID 0 makes the monitor's sample() return nil; it is never used
-        // because start()/requestRefresh() are not called on a fixture.
-        let collector = StatsCollector(
+        // Legacy non-refreshing previews use the fallback. DRIVE supplies a collector
+        // whose refresh providers are also synthetic, because its root requests refresh.
+        let collector = isolatedCollector ?? StatsCollector(
             dbPath: "/nonexistent/brainbar-fixture.db",
             daemonMonitor: DaemonHealthMonitor(targetPID: 0),
             agentActivityMonitor: AgentActivityMonitor(snapshotProvider: { nil }, executablePathResolver: { _ in nil })
@@ -1061,6 +1062,16 @@ extension StatsCollector {
         collector.lastFetchError = lastFetchError
         collector.snapshotFreshnessState = snapshotFreshnessState
         return collector
+    }
+
+    /// DEBUG fixture tests drain owned work before releasing their private dependencies.
+    func waitForFixtureRefresh() async {
+        await dashboardRefreshTask?.value
+        await signalCoverageTask?.value
+        await windowedBucketsTask?.value
+        await watcherProcessRefreshTask?.value
+        await daemonSampleTask?.value
+        await agentActivityTask?.value
     }
 }
 #endif
