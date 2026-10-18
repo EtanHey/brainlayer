@@ -379,6 +379,28 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py)
+        # These modules have split test owners. Require every companion before narrowing;
+        # a missing suite must retain the existing full-suite escalation.
+        if [ "$changed" = "src/brainlayer/embeddings.py" ]; then
+          idx_tests=(test_embedding_truncation.py test_embedding_device.py test_index_completion.py)
+        else
+          idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
+        fi
+        idx_complete=1
+        for rel in "${idx_tests[@]}"; do
+          if [ ! -f "$TEST_ROOT/$rel" ]; then
+            idx_complete=0
+            break
+          fi
+        done
+        if [ "$idx_complete" -eq 1 ]; then
+          for rel in "${idx_tests[@]}"; do
+            append_unique "$TEST_ROOT/$rel"
+          done
+          mapped=1
+        fi
+        ;;
       src/brainlayer/index_new.py)
         for rel in test_source_class.py test_ingest_t3.py test_context_pipeline.py; do
           test_path="$TEST_ROOT/$rel"
