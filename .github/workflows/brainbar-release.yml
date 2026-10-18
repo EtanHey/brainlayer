@@ -19,6 +19,8 @@ on:
       - "!v1.5.62"
       # Formula-only raw backup snapshot cleanup: retain BrainBar 1.5.61.
       - "!v1.5.63"
+      # Formula-only deferred activation release: retain BrainBar 1.5.61.
+      - "!v1.5.64"
 
 permissions:
   contents: write
