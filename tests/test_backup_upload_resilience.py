@@ -642,3 +642,72 @@ def test_r1_weekly_snapshot_expiring_during_upload_cannot_authorize_vacuum(lane,
     assert result["verified"] is False
     assert "snapshot" in result["verification_error"]
     assert lane.snapshot.exists()
+
+
+def _r2_completed_with_failed_verification(lane, monkeypatch, failure):
+    """Replay Cursor's _r2_repro{,2}: completed upload, unsuccessful verification."""
+    if failure == "weekly_age":
+        import datetime as dt
+
+        receipt = stalled(lane)
+        clock = [dt.datetime.now(dt.UTC)]
+        receipt["snapshot_created_at"] = (clock[0] - dt.timedelta(hours=5, minutes=59)).isoformat()
+        lane.log.write_text(json.dumps(receipt) + "\n")
+        real_datetime = dt.datetime
+
+        class Clock(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0].astimezone(tz)
+
+        monkeypatch.setattr(backup.dt, "datetime", Clock)
+        monkeypatch.setenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", "6")
+        lane.outcomes.extend(
+            [_DriveResponse(308, headers={"Range": "bytes=0-2"}), _DriveResponse(200, payload={"id": "done"})]
+        )
+
+        def verify(*args, **kwargs):
+            clock[0] += dt.timedelta(minutes=2)
+            return {"verified": True}
+    else:
+        lane.outcomes.extend(
+            [_DriveResponse(308, headers={"Range": "bytes=0-2"}), _DriveResponse(200, payload={"id": "done"})]
+        )
+
+        def verify(*args, **kwargs):
+            return {"verified": False, "verification_error": "local gzip verification failed"}
+
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", verify)
+    return lane.run("2026-10-18" if failure == "weekly_age" else "2026-10-17")
+
+
+@pytest.mark.parametrize("failure", ["weekly_age", "local_verify"])
+def test_r2_completed_upload_is_not_an_interrupted_session(lane, monkeypatch, failure):
+    result = _r2_completed_with_failed_verification(lane, monkeypatch, failure)
+    assert result["uploaded"] is True and result["drive_file"]["id"] == "done"
+    assert result["verified"] is False
+    assert "resumable_upload" not in result
+    assert result.get("error_code") != "drive_upload_interrupted"
+    reason = "weekly backup safety window" if failure == "weekly_age" else "local gzip verification failed"
+    assert reason in result["verification_error"]
+    receipt = json.loads(lane.log.read_text().splitlines()[-1])
+    assert "resumable_upload" not in receipt and URL not in json.dumps(receipt)
+    assert receipt.get("error_code") != "drive_upload_interrupted"
+    assert reason in receipt["verification_error"]
+    monkeypatch.delenv("BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS", raising=False)
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True})
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
+    assert lane.run("2026-10-19")["verified"]
+    assert len(lane.posts) == 2
+    assert lane.puts[-1][1] == "bytes 0-5/6"
+
+
+def test_r2_truncated_verification_receipt_cannot_revive_completed_session(lane, monkeypatch):
+    _r2_completed_with_failed_verification(lane, monkeypatch, "local_verify")
+    lines = lane.log.read_text().splitlines()
+    lane.log.write_text("\n".join(lines[:-1]) + '\n{"uploaded":')
+    monkeypatch.setattr(backup, "verify_sqlite_backup_artifact", lambda *a, **kw: {"verified": True})
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
+    assert lane.run("2026-10-18")["verified"]
+    assert len(lane.posts) == 2, "crash tail resurrected an already completed upload session"
+    assert lane.puts[-1][1] == "bytes 0-5/6"

@@ -2102,6 +2102,11 @@ def run_backup(
             file_id = uploaded.get("id")
             if not file_id:
                 raise RuntimeError(f"Drive upload response missing file id: {uploaded!r}")
+            # Drive has completed the session. Persist that fact before verification can
+            # fail or its final receipt can be truncated; an older checkpoint must not revive it.
+            result.update({"uploaded": True, "drive_file": uploaded})
+            resume_state = None
+            _append_json_log(resolved_log_path, {**result, "verification_pending": True})
             # The service above has sat idle through an upload that can run for hours; its
             # keep-alive socket is dead by now (2026-09-23: a finished upload was recorded failed
             # when verification reset on it). Every post-upload call gets a fresh connection. The
@@ -2134,8 +2139,6 @@ def run_backup(
                             "verification_error": "snapshot aged beyond weekly backup safety window; VACUUM not authorized",
                         }
                     )
-            # Keep the confirmed upload addressable even if cleanup/retention fails.
-            result.update({"uploaded": True, "drive_file": uploaded})
             if result["verified"]:
                 result["temp_dirs_removed_after_verification"] = _prune_owned_temps_after_verified(
                     snapshot.parent, snapshot
@@ -2196,7 +2199,7 @@ def run_backup(
             )
         raise
     finally:
-        if resume_state is not None and not result["verified"]:
+        if resume_state is not None and not result["uploaded"] and not result.get("drive_file"):
             result["resumable_upload"] = resume_state
             result.setdefault("error_code", "drive_upload_interrupted")
         _append_json_log(resolved_log_path, result)
