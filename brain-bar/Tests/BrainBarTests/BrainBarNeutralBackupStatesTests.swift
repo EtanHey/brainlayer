@@ -139,6 +139,47 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         }
     }
 
+    func testRealPythonProducerFixturesDecodeAndKeepOffsiteHistory() throws {
+        let fixture = try XCTUnwrap(Bundle.module.resourceURL).appendingPathComponent("Fixtures/neutral-backup-states-v2.json")
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [[String: Any]])
+        XCTAssertEqual(cases.count, 9)
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("observability.json")
+        for item in cases {
+            let name = try XCTUnwrap(item["name"] as? String)
+            try JSONSerialization.data(withJSONObject: XCTUnwrap(item["document"])).write(to: url)
+            guard case let .readable(doc) = ObservabilityReader.read(url: url) else {
+                return XCTFail("Real producer JSON failed to decode: \(name)")
+            }
+            let checks = BrainBarBackupChecks.derive(doc.backups, now: doc.generatedAt)
+            let status = ObservabilityPresentation.backupStatus(for: doc.backups, now: doc.generatedAt)
+            XCTAssertEqual(status.snapshot.tone, .green, name)
+            switch name {
+            case "pending", "in_progress":
+                XCTAssertEqual(status.snapshotUpload?.tone, .neutral, name)
+                XCTAssertEqual(status.snapshotUpload?.text, "Local snapshot verified, upload in progress")
+                XCTAssertEqual(doc.backups.dbSnapshot?.destination, "previous.db.gz")
+                XCTAssertNil(checks.attentionSentence)
+            case "failed", "abandoned":
+                XCTAssertEqual(status.snapshotUpload?.tone, .red, name)
+                XCTAssertTrue(status.snapshotUpload?.text.contains("Synthetic Drive rejected upload") == true)
+                XCTAssertEqual(doc.backups.errorType, "SyntheticUploadFailure")
+                XCTAssertNotNil(checks.attentionSentence)
+            case "verified":
+                XCTAssertNil(status.snapshotUpload)
+                XCTAssertEqual(doc.backups.dbSnapshot?.destination, "local.db.gz")
+            case "legacy":
+                XCTAssertEqual(status.upload.tone, .red)
+                XCTAssertNil(doc.backups.transcriptAttempt)
+            default:
+                XCTAssertEqual(status.upload.tone, .neutral, name)
+                XCTAssertEqual(doc.backups.survivingArchives30D, 0)
+            }
+        }
+    }
+
     func testDashboardAndJobsShareNeutralStatesAndRealFailuresWin() throws {
         for state in [nil, "pending", "in_progress"] as [String?] {
             let doc = try document(attempt: true, pending: state)
