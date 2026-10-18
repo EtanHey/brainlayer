@@ -387,9 +387,9 @@ map_changed_files_to_pytests() {
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3.py" ]; then
-          idx_tests=(test_ingest_t3.py)
+          idx_tests=(test_ingest_t3.py test_health_check.py test_paths.py)
         else
-          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py)
+          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py test_index_checkpoint_boundary.py test_index_checkpoint_durability.py test_index_completion.py test_cli_index_calendar.py test_cli_index_writers.py test_index_convergence.py)
         fi
         idx_complete=1
         for rel in "${idx_tests[@]}"; do

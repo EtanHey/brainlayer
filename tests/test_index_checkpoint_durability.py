@@ -60,7 +60,7 @@ def test_checkpoint_publication_follows_wal_frame_sync(calendar_fixture, monkeyp
     with wal_faults() as (events, _):
 
         def publish(path, payload):
-            if payload["files"]:
+            if path.name.startswith("index-checkpoint-") and payload["files"]:
                 assert events and events[-1] == "wal-sync", events
                 published.append(next(iter(payload["files"].values()))["next_chunk"])
                 print(
