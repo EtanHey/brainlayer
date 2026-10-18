@@ -7,10 +7,19 @@ import pytest
 from typer.testing import CliRunner
 
 import brainlayer.cli as cli
+import brainlayer.index_budget as index_budget
 from brainlayer.vector_store import IndexDeadlineExceeded
 
 
-def prepare(tmp_path, monkeypatch, *, chunks=1):
+def prepare(tmp_path, monkeypatch, *, chunks=1, calendar_now=datetime(2026, 10, 18, 12)):
+    # Patch the clock read by the budget itself, preserving its real admission logic.
+    # Shared writer/custody tests must not depend on when the suite is run.
+    class CalendarDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return calendar_now if tz is None else calendar_now.astimezone(tz)
+
+    monkeypatch.setattr(index_budget, "datetime", CalendarDateTime)
     source = tmp_path / "projects"
     source.mkdir()
     (source / "a.jsonl").write_text("{}\n")
@@ -151,6 +160,19 @@ def test_calendar_window_defers_before_opening_store(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.app, ["index", str(source)])
     assert result.exit_code == 75
     assert "INDEX_DEFERRED maintenance_window" in result.output
+
+
+def test_pinned_calendar_clock_inside_window_defers_before_opening_store(tmp_path, monkeypatch):
+    source, _, alarms = prepare(tmp_path, monkeypatch, calendar_now=datetime(2026, 10, 18, 4, 30))
+
+    def forbidden(*a, **kw):
+        pytest.fail("maintenance window must defer before opening a writer")
+
+    monkeypatch.setattr("brainlayer.runtime_store.open_writer_store", forbidden)
+    result = CliRunner().invoke(cli.app, ["index", str(source)])
+    assert result.exit_code == 75, result.output
+    assert "INDEX_DEFERRED maintenance_window=04:00-06:00" in result.output
+    assert not alarms
 
 
 def test_partial_batch_replays_without_skipping_inputs(tmp_path, monkeypatch):
