@@ -137,8 +137,13 @@ class SQLiteBackupArtifact:
     integrity_duration_seconds: float | None = None
 
 
+def local_backup_date(now: dt.datetime | None = None) -> dt.date:
+    """Use the machine's local day for snapshot names, weekly pins and eligibility."""
+    return (now if now is not None else dt.datetime.now(dt.UTC)).astimezone().date()
+
+
 def _today() -> str:
-    return dt.datetime.now(dt.UTC).date().isoformat()
+    return local_backup_date().isoformat()
 
 
 class InvalidMachineIdError(ValueError):
@@ -1906,7 +1911,7 @@ def _recent_local_verified_backup(
             receipt.get("db") == str(db_path)
             and "snapshot_created_at" in receipt
             and created is not None
-            and created.astimezone(now.tzinfo).date() == now.date()
+            and local_backup_date(created) == local_backup_date(now)
             and dt.timedelta(0) <= now - created <= dt.timedelta(hours=max_age_hours)
             and _local_snapshot_intact(receipt)
             and receipt.get("local_integrity") == "ok"
@@ -1922,7 +1927,7 @@ def _protected_snapshot_names(staging_dir: Path) -> set[str]:
     pin = staging_dir / ".weekly-backup-pin.json"
     try:
         payload = json.loads(pin.read_text())
-        if payload["date"] == dt.datetime.now().astimezone().date().isoformat():
+        if payload["date"] == local_backup_date().isoformat():
             return {Path(payload["snapshot"]).name}
     except FileNotFoundError:
         pass
@@ -2281,7 +2286,7 @@ def run_backup(
         if phase == "snapshot" and local is not None:
             created = _snapshot_created_time(local)
             now = dt.datetime.fromisoformat(result["attempted_at"])
-            if created and created.astimezone().date() == now.astimezone().date() and _local_snapshot_intact(local):
+            if created and local_backup_date(created) == local_backup_date(now) and _local_snapshot_intact(local):
                 result.update(local)
                 return result
         if phase == "upload" and local is None:

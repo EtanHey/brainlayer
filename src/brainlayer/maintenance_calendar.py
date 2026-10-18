@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import maintenance_control
-from .backup_daily import DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
+from .backup_daily import DEFAULT_SNAPSHOT_TIMEOUT_SECONDS, local_backup_date
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
@@ -295,7 +295,7 @@ async def run_calendar(
 ):
     if not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout)) or defer_after < 1:
         raise ValueError("invalid calendar timing")
-    date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or now_fn().date()
+    date = steps.scheduled_date if isinstance(steps, CalendarPlan) else scheduled_date or local_backup_date(now_fn())
     custody = Custody(directory)
     try:
         custody.__enter__()
