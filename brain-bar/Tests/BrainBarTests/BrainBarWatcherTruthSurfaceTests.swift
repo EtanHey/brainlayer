@@ -226,7 +226,9 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 XCTAssertEqual(viewModel.watcherStatus.title, title)
                 XCTAssertEqual(viewModel.footerPresentation.state.title, title)
                 let ingest = viewModel.groupStatus(.ingest)
-                XCTAssertEqual(ingest.health, groupHealth, title)
+                let expectedHealth: BrainLayerLaunchdGroupHealth = groupHealth == .healthy && !watchEnabled && !indexEnabled
+                    ? .skipped : groupHealth
+                XCTAssertEqual(ingest.health, expectedHealth, title)
                 XCTAssertEqual(ingest.attentionReason, viewModel.footerPresentation.detail, title)
                 XCTAssertEqual(ingest.note, note)
                 XCTAssertFalse(ingest.nextRunText.contains("Index Continuous"), "loaded scheduled Index is not executing")
@@ -237,7 +239,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         }
     }
 
-    func testConfiguredOffDoesNotHideObservedIndexFailures() {
+    func testConfiguredOffKeepsIndexEvidenceAndReenablingRestoresAttention() {
         var settings = BrainLayerConfig.defaultConfig.launchdJobs
         for job in BrainLayerLaunchdJobGroup.ingest.jobs { settings[job]?.enabled = false }
         let observations: [BrainLayerLaunchdJobObservation] = [
@@ -251,9 +253,17 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 formatDate: { _ in "t" },
                 watcher: .running(heartbeatAt: now.addingTimeInterval(-70)), now: now
             )
-            XCTAssertEqual(status.health, .unhealthy)
-            XCTAssertEqual(status.attentionReason, reason)
+            XCTAssertEqual(status.health, .skipped)
+            XCTAssertNil(status.attentionReason)
             XCTAssertEqual(status.note, "Configured OFF: Watcher, Index.")
+            // Desired OFF changes presentation, never the captured runtime evidence.
+            let enabled = BrainLayerLaunchdJobGroup.ingest.status(
+                settings: BrainLayerConfig.defaultConfig.launchdJobs,
+                observations: [.watch: .stateOnly(.running), .index: index],
+                formatDate: { _ in "t" }, watcher: .running(heartbeatAt: now.addingTimeInterval(-70)), now: now
+            )
+            XCTAssertEqual(enabled.health, .unhealthy)
+            XCTAssertEqual(enabled.attentionReason, reason)
         }
     }
 
@@ -276,12 +286,14 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         XCTAssertEqual(try store.loadDocument().config.launchdJobs[.watch]?.enabled, false)
         XCTAssertEqual(viewModel.config.launchdJobs[.watch]?.loadState, .running)
         XCTAssertEqual(viewModel.watcherStatus, runtime)
-        XCTAssertEqual(viewModel.groupStatus(.ingest).health, .healthy)
+        XCTAssertEqual(viewModel.groupStatus(.ingest).health, .skipped)
         XCTAssertEqual(viewModel.groupStatus(.ingest).note, "Configured OFF: Watcher, Index.")
         viewModel.setGroup(.ingest, enabled: true)
         XCTAssertTrue(viewModel.isGroupEnabled(.ingest))
         XCTAssertEqual(try store.loadDocument().config.launchdJobs[.watch]?.enabled, true)
         XCTAssertEqual(viewModel.watcherStatus, runtime)
+        XCTAssertEqual(viewModel.config.launchdJobs[.index]?.loadState, .loaded)
+        XCTAssertEqual(viewModel.groupStatus(.ingest).health, .healthy)
         XCTAssertNil(viewModel.groupStatus(.ingest).note)
     }
 

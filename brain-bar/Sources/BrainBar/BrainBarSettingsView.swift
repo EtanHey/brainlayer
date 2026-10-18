@@ -235,6 +235,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
         group.jobs.allSatisfy { config.launchdJobs[$0]?.enabled == true }
     }
 
+    var dashboardJobsChecking: Bool {
+        BrainLayerLaunchdJobGroup.allCases.contains { groupStatus($0).health == .checking }
+    }
+
     var dashboardJobAttentionReasons: [String] {
         BrainLayerLaunchdJobGroup.allCases.compactMap { group in
             let status = groupStatus(group)
@@ -251,9 +255,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
         let watcher = watcherStatus
         // The independent health reader can measure a failure before launchd finishes.
         if !hasCompletedLaunchdSample, !(group == .ingest && watcher.needsAttention) {
-            let disabledReason = group.disabledJobReason(settings: config.launchdJobs)
-            return .init(health: disabledReason == nil ? .checking : .unhealthy,
-                         attentionReason: disabledReason, lastRunText: "Checking…", nextRunText: "Checking…")
+            return .init(health: .checking, attentionReason: nil,
+                         lastRunText: "Checking…", nextRunText: "Checking…")
         }
         return group.status(
             settings: config.launchdJobs,

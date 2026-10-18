@@ -379,7 +379,7 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
-      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py|src/brainlayer/index_new.py|src/brainlayer/ingest/t3.py)
+      src/brainlayer/embeddings.py|src/brainlayer/index_budget.py|src/brainlayer/index_new.py|src/brainlayer/ingest/t3.py|src/brainlayer/maintenance_calendar.py)
         # These modules have split test owners. Require every companion before narrowing;
         # a missing suite must retain the existing full-suite escalation.
         if [ "$changed" = "src/brainlayer/embeddings.py" ]; then
@@ -387,9 +387,11 @@ map_changed_files_to_pytests() {
         elif [ "$changed" = "src/brainlayer/index_budget.py" ]; then
           idx_tests=(test_index_calendar_custody.py test_cli_index_calendar.py)
         elif [ "$changed" = "src/brainlayer/ingest/t3.py" ]; then
-          idx_tests=(test_ingest_t3.py)
+          idx_tests=(test_ingest_t3.py test_health_check.py test_paths.py)
+        elif [ "$changed" = "src/brainlayer/maintenance_calendar.py" ]; then
+          idx_tests=(test_maintenance_calendar.py test_maintenance_calendar_leases.py test_index_calendar_custody.py test_index_calendar_deferrals.py)
         else
-          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py)
+          idx_tests=(test_source_class.py test_ingest_t3.py test_context_pipeline.py test_index_empty_content.py test_index_checkpoint_boundary.py test_index_checkpoint_durability.py test_index_completion.py test_cli_index_calendar.py test_cli_index_writers.py test_index_convergence.py)
         fi
         idx_complete=1
         for rel in "${idx_tests[@]}"; do

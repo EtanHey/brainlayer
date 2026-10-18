@@ -759,6 +759,12 @@ def test_changed_only_scope_maps_source_class_storage_pipeline_to_safe_tests(tmp
         "test_ingest_t3.py",
         "test_context_pipeline.py",
         "test_index_empty_content.py",
+        "test_index_checkpoint_boundary.py",
+        "test_index_checkpoint_durability.py",
+        "test_index_completion.py",
+        "test_cli_index_calendar.py",
+        "test_cli_index_writers.py",
+        "test_index_convergence.py",
     )
     for filename in (*expected, "test_think_recall_integration.py"):
         (test_root / filename).write_text("test placeholder\n")
@@ -2016,10 +2022,30 @@ def test_harness_runtime_mapping_escalates_when_companion_is_missing(tmp_path: P
 
 
 IDX_FOCUSED_MAPPINGS = (
-    ("ingest/t3", ("test_ingest_t3.py",)),
+    (
+        "maintenance_calendar",
+        (
+            "test_maintenance_calendar.py",
+            "test_maintenance_calendar_leases.py",
+            "test_index_calendar_custody.py",
+            "test_index_calendar_deferrals.py",
+        ),
+    ),
+    ("ingest/t3", ("test_ingest_t3.py", "test_health_check.py", "test_paths.py")),
     (
         "index_new",
-        ("test_source_class.py", "test_ingest_t3.py", "test_context_pipeline.py", "test_index_empty_content.py"),
+        (
+            "test_source_class.py",
+            "test_ingest_t3.py",
+            "test_context_pipeline.py",
+            "test_index_empty_content.py",
+            "test_index_checkpoint_boundary.py",
+            "test_index_checkpoint_durability.py",
+            "test_index_completion.py",
+            "test_cli_index_calendar.py",
+            "test_cli_index_writers.py",
+            "test_index_convergence.py",
+        ),
     ),
     ("embeddings", ("test_embedding_truncation.py", "test_embedding_device.py", "test_index_completion.py")),
     ("index_budget", ("test_index_calendar_custody.py", "test_cli_index_calendar.py")),

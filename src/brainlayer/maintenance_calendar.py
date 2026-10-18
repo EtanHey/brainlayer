@@ -25,6 +25,7 @@ NAMES = tuple(
     )
 )
 KEYS = {
+    "index": "index",
     "backup-daily": "backup-daily",
     "jsonl-backup": "jsonl-backup",
     "maintenance-nightly": "maintenance-light",
@@ -52,10 +53,14 @@ class CalendarPlan:
     def select(self, last_weekly=None):
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
-        names = list(NAMES[:6])
+        # Nightly jobs precede the long upload; weekly full needs that night's fresh receipt.
+        names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
         if weekly:
-            names[2] = "maintenance-weekly"
+            names[1] = "maintenance-weekly"
+            names.insert(1, "backup-daily")
             names += ["decay", "repair-fts"]
+        else:
+            names.append("backup-daily")
         by_name = {s.name: s for s in self.candidates}
         return [by_name[n] for n in names]
 
@@ -76,6 +81,7 @@ def calendar_steps(python, cli, lib_dir, scheduled_date):
         Step(n, (str(lib_dir / "brainlayer-env-run.sh"), *args), timeout, {"BRAINLAYER_PYTHON": str(python)})
         for n, (args, timeout) in zip(NAMES, commands)
     )
+    steps[1].env["BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"] = "6"
     steps[3].env["BRAINLAYER_JSONL_BACKUP_DRIVE_FOLDER"] = "Brain Drive/06_ARCHIVE/backups/claude-jsonl"
     return CalendarPlan(scheduled_date, steps)
 
@@ -128,6 +134,28 @@ async def pulse(guard, stop, interval):
     while not stop.is_set() and guard.poll() is None:
         os.write(guard.stdin.fileno(), b"H\n")
         await asyncio.sleep(interval)
+
+
+def _index_deferral_reason(path, offset):
+    """Only this invocation's bounded stdout tail can explain an index exit 75."""
+    try:
+        with path.open("rb") as handle:
+            end = handle.seek(0, 2)
+            start = max(offset, end - 64 * 1024)
+            handle.seek(start)
+            data = handle.read(64 * 1024)
+        if start > offset:
+            data = data.partition(b"\n")[2]  # Never accept a truncated line.
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        last = next((line for line in reversed(lines) if line.startswith("INDEX_DEFERRED ")), "")
+        fields = last.split()
+        token = fields[1] if len(fields) > 1 else ""
+        return {
+            "resident_writer_busy": "resident-writer-busy",
+            "maintenance_window=04:00-06:00": "maintenance-window",
+        }.get(token)
+    except OSError:
+        return None
 
 
 async def _execute_step(step, env, *, directory, logs, custody, guard, stop, guard_timeout, shutdown_timeout):
@@ -270,7 +298,9 @@ async def run_calendar(
                 if step.name == "index":
                     bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
                     if bounded is None:
-                        results[step.name] = finish(directory, state, step, 75, date, defer_after)
+                        results[step.name] = finish(
+                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
+                        )
                         continue
                     step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
@@ -291,6 +321,10 @@ async def run_calendar(
                             code = 143
                         else:
                             started = now_fn()
+                            index_log = logs / "index.out.log"
+                            index_offset = (
+                                index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
+                            )
                             code = await _execute_step(
                                 step,
                                 held_env,
@@ -304,6 +338,8 @@ async def run_calendar(
                             )
                             ended = now_fn()
                             if step.name == "index":
+                                if code == 75:
+                                    reason = _index_deferral_reason(index_log, index_offset)
                                 # Only attribute the miss to indexing when its measured interval
                                 # crossed this day's window end. Backup delays get a generic reason.
                                 window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)

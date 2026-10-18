@@ -50,6 +50,7 @@ def test_index_deadline_exits_nonzero_with_loud_alarm(tmp_path, monkeypatch):
         deadline_monotonic=None,
         store=None,
         on_skipped_empty=None,
+        on_rejected=None,
     ):
         captured["deadline"] = deadline_monotonic
         captured["store"] = store
@@ -97,6 +98,7 @@ def test_fast_index_under_deadline_completes_without_alarm(tmp_path, monkeypatch
         deadline_monotonic=None,
         store=None,
         on_skipped_empty=None,
+        on_rejected=None,
     ):
         captured["deadline"] = deadline_monotonic
         captured["store"] = store

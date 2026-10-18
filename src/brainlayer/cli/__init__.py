@@ -137,51 +137,357 @@ def _calendar_index_budget_s(now: datetime | None = None) -> float:
 
 
 class _CalendarIndexCheckpoint:
-    """Only advance after a committed batch; replay an interrupted batch safely."""
+    """Durable input offsets plus a separate, visible per-pass convergence record."""
 
     def __init__(self, db: Path, source: Path, project: str | None, force: bool):
+        # Keep root --version/help free of the pipeline package's heavy imports.
+        from ..pipeline.chunk import INDEX_PIPELINE_VERSION
+
+        self.pipeline_version = INDEX_PIPELINE_VERSION
         identity = hashlib.sha256(f"{db.resolve()}\0{source.resolve()}\0{project}".encode()).hexdigest()[:16]
         self.path = db.parent / f"index-checkpoint-{identity}.json"
+        self.backlog_path = db.parent / f"index-backlog-{identity}.json"
         stat = db.stat()
         self.database = [stat.st_dev, stat.st_ino]
-        self.files = {}
-        if self.path.exists() and not force:
-            saved = json.loads(self.path.read_text())
-            if saved.get("version") not in {1, 2} or not isinstance(saved.get("files"), dict):
-                raise ValueError("invalid calendar index checkpoint")
-            # v1 could outlive NORMAL-mode WAL commits. Replay those inputs once;
-            # only v2 entries are published after durable calendar commits.
-            if saved.get("version") == 2 and saved.get("database") == self.database:
-                self.files = saved["files"]
-                for entry in self.files.values():
+        self.files, self.current, self.catalog, self.hashes = {}, {}, {}, {}
+        self.previous, self.failures = {}, {}
+        self.pass_consumed = self.pass_completed = 0
+        self.resource_faults = {}
+        self.check = lambda: None
+        self.rejected_chunks = 0
+        if not force:
+            try:
+                saved = json.loads(self.path.read_text())
+                if (
+                    not isinstance(saved, dict)
+                    or saved.get("version") not in {1, 2}
+                    or not isinstance(saved.get("files"), dict)
+                ):
+                    raise ValueError("invalid checkpoint shape")
+                if saved.get("database") != self.database:
+                    raise ValueError("checkpoint database identity changed")
+                if saved["version"] == 2:
+                    for entry in saved["files"].values():
+                        if (
+                            not isinstance(entry, dict)
+                            or type(entry.get("next_chunk")) is not int
+                            or entry["next_chunk"] < 0
+                            or type(entry.get("done")) is not bool
+                            or not self.valid_signature(entry.get("signature"))
+                        ):
+                            raise ValueError("invalid checkpoint entry")
+                    self.files = saved["files"]
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, TypeError) as exc:
+                rprint(f"[yellow]Warning: unreadable index checkpoint; replay required ({type(exc).__name__})[/]")
+            try:
+                previous = json.loads(self.backlog_path.read_text())
+                if (
+                    not isinstance(previous, dict)
+                    or not isinstance(previous.get("catalog"), dict)
+                    or not isinstance(previous.get("failures"), dict)
+                ):
+                    raise ValueError("invalid backlog history")
+                for item in previous["catalog"].values():
                     if (
-                        not isinstance(entry, dict)
-                        or type(entry.get("next_chunk")) is not int
-                        or entry["next_chunk"] < 0
-                        or type(entry.get("done")) is not bool
+                        not isinstance(item, dict)
+                        or (item.get("signature") is not None and not self.valid_signature(item["signature"]))
+                        or (item.get("total") is not None and (type(item["total"]) is not int or item["total"] < 0))
                     ):
-                        raise ValueError("invalid calendar index checkpoint entry")
+                        raise ValueError("invalid inventory entry")
+                for failure in previous["failures"].values():
+                    if (
+                        not isinstance(failure, dict)
+                        or type(failure.get("count")) is not int
+                        or failure["count"] < 0
+                        or not self.valid_signature(failure.get("signature"))
+                    ):
+                        raise ValueError("invalid failure history")
+                if type(previous.get("stalled_passes")) is not int or any(
+                    type(previous.get(k)) is not int for k in ("files_remaining", "chunks_remaining", "uncounted_files")
+                ):
+                    raise ValueError("invalid backlog counters")
+                best = previous.get("best_backlog")
+                if best is not None and (
+                    not isinstance(best, dict)
+                    or any(type(best.get(k)) is not int or best[k] < 0 for k in self.backlog_keys())
+                ):
+                    raise ValueError("invalid best backlog")
+                if (
+                    previous.get("database") == self.database
+                    and previous.get("pipeline_version") == self.pipeline_version
+                ):
+                    self.previous = previous
+                    self.failures = previous.get("failures", {})
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, TypeError, AttributeError):
+                rprint("[yellow]Warning: unreadable index backlog history; restarting measurement[/]")
+        self._write()
+
+    def _write(self):
         from ..drive_credentials import _atomic_write
 
+        self.checkpoint_write_failed = True
         _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
+        self.checkpoint_write_failed = False
+
+    @staticmethod
+    def valid_signature(value) -> bool:
+        # Persisted state is untrusted: reject corrupt prefix lengths before reads
+        # and scalar types before append comparisons, then recover by replaying.
+        return (
+            isinstance(value, list)
+            and len(value) in {3, 4}
+            and all(type(part) is int for part in value)
+            and value[0] >= 0
+            and value[1] >= 0
+            and (len(value) == 3 or value[3] >= 0)
+        )
 
     @staticmethod
     def signature(path: Path) -> list[int]:
         stat = path.stat()
-        return [stat.st_ino, stat.st_size, stat.st_mtime_ns]
+        return [stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_dev]
+
+    def fingerprint(self, path: Path, size: int) -> str:
+        key = (str(path), tuple(self.signature(path)), size)
+        if key not in self.hashes:
+            digest, remaining = hashlib.sha256(), size
+            with path.open("rb") as stream:
+                while remaining:
+                    self.check()
+                    block = stream.read(min(remaining, 1024 * 1024))
+                    if not block:
+                        raise ValueError("source truncated while fingerprinting")
+                    digest.update(block)
+                    remaining -= len(block)
+            self.hashes[key] = digest.hexdigest()
+        return self.hashes[key]
 
     def entry(self, path: Path, signature: list[int]) -> dict:
         saved = self.files.get(str(path.resolve()), {})
-        return saved if saved.get("signature") == signature else {}
+        # Unchanged inputs keep their state across releases. Only append-resume
+        # reuses positions under newly parsed/chunked input and needs a version gate.
+        if saved.get("signature") == signature:
+            return saved
+        old = saved.get("signature", [])
+        # Only a verified same-inode/device, newline-terminated prefix may retain offsets.
+        if (
+            saved.get("pipeline_version") == self.pipeline_version
+            and len(old) == 4
+            and old[0] == signature[0]
+            and old[3] == signature[3]
+            and signature[1] >= old[1]
+            and saved.get("prefix_sha256")
+            and saved.get("line_boundary")
+        ):
+            if self.fingerprint(path, old[1]) == saved["prefix_sha256"]:
+                return dict(saved, done=False)
+        return {}
+
+    def begin(self, paths, check=lambda: None):
+        self.check = check
+        self.catalog = {str(path.resolve()): dict(signature=None, total=None) for path in paths}
+        old_catalog = self.previous.get("catalog", {})
+        for path in paths:
+            self.check()
+            key, signature = str(path.resolve()), self.signature(path)
+            self.current[key] = self.entry(path, signature)
+            old = old_catalog.get(key, {})
+            total = old.get("total") if old.get("signature") == signature else None
+            if self.current[key].get("done"):
+                total = self.current[key]["next_chunk"]
+            self.catalog[key] = dict(signature=signature, total=total)
+            if not self.failure_matches(path, self.failures.get(key, {})):
+                self.failures.pop(key, None)
+
+    def measured(self, path, count):
+        self.catalog[str(path.resolve())]["total"] = count
 
     def save(self, path: Path, signature: list[int], next_chunk: int, *, done: bool = False):
-        from ..drive_credentials import _atomic_write
-
-        # A source changed during parsing/writing must be replayed, never marked complete.
         if self.signature(path) != signature:
             return
-        self.files[str(path.resolve())] = dict(signature=signature, next_chunk=next_chunk, done=done)
-        _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
+        key = str(path.resolve())
+        prior = self.current.get(key, self.entry(path, signature))
+        self.pass_consumed += max(0, next_chunk - prior.get("next_chunk", 0))
+        self.pass_completed += int(done and not prior.get("done"))
+        with path.open("rb") as stream:
+            if signature[1]:
+                stream.seek(signature[1] - 1)
+            boundary = not signature[1] or stream.read(1) == b"\n"
+        self.files[key] = dict(
+            pipeline_version=self.pipeline_version,
+            signature=signature,
+            next_chunk=next_chunk,
+            done=done,
+            prefix_sha256=self.fingerprint(path, signature[1]),
+            line_boundary=boundary,
+            rejected_chunks=prior.get("rejected_chunks", 0) + self.rejected_chunks,
+        )
+        self.rejected_chunks = 0
+        self.current[key] = self.files[key]
+        if done:
+            self.failures.pop(key, None)
+        self._write()
+
+    @staticmethod
+    def limit(name):
+        value = int(os.environ.get(name, "3"))
+        if value < 1:
+            raise ValueError(f"{name} must be positive")
+        return value
+
+    def quarantined(self, path):
+        return self.failures.get(str(path.resolve()), {}).get("count", 0) >= self.limit(
+            "BRAINLAYER_INDEX_QUARANTINE_PASSES"
+        )
+
+    def failure_matches(self, path, old):
+        if old.get("pipeline_version") != self.pipeline_version:
+            return False
+        signature, prior = self.signature(path), old.get("signature", [])
+        if prior == signature:
+            return True
+        return (
+            len(prior) == 4
+            and prior[0] == signature[0]
+            and prior[3] == signature[3]
+            and signature[1] >= prior[1]
+            and bool(old.get("prefix_sha256"))
+            and old["prefix_sha256"] == self.fingerprint(path, prior[1])
+        )
+
+    @staticmethod
+    def resource_cause(exc):
+        # Explicit causes preserve encoder wrappers; unrelated handler context
+        # is not evidence that this file's failure was a resource fault.
+        seen = set()
+        torch_oom = getattr(sys.modules.get("torch"), "OutOfMemoryError", None)
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            if isinstance(exc, (OSError, MemoryError)) or (isinstance(torch_oom, type) and isinstance(exc, torch_oom)):
+                return type(exc).__name__
+            exc = exc.__cause__
+        return None
+
+    def skip_resource(self, path, exc):
+        cause = self.resource_cause(exc)
+        if cause is None:
+            return False
+        key = str(path.resolve())
+        self.failures.pop(key, None)
+        self.resource_faults[key] = cause
+        return True
+
+    def failed(self, path, exc):
+        if self.skip_resource(path, exc):
+            return False
+        key, signature = str(path.resolve()), self.signature(path)
+        # Keep a fingerprint, not exception/source text, in persistent diagnostics.
+        token = hashlib.sha256(f"{type(exc).__name__}:{exc}".encode()).hexdigest()
+        old = self.failures.get(key, {})
+        offset = self.current.get(key, {}).get("next_chunk", 0)
+        count = (
+            old.get("count", 0) + 1
+            if self.failure_matches(path, old) and old.get("error") == token and old.get("offset") == offset
+            else 1
+        )
+        self.failures[key] = dict(
+            pipeline_version=self.pipeline_version,
+            signature=signature,
+            prefix_sha256=self.hashes.get((str(path), tuple(signature), signature[1])),
+            error=token,
+            count=count,
+            error_type=type(exc).__name__,
+            offset=offset,
+        )
+        return self.quarantined(path)
+
+    def backlog(self):
+        files = chunks = unknown = 0
+        for key, item in self.catalog.items():
+            saved = self.current.get(key, {})
+            if saved.get("done"):
+                continue
+            files += 1
+            if item["total"] is None:
+                unknown += int(not self.quarantined(Path(key)))
+            else:
+                chunks += max(0, item["total"] - saved.get("next_chunk", 0))
+        return dict(files_remaining=files, chunks_remaining=chunks, uncounted_files=unknown)
+
+    def summary(self):
+        return " ".join(f"{key}={value}" for key, value in self.backlog().items())
+
+    @staticmethod
+    def backlog_keys():
+        return ("files_remaining", "chunks_remaining", "uncounted_files")
+
+    def finish(self, *, deferred=False):
+        from ..drive_credentials import _atomic_write
+
+        backlog = self.backlog()
+        stalled = self.previous.get("stalled_passes", 0)
+        best = self.previous.get("best_backlog")
+        # Only complete non-deferred measurements can establish or advance the
+        # held minimum. Unknown lower bounds carry both count and baseline.
+        if (
+            best is None
+            and self.previous
+            and not self.previous.get("deferred")
+            and self.previous["uncounted_files"] == 0
+        ):
+            best = {key: self.previous[key] for key in self.backlog_keys()}
+        measured = backlog["uncounted_files"] == 0
+        if not deferred and measured:
+            if not backlog["files_remaining"]:
+                stalled, best = 0, backlog
+            elif best is None or best["uncounted_files"] or not best["files_remaining"]:
+                best = backlog
+            else:
+                smaller = (backlog["chunks_remaining"], backlog["files_remaining"]) < (
+                    best["chunks_remaining"],
+                    best["files_remaining"],
+                )
+                stalled = 0 if smaller else stalled + 1
+                if smaller:
+                    best = backlog
+        quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
+        state = dict(
+            database=self.database,
+            pipeline_version=self.pipeline_version,
+            **backlog,
+            stalled_passes=stalled,
+            best_backlog=best,
+            deferred=deferred,
+            quarantined=quarantined,
+            resource_faults=self.resource_faults,
+            failures=self.failures,
+            catalog=self.catalog,
+        )
+        _atomic_write(self.backlog_path, state)
+        rprint(
+            f"INDEX_BACKLOG {self.summary()} stalled_passes={stalled} "
+            f"quarantined_files={len(quarantined)} resource_files={len(self.resource_faults)}"
+        )
+        for path, cause in self.resource_faults.items():
+            rprint(f"INDEX_RESOURCE_SKIPPED file={path} cause={cause}")
+        for path in quarantined:
+            rprint(f"INDEX_QUARANTINED file={path}")
+        if deferred:
+            # Calendar finish() alone owns rc75 streak escalation. An unstarted busy
+            # pass is not evidence of non-converging work and must not alarm twice.
+            return False
+        if quarantined or (measured and stalled >= self.limit("BRAINLAYER_INDEX_STALL_PASSES")):
+            code = "INDEX_FILE_QUARANTINED" if quarantined else "INDEX_BACKLOG_STALLED"
+            rprint(f"[bold red]{code}[/] attention_required=true")
+            return True
+        if self.resource_faults and not (self.pass_consumed or self.pass_completed):
+            rprint("[bold red]INDEX_RESOURCE_FAILED[/] attention_required=true progressed=false")
+            return True
+        return False
 
 
 @app.command("observability")
@@ -3639,11 +3945,16 @@ def _exit_on_index_deadline(
     from ..alarm import build_alarm, emit_alarm
 
     escalated = watchdog is not None and getattr(watchdog, "escalation_attempted", False)
-    if checkpoint is not None and committed_chunks > 0 and _looks_like_watchdog_interrupt(cause) and not escalated:
+    if (
+        checkpoint is not None
+        and (committed_chunks > 0 or checkpoint.pass_consumed > 0)
+        and _looks_like_watchdog_interrupt(cause)
+        and not escalated
+    ):
         rprint(
             "[bold yellow]INDEX_CHECKPOINTED[/] status=checkpointed "
             f"committed_chunks={committed_chunks} files_completed={files_completed} "
-            f"checkpoint={checkpoint.path}"
+            f"checkpoint={checkpoint.path} {checkpoint.summary()}"
         )
         return typer.Exit(0)
 
@@ -3691,10 +4002,18 @@ def index_fast(
     watchdog = None
     checkpoint = None
     skipped_empty_chunks = 0
+    rejected_chunks = 0
+    pass_deferred = False
 
     def note_skipped_empty(count: int) -> None:
         nonlocal skipped_empty_chunks
         skipped_empty_chunks += count
+
+    def note_rejected(count: int) -> None:
+        nonlocal rejected_chunks
+        rejected_chunks += count
+        if checkpoint is not None:
+            checkpoint.rejected_chunks += count
 
     calendar = os.environ.get("BRAINLAYER_LAUNCHD_SERVICE") == "index"
     try:
@@ -3773,6 +4092,35 @@ def index_fast(
             if calendar:
                 jsonl_files.sort()
                 checkpoint = _CalendarIndexCheckpoint(get_db_path(), source, project, force)
+                checkpoint.begin(jsonl_files, watchdog.raise_if_expired)
+                # Inventory counts, never embeddings, within the same watchdog budget.
+                # Cache unchanged totals; explicitly report uncounted files if the cap interrupts discovery.
+                for path in jsonl_files:
+                    watchdog.raise_if_expired()
+                    key = str(path.resolve())
+                    if checkpoint.catalog[key]["total"] is not None or checkpoint.quarantined(path):
+                        continue
+                    try:
+                        from ..system_prompt_guard import looks_like_system_prompt
+
+                        count = 0
+                        for record in parse_jsonl(path):
+                            watchdog.raise_if_expired()
+                            classified = classify_content(record)
+                            if classified is not None:
+                                count += sum(
+                                    1
+                                    for c in chunk_content(classified)
+                                    if not c.metadata.get("is_system_prompt")
+                                    and not looks_like_system_prompt(c.content)
+                                )
+                        checkpoint.measured(path, count)
+                    except (ValueError, RuntimeError, OSError, MemoryError) as exc:
+                        if watchdog.expired or _looks_like_watchdog_interrupt(exc):
+                            raise
+                        checkpoint.skip_resource(path, exc)
+                        # Count and classify deterministic failures only once in the actual file attempt.
+                        continue
             rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
 
             watchdog.set_phase("open_store")
@@ -3814,82 +4162,116 @@ def index_fast(
                 watchdog.raise_if_expired()
                 signature = checkpoint.signature(jsonl_file) if checkpoint else None
                 saved = checkpoint.entry(jsonl_file, signature) if checkpoint else {}
+                if checkpoint:
+                    key = str(jsonl_file.resolve())
+                    checkpoint.current[key] = saved
+                    if checkpoint.catalog[key]["signature"] != signature:
+                        checkpoint.catalog[key] = dict(signature=signature, total=None)
                 if saved.get("done"):
                     progress.update(task, completed=i + 1)
                     continue
-                raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
-                proj_name = _normalize_project_name(raw_proj) if raw_proj else None
-
-                # Parse, classify, and chunk each entry
-                all_chunks = []
-                for entry in parse_jsonl(jsonl_file):
-                    watchdog.raise_if_expired()
-                    classified = classify_content(entry)
-                    if classified is not None:  # Skip noise entries
-                        chunks = chunk_content(classified)
-                        all_chunks.extend(chunks)
-
-                if all_chunks:
-                    # Index with progress callback
-                    def progress_callback(embedded_count, total_embed):
-                        pass  # Could update sub-progress here
-
-                    watchdog.set_phase(f"embed_and_upsert:{jsonl_file.name}")
+                if checkpoint and (
+                    checkpoint.quarantined(jsonl_file) or str(jsonl_file.resolve()) in checkpoint.resource_faults
+                ):
+                    continue
+                try:
                     if checkpoint:
-                        from ..system_prompt_guard import looks_like_system_prompt
+                        # Fingerprint before embedding/COMMIT so a post-commit deadline cannot
+                        # interrupt publication of an already proven complete input batch.
+                        checkpoint.fingerprint(jsonl_file, signature[1])
+                    raw_proj = jsonl_file.parent.name if jsonl_file.parent != source else None
+                    proj_name = _normalize_project_name(raw_proj) if raw_proj else None
 
-                        # Match the adapter's admission BEFORE assigning global positions.
-                        all_chunks = [
-                            c
-                            for c in all_chunks
-                            if not c.metadata.get("is_system_prompt") and not looks_like_system_prompt(c.content)
-                        ]
-                        offset = saved.get("next_chunk", 0)
-                        for start in range(offset, len(all_chunks), 64):
-                            watchdog.raise_if_expired()
-                            batch = all_chunks[start : start + 64]
-                            try:
-                                total_chunks += index_chunks_to_sqlite(
-                                    batch,
-                                    source_file=str(jsonl_file),
-                                    project=proj_name,
-                                    on_progress=progress_callback,
-                                    deadline_monotonic=deadline_monotonic,
-                                    store=runtime_store,
-                                    start_position=start,
-                                    on_skipped_empty=note_skipped_empty,
-                                )
-                            except IndexDeadlineExceeded as exc:
-                                if exc.completed_input_count == len(batch):
-                                    checkpoint.save(
-                                        jsonl_file,
-                                        signature,
-                                        start + len(batch),
-                                        done=start + len(batch) == len(all_chunks),
+                    # Parse, classify, and chunk each entry
+                    all_chunks = []
+                    for entry in parse_jsonl(jsonl_file):
+                        watchdog.raise_if_expired()
+                        classified = classify_content(entry)
+                        if classified is not None:  # Skip noise entries
+                            chunks = chunk_content(classified)
+                            all_chunks.extend(chunks)
+
+                    if all_chunks:
+                        # Index with progress callback
+                        def progress_callback(embedded_count, total_embed):
+                            pass  # Could update sub-progress here
+
+                        watchdog.set_phase(f"embed_and_upsert:{jsonl_file.name}")
+                        if checkpoint:
+                            from ..system_prompt_guard import looks_like_system_prompt
+
+                            # Match the adapter's admission BEFORE assigning global positions.
+                            all_chunks = [
+                                c
+                                for c in all_chunks
+                                if not c.metadata.get("is_system_prompt") and not looks_like_system_prompt(c.content)
+                            ]
+                            checkpoint.measured(jsonl_file, len(all_chunks))
+                            offset = saved.get("next_chunk", 0)
+                            for start in range(offset, len(all_chunks), 64):
+                                watchdog.raise_if_expired()
+                                batch = all_chunks[start : start + 64]
+                                try:
+                                    total_chunks += index_chunks_to_sqlite(
+                                        batch,
+                                        source_file=str(jsonl_file),
+                                        project=proj_name,
+                                        on_progress=progress_callback,
+                                        deadline_monotonic=deadline_monotonic,
+                                        store=runtime_store,
+                                        start_position=start,
+                                        on_skipped_empty=note_skipped_empty,
+                                        on_rejected=note_rejected,
                                     )
-                                raise
-                            checkpoint.save(
-                                jsonl_file, signature, start + len(batch), done=start + len(batch) == len(all_chunks)
+                                except IndexDeadlineExceeded as exc:
+                                    if exc.completed_input_count == len(batch):
+                                        checkpoint.save(
+                                            jsonl_file,
+                                            signature,
+                                            start + len(batch),
+                                            done=start + len(batch) == len(all_chunks),
+                                        )
+                                    raise
+                                checkpoint.save(
+                                    jsonl_file,
+                                    signature,
+                                    start + len(batch),
+                                    done=start + len(batch) == len(all_chunks),
+                                )
+                                watchdog.raise_if_expired()
+                        else:
+                            indexed = index_chunks_to_sqlite(
+                                all_chunks,
+                                source_file=str(jsonl_file),
+                                project=proj_name,
+                                on_progress=progress_callback,
+                                deadline_monotonic=deadline_monotonic,
+                                store=runtime_store,
+                                on_skipped_empty=note_skipped_empty,
+                                on_rejected=note_rejected,
                             )
-                            watchdog.raise_if_expired()
-                    else:
-                        indexed = index_chunks_to_sqlite(
-                            all_chunks,
-                            source_file=str(jsonl_file),
-                            project=proj_name,
-                            on_progress=progress_callback,
-                            deadline_monotonic=deadline_monotonic,
-                            store=runtime_store,
-                            on_skipped_empty=note_skipped_empty,
-                        )
-                        total_chunks += indexed
-                    watchdog.raise_if_expired(processed_count=0)
-                if checkpoint:
-                    checkpoint.save(jsonl_file, signature, len(all_chunks), done=True)
-                files_completed = i + 1
-                watchdog.note_progress()
-                watchdog.raise_if_expired()
-
+                            total_chunks += indexed
+                        watchdog.raise_if_expired(processed_count=0)
+                    if checkpoint:
+                        checkpoint.save(jsonl_file, signature, len(all_chunks), done=True)
+                    files_completed = i + 1
+                    watchdog.note_progress()
+                    watchdog.raise_if_expired()
+                except (ValueError, RuntimeError, OSError, MemoryError) as exc:
+                    if (
+                        not checkpoint
+                        or checkpoint.checkpoint_write_failed
+                        or watchdog.expired
+                        or time.monotonic() >= deadline_monotonic
+                        or _looks_like_watchdog_interrupt(exc)
+                    ):
+                        raise
+                    if checkpoint.skip_resource(jsonl_file, exc):
+                        continue
+                    if not checkpoint.failed(jsonl_file, exc):
+                        raise
+                    rprint(f"[red]INDEX_QUARANTINED[/] file={jsonl_file} cause={type(exc).__name__}")
+                    continue
                 # Update progress
                 elapsed = time.time() - start_time
                 files_done = i + 1
@@ -3939,6 +4321,7 @@ def index_fast(
                     current_file=current_file,
                     checkpoint=checkpoint,
                 ) from e
+            pass_deferred = True
             rprint(
                 "[yellow]INDEX_DEFERRED resident_writer_busy[/] "
                 f"committed_chunks={total_chunks} files_completed={files_completed} "
@@ -3968,7 +4351,9 @@ def index_fast(
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
     finally:
-        rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks}")
+        rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks} rejected_chunks={rejected_chunks}")
+        if checkpoint is not None and checkpoint.finish(deferred=pass_deferred):
+            raise typer.Exit(1)
 
 
 @app.command("ingest-t3")
