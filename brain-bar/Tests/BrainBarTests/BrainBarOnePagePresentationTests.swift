@@ -352,6 +352,37 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testCalendarFailureRemainsActionableWhileObservabilityLoads() throws {
+        let reasons = ["Index failed with exit 1", "Maintenance missed its window"]
+        let presentation = try makePresentation(
+            result: .unreadable("Loading observability data."),
+            now: BrainBarOnePageTestFixture.now,
+            snapshotFreshness: .live(ageSeconds: 0),
+            jobAttentionReasons: reasons,
+            heroResult: BrainBarOnePageTestFixture.healthyResult()
+        )
+        XCTAssertEqual(presentation.status.tone, .amber)
+        XCTAssertEqual(presentation.status.reason, reasons.first)
+        XCTAssertEqual(presentation.attentionItems, reasons)
+    }
+
+    @MainActor
+    func testMeasuredBackupFailureOutranksJobFailureWhileObservabilityLoads() throws {
+        let jobReason = "Index failed with exit 1"
+        let presentation = try makePresentation(
+            result: .unreadable("Loading observability data."),
+            now: BrainBarOnePageTestFixture.now,
+            snapshotFreshness: .live(ageSeconds: 0),
+            jobAttentionReasons: [jobReason],
+            heroResult: BrainBarOnePageTestFixture.unverifiedResult()
+        )
+        XCTAssertEqual(presentation.status.tone, .amber)
+        XCTAssertTrue(presentation.status.reason?.hasPrefix("Last transcript upload (NOT verified):") == true)
+        XCTAssertEqual(presentation.attentionItems.first, presentation.status.reason)
+        XCTAssertTrue(presentation.attentionItems.contains(jobReason))
+    }
+
+    @MainActor
     func testCalendarRecoveryClearsDashboardAttention() throws {
         let status = BrainLayerLaunchdGroupStatus(health: .healthy, attentionReason: nil,
             lastRunText: "today", nextRunText: "tomorrow")
@@ -368,7 +399,8 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
         agentActivity: AgentActivitySnapshot = BrainBarDashboardFixture.agentActivity,
         snapshotFreshness: SnapshotFreshnessState? = nil,
         collector providedCollector: StatsCollector? = nil,
-        jobAttentionReasons: [String] = []
+        jobAttentionReasons: [String] = [],
+        heroResult: ObservabilityReadResult? = nil
     ) throws -> BrainBarOnePagePresentation {
         let collector = providedCollector ?? BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
         let flow = DashboardFlowSummary.derive(
@@ -380,7 +412,7 @@ final class BrainBarOnePagePresentationTests: XCTestCase {
             flow: flow,
             stats: collector.stats,
             backupTruth: BrainBarHeroBackupTruth.derive(
-                from: result,
+                from: heroResult ?? result,
                 now: now,
                 cadence: .known(300)
             ),

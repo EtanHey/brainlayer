@@ -512,9 +512,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             : "\(attentionItems.count) things need you"
 
         let status: BrainBarOnePageStatus
-        if case .unreadable("Loading observability data.") = observability {
-            status = .init(headline: "Checking…", reason: nil, tone: .neutral)
-        } else if let backupFailureReason = hero.backupFailureReason {
+        if let backupFailureReason = hero.backupFailureReason {
             status = .init(
                 headline: attentionHeadline,
                 reason: backupFailureReason,
@@ -522,6 +520,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
             )
         } else if let jobReason = jobAttentionReasons.first {
             status = .init(headline: attentionHeadline, reason: jobReason, tone: .amber)
+        } else if case .unreadable("Loading observability data.") = observability {
+            status = .init(headline: "Checking…", reason: nil, tone: .neutral)
         } else {
             switch snapshotFreshness {
             case .loading:
