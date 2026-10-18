@@ -52,10 +52,12 @@ class CalendarPlan:
     def select(self, last_weekly=None):
         sunday = self.scheduled_date - dt.timedelta(days=(self.scheduled_date.weekday() + 1) % 7)
         weekly = last_weekly is None or last_weekly < sunday
-        names = list(NAMES[:6])
+        # Keep the command registry/bindings stable; schedule the long Drive upload last.
+        names = ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint"]
         if weekly:
-            names[2] = "maintenance-weekly"
+            names[1] = "maintenance-weekly"
             names += ["decay", "repair-fts"]
+        names.append("backup-daily")
         by_name = {s.name: s for s in self.candidates}
         return [by_name[n] for n in names]
 
