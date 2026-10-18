@@ -286,7 +286,13 @@ final class BrainBarDashboardPanelControllerTests: XCTestCase {
         let clip = scroll.contentView
         clip.scroll(to: NSPoint(x: 0, y: 80))
         scroll.reflectScrolledClipView(clip)
-        window.setFrameOrigin(NSPoint(x: window.frame.minX - 10, y: window.frame.minY + 10))
+        // Stay within this window's screen: AppKit may clamp an off-screen origin on show.
+        // The invariant under test is preserving a legal user placement, not defeating that clamp.
+        let placementBounds = window.screen?.visibleFrame ?? visible
+        window.setFrameOrigin(NSPoint(
+            x: max(placementBounds.minX, min(window.frame.minX - 10, placementBounds.maxX - window.frame.width)),
+            y: max(placementBounds.minY, min(window.frame.minY + 10, placementBounds.maxY - window.frame.height))
+        ))
         let frame = window.frame
         let origin = clip.bounds.origin
         XCTAssertGreaterThan(origin.y, 0)
