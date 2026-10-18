@@ -39,6 +39,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.65] - 2026-10-18
+
+### Fixed
+- A transient `ps` timeout or OS error during the BrainBar activation process scan defers activation instead of raising a false "activation monitor refused" alert. A scan alert is raised only after 12 consecutive failed ticks while both BrainBar jobs are unloaded, and clears after the next successful scan (#1399).
+- A persistent non-scan `OSError` no longer flaps the activation alert (cleared after each successful scan, then re-reported every tick). A legacy `BrainBar activation monitor refused: [Errno …]` alert is cleared once, by a one-shot migration on the first successful scan; later errno failures stay raised (#1403).
+- The `t3_runtime_linkage_pending` CRITICAL alarm is deduplicated: emission happens once per file/state transition with hourly reminders, backed by a durable per-file status in `t3-linkage-status/` beside the resolved DB. Every pending observation still raises and ingestion still defers (#1400).
+
+### Documentation
+- Health-check guide: an idle machine (no new transcripts, old last-store timestamp, flat drain totals with an empty queue) is healthy; the MCP canary passes with zero results. Adds regression tests and the 2026-10-18 idle-machine audit (#1397).
+
+### Upgrade notes
+- The BrainBar Settings watcher-heartbeat re-read from #1400 is on main but NOT shipped: it needs a BrainBar app release.
+- Formula-only release: BrainBar and its cask remain at 1.5.61.
+
 ## [1.5.64] - 2026-10-18
 
 ### Added
