@@ -168,9 +168,7 @@ class _CalendarIndexCheckpoint:
                             or type(entry.get("next_chunk")) is not int
                             or entry["next_chunk"] < 0
                             or type(entry.get("done")) is not bool
-                            or not isinstance(entry.get("signature"), list)
-                            or len(entry["signature"]) not in {3, 4}
-                            or any(type(v) is not int for v in entry["signature"])
+                            or not self.valid_signature(entry.get("signature"))
                         ):
                             raise ValueError("invalid checkpoint entry")
                     self.files = saved["files"]
@@ -189,7 +187,7 @@ class _CalendarIndexCheckpoint:
                 for item in previous["catalog"].values():
                     if (
                         not isinstance(item, dict)
-                        or (item.get("signature") is not None and not isinstance(item["signature"], list))
+                        or (item.get("signature") is not None and not self.valid_signature(item["signature"]))
                         or (item.get("total") is not None and (type(item["total"]) is not int or item["total"] < 0))
                     ):
                         raise ValueError("invalid inventory entry")
@@ -197,7 +195,8 @@ class _CalendarIndexCheckpoint:
                     if (
                         not isinstance(failure, dict)
                         or type(failure.get("count")) is not int
-                        or not isinstance(failure.get("signature"), list)
+                        or failure["count"] < 0
+                        or not self.valid_signature(failure.get("signature"))
                     ):
                         raise ValueError("invalid failure history")
                 if type(previous.get("stalled_passes")) is not int or any(
@@ -217,6 +216,19 @@ class _CalendarIndexCheckpoint:
         from ..drive_credentials import _atomic_write
 
         _atomic_write(self.path, dict(version=2, database=self.database, files=self.files))
+
+    @staticmethod
+    def valid_signature(value) -> bool:
+        # Persisted state is untrusted: reject corrupt prefix lengths before reads
+        # and scalar types before append comparisons, then recover by replaying.
+        return (
+            isinstance(value, list)
+            and len(value) in {3, 4}
+            and all(type(part) is int for part in value)
+            and value[0] >= 0
+            and value[1] >= 0
+            and (len(value) == 3 or value[3] >= 0)
+        )
 
     @staticmethod
     def signature(path: Path) -> list[int]:

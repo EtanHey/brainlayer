@@ -44,6 +44,7 @@ remains in the backlog, is named by `INDEX_QUARANTINED`, and forces rc1 until re
 Rewriting/replacing the failing prefix retries it; `--force` clears checkpoint/failure
 history and replays all inputs. Quarantine never moves or deletes source data.
 
-Unreadable or malformed checkpoint/history JSON emits a warning and restarts from
-safe replay/measurement. Replay uses the existing idempotent upsert path. If sidecar
+Unreadable or malformed checkpoint/history JSON, including invalid signature scalar
+types or negative byte lengths, emits a warning and restarts from safe replay/measurement.
+Replay uses the existing idempotent upsert path. If sidecar
 publication itself fails, the pass still fails visibly.

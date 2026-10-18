@@ -197,6 +197,30 @@ def test_corrupt_entry_and_backlog_are_discarded(calendar_fixture, monkeypatch):
     readback(db, chunks)
 
 
+@pytest.mark.parametrize("sidecar", ["checkpoint", "backlog"])
+def test_invalid_saved_signature_warns_and_recovers(calendar_fixture, monkeypatch, sidecar):
+    source, db, chunks, _ = calendar_fixture
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    assert invoke(source).exit_code == 0
+    path = next(db.parent.glob(f"index-{sidecar}-*.json"))
+    saved = json.loads(path.read_text())
+    key = str((source / "a.jsonl").resolve())
+    signature = cli._CalendarIndexCheckpoint.signature(source / "a.jsonl")
+    if sidecar == "checkpoint":
+        # A negative prefix length must never reach fingerprint()'s read loop.
+        saved["files"][key]["signature"][1] = -1
+    else:
+        # Shape-valid history with a corrupt scalar used to fail on every begin().
+        signature[1] = "invalid-size"
+        saved["failures"][key] = dict(signature=signature, count=3, prefix_sha256="invalid")
+    path.write_text(json.dumps(saved))
+    result = invoke(source)
+    assert result.exit_code == 0, result.output
+    assert "Warning: unreadable index" in result.output
+    readback(db, chunks)
+    assert invoke(source).exit_code == 0
+
+
 def test_non_newline_prefix_requires_full_replay(calendar_fixture, monkeypatch):
     source, db, chunks, clock = calendar_fixture
     path = source / "a.jsonl"
