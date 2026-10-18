@@ -58,8 +58,14 @@
 - Release the BrainLayer formula and BrainBar app together.
 
 ### Upgrade notes
-- The first calendar index pass after upgrade replays files once because the checkpoint format changed (`INDEX_PIPELINE_VERSION=1`).
+- The first calendar index pass after upgrading replays every file once while it builds the new checkpoint (`index-checkpoint-*.json` beside the DB); later passes resume. `INDEX_PIPELINE_VERSION` (currently 1) only gates resuming appended files and quarantine history.
 - Calendar step order now differs on nightly and weekly nights: nightly maintenance precedes daily Drive upload; weekly nights retain the daily-backup receipt dependency.
+
+
+### Operator-visible
+- New index stdout/alarm tokens: `INDEX_CHECKPOINTED`, `INDEX_BACKLOG_STALLED`, `INDEX_FILE_QUARANTINED`, `INDEX_PASS_CAP_REACHED`, `INDEX_RESOURCE_FAILED` / `INDEX_RESOURCE_SKIPPED`.
+- New tunables: `BRAINLAYER_INDEX_QUARANTINE_PASSES`, `BRAINLAYER_INDEX_STALL_PASSES`, and `BRAINLAYER_INDEX_CALENDAR_BUDGET_S`.
+- Files can be quarantined after repeated deterministic failures. See [index convergence](docs/operations/index-convergence.md) for the procedure to clear quarantine and retry.
 
 ## [1.5.60] - 2026-10-18
 
