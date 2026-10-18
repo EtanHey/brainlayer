@@ -299,3 +299,106 @@ def test_r1_measured_convergence_and_new_work_cycle_remain_healthy(tmp_path):
     for chunks in (1000, 900, 800, 700, 0, 600, 500, 400):
         alarm, state = finish_backlog_pass(tmp_path, files=int(chunks > 0), chunks=chunks)
         assert not alarm and state["stalled_passes"] == 0
+
+
+@pytest.mark.parametrize("append", [False, True])
+def test_r1_pipeline_upgrade_replays_changed_prefix_admission(calendar_fixture, monkeypatch, append):
+    source, db, chunks, _ = calendar_fixture
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    assert invoke(source).exit_code == 0
+    old_version = cli.__version__
+    # New chunker admits two prefix chunks instead of 66; appended inputs now
+    # occupy positions 2 and 3, below the old offset. Never reuse that offset.
+    chunks[:] = chunks[:2]
+    if append:
+        with (source / "a.jsonl").open("a") as stream:
+            stream.write("{}\n")
+        chunks.extend(replace(chunks[0], content=f"Upgrade appended input {i}") for i in range(2))
+    monkeypatch.setattr(cli, "__version__", old_version + "+review-upgrade")
+    seen = []
+    monkeypatch.setattr(adapter, "embed_chunks", lambda cs, **kw: seen.extend(cs) or synthetic_vectors(cs))
+    result = invoke(source)
+    assert result.exit_code == 0, result.output
+    assert seen == chunks
+    saved = next(iter(checkpoint(db).values()))
+    assert saved["pipeline_version"] == cli.__version__
+    assert saved["next_chunk"] == len(chunks)
+    with ReadonlyStore(db) as store:
+        rows = list(
+            store.conn.execute(
+                "SELECT position,content FROM chunks WHERE position < ? ORDER BY position", (len(chunks),)
+            )
+        )
+        assert rows == [(i, c.content) for i, c in enumerate(chunks)]
+        assert store.conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+def test_r1_pipeline_upgrade_retries_quarantine_with_fresh_failure_streak(calendar_fixture, monkeypatch):
+    source, db, chunks, _ = calendar_fixture
+    calls = []
+
+    def broken(cs, **kw):
+        calls.append(True)
+        raise RuntimeError("stable code defect")
+
+    monkeypatch.setattr(adapter, "embed_chunks", broken)
+    for _ in range(3):
+        assert invoke(source).exit_code == 1
+    assert len(calls) == 3
+    monkeypatch.setattr(cli, "__version__", cli.__version__ + "+review-upgrade")
+    assert invoke(source).exit_code == 1
+    assert len(calls) == 4
+    state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
+    failure = next(iter(state["failures"].values()))
+    assert failure["count"] == 1 and failure["pipeline_version"] == cli.__version__
+    assert not state["quarantined"]
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+    assert invoke(source).exit_code == 0
+    readback(db, chunks)
+
+
+@pytest.mark.parametrize("resource", ["enospc", "memory", "nested_oserror", "torch_oom"])
+def test_r1_real_embedder_resource_errors_never_quarantine(calendar_fixture, monkeypatch, resource):
+    import errno
+    import sys
+    from types import SimpleNamespace
+
+    from brainlayer.embeddings import EmbeddingModel
+
+    source, db, chunks, _ = calendar_fixture
+
+    class DeviceOutOfMemoryError(RuntimeError):
+        pass
+
+    if resource == "torch_oom":
+        # Test the already-loaded provider's typed error without importing torch.
+        monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(OutOfMemoryError=DeviceOutOfMemoryError))
+
+    class Encoder:
+        calls = 0
+
+        def encode(self, *args, **kwargs):
+            self.calls += 1
+            if resource == "memory":
+                raise MemoryError("synthetic memory pressure")
+            if resource == "torch_oom":
+                raise DeviceOutOfMemoryError("synthetic device memory pressure")
+            try:
+                raise OSError(errno.ENOSPC, "synthetic disk full")
+            except OSError as exc:
+                if resource == "nested_oserror":
+                    raise RuntimeError("encoder resource wrapper") from exc
+                raise
+
+    encoder = Encoder()
+    model = EmbeddingModel()
+    model._model = encoder
+    monkeypatch.setattr(adapter, "embed_chunks", model.embed_chunks)
+    for _ in range(4):
+        result = invoke(source)
+        assert result.exit_code == 1, result.output
+        assert "INDEX_FILE_QUARANTINED" not in result.output
+        state = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
+        assert not state["failures"] and not state["quarantined"]
+    assert encoder.calls == 4
+    assert checkpoint(db) == {}

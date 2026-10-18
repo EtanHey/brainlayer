@@ -209,7 +209,7 @@ class _CalendarIndexCheckpoint:
                     or any(type(best.get(k)) is not int or best[k] < 0 for k in self.backlog_keys())
                 ):
                     raise ValueError("invalid best backlog")
-                if previous.get("database") == self.database:
+                if previous.get("database") == self.database and previous.get("pipeline_version") == __version__:
                     self.previous = previous
                     self.failures = previous.get("failures", {})
             except FileNotFoundError:
@@ -258,6 +258,10 @@ class _CalendarIndexCheckpoint:
 
     def entry(self, path: Path, signature: list[int]) -> dict:
         saved = self.files.get(str(path.resolve()), {})
+        # Positions are meaningful only under the admission/chunking pipeline
+        # that produced them. Package upgrades conservatively replay all inputs.
+        if saved.get("pipeline_version") != __version__:
+            return {}
         if saved.get("signature") == signature:
             return saved
         old = saved.get("signature", [])
@@ -304,6 +308,7 @@ class _CalendarIndexCheckpoint:
                 stream.seek(signature[1] - 1)
             boundary = not signature[1] or stream.read(1) == b"\n"
         self.files[key] = dict(
+            pipeline_version=__version__,
             signature=signature,
             next_chunk=next_chunk,
             done=done,
@@ -330,6 +335,8 @@ class _CalendarIndexCheckpoint:
         )
 
     def failure_matches(self, path, old):
+        if old.get("pipeline_version") != __version__:
+            return False
         signature, prior = self.signature(path), old.get("signature", [])
         if prior == signature:
             return True
@@ -344,6 +351,22 @@ class _CalendarIndexCheckpoint:
 
     def failed(self, path, exc):
         key, signature = str(path.resolve()), self.signature(path)
+        # embed_chunks deliberately preserves the encoder exception as a cause
+        # while wrapping it in RuntimeError. Resource failures are retryable, not
+        # deterministic bad inputs, even through multiple encoder wrappers.
+        pending, seen = [exc], set()
+        torch_oom = getattr(sys.modules.get("torch"), "OutOfMemoryError", None)
+        while pending:
+            cause = pending.pop()
+            if id(cause) in seen:
+                continue
+            seen.add(id(cause))
+            if isinstance(cause, (OSError, MemoryError)) or (
+                isinstance(torch_oom, type) and isinstance(cause, torch_oom)
+            ):
+                self.failures.pop(key, None)
+                return False
+            pending.extend(item for item in (cause.__cause__, cause.__context__) if item is not None)
         # Keep a fingerprint, not exception/source text, in persistent diagnostics.
         token = hashlib.sha256(f"{type(exc).__name__}:{exc}".encode()).hexdigest()
         old = self.failures.get(key, {})
@@ -354,6 +377,7 @@ class _CalendarIndexCheckpoint:
             else 1
         )
         self.failures[key] = dict(
+            pipeline_version=__version__,
             signature=signature,
             prefix_sha256=self.hashes.get((str(path), tuple(signature), signature[1])),
             error=token,
@@ -412,6 +436,7 @@ class _CalendarIndexCheckpoint:
         quarantined = [key for key in self.catalog if self.quarantined(Path(key))]
         state = dict(
             database=self.database,
+            pipeline_version=__version__,
             **backlog,
             stalled_passes=stalled,
             best_backlog=best,

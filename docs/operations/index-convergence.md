@@ -39,8 +39,16 @@ Real rc1 non-convergence follows the failed-job report path.
 
 An append resumes at the saved input offset only on the same device/inode, with at
 least the saved byte length, a newline-terminated saved prefix, and a matching SHA-256
-of that prefix. Truncation, replacement, or prefix rewrite replays from zero. Older
-checkpoint entries without this identity/fingerprint proof replay conservatively.
+of that prefix. Every checkpoint entry also records `pipeline_version`, using the
+package's `brainlayer.__version__`. Any package-version mismatch, including an entry
+without a stamp, replays from zero even for an unchanged file. This deliberately
+invalidates offsets on every package upgrade, so changed parsing, classification,
+chunking or admission cannot skip appended input under an obsolete position count.
+Release/deployment of such changes must advance the package version; source edits
+under the same package version are not an upgrade boundary. Truncation, replacement,
+or prefix rewrite also replays from zero. Older checkpoint entries without the
+identity/fingerprint proof replay conservatively. Backlog inventory/baselines are
+versioned too: an upgrade recounts instead of trusting old chunk totals.
 Fingerprints are captured before embedding so a deadline after COMMIT cannot block
 publication of an already proven complete batch.
 
@@ -50,11 +58,21 @@ store's rejection contract remains unchanged.
 
 `BRAINLAYER_INDEX_QUARANTINE_PASSES` (default **3**) controls quarantine after identical
 ValueError/RuntimeError failures at the same input offset. Cap interrupts, SQLite busy
-errors, and I/O errors are not quarantined. Appending to the same failing prefix does
+errors, and resource failures are not quarantined. Resource detection walks preserved
+exception causes/contexts, so OSError (including ENOSPC), MemoryError, or a loaded
+PyTorch OutOfMemoryError remains retryable even when an encoder and `embed_chunks`
+wrap it in RuntimeError. These errors still fail the pass visibly. Appending to the same failing prefix does
 not erase its streak. A quarantined file is skipped so later files can proceed, but it
 remains in the backlog, is named by `INDEX_QUARANTINED`, and forces rc1 until resolved.
-Rewriting/replacing the failing prefix retries it; `--force` clears checkpoint/failure
-history and replays all inputs. Quarantine never moves or deletes source data.
+Failure entries carry the same package `pipeline_version`: an upgrade clears the
+old failure streak and retries the unchanged file, starting at count 1 if it still
+fails. Rewriting/replacing the failing prefix also retries it; `--force` clears
+checkpoint/failure history and replays all inputs. For a targeted retry without a
+corpus replay, with no index pass running, remove only the affected absolute-path
+key from `failures` in the matching `index-backlog-<identity>.json` and its path from
+the derived `quarantined` list. Keep the checkpoint and remaining history intact;
+the next pass recomputes quarantine and resumes from the durable checkpoint.
+Quarantine never moves or deletes source data.
 
 Unreadable or malformed checkpoint/history JSON, including invalid signature scalar
 types or negative byte lengths, emits a warning and restarts from safe replay/measurement.
