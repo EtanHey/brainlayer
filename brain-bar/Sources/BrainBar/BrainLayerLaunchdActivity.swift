@@ -122,13 +122,14 @@ enum BrainLayerMaintenanceExit {
     static let recordLatestAfterStart: TimeInterval = 4 * 3_600 + 15 * 60
 
     /// The deliberate deferrals `maintenance.py` raises with exit 75 before any service is quiesced
-    /// (`_check_quiet_window`, `_check_idle`, `_check_lsof_clean`), matched whole and
+    /// (`_check_quiet_window`, `_check_idle`, `_check_lsof_clean`, a refused window-bound hold), matched whole and
     /// case-insensitively. Every other 75 reason is attention: this is an allowlist, not a blacklist.
     static let deliberateDeferrals = [
         #"^outside quiet window: now=\S+ start_hour=\d+ duration_minutes=\d+$"#,
         #"^recent queue write activity: \d+ file\(s\) modified recently$"#,
         #"^queue depth growing: before=\d+ after=\d+$"#,
         #"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$"#,
+        #"^quiet window leaves no time for a bounded maintenance hold$"#,
     ]
 
     static func isDeliberateDeferral(_ reason: String) -> Bool {

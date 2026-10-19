@@ -203,7 +203,7 @@ def _index_deferral_reason(path, offset):
 
 
 async def _execute_step(
-    step, env, *, directory, logs, custody, guard, stop, guard_timeout, shutdown_timeout, expires_at=None
+    step, env, *, directory, logs, custody, guard, stop, guard_timeout, shutdown_timeout, deadline=None
 ):
     child, gate = None, None
     try:
@@ -217,12 +217,16 @@ async def _execute_step(
         os.write(guard.stdin.fileno(), f"+{child.pid}\n".encode())
         record(directory, event="spawn", step=step.name, pid=child.pid)
         os.write(gate, b"R")
-        budget = backup_deadline(step)
-        held = expires_at is not None and expires_at - time.time() < budget
-        if held:
-            budget = expires_at - time.time()  # The hold, not the step timeout, bounds a writer pause.
-        deadline = time.monotonic() + budget
-        while child.poll() is None and not stop.is_set() and time.monotonic() < deadline:
+        budget, held, clock = backup_deadline(step), False, time.monotonic
+        if deadline is not None:
+            # A held step runs on the hold clock, the same one VACUUM and the watchdog read, so a
+            # wall-clock step can neither drop nor reorder the bound.
+            clock = maintenance_control.hold_clock
+            remaining = max(0.0, deadline - clock())
+            held = remaining <= budget
+            budget = min(budget, remaining)
+        end = clock() + budget
+        while child.poll() is None and not stop.is_set() and clock() < end:
             if guard.poll() is not None:
                 raise RuntimeError("calendar guard exited")
             await asyncio.sleep(min(0.1, guard_timeout / 4))
@@ -281,14 +285,14 @@ async def step_hold(client, guard, env, step, now_fn=None):
     if step.name not in HELD_STEPS:
         yield env
         return
-    hold = MaintenanceHold(client, now_fn=now_fn)
+    hold = MaintenanceHold(client, now_fn=now_fn)  # Calendar holds are always window-bound.
     await asyncio.to_thread(hold.__enter__)  # Keep watchdog pulses alive during acknowledged pause.
     try:
         guard_lease(guard, hold.fd)
         yield env | dict(
             BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
             BRAINLAYER_MAINTENANCE_TOKEN=hold.token,
-            BRAINLAYER_MAINTENANCE_HOLD_EXPIRES_AT=repr(hold.expires_at),
+            BRAINLAYER_MAINTENANCE_HOLD_DEADLINE=repr(hold.deadline),
         )
         guard_lease(guard, None)  # Only after the child group is confirmed gone.
     finally:
@@ -373,12 +377,12 @@ async def run_calendar(
                 disabled = client._disabled(client.request(), include_paused=False)
                 if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                     code, reason = 75, "disabled"
-                elif step.name in HELD_STEPS and maintenance_control.hold_budget(now_fn()) <= 0:
-                    code, reason = 75, "maintenance-window"  # No bounded hold fits before the window closes.
                 elif not await _window(directory, step, now_fn, sleep_fn, stop):
                     code, missed = (143, False) if stop.is_set() else (75, True)
                     if missed:
                         reason = "index-overran-window" if index_overran_window else "quiet-window-missed"
+                elif step.name in HELD_STEPS and maintenance_control.hold_budget(now_fn()) <= 0:
+                    code, reason = 75, "maintenance-window"  # Outside the window, or no bounded hold fits.
                 else:
                     child_env = (
                         env
@@ -388,37 +392,41 @@ async def run_calendar(
                             XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
                         )
                     )
-                    async with step_hold(client, guard, child_env, step, now_fn) as held_env:
-                        if stop.is_set():
-                            code = 143
-                        else:
-                            started = now_fn()
-                            index_log = logs / "index.out.log"
-                            index_offset = (
-                                index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
-                            )
-                            code = await _execute_step(
-                                step,
-                                held_env,
-                                directory=directory,
-                                logs=logs,
-                                custody=custody,
-                                guard=guard,
-                                stop=stop,
-                                guard_timeout=guard_timeout,
-                                shutdown_timeout=shutdown_timeout,
-                                expires_at=float(held_env["BRAINLAYER_MAINTENANCE_HOLD_EXPIRES_AT"])
-                                if "BRAINLAYER_MAINTENANCE_HOLD_EXPIRES_AT" in held_env
-                                else None,
-                            )
-                            ended = now_fn()
-                            if step.name == "index":
-                                if code == 75:
-                                    reason = _index_deferral_reason(index_log, index_offset)
-                                # Only attribute the miss to indexing when its measured interval
-                                # crossed this day's window end. Backup delays get a generic reason.
-                                window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
-                                index_overran_window = started < window_end <= ended
+                    try:
+                        async with step_hold(client, guard, child_env, step, now_fn) as held_env:
+                            if stop.is_set():
+                                code = 143
+                            else:
+                                started = now_fn()
+                                index_log = logs / "index.out.log"
+                                index_offset = (
+                                    index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
+                                )
+                                code = await _execute_step(
+                                    step,
+                                    held_env,
+                                    directory=directory,
+                                    logs=logs,
+                                    custody=custody,
+                                    guard=guard,
+                                    stop=stop,
+                                    guard_timeout=guard_timeout,
+                                    shutdown_timeout=shutdown_timeout,
+                                    deadline=float(held_env["BRAINLAYER_MAINTENANCE_HOLD_DEADLINE"])
+                                    if "BRAINLAYER_MAINTENANCE_HOLD_DEADLINE" in held_env
+                                    else None,
+                                )
+                                ended = now_fn()
+                                if step.name == "index":
+                                    if code == 75:
+                                        reason = _index_deferral_reason(index_log, index_offset)
+                                    # Only attribute the miss to indexing when its measured interval
+                                    # crossed this day's window end. Backup delays get a generic reason.
+                                    window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
+                                    index_overran_window = started < window_end <= ended
+                    except maintenance_control.HoldWindowClosed:
+                        # The window closed between the check and the grant: defer, keep the plan going.
+                        code, reason = 75, "maintenance-window"
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
