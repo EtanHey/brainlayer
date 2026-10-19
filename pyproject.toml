@@ -77,7 +77,7 @@ telemetry = [
 dev = [
     "deepchecks>=0.19.1",
     "numpy<2",
-    "pytest>=7.0.0",
+    "pytest>=7.3.0",
     "pytest-asyncio>=0.21.0",
     "pytest-timeout>=2.3.1",
     "ruff>=0.1.0",
@@ -117,6 +117,8 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+# Keep temp trees only for failed tests: passing full-suite runs left 40+ GiB basetemps (2026-10-19).
+tmp_path_retention_policy = "failed"
 markers = [
     "crash_sweep: exhaustive migration/revert SIGKILL cuts (separate required CI gate; retained by local pre-push)",
     "retired_enrichment: retirement tests that forbid cloud-client construction and inet sends",
