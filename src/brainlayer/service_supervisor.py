@@ -172,14 +172,15 @@ class Supervisor:
             except BlockingIOError:
                 pass  # A live holder or inherited child still owns the lease.
             except Exception as exc:
-                for child in self.components.values():
-                    if child.pause_owner:
-                        child.error = f"maintenance recovery failed: {exc}"
+                # After a restart nothing carries a pause owner; report on every component then.
+                owners = [c for c in self.components.values() if c.pause_owner] or self.components.values()
+                for child in owners:
+                    child.error = f"maintenance recovery failed: {exc}"
             self.recovery = None
+        # The journal alone drives recovery and expiry: a restarted supervisor has no pause owners.
         if (
             self.recovery is None
             and time.monotonic() >= self.recovery_at
-            and any(c.pause_owner for c in self.components.values())
             and self.path.with_name("maintenance.json").exists()
         ):
             from .maintenance_control import recover_hold

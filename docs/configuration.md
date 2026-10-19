@@ -214,8 +214,32 @@ The receipt binds SHA-256, size and path; missing, altered, unverified, failed r
 future or yesterday's copies cannot authorize VACUUM. Remote upload is not part of that gate.
 Calendar runs without that proof skip VACUUM with exit **76**. A standalone full run may create a
 local snapshot under the daily supervisor within the remaining quiet window. A held backup lock
-still waits up to two hours. Quiet-window, queue-idle and writer checks run again after backup;
+still waits up to two hours in a standalone run; a calendar step, whose writers are already paused,
+never waits and skips VACUUM with exit **76**. Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
+
+Every writer pause (a supervisor `MaintenanceHold`) is bounded. It lasts at most
+`BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (default **3600**). A calendar or scheduled maintenance hold is
+also window-bound: it starts only inside the quiet window and ends 10 minutes before the window closes
+(05:50 for the default window). A held step with no time left, including calendar FTS repair after
+05:50, defers with exit **75** (`maintenance-window`) and the rest of the plan still runs. Manual FTS
+repair keeps only the cap. The deadline is measured on a boot-scoped elapsed clock, not the wall clock,
+so changing the system time neither extends nor shortens a hold. Suspend counts toward it, so a hold
+that ran out while the Mac slept ends on wake. The hold clock is Darwin `CLOCK_MONOTONIC` or Linux
+`CLOCK_BOOTTIME`.
+
+The ordering is fixed on that one clock:
+1. VACUUM is interrupted (SQLite rolls it back) 30 s before the deadline.
+2. The calendar cuts the step at the deadline.
+3. 60 s after the deadline, the supervisor sends TERM to the hold's owner, then KILL 30 s after a
+   delivered TERM.
+
+Only VACUUM unwinds itself; the checkpoints around it rely on the cut and the watchdog. The journal
+records the hold generation: owner token, PID, kernel birth time and boot session. The supervisor
+revalidates that same generation (lease still held, journal unchanged) immediately before each signal,
+and never signals a dead, reused or previous-boot PID. A hold is refused when its owner identity cannot
+be read. Escalation state sits beside the journal, so a supervisor restart does not grant a fresh TERM
+cycle. On each tick the supervisor restores a hold whose owner has died.
 
 Older pending copies of the same DB become reclaimable only after a newer copy is offsite-verified;
 capacity errors list retained archives. Weekly maintenance holds the archive lock across quiesce/VACUUM

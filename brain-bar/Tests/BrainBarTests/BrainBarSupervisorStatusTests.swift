@@ -300,7 +300,8 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         XCTAssertEqual(history.runs["maintenance-nightly"]?.startedAt, start)
         let reasons = ["outside quiet window: now=08:00 start_hour=4 duration_minutes=120",
             "recent queue write activity: 2 file(s) modified recently", "queue depth growing: before=1 after=2",
-            "unexpected writer holds brainlayer db: pid=42 command=fixture fd=3u", "failed to resume services"]
+            "unexpected writer holds brainlayer db: pid=42 command=fixture fd=3u",
+            "quiet window leaves no time for a bounded maintenance hold", "failed to resume services"]
         for (index, reason) in reasons.enumerated() {
             for name in ["maintenance-nightly", "jsonl-backup"] {
                 let log = logs.appendingPathComponent("\(name).out.log")
@@ -308,7 +309,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
                 try FileManager.default.setAttributes([.modificationDate: end], ofItemAtPath: log.path)
             }
             let observations = Self.supervised(history: history, logs: logs).sampleActivity()
-            let deliberate = index < 4
+            let deliberate = index < 5
             XCTAssertEqual(observations[.jsonlBackup]?.backupScheduleLine?.tone, .neutral)
             XCTAssertTrue(observations[.jsonlBackup]?.backupScheduleLine?.text.hasPrefix(deliberate ? "Skipped" : "Deferred") == true)
             for group in [BrainLayerLaunchdJobGroup.maintenance, .backups] {
