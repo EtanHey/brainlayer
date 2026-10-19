@@ -305,6 +305,24 @@ class BrainBarSnapshotBusyError(RuntimeError):
 BRAINBAR_SNAPSHOT_BUSY_MESSAGE = "A BrainBar backup snapshot is already in progress."
 
 
+class BrainBarDatabaseIdentityError(RuntimeError):
+    """BrainBar serves a different database than the one this backup was aimed at."""
+
+
+# MCPRouter.handleBrainBackupVacuumInto refuses with this before any VACUUM INTO when the
+# request's expected_db_path does not identify the database BrainBar serves.
+BRAINBAR_DB_IDENTITY_MISMATCH = "BrainBar database identity mismatch"
+
+
+def _same_database_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) -> bool:
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def _is_brainbar_snapshot_busy(response: dict[str, Any]) -> bool:
     error = response.get("error")
     return isinstance(error, dict) and error.get("message") == BRAINBAR_SNAPSHOT_BUSY_MESSAGE
@@ -926,6 +944,10 @@ def _copy_with_raw_floor(source: Any, destination: Any, output_dir: Path) -> Non
         _require_raw_floor(output_dir)
 
 
+def _is_canonical_staging(output_dir: Path) -> bool:
+    return os.path.realpath(output_dir) == os.path.realpath(Path(DEFAULT_STAGING_DIR).expanduser())
+
+
 def create_sqlite_backup_artifact(
     db_path: Path,
     output_dir: Path,
@@ -1068,41 +1090,55 @@ def create_sqlite_backup_artifact(
     if final_raw.exists() or final_raw.is_symlink():
         raise FileExistsError(f"Retaining existing raw snapshot without a verified gzip: {final_raw}")
 
-    with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
-        (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
-        raw_snapshot = final_raw
-        snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
-        request_brainbar_vacuum_into(
-            raw_snapshot,
-            socket_path=socket_path,
-            attempt_dir=output_dir,
-            retry_capacity_check=require_retry_capacity,
-        )
-        _require_raw_floor(output_dir)
-        sentinel_chunks = _validate_backup_target(raw_snapshot)
-        pragma = (
-            "integrity_check"
-            if (integrity_full if integrity_full is not None else _should_run_full_verify(date_stamp))
-            else "quick_check"
-        )
-        integrity_started = time.monotonic()
-        try:
-            integrity = _sqlite_pragma_check(raw_snapshot, pragma)
-        except sqlite3.Error as exc:
-            integrity = f"{type(exc).__name__}: {exc}"
-        integrity_duration = time.monotonic() - integrity_started
-        if integrity_status_callback is not None:
-            integrity_status_callback(integrity, pragma, integrity_duration)
-        if integrity != "ok":
-            raise RuntimeError(f"Raw snapshot {pragma} failed: {integrity}; retaining raw snapshot")
+    # A raw this run promoted into non-canonical (temp/test/harness) staging is removed if the run
+    # exits before verification: nothing else ever reclaims it there (2026-10-19, 19 GiB in $TMPDIR).
+    orphan_cleanup = not _is_canonical_staging(output_dir)
+    raw_settled = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
+            (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
+            raw_snapshot = final_raw
+            snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
+            request_brainbar_vacuum_into(
+                raw_snapshot,
+                socket_path=socket_path,
+                attempt_dir=output_dir,
+                retry_capacity_check=require_retry_capacity,
+                expected_db_path=db_path,
+            )
+            _require_raw_floor(output_dir)
+            sentinel_chunks = _validate_backup_target(raw_snapshot)
+            pragma = (
+                "integrity_check"
+                if (integrity_full if integrity_full is not None else _should_run_full_verify(date_stamp))
+                else "quick_check"
+            )
+            integrity_started = time.monotonic()
+            try:
+                integrity = _sqlite_pragma_check(raw_snapshot, pragma)
+            except sqlite3.Error as exc:
+                integrity = f"{type(exc).__name__}: {exc}"
+            integrity_duration = time.monotonic() - integrity_started
+            if integrity_status_callback is not None:
+                integrity_status_callback(integrity, pragma, integrity_duration)
+            # Past this point a raw is either verified or retained on purpose; the existing
+            # retained-raw rules own it, never the orphan cleanup below.
+            raw_settled = True
+            if integrity != "ok":
+                raise RuntimeError(f"Raw snapshot {pragma} failed: {integrity}; retaining raw snapshot")
 
-        temp_gz = Path(tmp) / final_gz.name
-        with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
-            _copy_with_raw_floor(src, dst, output_dir)
-        shutil.move(str(temp_gz), final_gz)
+            temp_gz = Path(tmp) / final_gz.name
+            with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
+                _copy_with_raw_floor(src, dst, output_dir)
+            shutil.move(str(temp_gz), final_gz)
 
-        _remove_raw_with_verified_gzip(output_dir, final_raw, own_run=True)
-        deleted.append(final_raw.name)
+            _remove_raw_with_verified_gzip(output_dir, final_raw, own_run=True)
+            deleted.append(final_raw.name)
+    except BaseException:
+        if orphan_cleanup and not raw_settled and (final_raw.exists() or final_raw.is_symlink()):
+            final_raw.unlink(missing_ok=True)
+            print(f"Backup removed unverified raw from non-canonical staging: {final_raw}", flush=True)
+        raise
 
     return SQLiteBackupArtifact(
         gzip_path=final_gz,
@@ -1147,8 +1183,18 @@ def request_brainbar_vacuum_into(
     retry_backoff_seconds: int = 60,
     attempt_dir: Path | None = None,
     retry_capacity_check: Callable[[list[Path]], None] | None = None,
+    expected_db_path: Path | str | None = None,
 ) -> None:
+    """Ask BrainBar to VACUUM INTO an attempt path, then promote it to target_path.
+
+    With expected_db_path, BrainBar must serve exactly that database: it refuses a mismatch
+    before any VACUUM, and a response that does not confirm the same file (an older BrainBar
+    ignores the argument) is deleted and refused. Identity refusals never retry.
+    """
     target_path = Path(target_path).expanduser()
+    resolved_expected_db = (
+        os.path.realpath(Path(expected_db_path).expanduser()) if expected_db_path is not None else None
+    )
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
     if target_path.exists():
@@ -1175,7 +1221,10 @@ def request_brainbar_vacuum_into(
             "method": "tools/call",
             "params": {
                 "name": "brain_backup_vacuum_into",
-                "arguments": {"target_path": str(attempt_path)},
+                "arguments": {
+                    "target_path": str(attempt_path),
+                    **({"expected_db_path": resolved_expected_db} if resolved_expected_db else {}),
+                },
             },
         }
         terminal_response_received = False
@@ -1200,10 +1249,27 @@ def request_brainbar_vacuum_into(
             if response.get("error"):
                 raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
             result = response.get("result") or {}
+            content = result.get("content") or []
+            text = content[0].get("text") if content and isinstance(content[0], dict) else None
             if result.get("isError"):
-                content = result.get("content") or []
-                text = content[0].get("text") if content and isinstance(content[0], dict) else result
-                raise RuntimeError(f"BrainBar backup request failed: {text}")
+                if isinstance(text, str) and BRAINBAR_DB_IDENTITY_MISMATCH in text:
+                    raise BrainBarDatabaseIdentityError(f"BrainBar refused the backup before VACUUM: {text}")
+                raise RuntimeError(f"BrainBar backup request failed: {text if text is not None else result}")
+            if resolved_expected_db is not None:
+                try:
+                    served_db = json.loads(text).get("db_path") if isinstance(text, str) else None
+                except (ValueError, AttributeError):
+                    served_db = None
+                if not isinstance(served_db, str) or not _same_database_file(served_db, resolved_expected_db):
+                    # Terminal response: BrainBar has stopped writing this attempt. Whatever it
+                    # vacuumed is not the configured database, so it must not survive here.
+                    attempt_path.unlink(missing_ok=True)
+                    _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
+                    raise BrainBarDatabaseIdentityError(
+                        f"{BRAINBAR_DB_IDENTITY_MISMATCH}: expected {resolved_expected_db}, "
+                        f"BrainBar reported {served_db!r}; deleted the unconfirmed snapshot. "
+                        "A BrainBar without expected_db_path support must be upgraded."
+                    )
             if not attempt_path.exists():
                 raise RuntimeError(f"BrainBar backup did not create snapshot: {attempt_path}")
             try:
@@ -1219,7 +1285,7 @@ def request_brainbar_vacuum_into(
                 prior_path.unlink(missing_ok=True)
                 _backup_attempt_completion_marker(prior_path).unlink(missing_ok=True)
             return
-        except BackupTimeoutError:
+        except (BackupTimeoutError, BrainBarDatabaseIdentityError):
             raise
         except BrainBarSnapshotBusyError as exc:
             if unconfirmed_attempt_paths:

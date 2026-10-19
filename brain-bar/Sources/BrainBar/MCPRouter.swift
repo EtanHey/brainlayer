@@ -108,11 +108,13 @@ final class MCPRouter: @unchecked Sendable {
         let status: String
         let targetPath: String
         let bytes: Int64
+        let dbPath: String
 
         enum CodingKeys: String, CodingKey {
             case status
             case targetPath = "target_path"
             case bytes
+            case dbPath = "db_path"
         }
     }
 
@@ -245,7 +247,8 @@ final class MCPRouter: @unchecked Sendable {
         "session_id": 128,
         "source": 32,
         "tag": 128,
-        "target_path": 4_096
+        "target_path": 4_096,
+        "expected_db_path": 4_096
     ]
     private static let stringArrayLimits: [String: (maxItems: Int, itemMaxLength: Int)] = [
         "chunk_ids": (maxItems: 500, itemMaxLength: chunkIdentifierMaxLength),
@@ -1639,14 +1642,22 @@ final class MCPRouter: @unchecked Sendable {
             throw ToolError.missingParameter("target_path")
         }
         let db = try writeDB()
+        // A caller aimed at a different database must never receive this one (2026-10-19:
+        // a temp-DB run got a 20 GB production copy). Refuse before any VACUUM INTO.
+        if let expected = args["expected_db_path"] as? String, !db.isSameDatabaseFile(as: expected) {
+            throw ToolError.operationFailed(
+                "BrainBar database identity mismatch: expected_db_path \(expected) is not the served database"
+            )
+        }
         pendingStoreDrainScheduler.backupGate.waitForDrains()
         let bytes = try db.vacuumInto(targetPath: targetPath)
-        let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes)
+        let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes, dbPath: db.databasePath)
         return ToolOutput(
             text: jsonEncode(payload),
             metadata: [
                 "target_path": targetPath,
                 "bytes": bytes,
+                "db_path": db.databasePath,
             ]
         )
     }
@@ -2069,6 +2080,7 @@ final class MCPRouter: @unchecked Sendable {
                 "type": "object",
                 "properties": [
                     "target_path": ["type": "string", "description": "Absolute path for the new SQLite backup file"],
+                    "expected_db_path": ["type": "string", "description": "Refuse unless this is the served database file"],
                 ] as [String: Any],
                 "required": ["target_path"]
             ] as [String: Any])

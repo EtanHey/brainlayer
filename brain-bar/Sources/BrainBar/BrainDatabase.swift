@@ -1164,6 +1164,23 @@ final class BrainDatabase: @unchecked Sendable {
         isOpen = false
     }
 
+    var databasePath: String { path }
+
+    /// Same file as the served database: equal resolved paths, or equal device and inode.
+    /// A path that does not exist is never the served database.
+    func isSameDatabaseFile(as candidatePath: String) -> Bool {
+        let candidate = candidatePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else { return false }
+        var candidateStat = stat()
+        var servedStat = stat()
+        guard stat(candidate, &candidateStat) == 0, stat(path, &servedStat) == 0 else { return false }
+        if URL(fileURLWithPath: candidate).resolvingSymlinksInPath().standardizedFileURL.path
+            == URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path {
+            return true
+        }
+        return candidateStat.st_dev == servedStat.st_dev && candidateStat.st_ino == servedStat.st_ino
+    }
+
     func vacuumInto(targetPath: String) throws -> Int64 {
         guard let db else { throw DBError.notOpen }
         let trimmedTarget = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
