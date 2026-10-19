@@ -297,6 +297,19 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
+class BrainBarSnapshotBusyError(RuntimeError):
+    """BrainBar refused a snapshot request because another VACUUM INTO is still running."""
+
+
+# BrainBarServer.handleBackupToolCallAsync sends this before admission; the running writer continues.
+BRAINBAR_SNAPSHOT_BUSY_MESSAGE = "A BrainBar backup snapshot is already in progress."
+
+
+def _is_brainbar_snapshot_busy(response: dict[str, Any]) -> bool:
+    error = response.get("error")
+    return isinstance(error, dict) and error.get("message") == BRAINBAR_SNAPSHOT_BUSY_MESSAGE
+
+
 class BackupStoppedError(BaseException):
     def __init__(self, signum: int):
         self.signum = signum
@@ -1172,6 +1185,17 @@ def request_brainbar_vacuum_into(
                 request,
                 timeout_seconds=resolved_timeout_seconds,
             )
+            if _is_brainbar_snapshot_busy(response):
+                # Rejected before admission, so this request never wrote, and the writer it
+                # names may be one of ours. Release nothing: no response proves it stopped.
+                if unconfirmed_attempt_paths:
+                    preserved = ", ".join(str(path) for path in unconfirmed_attempt_paths)
+                    raise BrainBarSnapshotBusyError(
+                        f"{BRAINBAR_SNAPSHOT_BUSY_MESSAGE} Not retrying beside an unresolved earlier request; "
+                        f"preserving {len(unconfirmed_attempt_paths)} attempt targets and their reservations: "
+                        f"{preserved}"
+                    )
+                raise BrainBarSnapshotBusyError(BRAINBAR_SNAPSHOT_BUSY_MESSAGE)
             terminal_response_received = True
             if response.get("error"):
                 raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
@@ -1197,12 +1221,18 @@ def request_brainbar_vacuum_into(
             return
         except BackupTimeoutError:
             raise
+        except BrainBarSnapshotBusyError as exc:
+            if unconfirmed_attempt_paths:
+                raise
+            # Someone else's snapshot is running and this run owns no writer: back off and retry.
+            last_error = exc
+            existing_target_note = ""
         except Exception as exc:
             last_error = exc
             existing_target_note = ""
             if terminal_response_received:
-                # BrainBar's request queue is serial. A terminal response proves this
-                # attempt and every earlier request are no longer writing.
+                # BrainBar admits one snapshot at a time and answers only after it finishes, so an
+                # admitted request's terminal response proves it and every earlier request stopped.
                 for completed_path in [*unconfirmed_attempt_paths, attempt_path]:
                     completed_path.unlink(missing_ok=True)
                     _backup_attempt_completion_marker(completed_path).unlink(missing_ok=True)
@@ -1214,18 +1244,19 @@ def request_brainbar_vacuum_into(
                 unconfirmed_attempt_paths.append(attempt_path)
                 if attempt_path.exists():
                     existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
-            if attempt >= max_attempts:
-                print(
-                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}",
-                    flush=True,
-                )
-                break
+        failure = _redact_upload_secrets(str(last_error))
+        if attempt >= max_attempts:
             print(
-                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}; "
-                f"retrying in {retry_backoff_seconds}s",
+                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {failure}{existing_target_note}",
                 flush=True,
             )
-            _sleep(retry_backoff_seconds)
+            break
+        print(
+            f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {failure}{existing_target_note}; "
+            f"retrying in {retry_backoff_seconds}s",
+            flush=True,
+        )
+        _sleep(retry_backoff_seconds)
     if last_error is not None:
         raise last_error
 

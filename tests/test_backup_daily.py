@@ -1615,6 +1615,95 @@ def test_terminal_response_releases_retry_reservation(tmp_path, monkeypatch):
     assert not any(path.exists() for path in calls)
 
 
+BRAINBAR_BUSY_RESPONSE = {"error": {"code": -32000, "message": "A BrainBar backup snapshot is already in progress."}}
+
+
+def test_busy_rejection_preserves_an_earlier_still_running_target(tmp_path, monkeypatch):
+    # Sol's #1408 R2 repro: BrainBar rejects the retry before admission while the first
+    # VACUUM INTO keeps writing, so the rejection says nothing about that first writer.
+    from brainlayer import backup_daily
+
+    writer = {}
+
+    def respond(calls):
+        if len(calls) == 1:
+            raise OSError("connection reset before BrainBar opened the target")
+        return BRAINBAR_BUSY_RESPONSE
+
+    def late_live_target(calls, disk):
+        if len(calls) == 1:
+            handle = calls[0].open("wb")
+            handle.write(b"x" * 4096)
+            handle.flush()
+            writer["handle"] = handle  # The first VACUUM INTO is still writing.
+            disk["free"] -= 4096
+
+    try:
+        calls, error = _vacuum_retry_run(
+            tmp_path, monkeypatch, free=INCIDENT_RAW_FREE, respond=respond, on_backoff=late_live_target
+        )
+        assert len(calls) == 2  # The busy retry was never admitted; no further request follows it.
+        assert calls[0].exists()
+        assert os.fstat(writer["handle"].fileno()).st_nlink == 1
+        assert "already in progress" in error
+        assert str(calls[0]) in error
+    finally:
+        writer["handle"].close()
+    # The next run still reserves the preserved target's remaining growth.
+    _, surviving = backup_daily._sweep_stale_backup_attempts(tmp_path / "out", writer_started_at=None)
+    assert surviving == [calls[0]]
+
+
+def test_busy_message_matches_the_brainbar_admission_guard():
+    # Python recognises the pre-admission rejection by its text; rewording it in Swift would
+    # silently turn the rejection back into "terminal" and re-arm the unlink.
+    from brainlayer import backup_daily
+
+    server = Path(__file__).resolve().parents[1] / "brain-bar/Sources/BrainBar/BrainBarServer.swift"
+    assert f'"message": "{backup_daily.BRAINBAR_SNAPSHOT_BUSY_MESSAGE}"' in server.read_text()
+
+
+def test_busy_rejection_without_an_earlier_request_backs_off_and_retries(tmp_path, monkeypatch):
+    # Another snapshot is running; this run owns no writer, so nothing is preserved or deleted.
+    def respond(calls):
+        if len(calls) < 3:
+            return BRAINBAR_BUSY_RESPONSE
+        return {"error": {"code": -32000, "message": "vacuum failed"}}
+
+    calls, error = _vacuum_retry_run(tmp_path, monkeypatch, free=INCIDENT_RAW_FREE, respond=respond)
+    assert len(calls) == 3
+    assert "vacuum failed" in error
+
+
+def test_admitted_terminal_response_releases_an_earlier_lost_request(tmp_path, monkeypatch):
+    # Admission is exclusive: an admitted request's response proves every earlier one stopped.
+    checked = []
+
+    def respond(calls):
+        if len(calls) == 1:
+            calls[0].write_bytes(b"x" * 4096)
+            raise OSError("connection reset before the terminal response")
+        return {"error": {"code": -32000, "message": "vacuum failed"}}
+
+    from brainlayer import backup_daily
+
+    original = backup_daily.request_brainbar_vacuum_into
+
+    def spy(*args, retry_capacity_check, **kwargs):
+        def check(unconfirmed):
+            checked.append(list(unconfirmed))
+            retry_capacity_check(unconfirmed)
+
+        return original(*args, retry_capacity_check=check, **kwargs)
+
+    monkeypatch.setattr(backup_daily, "request_brainbar_vacuum_into", spy)
+    calls, error = _vacuum_retry_run(tmp_path, monkeypatch, free=INCIDENT_RAW_FREE, respond=respond)
+    assert len(calls) == 3
+    assert checked == [[calls[0]], []]
+    assert "vacuum failed" in error
+    assert not any(path.exists() for path in calls)
+
+
 def test_2026_10_19_numbers_in_full_mode_budget_the_drive_download(tmp_path, monkeypatch):
     # 2026-10-18 is a Sunday, so the restore verifies a downloaded Drive copy beside the local gzip.
     with pytest.raises(RuntimeError, match="writer reached"):
