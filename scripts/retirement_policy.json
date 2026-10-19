@@ -22,6 +22,16 @@
         "target": "socket.socket"
       }
     },
+    "023bc7f48ec39203f7c49485cbc91883b773b21fce8b463c84242679e345bd70": {
+      "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "8116e031f3bef9d4507393e940c9d5be8048009f1a6b8602e358a8ed1b547182",
+        "kind": "transport_call",
+        "owner": "<module>.boot_id",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "ctypes.create_string_buffer"
+      }
+    },
     "0251bde8a9132c26cbaf2e8c1444007af605295d4e5b5a300dfd7612078ca874": {
       "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: scripts/release_tag_contains.py <module>._git subprocess.CompletedProcess.",
       "site": {
@@ -1032,6 +1042,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "3354534443c8aec1d19f20a5d91733d9a02765baea5af7ceba21be0cec92bd75": {
+      "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "b037058c64dab853f827856d2585d3484b629d9cd4ba21b222a5a772db393c35",
+        "kind": "transport_call",
+        "owner": "<module>.boot_id",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "ctypes.get_errno"
+      }
+    },
     "335cd717d2aebd362c11f84f60018df75422d26cec8870cfaf5681a888a0a7c5": {
       "non_cloud_purpose": "Operator-only native harness connectivity diagnostic. Uses the installed T3 stdio ACP MCP bridge only with existing caller credentials and a loopback endpoint matching the installed runtime; native events, strong read-only provider linkage and bounded metadata prove connectivity. No server, token minting, or BrainLayer production cloud-model backend. The external agent retains its provider and may invoke that provider. Helper timeout changes only own-probe cleanup timing. Site: scripts/harness_probe_t3.py <module>.probe urllib.parse.urlsplit.",
       "site": {
@@ -1120,6 +1140,16 @@
         "owner": "<module>._index_completeness",
         "path": "src/brainlayer/doctor.py",
         "target": "sqlite3.connect"
+      }
+    },
+    "368f5920ada34c850c0dfd86e864870078a88085a46b41f5c4985d5a0efb1690": {
+      "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "9e8330fd9b352b74b30a279374893cf5589c4542e036a2f451186ab916a50058",
+        "kind": "transport_call",
+        "owner": "<module>.boot_id",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "ctypes.c_size_t"
       }
     },
     "369b374a940d6f1b109fc01b4e6abff8caad745a56dd0cd859cc5ce18e14c846": {
@@ -2636,6 +2666,16 @@
         "target": "subprocess.SubprocessError"
       }
     },
+    "77b47f7533518ceca64186b1f595ad29285002ec91ad3e3bd28a3039fe828ad3": {
+      "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "fd2e5768445f456ee386121be506cc6f812ec53016700424fc3cbf65351ee7d7",
+        "kind": "dynamic_code_or_import",
+        "owner": "<module>.boot_id",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "ctypes.CDLL"
+      }
+    },
     "79343417b0e866f661f3af1d34d5a944d56b914d837f420253db5afe270724b4": {
       "non_cloud_purpose": "Stdlib local process custody and Unix peer credentials; imports do not activate commands or connect to cloud endpoints.",
       "site": {
@@ -3910,6 +3950,16 @@
         "target": "import subprocess"
       }
     },
+    "b0bd0e2ebb2b2621680b1d45f7608ff406a04bec455a62414031854c7307b615": {
+      "non_cloud_purpose": "Read only the local per-boot session identity for maintenance hold generations: Darwin libc sysctlbyname kern.bootsessionuuid (string buffer), or Linux boot_id file. No subprocess/network/model sender.",
+      "site": {
+        "call_sha256": "cdbcf403131a1aeebe22fdab99de61ec86e927cdb74acd398bc35d8babf5eeab",
+        "kind": "transport_call",
+        "owner": "<module>.boot_id",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "ctypes.byref"
+      }
+    },
     "b0c6e48d86b1499cd5ee0a1e7c1270aeed6f918904e265cf7058bc10b82c8812": {
       "non_cloud_purpose": "Retained Drive/OAuth backup and local backup supervision, not a model API",
       "site": {
@@ -4198,6 +4248,16 @@
         "owner": "<module>.controls",
         "path": "scripts/retirement_probe.py",
         "target": "importlib.import_module"
+      }
+    },
+    "bb47bb145fd599ccc4b091a3486d7709891cff553006b452650d2b515541d72c": {
+      "non_cloud_purpose": "Stdlib local kernel boot-session identity for maintenance hold generations; the import does not activate commands or connect to cloud endpoints.",
+      "site": {
+        "call_sha256": "669c8db7bfb9b4e64a7aa5f9239cbd229a5c460f228936e83d225f5ab2176b82",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/maintenance_control.py",
+        "target": "import ctypes"
       }
     },
     "bb4feb9ffc2955a688b09d655d3f2279767270a3e33df698a382b4edd357d988": {
