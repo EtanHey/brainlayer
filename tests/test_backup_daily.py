@@ -76,7 +76,13 @@ def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
                                     {
                                         "type": "text",
                                         "text": json.dumps(
-                                            {"status": "ok", "target_path": str(target_path), "db_path": str(source_db)}
+                                            {
+                                                "status": "ok",
+                                                "target_path": str(target_path),
+                                                "db_path": str(source_db),
+                                                "db_dev": os.stat(source_db).st_dev,
+                                                "db_ino": os.stat(source_db).st_ino,
+                                            }
                                         ),
                                     }
                                 ]

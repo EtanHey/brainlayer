@@ -314,13 +314,22 @@ class BrainBarDatabaseIdentityError(RuntimeError):
 BRAINBAR_DB_IDENTITY_MISMATCH = "BrainBar database identity mismatch"
 
 
-def _same_database_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) -> bool:
-    if os.path.realpath(a) == os.path.realpath(b):
-        return True
+class BackupTargetConflictError(FileExistsError):
+    """A peer's dated raw appeared while this run's snapshot ran; it is never replaced."""
+
+
+def _file_identity(path: str | os.PathLike[str]) -> tuple[int, int] | None:
     try:
-        return os.path.samefile(a, b)
+        info = os.stat(path)
     except OSError:
-        return False
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _same_database_file(a: str | os.PathLike[str], b: str | os.PathLike[str]) -> bool:
+    """Both paths exist and name the same dev/inode; a missing path never matches."""
+    identity = _file_identity(a)
+    return identity is not None and identity == _file_identity(b)
 
 
 def _is_brainbar_snapshot_busy(response: dict[str, Any]) -> bool:
@@ -963,6 +972,28 @@ def _refuse_foreign_db_on_production_socket(db_path: Path, socket_path: Path | s
         )
 
 
+def _remove_owned_raw(raw: Path, owned: tuple[int, int]) -> None:
+    """Remove raw only if it is still the file this run promoted.
+
+    The rename aside is atomic, so the inode checked is the inode removed. A peer's file that
+    took the name is linked back create-exclusive, or left aside and reported, never deleted.
+    """
+    aside = raw.with_name(f".{raw.name}.orphan-{uuid.uuid4().hex}")
+    try:
+        os.rename(raw, aside)
+    except FileNotFoundError:
+        return
+    if _file_identity(aside) == owned:
+        aside.unlink()
+        print(f"Backup removed unverified raw from non-canonical staging: {raw}", flush=True)
+        return
+    try:
+        os.link(aside, raw)
+        aside.unlink()
+    except FileExistsError:
+        print(f"Backup left a peer's raw aside, its name was retaken: {aside}", flush=True)
+
+
 def _is_canonical_staging(output_dir: Path) -> bool:
     return os.path.realpath(output_dir) == os.path.realpath(Path(DEFAULT_STAGING_DIR).expanduser())
 
@@ -1112,20 +1143,24 @@ def create_sqlite_backup_artifact(
 
     # A raw this run promoted into non-canonical (temp/test/harness) staging is removed if the run
     # exits before verification: nothing else ever reclaims it there (2026-10-19, 19 GiB in $TMPDIR).
+    # Ownership is the promoted dev/inode, never the dated name: a peer's raw is never touched.
     orphan_cleanup = not _is_canonical_staging(output_dir)
     raw_settled = False
+    owned_raw: tuple[int, int] | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
             (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
             raw_snapshot = final_raw
             snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
-            request_brainbar_vacuum_into(
+            promoted = request_brainbar_vacuum_into(
                 raw_snapshot,
                 socket_path=socket_path,
                 attempt_dir=output_dir,
                 retry_capacity_check=require_retry_capacity,
                 expected_db_path=db_path,
             )
+            if isinstance(promoted, os.stat_result):
+                owned_raw = (promoted.st_dev, promoted.st_ino)
             _require_raw_floor(output_dir)
             sentinel_chunks = _validate_backup_target(raw_snapshot)
             pragma = (
@@ -1155,9 +1190,8 @@ def create_sqlite_backup_artifact(
             _remove_raw_with_verified_gzip(output_dir, final_raw, own_run=True)
             deleted.append(final_raw.name)
     except BaseException:
-        if orphan_cleanup and not raw_settled and (final_raw.exists() or final_raw.is_symlink()):
-            final_raw.unlink(missing_ok=True)
-            print(f"Backup removed unverified raw from non-canonical staging: {final_raw}", flush=True)
+        if orphan_cleanup and not raw_settled and owned_raw is not None:
+            _remove_owned_raw(final_raw, owned_raw)
         raise
 
     return SQLiteBackupArtifact(
@@ -1204,8 +1238,11 @@ def request_brainbar_vacuum_into(
     attempt_dir: Path | None = None,
     retry_capacity_check: Callable[[list[Path]], None] | None = None,
     expected_db_path: Path | str | None = None,
-) -> None:
+) -> os.stat_result:
     """Ask BrainBar to VACUUM INTO an attempt path, then promote it to target_path.
+
+    Promotion is create-exclusive and returns the stat of the promoted file, which is how a
+    caller proves later that a raw at target_path is still the one this run created.
 
     With expected_db_path, BrainBar must serve exactly that database: it refuses a mismatch
     before any VACUUM, and a response that does not confirm the same file (an older BrainBar
@@ -1276,19 +1313,24 @@ def request_brainbar_vacuum_into(
                     raise BrainBarDatabaseIdentityError(f"BrainBar refused the backup before VACUUM: {text}")
                 raise RuntimeError(f"BrainBar backup request failed: {text if text is not None else result}")
             if resolved_expected_db is not None:
+                # BrainBar echoes the dev/inode of the file its connection has OPEN; a pathname
+                # cannot prove that (the path may have been replaced under the live connection).
                 try:
-                    served_db = json.loads(text).get("db_path") if isinstance(text, str) else None
-                except (ValueError, AttributeError):
-                    served_db = None
-                if not isinstance(served_db, str) or not _same_database_file(served_db, resolved_expected_db):
+                    echo = json.loads(text) if isinstance(text, str) else None
+                except ValueError:
+                    echo = None
+                echo = echo if isinstance(echo, dict) else {}
+                served_identity = (echo.get("db_dev"), echo.get("db_ino"))
+                expected_identity = _file_identity(resolved_expected_db)
+                if not all(isinstance(v, int) for v in served_identity) or served_identity != expected_identity:
                     # Terminal response: BrainBar has stopped writing this attempt. Whatever it
                     # vacuumed is not the configured database, so it must not survive here.
                     attempt_path.unlink(missing_ok=True)
                     _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
                     raise BrainBarDatabaseIdentityError(
-                        f"{BRAINBAR_DB_IDENTITY_MISMATCH}: expected {resolved_expected_db}, "
-                        f"BrainBar reported {served_db!r}; deleted the unconfirmed snapshot. "
-                        "A BrainBar without expected_db_path support must be upgraded."
+                        f"{BRAINBAR_DB_IDENTITY_MISMATCH}: expected {resolved_expected_db} {expected_identity}, "
+                        f"BrainBar reported {echo.get('db_path')!r} {served_identity}; deleted the unconfirmed "
+                        "snapshot. A BrainBar without open-database identity support must be upgraded."
                     )
             if not attempt_path.exists():
                 raise RuntimeError(f"BrainBar backup did not create snapshot: {attempt_path}")
@@ -1299,13 +1341,23 @@ def request_brainbar_vacuum_into(
                 attempt_path.unlink(missing_ok=True)
                 _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
                 raise
-            os.replace(attempt_path, target_path)
+            promoted = os.stat(attempt_path)
+            try:
+                # Create-exclusive: a peer's dated raw that appeared meanwhile is never replaced.
+                os.link(attempt_path, target_path)
+            except FileExistsError:
+                attempt_path.unlink(missing_ok=True)
+                _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
+                raise BackupTargetConflictError(
+                    f"Backup target appeared while this snapshot ran; not replacing it: {target_path}"
+                ) from None
+            attempt_path.unlink()
             _backup_attempt_completion_marker(attempt_path).unlink(missing_ok=True)
             for prior_path in unconfirmed_attempt_paths:
                 prior_path.unlink(missing_ok=True)
                 _backup_attempt_completion_marker(prior_path).unlink(missing_ok=True)
-            return
-        except (BackupTimeoutError, BrainBarDatabaseIdentityError):
+            return promoted
+        except (BackupTimeoutError, BrainBarDatabaseIdentityError, BackupTargetConflictError):
             raise
         except BrainBarSnapshotBusyError as exc:
             if unconfirmed_attempt_paths:
@@ -1345,6 +1397,7 @@ def request_brainbar_vacuum_into(
         _sleep(retry_backoff_seconds)
     if last_error is not None:
         raise last_error
+    raise RuntimeError("BrainBar vacuum snapshot made no attempt")
 
 
 def _send_brainbar_json_request(

@@ -20,6 +20,11 @@ def _ok(payload: dict) -> dict:
     return {"result": {"content": [{"type": "text", "text": json.dumps({"status": "ok", **payload})}]}}
 
 
+def _identity(path: Path) -> dict:
+    info = os.stat(path)
+    return {"db_dev": info.st_dev, "db_ino": info.st_ino}
+
+
 def _fake_brainbar(served_db: Path, requests: list, *, enforce: bool = True, echo: bool = True):
     """Mimic BrainBar: refuse a mismatched expected_db_path before VACUUM, else vacuum served_db."""
 
@@ -37,7 +42,9 @@ def _fake_brainbar(served_db: Path, requests: list, *, enforce: bool = True, ech
         target = Path(args["target_path"])
         target.write_bytes(served_db.read_bytes())
         Path(f"{target}.complete").write_text("complete\n")
-        return _ok({"target_path": str(target), **({"db_path": str(served_db)} if echo else {})})
+        return _ok(
+            {"target_path": str(target), **({"db_path": str(served_db), **_identity(served_db)} if echo else {})}
+        )
 
     return send
 
@@ -126,9 +133,12 @@ def raw_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
     monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
     monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
-    monkeypatch.setattr(
-        backup, "request_brainbar_vacuum_into", lambda target, **kw: target.write_bytes(source.read_bytes())
-    )
+
+    def promote(target, **_kw):
+        target.write_bytes(source.read_bytes())
+        return os.stat(target)
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", promote)
     return source, output
 
 
@@ -215,3 +225,111 @@ def test_configured_db_on_production_socket_passes_the_preflight(tmp_path, dbs, 
 
     assert artifact.gzip_path.exists()
     assert len(requests) == 1
+
+
+def test_echo_with_the_expected_pathname_but_another_inode_is_refused(tmp_path, dbs, monkeypatch):
+    """Sol, #1414 round 1: a pathname echo cannot prove which file the open connection read."""
+    configured, production = dbs
+    requests: list = []
+
+    def send(socket_path, request, timeout_seconds):  # noqa: ARG001
+        requests.append(request)
+        target = Path(request["params"]["arguments"]["target_path"])
+        target.write_bytes(production.read_bytes())
+        return _ok({"target_path": str(target), "db_path": str(configured), **_identity(production)})
+
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", send)
+    _no_sleep(monkeypatch)
+    out = tmp_path / "out"
+
+    with pytest.raises(backup.BrainBarDatabaseIdentityError):
+        backup.request_brainbar_vacuum_into(out / "snap.db", socket_path="/x.sock", expected_db_path=configured)
+
+    assert len(requests) == 1
+    assert list(out.iterdir()) == []
+
+
+def test_echo_without_the_open_inode_is_refused(tmp_path, dbs, monkeypatch):
+    configured, _ = dbs
+
+    def send(socket_path, request, timeout_seconds):  # noqa: ARG001
+        target = Path(request["params"]["arguments"]["target_path"])
+        target.write_bytes(configured.read_bytes())
+        return _ok({"target_path": str(target), "db_path": str(configured)})
+
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", send)
+    _no_sleep(monkeypatch)
+    out = tmp_path / "out"
+
+    with pytest.raises(backup.BrainBarDatabaseIdentityError):
+        backup.request_brainbar_vacuum_into(out / "snap.db", socket_path="/x.sock", expected_db_path=configured)
+
+    assert list(out.iterdir()) == []
+
+
+def test_peer_raw_that_appears_mid_run_survives_this_runs_early_exit(raw_lane, monkeypatch):
+    """Sol + Cursor, #1414 round 1: a peer promotes after our absence check; we fail busy."""
+    source, output = raw_lane
+    peer = b"peer-snapshot"
+
+    def busy_after_peer_promotes(target, **_kw):
+        target.write_bytes(peer)
+        raise backup.BrainBarSnapshotBusyError(backup.BRAINBAR_SNAPSHOT_BUSY_MESSAGE)
+
+    monkeypatch.setattr(backup, "request_brainbar_vacuum_into", busy_after_peer_promotes)
+
+    with pytest.raises(backup.BrainBarSnapshotBusyError):
+        backup.create_sqlite_backup_artifact(source, output, date_stamp="2026-10-18")
+
+    assert (output / "2026-10-18.db").read_bytes() == peer
+
+
+def test_peer_raw_that_replaced_ours_survives_this_runs_early_exit(raw_lane, monkeypatch):
+    source, output = raw_lane
+    raw = output / "2026-10-18.db"
+    peer = output / "peer.tmp"
+
+    def peer_replaces_then_interrupt(*_a, **_kw):
+        peer.write_bytes(b"peer-snapshot")
+        os.replace(peer, raw)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(backup, "_validate_backup_target", peer_replaces_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        backup.create_sqlite_backup_artifact(source, output, date_stamp="2026-10-18")
+
+    assert raw.read_bytes() == b"peer-snapshot"
+
+
+def test_promotion_never_replaces_a_peer_raw(tmp_path, dbs, monkeypatch):
+    configured, _ = dbs
+    out = tmp_path / "out"
+    target = out / "2026-10-18.db"
+    requests: list = []
+    vacuum = _fake_brainbar(configured, requests)
+
+    def send(socket_path, request, timeout_seconds):
+        response = vacuum(socket_path, request, timeout_seconds)
+        target.write_bytes(b"peer-snapshot")  # a peer promoted while our VACUUM ran
+        return response
+
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", send)
+    _no_sleep(monkeypatch)
+
+    with pytest.raises(backup.BackupTargetConflictError):
+        backup.request_brainbar_vacuum_into(target, socket_path="/x.sock", expected_db_path=configured)
+
+    assert len(requests) == 1
+    assert target.read_bytes() == b"peer-snapshot"
+    assert sorted(p.name for p in out.iterdir()) == ["2026-10-18.db"]
+
+
+def test_promotion_returns_the_promoted_inode(tmp_path, dbs, monkeypatch):
+    configured, _ = dbs
+    target = tmp_path / "out" / "2026-10-18.db"
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", _fake_brainbar(configured, []))
+
+    promoted = backup.request_brainbar_vacuum_into(target, socket_path="/x.sock", expected_db_path=configured)
+
+    assert (promoted.st_dev, promoted.st_ino) == (os.stat(target).st_dev, os.stat(target).st_ino)
