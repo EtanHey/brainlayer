@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import apsw
+
 from .agent_provenance import resolve_source_class
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import EmbeddedChunk, embed_chunks
@@ -39,8 +41,13 @@ def index_chunks_to_sqlite(
     start_position: int = 0,
     on_skipped_empty: Callable[[int], None] | None = None,
     on_rejected: Callable[[int], None] | None = None,
+    on_busy: Callable[[BaseException], None] | None = None,
 ) -> int:
-    """Index chunks to sqlite-vec database."""
+    """Index chunks to sqlite-vec database.
+
+    ``on_busy`` admits a busy rollback: it waits and returns to retry the same
+    upsert with the embeddings already computed, or raises to end the attempt.
+    """
     if not chunks:
         return 0
 
@@ -194,14 +201,20 @@ def index_chunks_to_sqlite(
     # A complete CLI index run injects one shared runtime store. Standalone
     # callers still get one bounded runtime open for this adapter invocation.
     def upsert(writer):
-        try:
-            return writer.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
-        except IndexDeadlineExceeded as exc:
-            # Complete ordered embeddings above + complete store admission below
-            # proves the WHOLE input call, never a count-shaped survivor prefix.
-            if exc.input_complete:
-                exc.completed_input_count = len(chunks)
-            raise
+        while True:
+            try:
+                return writer.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
+            except IndexDeadlineExceeded as exc:
+                # Complete ordered embeddings above + complete store admission below
+                # proves the WHOLE input call, never a count-shaped survivor prefix.
+                if exc.input_complete:
+                    exc.completed_input_count = len(chunks)
+                raise
+            except apsw.BusyError as exc:
+                # upsert_chunks rolled back; replaying the same inputs converges.
+                if on_busy is None:
+                    raise
+                on_busy(exc)
 
     if store is not None:
         return upsert(store)
