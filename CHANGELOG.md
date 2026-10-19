@@ -39,6 +39,26 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.66] - 2026-10-19
+
+### Fixed
+- Weekly VACUUM is gated on a fresh, restore-checked local snapshot instead of an offsite copy, and the Drive upload runs after maintenance; live scrubbing keeps its 24-hour offsite-backup contract (#1401).
+- BrainBar shows verified idle transcript backups and pending DB uploads as neutral states across Backups, Dashboard and Jobs. A recent local snapshot cannot hide a stale offsite copy, and unrelated DB or weekly maintenance errors no longer turn covered transcripts red (#1406; closes #1396, #1398).
+- The backup capacity gate is sized by the largest per-phase peak (raw copy, gzip, Drive download, restore) instead of a raw+restore sum; a lost-response retry gets its own explicit capacity check (#1408).
+- A BrainBar "snapshot already in progress" rejection no longer releases or unlinks an earlier, still-running VACUUM INTO target; the run fails with `BrainBarSnapshotBusyError` and the next run reserves the surviving attempt's growth (#1411).
+- Maintenance writer holds are bounded: a hold lasts at most `BRAINLAYER_MAINTENANCE_HOLD_MAX_S` and ends before the maintenance window closes, supervisor ticks expire overdue holds with generation-tied escalation, VACUUM starts only when its size-based estimate fits inside the hold and is interrupted (rolled back) when the hold clock reaches its cutoff (#1409).
+- The calendar index pass backs off and retries on a lost writer-busy race inside its existing budget, resuming from its checkpoint, instead of exiting 75 `resident-writer-busy` (#1410).
+- Isolated test HOMEs no longer accumulate copies of the vite-plus node runtime: a test HOME over 32 MiB fails its test, and pytest keeps temp trees only for failures (#1412).
+
+### Changed
+- Release the BrainLayer formula and BrainBar app together. This is the first BrainBar app build to ship the Settings watcher-heartbeat re-read from #1400 (merged in 1.5.65, which was formula-only).
+
+### Upgrade notes
+- Weekly calendar order is now index → backup-snapshot → weekly maintenance → … → backup upload.
+- New environment knobs: `BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS` (local snapshot freshness for the weekly gate, default 6), `BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (writer-hold cap, default 3600), `BRAINLAYER_VACUUM_SECONDS_PER_GB` (VACUUM duration estimate, default 30).
+- Observability schema v2 adds optional `backups.local_snapshot` and `transcript_attempt` evidence; schema v1 is unchanged.
+- BrainBar app: new neutral backup states (idle transcript coverage, pending upload).
+
 ## [1.5.65] - 2026-10-18
 
 ### Fixed
