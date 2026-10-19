@@ -500,6 +500,25 @@ def test_vacuum_refuses_when_hold_expires_before_it_could_unwind(vacuum_db):
     assert exc.value.code == 76 and _rows(vacuum_db) == before
 
 
+def test_vacuum_never_starts_without_time_to_finish(vacuum_db, monkeypatch):
+    """VACUUM's final copy-back cannot be interrupted (measured on a 20.7 GB copy), so it must fit."""
+    before = _rows(vacuum_db)
+    size_gb = vacuum_db.stat().st_size / 1e9
+    monkeypatch.setenv("BRAINLAYER_VACUUM_SECONDS_PER_GB", str(3600 / size_gb))  # Estimate: one hour.
+    with pytest.raises(maintenance.MaintenanceAbort, match="too little time for VACUUM") as exc:
+        maintenance._vacuum(vacuum_db, deadline=hold_clock() + maintenance.HOLD_UNWIND_S + 1800)
+    assert exc.value.code == 76 and _rows(vacuum_db) == before and _free_pages(vacuum_db) > 0
+    monkeypatch.setenv("BRAINLAYER_VACUUM_SECONDS_PER_GB", str(60 / size_gb))  # Estimate: one minute.
+    maintenance._vacuum(vacuum_db, deadline=hold_clock() + maintenance.HOLD_UNWIND_S + 1800)
+    assert _free_pages(vacuum_db) == 0
+
+
+@pytest.mark.parametrize("value", ["0", "-3", "nan", "inf", "fast"])
+def test_invalid_vacuum_rate_falls_back_to_default(monkeypatch, value):
+    monkeypatch.setenv("BRAINLAYER_VACUUM_SECONDS_PER_GB", value)
+    assert maintenance._vacuum_seconds_per_gb() == maintenance.DEFAULT_VACUUM_SECONDS_PER_GB
+
+
 def test_vacuum_is_interrupted_mid_statement_and_rolls_back(vacuum_db, monkeypatch):
     before, free = _rows(vacuum_db), _free_pages(vacuum_db)
     deadline = 1000.0 + maintenance.HOLD_UNWIND_S

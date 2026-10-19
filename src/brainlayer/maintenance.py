@@ -65,6 +65,11 @@ MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
 # VACUUM is interrupted this long before its hold expires, so restore wins the calendar's cut.
 HOLD_UNWIND_S = 30.0
 VACUUM_PROGRESS_OPS = 100_000  # SQLite VM steps between deadline polls during VACUUM.
+# VACUUM's final copy-back into the main DB runs no VM steps, so the progress handler cannot stop
+# it: a 20.7 GB copy (MBP, 2026-10-19) overran a 60 s cutoff and completed at 328 s, 15.9 s/GB.
+# Default to about twice that; a VACUUM starts only when its estimate fits inside the hold.
+VACUUM_SECONDS_PER_GB_ENV = "BRAINLAYER_VACUUM_SECONDS_PER_GB"
+DEFAULT_VACUUM_SECONDS_PER_GB = 30.0
 SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
 SEARCH_LATENCY_FAILURE_MS = 500.0
@@ -949,21 +954,35 @@ def _verify_search_latency(db_path: Path, *, threshold_ms: float = SEARCH_LATENC
     return latency_ms
 
 
+def _vacuum_seconds_per_gb() -> float:
+    from .maintenance_control import _seconds
+
+    return _seconds(VACUUM_SECONDS_PER_GB_ENV, DEFAULT_VACUUM_SECONDS_PER_GB)
+
+
 def _vacuum(db_path: Path, *, deadline: float | None = None) -> tuple[int, int]:
     """Run VACUUM, abandoning it ``HOLD_UNWIND_S`` before the hold's deadline (hold clock).
 
-    Only VACUUM unwinds itself: a progress handler makes SQLite abort with SQLITE_INTERRUPT and
-    roll the statement back. An interrupt that lands after VACUUM's last checkpoint may still let it
-    complete. The checkpoints around VACUUM have no such hook and rely on the calendar cut and the
-    supervisor watchdog.
+    Only VACUUM unwinds itself: during its rebuild a progress handler makes SQLite abort with
+    SQLITE_INTERRUPT and roll the statement back. Its final copy-back cannot be interrupted, so
+    VACUUM starts only when its size-based estimate fits; an overrun there is ended by the calendar
+    cut (SQLite discards the uncommitted WAL frames). The checkpoints around VACUUM rely on the cut
+    and the supervisor watchdog too.
     """
     from . import maintenance_control
 
     cutoff = None
     if deadline is not None:
-        cutoff = deadline - HOLD_UNWIND_S
-        if maintenance_control.hold_clock() >= cutoff:
+        cutoff, now = deadline - HOLD_UNWIND_S, maintenance_control.hold_clock()
+        if now >= cutoff:
             raise MaintenanceAbort("maintenance hold expires before VACUUM could unwind; VACUUM skipped", code=76)
+        estimate = db_path.stat().st_size / 1e9 * _vacuum_seconds_per_gb()
+        if now + estimate > cutoff:
+            raise MaintenanceAbort(
+                f"maintenance hold leaves too little time for VACUUM (estimate {estimate:.0f}s, "
+                f"{cutoff - now:.0f}s left); VACUUM skipped",
+                code=76,
+            )
     before = db_path.stat().st_size
     conn = sqlite3.connect(db_path)
     try:
