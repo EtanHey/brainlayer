@@ -1038,7 +1038,7 @@ def create_sqlite_backup_artifact(
             try:
                 growth += max(0, db_size - path.stat().st_size)
             except OSError:
-                growth += db_size
+                growth += db_size  # Not visible yet: the request may still write all of D.
         peak, detail = describe_phases({**phase_peaks, "raw_copy": growth + db_size})
         retry_required = peak + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES + surviving_attempt_growth_reserve_bytes
         raw = shutil.disk_usage(output_dir).free
@@ -1151,8 +1151,9 @@ def request_brainbar_vacuum_into(
     last_error: Exception | None = None
     unconfirmed_attempt_paths: list[Path] = []
     for attempt in range(1, max_attempts + 1):
-        if unconfirmed_attempt_paths and retry_capacity_check is not None:
-            # A preserved attempt may still grow to full size beside the next one.
+        if attempt > 1 and retry_capacity_check is not None:
+            # Re-measure before every retry: an unresolved request may still grow to full size
+            # beside the next one, even if its target has not appeared yet.
             retry_capacity_check(list(unconfirmed_attempt_paths))
         attempt_path = resolved_attempt_dir / f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}"
         request = {
@@ -1206,11 +1207,13 @@ def request_brainbar_vacuum_into(
                     completed_path.unlink(missing_ok=True)
                     _backup_attempt_completion_marker(completed_path).unlink(missing_ok=True)
                 unconfirmed_attempt_paths.clear()
-            elif attempt_path.exists():
-                # A lost response does not prove VACUUM INTO is finished. Never inspect,
-                # unlink, or promote a path that BrainBar may still be writing.
+            else:
+                # A lost response does not prove VACUUM INTO is finished, or even started:
+                # BrainBar keeps working after a disconnect. Never inspect, unlink, or promote
+                # a path that BrainBar may still be writing, and keep its capacity reserved.
                 unconfirmed_attempt_paths.append(attempt_path)
-                existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
+                if attempt_path.exists():
+                    existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
             if attempt >= max_attempts:
                 print(
                     f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}",

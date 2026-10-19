@@ -3,6 +3,7 @@ import io
 import json
 import os
 import queue
+import re
 import signal
 import socket
 import sqlite3
@@ -1508,52 +1509,110 @@ def test_2026_10_19_genuinely_tight_quick_backup_still_fails(tmp_path, monkeypat
         _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED - 1, date_stamp="2026-10-19")
 
 
-def _lost_response_then_second_attempt(tmp_path, monkeypatch, *, free: int):
+def _vacuum_retry_run(tmp_path, monkeypatch, *, free: int, respond, on_backoff=None):
     from brainlayer import backup_daily
 
     source = tmp_path / "brainlayer.db"
     _create_source_db(source)
     calls = []
+    disk = {"free": free}
 
-    def lost_then_reached(socket_path, request, timeout_seconds):  # noqa: ARG001
+    def send(socket_path, request, timeout_seconds):  # noqa: ARG001
         if request.get("method") != "tools/call":
             raise OSError("writer probe unavailable")
-        calls.append(request["params"]["arguments"]["target_path"])
-        if len(calls) == 1:
-            Path(calls[0]).write_bytes(b"x" * 4096)  # BrainBar may still be growing this to D.
-            raise OSError("connection reset before the terminal response")
-        raise RuntimeError("second attempt reached")
+        calls.append(Path(request["params"]["arguments"]["target_path"]))
+        return respond(calls)
+
+    def backoff(_seconds):
+        if on_backoff is not None:
+            on_backoff(calls, disk)
 
     monkeypatch.delenv(backup_daily.BACKUP_FULL_VERIFY_ENV, raising=False)
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: INCIDENT_DB_BYTES)
     monkeypatch.setattr(backup_daily, "_estimated_gzip_bytes", lambda _dir, _db: INCIDENT_GZIP_BYTES)
-    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=free))
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=disk["free"]))
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
-    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", lost_then_reached)
-    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", send)
+    monkeypatch.setattr(backup_daily, "_sleep", backoff)
     with pytest.raises(RuntimeError) as raised:
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-10-19")
     return calls, str(raised.value)
 
 
+def _retry_refusal(free: int, reserved: int, count: int) -> str:
+    raw_copy = reserved + INCIDENT_DB_BYTES
+    required = raw_copy + 2 * 1024**3 + 1024**2
+    return (
+        f"Insufficient free space for backup retry .*raw={free} required={required} .*"
+        f"peak_phase=raw_copy peak={raw_copy} .*{count} unconfirmed attempts reserve {reserved} growth bytes"
+    )
+
+
+def _lost_after_visible_target(calls):
+    if len(calls) == 1:
+        calls[0].write_bytes(b"x" * 4096)  # BrainBar may still be growing this to D.
+    raise OSError("connection reset before the terminal response")
+
+
 def test_lost_response_retry_rechecks_capacity_for_the_unconfirmed_attempt(tmp_path, monkeypatch):
     # The preserved attempt can still grow to D while the retry writes another D.
-    calls, error = _lost_response_then_second_attempt(tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED)
+    calls, error = _vacuum_retry_run(
+        tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED, respond=_lost_after_visible_target
+    )
     assert len(calls) == 1
-    growth = INCIDENT_DB_BYTES - 4096
-    raw_copy = growth + INCIDENT_DB_BYTES
-    required = raw_copy + 2 * 1024**3 + 1024**2
-    assert "Insufficient free space for backup retry" in error
-    assert f"raw={INCIDENT_QUICK_REQUIRED} required={required} " in error
-    assert f"peak_phase=raw_copy peak={raw_copy} " in error
-    assert "1 unconfirmed attempts reserve" in error
+    assert re.search(_retry_refusal(INCIDENT_QUICK_REQUIRED, INCIDENT_DB_BYTES - 4096, 1), error), error
+
+
+def test_lost_response_before_target_appears_still_reserves_it(tmp_path, monkeypatch):
+    # Sol's #1408 repro: BrainBar runs VACUUM INTO after the client disconnects, so the
+    # first target can appear only during the backoff, after the response was already lost.
+    def lost_before_target(_calls):
+        raise OSError("connection reset before BrainBar opened the target")
+
+    def target_appears_during_backoff(calls, disk):
+        if len(calls) == 1:
+            calls[0].write_bytes(b"x" * 4096)
+            disk["free"] -= INCIDENT_DB_BYTES  # The completed snapshot took D.
+
+    free_before_retry = INCIDENT_QUICK_REQUIRED - INCIDENT_DB_BYTES
+    calls, error = _vacuum_retry_run(
+        tmp_path,
+        monkeypatch,
+        free=INCIDENT_QUICK_REQUIRED,
+        respond=lost_before_target,
+        on_backoff=target_appears_during_backoff,
+    )
+    assert len(calls) == 1  # No second VACUUM INTO was sent.
+    assert re.search(_retry_refusal(free_before_retry, INCIDENT_DB_BYTES - 4096, 1), error), error
+
+
+def test_lost_response_whose_target_never_appears_reserves_full_growth(tmp_path, monkeypatch):
+    def lost_before_target(_calls):
+        raise OSError("connection reset before BrainBar opened the target")
+
+    calls, error = _vacuum_retry_run(tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED, respond=lost_before_target)
+    assert len(calls) == 1
+    assert re.search(_retry_refusal(INCIDENT_QUICK_REQUIRED, INCIDENT_DB_BYTES, 1), error), error
 
 
 def test_lost_response_retry_proceeds_when_the_unconfirmed_attempt_fits(tmp_path, monkeypatch):
     free = 2 * INCIDENT_DB_BYTES - 4096 + 2 * 1024**3 + 1024**2
-    calls, error = _lost_response_then_second_attempt(tmp_path, monkeypatch, free=free)
-    assert len(calls) == 3  # Every retry fits; the last attempt's own error surfaces.
-    assert "second attempt reached" in error
+    calls, error = _vacuum_retry_run(tmp_path, monkeypatch, free=free, respond=_lost_after_visible_target)
+    # The second request is admitted; its own lost response is then reserved at full D.
+    assert len(calls) == 2
+    assert re.search(_retry_refusal(free, 2 * INCIDENT_DB_BYTES - 4096, 2), error), error
+
+
+def test_terminal_response_releases_retry_reservation(tmp_path, monkeypatch):
+    # A terminal response proves this and every earlier serial request stopped writing.
+    def terminal_error(calls):
+        calls[-1].write_bytes(b"x" * 4096)
+        return {"error": {"code": -32000, "message": "vacuum failed"}}
+
+    calls, error = _vacuum_retry_run(tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED, respond=terminal_error)
+    assert len(calls) == 3
+    assert "BrainBar backup request failed" in error
+    assert not any(path.exists() for path in calls)
 
 
 def test_2026_10_19_numbers_in_full_mode_budget_the_drive_download(tmp_path, monkeypatch):
