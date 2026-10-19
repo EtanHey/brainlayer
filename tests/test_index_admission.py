@@ -14,6 +14,13 @@ from brainlayer.index_admission import AdmissionBackoff, IndexAdmissionExhausted
 from tests.test_cli_index_calendar import prepare
 
 
+def busy(committed=0):
+    """A busy rollback as upsert_chunks reports it: nothing past ``committed`` is durable."""
+    exc = apsw.BusyError("database is locked")
+    exc.committed_count = exc.committed_input_count = committed
+    return exc
+
+
 def backoff(clock, *, deadline=1000.0, rng=lambda: 1.0, **kw):
     sleeps = []
 
@@ -114,7 +121,7 @@ def test_busy_upsert_retries_without_reembedding(tmp_path, monkeypatch):
         def upsert_chunks(self, data, vectors, **kw):
             upserts.append(len(data))
             if len(upserts) < 3:
-                raise apsw.BusyError("database is locked")
+                raise busy()
             return len(data)
 
     count = index_new.index_chunks_to_sqlite(chunks, source_file=str(source), store=Store(), on_busy=waits.append)
@@ -149,7 +156,7 @@ def _calendar(tmp_path, monkeypatch, *, chunks, busy_upserts, budget_s=600):
         sleeps.append(seconds)
         clock[0] += seconds
 
-    monkeypatch.setattr("brainlayer.index_admission.time.sleep", sleep)
+    monkeypatch.setattr("brainlayer.index_admission._sleep", sleep)
 
     class Store:
         conn = SimpleNamespace(execute=lambda sql: None)
@@ -163,7 +170,7 @@ def _calendar(tmp_path, monkeypatch, *, chunks, busy_upserts, budget_s=600):
         def upsert_chunks(self, data, vectors, **kw):
             upserts.append(len(data))
             if busy_upserts(len(upserts)):
-                raise apsw.BusyError("database is locked")
+                raise busy()
             committed.extend(d["id"] for d in data)
             return len(data)
 

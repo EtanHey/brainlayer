@@ -4309,6 +4309,15 @@ def index_fast(
                                     )
                                     if admission is not None:
                                         admission.admitted()
+                                except (IndexAdmissionExhausted, apsw.BusyError) as exc:
+                                    # Rows committed before the lost race are durable:
+                                    # count them and resume after them, never replay them.
+                                    cause = getattr(exc, "cause", exc)
+                                    durable = getattr(cause, "committed_count", 0)
+                                    if durable:
+                                        total_chunks += durable
+                                        checkpoint.save(jsonl_file, signature, cause.next_position)
+                                    raise
                                 except IndexDeadlineExceeded as exc:
                                     if exc.completed_input_count == len(batch):
                                         checkpoint.save(

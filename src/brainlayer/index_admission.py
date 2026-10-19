@@ -14,6 +14,9 @@ import time
 from typing import Callable, TypeVar
 
 T = TypeVar("T")
+# The admission wait's own binding: a test can fake this pause without also
+# speeding up every other thread that sleeps (writer-telemetry heartbeats).
+_sleep = time.sleep
 
 ADMISSION_BASE_S = 1.0
 ADMISSION_CAP_S = 30.0
@@ -55,7 +58,7 @@ class AdmissionBackoff:
         self.deadline_monotonic = deadline_monotonic
         # Resolve the clock and sleep at call time so a patched module clock is honoured.
         self._monotonic = monotonic or (lambda: time.monotonic())
-        self._sleep = sleep or (lambda seconds: time.sleep(seconds))
+        self._sleep = sleep or (lambda seconds: _sleep(seconds))
         self._rng = rng
         self.base_s, self.cap_s, self.attempt_reserve_s = base_s, cap_s, attempt_reserve_s
         self._on_wait = on_wait
