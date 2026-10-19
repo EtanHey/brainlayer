@@ -873,6 +873,9 @@ final class BrainDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let path: String
+    /// dev/inode of the file this connection opened, captured right after open. A later path
+    /// check compares against THIS, never against whatever the pathname names at request time.
+    private(set) var openedFileIdentity: FileIdentity?
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
@@ -895,6 +898,7 @@ final class BrainDatabase: @unchecked Sendable {
     private func openAndConfigure() {
         do {
             db = try openConnection(path: path)
+            openedFileIdentity = FileIdentity(path: path)
             NSLog("[BrainBar] Connection opened, configuring...")
             try configureConnection(db)
             NSLog("[BrainBar] Connection configured, checking schema...")
@@ -925,6 +929,7 @@ final class BrainDatabase: @unchecked Sendable {
                 sqlite3_close(db)
                 self.db = nil
             }
+            openedFileIdentity = nil
             isOpen = false
             lastOpenError = error
             NSLog("[BrainBar] Failed to open/configure database at %@: %@", path, String(describing: error))
@@ -1161,28 +1166,45 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_close(db)
             self.db = nil
         }
+        openedFileIdentity = nil
         isOpen = false
     }
 
-    var databasePath: String { path }
+    struct FileIdentity: Equatable {
+        let device: Int64
+        let inode: Int64
 
-    /// Same file as the served database: equal resolved paths, or equal device and inode.
-    /// A path that does not exist is never the served database.
-    func isSameDatabaseFile(as candidatePath: String) -> Bool {
-        let candidate = candidatePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !candidate.isEmpty else { return false }
-        var candidateStat = stat()
-        var servedStat = stat()
-        guard stat(candidate, &candidateStat) == 0, stat(path, &servedStat) == 0 else { return false }
-        if URL(fileURLWithPath: candidate).resolvingSymlinksInPath().standardizedFileURL.path
-            == URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path {
-            return true
+        init?(path: String) {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            device = Int64(info.st_dev)
+            inode = Int64(info.st_ino)
         }
-        return candidateStat.st_dev == servedStat.st_dev && candidateStat.st_ino == servedStat.st_ino
     }
 
-    func vacuumInto(targetPath: String) throws -> Int64 {
+    var databasePath: String { path }
+    static let backupIdentityMismatchPrefix = "BrainBar database identity mismatch"
+
+    /// Why `expectedPath` is not the database this connection has open, or nil when it is.
+    /// The open file must still be at the served path (not moved, replaced or unlinked), and
+    /// `expectedPath` must name that same dev/inode. A missing path never matches.
+    func openDatabaseIdentityMismatch(expectedPath: String) -> String? {
+        guard let opened = openedFileIdentity else { return "the open database identity is unknown" }
+        guard FileIdentity(path: path) == opened else {
+            return "the open database was moved, replaced or unlinked from \(path) since it was opened"
+        }
+        let candidate = expectedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty, FileIdentity(path: candidate) == opened else {
+            return "expected_db_path \(expectedPath) is not the open database"
+        }
+        return nil
+    }
+
+    func vacuumInto(targetPath: String, expectedDatabasePath: String? = nil) throws -> Int64 {
         guard let db else { throw DBError.notOpen }
+        if let expectedDatabasePath, let mismatch = openDatabaseIdentityMismatch(expectedPath: expectedDatabasePath) {
+            throw DBError.exec(SQLITE_MISUSE, "\(Self.backupIdentityMismatchPrefix): \(mismatch)")
+        }
         let trimmedTarget = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTarget.isEmpty else {
             throw DBError.exec(SQLITE_MISUSE, "target_path is required")

@@ -109,12 +109,16 @@ final class MCPRouter: @unchecked Sendable {
         let targetPath: String
         let bytes: Int64
         let dbPath: String
+        let dbDevice: Int64?
+        let dbInode: Int64?
 
         enum CodingKeys: String, CodingKey {
             case status
             case targetPath = "target_path"
             case bytes
             case dbPath = "db_path"
+            case dbDevice = "db_dev"
+            case dbInode = "db_ino"
         }
     }
 
@@ -1643,23 +1647,26 @@ final class MCPRouter: @unchecked Sendable {
         }
         let db = try writeDB()
         // A caller aimed at a different database must never receive this one (2026-10-19:
-        // a temp-DB run got a 20 GB production copy). Refuse before any VACUUM INTO.
-        if let expected = args["expected_db_path"] as? String, !db.isSameDatabaseFile(as: expected) {
-            throw ToolError.operationFailed(
-                "BrainBar database identity mismatch: expected_db_path \(expected) is not the served database"
-            )
+        // a temp-DB run got a 20 GB production copy). Identity is the OPEN file's dev/inode, so a
+        // pathname moved or replaced under the live connection is refused too. Checked before the
+        // drain wait, and again inside vacuumInto right before VACUUM INTO.
+        let expected = args["expected_db_path"] as? String
+        if let expected, let mismatch = db.openDatabaseIdentityMismatch(expectedPath: expected) {
+            throw ToolError.operationFailed("\(BrainDatabase.backupIdentityMismatchPrefix): \(mismatch)")
         }
         pendingStoreDrainScheduler.backupGate.waitForDrains()
-        let bytes = try db.vacuumInto(targetPath: targetPath)
-        let payload = BackupVacuumResult(status: "ok", targetPath: targetPath, bytes: bytes, dbPath: db.databasePath)
-        return ToolOutput(
-            text: jsonEncode(payload),
-            metadata: [
-                "target_path": targetPath,
-                "bytes": bytes,
-                "db_path": db.databasePath,
-            ]
+        let bytes = try db.vacuumInto(targetPath: targetPath, expectedDatabasePath: expected)
+        let opened = db.openedFileIdentity
+        let payload = BackupVacuumResult(
+            status: "ok", targetPath: targetPath, bytes: bytes, dbPath: db.databasePath,
+            dbDevice: opened?.device, dbInode: opened?.inode
         )
+        var metadata: [String: Any] = ["target_path": targetPath, "bytes": bytes, "db_path": db.databasePath]
+        if let opened {
+            metadata["db_dev"] = opened.device
+            metadata["db_ino"] = opened.inode
+        }
+        return ToolOutput(text: jsonEncode(payload), metadata: metadata)
     }
 
     /// Safe JSON encoding — never use string interpolation with user data.
@@ -2080,7 +2087,7 @@ final class MCPRouter: @unchecked Sendable {
                 "type": "object",
                 "properties": [
                     "target_path": ["type": "string", "description": "Absolute path for the new SQLite backup file"],
-                    "expected_db_path": ["type": "string", "description": "Refuse unless this is the served database file"],
+                    "expected_db_path": ["type": "string", "description": "Refuse unless this is the open database file"],
                 ] as [String: Any],
                 "required": ["target_path"]
             ] as [String: Any])
