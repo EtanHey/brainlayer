@@ -297,6 +297,19 @@ class BackupTimeoutError(TimeoutError):
     pass
 
 
+class BrainBarSnapshotBusyError(RuntimeError):
+    """BrainBar refused a snapshot request because another VACUUM INTO is still running."""
+
+
+# BrainBarServer.handleBackupToolCallAsync sends this before admission; the running writer continues.
+BRAINBAR_SNAPSHOT_BUSY_MESSAGE = "A BrainBar backup snapshot is already in progress."
+
+
+def _is_brainbar_snapshot_busy(response: dict[str, Any]) -> bool:
+    error = response.get("error")
+    return isinstance(error, dict) and error.get("message") == BRAINBAR_SNAPSHOT_BUSY_MESSAGE
+
+
 class BackupStoppedError(BaseException):
     def __init__(self, signum: int):
         self.signum = signum
@@ -797,10 +810,24 @@ def _raw_bytes_pruned_before_verify(output_dir: Path, date_stamp: str, keep_late
     return sum(path.stat().st_size for _, path in dated if path not in kept or path == current)
 
 
-def _peak_backup_required_bytes(db_size: int, gzip_size: int, raw_reclaimed: int, *, full: bool) -> int:
-    compression_peak = db_size + gzip_size
-    verify_peak = (2 * db_size) + gzip_size + (gzip_size if full else 0) - raw_reclaimed
-    return max(compression_peak, verify_peak) + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES
+def _backup_phase_peaks(db_size: int, gzip_size: int, *, full: bool) -> dict[str, int]:
+    """New bytes each backup phase holds at once; existing files are already in measured free space.
+
+    The verified raw is unlinked before restore verification allocates restored.db, so the raw
+    and the restored copy never coexist (2026-10-19: summing them failed a run with ~16 GB slack).
+    """
+    phases = {
+        "raw_copy": db_size,  # VACUUM INTO writes the raw snapshot.
+        "gzip": db_size + gzip_size,  # The raw is still present while the gzip is written.
+    }
+    if full:
+        phases["drive_download"] = 2 * gzip_size  # Local gzip plus the downloaded Drive copy.
+    phases["restore"] = gzip_size + (gzip_size if full else 0) + db_size  # Raw already removed.
+    return phases
+
+
+def _peak_backup_required_bytes(db_size: int, gzip_size: int, *, full: bool) -> int:
+    return max(_backup_phase_peaks(db_size, gzip_size, full=full).values()) + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES
 
 
 def _stream_sha256(source: Any) -> bytes:
@@ -957,11 +984,19 @@ def create_sqlite_backup_artifact(
         surviving_attempt_bytes += attempt_size
         surviving_attempt_growth_reserve_bytes += max(0, db_size - attempt_size)
     estimated_gzip = _estimated_gzip_bytes(output_dir, db_size)
-    # Only proven duplicates were reclaimed above; never budget deletion of an only copy.
-    raw_reclaimed = 0
+    # Only proven duplicates were reclaimed above; retained raws stay in measured free space and
+    # are never budgeted as forthcoming room.
+    full_verify = _should_run_full_verify(date_stamp)
+    phase_peaks = _backup_phase_peaks(db_size, estimated_gzip, full=full_verify)
+
+    def describe_phases(peaks: dict[str, int]) -> tuple[int, str]:
+        phase = max(peaks, key=peaks.__getitem__)
+        detail = f"peak_phase={phase} peak={peaks[phase]} phases={','.join(f'{n}={s}' for n, s in peaks.items())}"
+        return peaks[phase], detail
+
+    _, capacity_detail = describe_phases(phase_peaks)
     required_bytes = (
-        _peak_backup_required_bytes(db_size, estimated_gzip, raw_reclaimed, full=_should_run_full_verify(date_stamp))
-        + surviving_attempt_growth_reserve_bytes
+        _peak_backup_required_bytes(db_size, estimated_gzip, full=full_verify) + surviving_attempt_growth_reserve_bytes
     )
     raw_before_purge = shutil.disk_usage(output_dir).free
     try:
@@ -992,7 +1027,7 @@ def create_sqlite_backup_artifact(
     print(
         f"Backup capacity: raw_before={raw_before_purge} raw_after={raw_free_bytes} "
         f"important_usage={important_free_bytes} selected={free_bytes} required={required_bytes} "
-        f"purge_error={purge_error}",
+        f"{capacity_detail} purge_error={purge_error}",
         flush=True,
     )
     if raw_free_bytes < required_bytes:
@@ -1004,11 +1039,29 @@ def create_sqlite_backup_artifact(
         raise RuntimeError(
             f"Insufficient free space for backup in {output_dir}: "
             f"raw_before={raw_before_purge} raw_after={raw_free_bytes} "
-            f"important_usage={important_free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES}; "
-            f"{reason}; "
+            f"important_usage={important_free_bytes} required={required_bytes} floor={MIN_RAW_FREE_BYTES} "
+            f"{capacity_detail}; {reason}; "
             f"{len(surviving_attempt_paths)} recent attempts reserve "
             f"{surviving_attempt_growth_reserve_bytes} growth bytes; retained raw snapshots: {retained_raw}"
         )
+
+    def require_retry_capacity(unconfirmed: list[Path]) -> None:
+        growth = 0
+        for path in unconfirmed:
+            try:
+                growth += max(0, db_size - path.stat().st_size)
+            except OSError:
+                growth += db_size  # Not visible yet: the request may still write all of D.
+        peak, detail = describe_phases({**phase_peaks, "raw_copy": growth + db_size})
+        retry_required = peak + MIN_RAW_FREE_BYTES + COPY_CHUNK_BYTES + surviving_attempt_growth_reserve_bytes
+        raw = shutil.disk_usage(output_dir).free
+        if raw < retry_required:
+            raise RuntimeError(
+                f"Insufficient free space for backup retry in {output_dir}: raw={raw} required={retry_required} "
+                f"floor={MIN_RAW_FREE_BYTES} {detail}; "
+                f"{len(unconfirmed)} unconfirmed attempts reserve {growth} growth bytes"
+            )
+
     final_gz = output_dir / f"{date_stamp}.db.gz"
     final_raw = output_dir / f"{date_stamp}.db"
     sentinel_chunks = 0
@@ -1019,7 +1072,12 @@ def create_sqlite_backup_artifact(
         (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
         raw_snapshot = final_raw
         snapshot_created_at = dt.datetime.now(dt.UTC).isoformat()
-        request_brainbar_vacuum_into(raw_snapshot, socket_path=socket_path, attempt_dir=output_dir)
+        request_brainbar_vacuum_into(
+            raw_snapshot,
+            socket_path=socket_path,
+            attempt_dir=output_dir,
+            retry_capacity_check=require_retry_capacity,
+        )
         _require_raw_floor(output_dir)
         sentinel_chunks = _validate_backup_target(raw_snapshot)
         pragma = (
@@ -1088,6 +1146,7 @@ def request_brainbar_vacuum_into(
     max_attempts: int = 3,
     retry_backoff_seconds: int = 60,
     attempt_dir: Path | None = None,
+    retry_capacity_check: Callable[[list[Path]], None] | None = None,
 ) -> None:
     target_path = Path(target_path).expanduser()
     if max_attempts < 1:
@@ -1105,6 +1164,10 @@ def request_brainbar_vacuum_into(
     last_error: Exception | None = None
     unconfirmed_attempt_paths: list[Path] = []
     for attempt in range(1, max_attempts + 1):
+        if attempt > 1 and retry_capacity_check is not None:
+            # Re-measure before every retry: an unresolved request may still grow to full size
+            # beside the next one, even if its target has not appeared yet.
+            retry_capacity_check(list(unconfirmed_attempt_paths))
         attempt_path = resolved_attempt_dir / f".{target_path.name}.attempt-{attempt}-{uuid.uuid4().hex}"
         request = {
             "jsonrpc": "2.0",
@@ -1122,6 +1185,17 @@ def request_brainbar_vacuum_into(
                 request,
                 timeout_seconds=resolved_timeout_seconds,
             )
+            if _is_brainbar_snapshot_busy(response):
+                # Rejected before admission, so this request never wrote, and the writer it
+                # names may be one of ours. Release nothing: no response proves it stopped.
+                if unconfirmed_attempt_paths:
+                    preserved = ", ".join(str(path) for path in unconfirmed_attempt_paths)
+                    raise BrainBarSnapshotBusyError(
+                        f"{BRAINBAR_SNAPSHOT_BUSY_MESSAGE} Not retrying beside an unresolved earlier request; "
+                        f"preserving {len(unconfirmed_attempt_paths)} attempt targets and their reservations: "
+                        f"{preserved}"
+                    )
+                raise BrainBarSnapshotBusyError(BRAINBAR_SNAPSHOT_BUSY_MESSAGE)
             terminal_response_received = True
             if response.get("error"):
                 raise RuntimeError(f"BrainBar backup request failed: {response['error']}")
@@ -1147,33 +1221,42 @@ def request_brainbar_vacuum_into(
             return
         except BackupTimeoutError:
             raise
+        except BrainBarSnapshotBusyError as exc:
+            if unconfirmed_attempt_paths:
+                raise
+            # Someone else's snapshot is running and this run owns no writer: back off and retry.
+            last_error = exc
+            existing_target_note = ""
         except Exception as exc:
             last_error = exc
             existing_target_note = ""
             if terminal_response_received:
-                # BrainBar's request queue is serial. A terminal response proves this
-                # attempt and every earlier request are no longer writing.
+                # BrainBar admits one snapshot at a time and answers only after it finishes, so an
+                # admitted request's terminal response proves it and every earlier request stopped.
                 for completed_path in [*unconfirmed_attempt_paths, attempt_path]:
                     completed_path.unlink(missing_ok=True)
                     _backup_attempt_completion_marker(completed_path).unlink(missing_ok=True)
                 unconfirmed_attempt_paths.clear()
-            elif attempt_path.exists():
-                # A lost response does not prove VACUUM INTO is finished. Never inspect,
-                # unlink, or promote a path that BrainBar may still be writing.
+            else:
+                # A lost response does not prove VACUUM INTO is finished, or even started:
+                # BrainBar keeps working after a disconnect. Never inspect, unlink, or promote
+                # a path that BrainBar may still be writing, and keep its capacity reserved.
                 unconfirmed_attempt_paths.append(attempt_path)
-                existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
-            if attempt >= max_attempts:
-                print(
-                    f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}",
-                    flush=True,
-                )
-                break
+                if attempt_path.exists():
+                    existing_target_note = f"; preserving isolated attempt target: {attempt_path}"
+        failure = _redact_upload_secrets(str(last_error))
+        if attempt >= max_attempts:
             print(
-                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {_redact_upload_secrets(str(exc))}{existing_target_note}; "
-                f"retrying in {retry_backoff_seconds}s",
+                f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {failure}{existing_target_note}",
                 flush=True,
             )
-            _sleep(retry_backoff_seconds)
+            break
+        print(
+            f"BrainBar vacuum snapshot attempt {attempt}/{max_attempts} failed: {failure}{existing_target_note}; "
+            f"retrying in {retry_backoff_seconds}s",
+            flush=True,
+        )
+        _sleep(retry_backoff_seconds)
     if last_error is not None:
         raise last_error
 
