@@ -40,7 +40,7 @@ from urllib.parse import urlsplit
 import requests
 
 from . import drive_credentials
-from .paths import get_db_path
+from .paths import get_db_path, resolve_db_path
 from .socket_hygiene import refuse_production_brainbar_socket
 
 _sleep = time.sleep
@@ -944,6 +944,25 @@ def _copy_with_raw_floor(source: Any, destination: Any, output_dir: Path) -> Non
         _require_raw_floor(output_dir)
 
 
+def _refuse_foreign_db_on_production_socket(db_path: Path, socket_path: Path | str | None) -> None:
+    """The production BrainBar serves the configured DB; never aim it at any other one.
+
+    2026-10-19: an ad-hoc probe outside pytest passed a temp db_path with no socket, fell
+    through to /tmp/brainbar.sock, and received a 20 GB production copy. Pass an isolated
+    socket_path (or BRAINBAR_SOCKET_PATH) to back up a different database.
+    """
+    resolved_socket = _brainbar_socket_path(socket_path)
+    if os.path.realpath(resolved_socket) != os.path.realpath(DEFAULT_BRAINBAR_SOCKET_PATH):
+        return
+    configured_db = resolve_db_path()
+    if not _same_database_file(db_path, configured_db):
+        raise BrainBarDatabaseIdentityError(
+            f"{BRAINBAR_DB_IDENTITY_MISMATCH}: refusing to snapshot {db_path} through the production BrainBar "
+            f"socket {resolved_socket}, which serves the configured database {configured_db}; "
+            "pass an isolated socket_path to back up any other database"
+        )
+
+
 def _is_canonical_staging(output_dir: Path) -> bool:
     return os.path.realpath(output_dir) == os.path.realpath(Path(DEFAULT_STAGING_DIR).expanduser())
 
@@ -972,6 +991,7 @@ def create_sqlite_backup_artifact(
 
     if not db_path.exists():
         raise FileNotFoundError(f"BrainLayer database not found: {db_path}")
+    _refuse_foreign_db_on_production_socket(db_path, socket_path)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     if _parse_uncompressed_snapshot_date(f"{date_stamp}.db") is None or output_dir.is_symlink():

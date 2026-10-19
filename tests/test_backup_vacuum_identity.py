@@ -185,3 +185,33 @@ def test_noncanonical_staging_never_removes_a_raw_this_run_did_not_create(raw_la
         backup.create_sqlite_backup_artifact(source, output, date_stamp="2026-10-18")
 
     assert (output / "2026-10-18.db").exists()
+
+
+def test_foreign_db_on_production_socket_refuses_before_any_file_or_request(tmp_path, dbs, monkeypatch):
+    """The 2026-10-19 caller: an ad-hoc probe outside pytest passed a temp db_path and no socket."""
+    configured, production = dbs
+    monkeypatch.delenv("BRAINBAR_SOCKET_PATH", raising=False)
+    monkeypatch.setenv("BRAINLAYER_DB", str(production))
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", lambda *a, **kw: pytest.fail("socket reached"))
+    out = tmp_path / "backups"
+
+    with pytest.raises(backup.BrainBarDatabaseIdentityError, match="production BrainBar socket"):
+        backup.create_sqlite_backup_artifact(configured, out, date_stamp="2026-10-18")
+
+    assert not out.exists()
+
+
+def test_configured_db_on_production_socket_passes_the_preflight(tmp_path, dbs, monkeypatch):
+    _, production = dbs
+    monkeypatch.delenv("BRAINBAR_SOCKET_PATH", raising=False)
+    monkeypatch.setenv("BRAINLAYER_DB", str(production))
+    requests: list = []
+    monkeypatch.setattr(backup, "_send_brainbar_json_request", _fake_brainbar(production, requests))
+    monkeypatch.setattr(backup, "_brainbar_writer_started_at", lambda *a: 1)
+    monkeypatch.setattr(backup, "_important_usage_capacity_bytes", lambda *a: None)
+    monkeypatch.setattr(backup.shutil, "disk_usage", lambda *a: SimpleNamespace(free=10**12))
+
+    artifact = backup.create_sqlite_backup_artifact(production, tmp_path / "backups", date_stamp="2026-10-18")
+
+    assert artifact.gzip_path.exists()
+    assert len(requests) == 1
