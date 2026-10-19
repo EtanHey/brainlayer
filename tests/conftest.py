@@ -202,8 +202,13 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     """Make the pure-library engine suite runnable as `pytest -m engine`."""
+    repo_root = Path(__file__).resolve().parents[1]
     for item in items:
-        rel_path = Path(str(item.fspath)).resolve().relative_to(Path(__file__).resolve().parents[1]).as_posix()
+        path = Path(str(item.fspath)).resolve()
+        # A suite outside the repo (an inner probe session loading this conftest) holds no engine file.
+        if not path.is_relative_to(repo_root):
+            continue
+        rel_path = path.relative_to(repo_root).as_posix()
         if rel_path in ENGINE_TEST_FILES:
             item.add_marker(pytest.mark.engine)
 
