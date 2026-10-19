@@ -198,5 +198,5 @@ def test_maintenance_deliberate_deferrals_match_swift_allowlist():
     ).read_text()
     block = swift.split("static let deliberateDeferrals = [", 1)[1].split("]", 1)[0]
     patterns = re.findall(r'#"(.*?)"#', block)
-    assert len(patterns) == 4
+    assert len(patterns) == 5
     assert tuple(patterns) == maintenance.DELIBERATE_DEFERRALS
