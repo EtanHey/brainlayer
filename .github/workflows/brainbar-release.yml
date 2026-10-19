@@ -3,7 +3,7 @@ name: BrainBar Release
 on:
   push:
     tags:
-      # Full package and BrainBar app release, including v1.5.61.
+      # Full package and BrainBar app release, including v1.5.66.
       - "v*"
       # Python-only release: retain BrainBar 1.5.51 and its existing cask.
       - "!v1.5.52"
