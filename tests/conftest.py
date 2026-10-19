@@ -366,16 +366,29 @@ def isolated_home_overage(home: Path) -> str | None:
     )
 
 
-_CALL_REPORT_KEY = pytest.StashKey[pytest.TestReport]()
+_ISOLATED_HOME_KEY = pytest.StashKey[Path]()
+_PHASE_FAILED_KEY = pytest.StashKey[bool]()
 
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
-    """Record the call-phase report so fixture teardown can tell a passing test from a failing one."""
+    """Remove a test's isolated HOME only after its LAST phase, and only when no phase failed.
+
+    Deciding inside the fixture's own teardown is too early: fixtures set up before it finalize
+    after it, so a later teardown failure would be judged a pass and its evidence deleted (review
+    r1 of #1412). The teardown report is made after every finalizer ran, so it sees all three.
+    """
     outcome = yield
     report = outcome.get_result()
-    if report.when == "call":
-        item.stash[_CALL_REPORT_KEY] = report
+    if report.failed:
+        item.stash[_PHASE_FAILED_KEY] = True
+    if report.when != "teardown":
+        return
+    home = item.stash.get(_ISOLATED_HOME_KEY, None)
+    if home is None or item.stash.get(_PHASE_FAILED_KEY, False):
+        return
+    if item.config.getini("tmp_path_retention_policy") in {"failed", "none"}:
+        _rmtree(home, ignore_errors=True)
 
 
 @functools.cache
@@ -421,17 +434,22 @@ def real_node_bin_dir(tmp_path_factory) -> Path | None:
 def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request, real_node_bin_dir):
     """Keep unit-test runtime resolvers out of production BrainLayer paths, and keep the HOME small.
 
-    The isolated HOME sits beside `tmp_path`, so pytest's own retention never reaches it: teardown
-    removes it for a passing test under the `failed` policy, and fails any test whose HOME grew
-    past `ISOLATED_HOME_BYTE_BOUND`.
+    The isolated HOME sits beside `tmp_path`, so pytest's own retention never reaches it:
+    `pytest_runtest_makereport` removes it once no phase failed. Teardown fails any test whose HOME
+    grew past `ISOLATED_HOME_BYTE_BOUND`, and keeps that HOME as the evidence. `embedding_model`
+    tests are exempt from the bound: they may legitimately hold a model cache under HOME.
     """
     if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
         monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "live")
         yield
         return
 
-    isolated_home = tmp_path.parent / f".{tmp_path.name}-brainlayer-home"
+    # Unique per test, never derived from tmp_path's number alone: pytest reuses a removed tmp dir's
+    # number (a setup skip or error leaves no call report, so its tmp_path is removed) while a kept
+    # HOME stays -- a numbered name would then collide on mkdir.
+    isolated_home = tmp_path.parent / f".{tmp_path.name}-{uuid.uuid4().hex[:8]}-brainlayer-home"
     isolated_home.mkdir()
+    request.node.stash[_ISOLATED_HOME_KEY] = isolated_home
     runtime_root = isolated_home / ".brainlayer"
     queue_dir = runtime_root / "queue"
     data_dir = isolated_home / ".local" / "share" / "brainlayer"
@@ -471,12 +489,9 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request, real_node_b
 
     yield
 
+    if request.node.get_closest_marker(EMBEDDING_MODEL_MARK) is not None:
+        return
     overage = isolated_home_overage(isolated_home)
-    report = request.node.stash.get(_CALL_REPORT_KEY, None)
-    passed = report is not None and not report.failed
-    policy = request.config.getini("tmp_path_retention_policy")
-    if overage is not None or policy == "none" or (policy == "failed" and passed):
-        _rmtree(isolated_home, ignore_errors=True)
     if overage is not None:
         pytest.fail(overage, pytrace=False)
 
