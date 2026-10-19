@@ -12,6 +12,7 @@ for _git_env_key in tuple(os.environ):
 
 import functools
 import importlib
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -22,6 +23,8 @@ import uuid
 from pathlib import Path
 
 _PROTECTED_TEST_HOME = Path.home().resolve()
+# Read before any fixture swaps HOME: resolving `node` needs the operator's own runtime store.
+_OPERATOR_PATH = os.environ.get("PATH", os.defpath)
 _OPERATOR_BRAINBAR_SOCKET_PATH = os.environ.get("BRAINBAR_SOCKET_PATH")
 _OPERATOR_MCP_SOCKET = os.environ.get("BRAINLAYER_MCP_SOCKET")
 
@@ -323,11 +326,103 @@ def isolate_fallback_gits_root(monkeypatch, request):
     monkeypatch.delenv("BRAINLAYER_FALLBACK_GITS_ROOT", raising=False)
 
 
+# A Node runtime is ~117 MiB; a test home that holds one, or anything like it, is a disk leak.
+ISOLATED_HOME_BYTE_BOUND = 32 * 1024 * 1024
+# Bound at import: the HOME teardown runs before `monkeypatch` undoes a test's patches, and tests do
+# patch the shared `os.walk` (test_ratchet_margins) -- the guard must not run their fake.
+_walk = os.walk
+_rmtree = shutil.rmtree
+
+
+def isolated_home_overage(home: Path) -> str | None:
+    """Describe *home* when its files exceed the bound, else None.
+
+    Reads apparent size (`st_size`), not allocated blocks: it is deterministic across filesystems,
+    and it never under-reads an APFS clone of a runtime as free.
+    """
+    sizes = []
+    for root, _dirs, files in _walk(home):
+        for name in files:
+            path = Path(root) / name
+            try:
+                sizes.append((path.lstat().st_size, path))
+            except OSError:
+                continue
+    total = sum(size for size, _path in sizes)
+    if total <= ISOLATED_HOME_BYTE_BOUND:
+        return None
+    largest = ", ".join(
+        f"{path.relative_to(home).as_posix()} ({size // (1024 * 1024)} MiB)"
+        for size, path in sorted(sizes, reverse=True)[:5]
+    )
+    return (
+        f"isolated test HOME {home} holds {total // (1024 * 1024)} MiB, over the "
+        f"{ISOLATED_HOME_BYTE_BOUND // (1024 * 1024)} MiB bound; largest: {largest}"
+    )
+
+
+_CALL_REPORT_KEY = pytest.StashKey[pytest.TestReport]()
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """Record the call-phase report so fixture teardown can tell a passing test from a failing one."""
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call":
+        item.stash[_CALL_REPORT_KEY] = report
+
+
+@functools.cache
+def _real_node_binary() -> str | None:
+    """The executable `node` on the operator's PATH really runs, resolved under the real HOME.
+
+    Version-manager shims (vite-plus `vp`, and any other HOME-keyed store) pick their runtime from
+    HOME. Inside a fresh isolated HOME the vite-plus shim copied a ~117 MiB Node runtime into every
+    test home -- 42 GiB in one basetemp on 2026-10-19. Asking the shim once, under the real HOME,
+    for `process.execPath` gives the binary every shim ends up exec'ing.
+    """
+    shim = shutil.which("node", path=_OPERATOR_PATH)
+    if shim is None:
+        return None
+    env = {key: value for key, value in os.environ.items() if key not in {"NODE_OPTIONS", "NODE_PATH"}}
+    env["HOME"] = str(_PROTECTED_TEST_HOME)
+    env["PATH"] = _OPERATOR_PATH
+    try:
+        resolved = subprocess.run([shim, "-p", "process.execPath"], capture_output=True, text=True, timeout=60, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    path = resolved.stdout.strip()
+    if resolved.returncode != 0 or not os.path.isabs(path) or not os.access(path, os.X_OK):
+        return None
+    return path
+
+
+@pytest.fixture(scope="session")
+def real_node_bin_dir(tmp_path_factory) -> Path | None:
+    """A one-entry bin dir whose `node` is the real binary, shared read-only by every test.
+
+    None when no node resolves; the isolated-home bound below then fails loudly on any copy.
+    """
+    node = _real_node_binary()
+    if node is None:
+        return None
+    bin_dir = tmp_path_factory.mktemp("real-node-bin")
+    (bin_dir / "node").symlink_to(node)
+    return bin_dir
+
+
 @pytest.fixture(autouse=True)
-def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
-    """Keep unit-test runtime resolvers out of production BrainLayer paths."""
+def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request, real_node_bin_dir):
+    """Keep unit-test runtime resolvers out of production BrainLayer paths, and keep the HOME small.
+
+    The isolated HOME sits beside `tmp_path`, so pytest's own retention never reaches it: teardown
+    removes it for a passing test under the `failed` policy, and fails any test whose HOME grew
+    past `ISOLATED_HOME_BYTE_BOUND`.
+    """
     if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
         monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "live")
+        yield
         return
 
     isolated_home = tmp_path.parent / f".{tmp_path.name}-brainlayer-home"
@@ -337,6 +432,8 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
     data_dir = isolated_home / ".local" / "share" / "brainlayer"
 
     monkeypatch.setenv("HOME", str(isolated_home))
+    if real_node_bin_dir is not None:
+        monkeypatch.setenv("PATH", f"{real_node_bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
     monkeypatch.setenv("BRAINLAYER_DB", str(data_dir / "brainlayer.db"))
     monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
     monkeypatch.setenv("BRAINLAYER_DRAIN_LOG_PATH", str(runtime_root / "logs" / "drain.log"))
@@ -366,6 +463,17 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+    yield
+
+    overage = isolated_home_overage(isolated_home)
+    report = request.node.stash.get(_CALL_REPORT_KEY, None)
+    passed = report is not None and not report.failed
+    policy = request.config.getini("tmp_path_retention_policy")
+    if overage is not None or policy == "none" or (policy == "failed" and passed):
+        _rmtree(isolated_home, ignore_errors=True)
+    if overage is not None:
+        pytest.fail(overage, pytrace=False)
 
 
 @pytest.fixture(autouse=True)
