@@ -37,12 +37,14 @@ h=maintenance_control.MaintenanceHold().__enter__()
 """
 
 
-@pytest.fixture
-def fast_expiry(monkeypatch):
-    """Must precede ``control`` so the fixture supervisor inherits the short bounds."""
-    monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_MAX_S", "1")
-    monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_GRACE_S", "0.2")
-    monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_KILL_AFTER_S", "0.5")
+def _supervised(request, *, fast=False):
+    """With ``fast``, the fixture supervisor inherits short bounds: it must start after these are set."""
+    if fast:
+        monkeypatch = request.getfixturevalue("monkeypatch")
+        monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_MAX_S", "1")
+        monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_GRACE_S", "0.2")
+        monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_KILL_AFTER_S", "0.5")
+    return request.getfixturevalue("control")
 
 
 def _paused(query):
@@ -65,6 +67,7 @@ def test_hold_budget_ends_before_window_close_minus_reserve(monkeypatch):
     assert hold_budget(dt.datetime(2026, 10, 19, 5, 49)) == 60
     assert hold_budget(dt.datetime(2026, 10, 19, 5, 55)) <= 0
     assert hold_budget(dt.datetime(2026, 10, 19, 14, 0)) == 7200  # Off-window holds keep only the cap.
+    assert hold_budget(None) == 7200  # No window clock (manual FTS repair): the cap alone.
     monkeypatch.delenv("BRAINLAYER_MAINTENANCE_HOLD_MAX_S")
     assert hold_budget(dt.datetime(2026, 10, 19, 4, 0)) == maintenance_control.DEFAULT_HOLD_MAX_S
 
@@ -75,8 +78,8 @@ def test_invalid_hold_cap_falls_back_to_default(monkeypatch, value):
     assert hold_budget(dt.datetime(2026, 10, 19, 14, 0)) == maintenance_control.DEFAULT_HOLD_MAX_S
 
 
-def test_hold_journal_records_owner_identity_and_expiry(control):
-    path = control[0]
+def test_hold_journal_records_owner_identity_and_expiry(request):
+    path = _supervised(request)[0]
     before = time.time()
     with MaintenanceHold() as hold:
         entry = json.loads((path / "maintenance.json").read_text())
@@ -86,8 +89,8 @@ def test_hold_journal_records_owner_identity_and_expiry(control):
         assert before < hold.expires_at <= time.time() + maintenance_control.DEFAULT_HOLD_MAX_S
 
 
-def test_hold_refuses_to_start_when_window_has_no_room(control):
-    path, _, query, _ = control
+def test_hold_refuses_to_start_when_window_has_no_room(request):
+    path, _, query, _ = _supervised(request)
     with pytest.raises(maintenance_control.HoldWindowClosed):
         with MaintenanceHold(now_fn=lambda: dt.datetime(2026, 10, 19, 5, 55)):
             pass
@@ -95,8 +98,8 @@ def test_hold_refuses_to_start_when_window_has_no_room(control):
     assert not (path / "maintenance.json").exists()
 
 
-def test_sigkill_of_maintenance_owner_resumes_watcher(fast_expiry, control):
-    path, _, query, _ = control
+def test_sigkill_of_maintenance_owner_resumes_watcher(request):
+    path, _, query, _ = _supervised(request, fast=True)
     holder = _hold_in_subprocess(path, "plain")
     try:
         assert _paused(query)
@@ -110,8 +113,8 @@ def test_sigkill_of_maintenance_owner_resumes_watcher(fast_expiry, control):
     assert not (path / "maintenance.json").exists()
 
 
-def test_exception_inside_hold_resumes_watcher(control):
-    path, _, query, _ = control
+def test_exception_inside_hold_resumes_watcher(request):
+    path, _, query, _ = _supervised(request)
     with pytest.raises(ZeroDivisionError), MaintenanceHold():
         assert _paused(query)
         1 / 0
@@ -120,8 +123,8 @@ def test_exception_inside_hold_resumes_watcher(control):
 
 
 @pytest.mark.parametrize("mode", ["plain", "stubborn"])
-def test_hang_beyond_cap_is_ended_by_supervisor_tick(fast_expiry, control, mode):
-    path, _, query, _ = control
+def test_hang_beyond_cap_is_ended_by_supervisor_tick(request, mode):
+    path, _, query, _ = _supervised(request, fast=True)
     holder = _hold_in_subprocess(path, mode)
     try:
         assert _paused(query)
@@ -135,9 +138,9 @@ def test_hang_beyond_cap_is_ended_by_supervisor_tick(fast_expiry, control, mode)
     assert not (path / "maintenance.json").exists()
 
 
-def test_hung_hold_still_expires_after_supervisor_restart(fast_expiry, control):
+def test_hung_hold_still_expires_after_supervisor_restart(request):
     """A replacement supervisor has no in-memory pause owner; the journal alone must drive expiry."""
-    path, parent, query, _ = control
+    path, parent, query, _ = _supervised(request, fast=True)
     holder = _hold_in_subprocess(path, "plain")
     replacement = None
     try:
@@ -185,8 +188,8 @@ def test_expiry_waits_for_grace_before_signalling(tmp_path, monkeypatch):
             owner.wait(timeout=2)
 
 
-def test_calendar_held_step_is_cut_at_hold_expiry_not_step_timeout(control, monkeypatch):
-    path, _, query, _ = control
+def test_calendar_held_step_is_cut_at_hold_expiry_not_step_timeout(request, monkeypatch):
+    path, _, query, _ = _supervised(request)
     monkeypatch.setenv("BRAINLAYER_MAINTENANCE_HOLD_MAX_S", "1")
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(path / "alerts.json"))
     monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "pytest")
@@ -208,8 +211,8 @@ def test_calendar_held_step_is_cut_at_hold_expiry_not_step_timeout(control, monk
     native_tests.eventually(lambda: _watch_running(query))
 
 
-def test_calendar_defers_held_step_when_window_leaves_no_hold_budget(control, monkeypatch):
-    path, _, query, _ = control
+def test_calendar_defers_held_step_when_window_leaves_no_hold_budget(request, monkeypatch):
+    path, _, query, _ = _supervised(request)
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(path / "alerts.json"))
     monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "pytest")
     probe = "raise SystemExit(99)"
@@ -289,7 +292,8 @@ def test_run_maintenance_bounds_vacuum_by_the_supervisor_hold(tmp_path, monkeypa
         def close(self):
             FakeHold.closed = True
 
-    def quiesce(_services, booted_out):
+    def quiesce(_services, booted_out, now_fn):
+        assert now_fn is config.now_fn
         booted_out["_supervisor_hold"] = FakeHold()
 
     seen = []

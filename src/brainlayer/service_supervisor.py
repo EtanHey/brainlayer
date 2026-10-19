@@ -176,10 +176,10 @@ class Supervisor:
                     if child.pause_owner:
                         child.error = f"maintenance recovery failed: {exc}"
             self.recovery = None
+        # The journal alone drives recovery and expiry: a restarted supervisor has no pause owners.
         if (
             self.recovery is None
             and time.monotonic() >= self.recovery_at
-            and any(c.pause_owner for c in self.components.values())
             and self.path.with_name("maintenance.json").exists()
         ):
             from .maintenance_control import recover_hold

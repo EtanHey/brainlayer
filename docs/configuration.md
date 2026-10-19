@@ -214,8 +214,17 @@ The receipt binds SHA-256, size and path; missing, altered, unverified, failed r
 future or yesterday's copies cannot authorize VACUUM. Remote upload is not part of that gate.
 Calendar runs without that proof skip VACUUM with exit **76**. A standalone full run may create a
 local snapshot under the daily supervisor within the remaining quiet window. A held backup lock
-still waits up to two hours. Quiet-window, queue-idle and writer checks run again after backup;
+still waits up to two hours in a standalone run; a calendar step, whose writers are already paused,
+never waits and skips VACUUM with exit **76**. Quiet-window, queue-idle and writer checks run again after backup;
 post-backup gate failure skips service bootout and all DB maintenance with exit **76**.
+
+Every writer pause (a supervisor `MaintenanceHold`) is bounded. It lasts at most
+`BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (default **3600**), and a calendar or scheduled maintenance hold
+also ends 10 minutes before the quiet window closes (05:50); with no time left the step defers
+with exit **75** (`maintenance-window`). The calendar cuts a held step at that expiry instead of its
+step timeout, and VACUUM is interrupted (rolled back) 30 s before it. The hold journal records the
+owner's PID, birth time and expiry; on each tick the supervisor restores a hold whose owner has died,
+and sends TERM, then KILL 30 s later, to the exact owner of a hold 60 s past its expiry.
 
 Older pending copies of the same DB become reclaimable only after a newer copy is offsite-verified;
 capacity errors list retained archives. Weekly maintenance holds the archive lock across quiesce/VACUUM

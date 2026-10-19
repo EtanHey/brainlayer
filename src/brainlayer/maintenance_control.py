@@ -1,15 +1,84 @@
 """Opt-in acknowledged component quiescence with an inherited writer-exclusion lease."""
 
+import datetime as dt
 import fcntl
 import json
+import math
 import os
+import signal
 import subprocess
 import time
 import uuid
 from pathlib import Path
 
 from .drive_credentials import _atomic_write
-from .supervisor_guard import component_gate
+from .supervisor_guard import component_gate, start_time
+
+HOLD_MAX_ENV = "BRAINLAYER_MAINTENANCE_HOLD_MAX_S"
+HOLD_GRACE_ENV = "BRAINLAYER_MAINTENANCE_HOLD_GRACE_S"
+HOLD_KILL_AFTER_ENV = "BRAINLAYER_MAINTENANCE_HOLD_KILL_AFTER_S"
+DEFAULT_HOLD_MAX_S = 3600.0
+# The hold ends this long before the quiet window closes, leaving room to resume and catch up.
+HOLD_WINDOW_RESERVE_S = 600.0
+
+
+class HoldWindowClosed(RuntimeError):
+    """The quiet window leaves no time for a bounded hold."""
+
+
+def _seconds(name, default):
+    try:
+        value = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def hold_budget(now=None, *, window_start_hour=4, window_minutes=120):
+    """Seconds a hold may last: the cap, and inside the quiet window, its end minus the reserve.
+
+    Without a window clock (manual FTS repair, ad-hoc holds) only the cap applies.
+    """
+    budget = _seconds(HOLD_MAX_ENV, DEFAULT_HOLD_MAX_S)
+    if now is None:
+        return budget
+    start = now.replace(hour=window_start_hour, minute=0, second=0, microsecond=0)
+    if now < start:
+        start -= dt.timedelta(days=1)
+    end = start + dt.timedelta(minutes=window_minutes)
+    if now < end:
+        budget = min(budget, (end - now).total_seconds() - HOLD_WINDOW_RESERVE_S)
+    return budget
+
+
+_terminated = {}  # (pid, birth) -> when this supervisor sent TERM; KILL only follows a delivered TERM.
+
+
+def enforce_hold_expiry(path, now=None):
+    """Supervisor-side backstop: TERM, then KILL, the exact live owner of an overdue hold."""
+    journal = Path(path).with_name("maintenance.json")
+    try:
+        entry = json.loads(journal.read_text())
+        expires, pid, birth = entry["expires_at"], entry["pid"], entry["pid_start"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None  # No journal, or one written before holds carried an owner and a cap.
+    if type(expires) not in (int, float):
+        return None
+    now = time.time() if now is None else now
+    overdue = now - expires - _seconds(HOLD_GRACE_ENV, 60)
+    if overdue < 0 or type(pid) is not int or pid <= 1 or pid == os.getpid() or not isinstance(birth, str):
+        return None
+    if start_time(pid) != birth:
+        return None  # Dead owner or reused PID: never signal a stranger.
+    termed = _terminated.setdefault((pid, birth), now)
+    sig = signal.SIGKILL if now - termed >= _seconds(HOLD_KILL_AFTER_ENV, 30) else signal.SIGTERM
+    if sig == signal.SIGTERM and termed != now:
+        return None  # TERM already delivered; give the owner its unwind time.
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        return None
+    return sig
 
 
 def recover_hold(path):
@@ -33,8 +102,12 @@ def recover_hold(path):
 
     client.request = bounded_request
     hold = MaintenanceHold(client)
-    with component_gate(hold.directory, exclusive=True):
-        hold._restore()
+    try:
+        with component_gate(hold.directory, exclusive=True):
+            hold._restore()
+    except BlockingIOError:
+        enforce_hold_expiry(path)  # A live owner past its cap is ended; the next tick restores.
+        raise
 
 
 def control_client():
@@ -58,10 +131,12 @@ def service_loaded(service):
 class MaintenanceHold:
     """Recover owned pauses; callers inherit fd/token and retain the lease until children are reaped."""
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, *, now_fn=None):
         self.client = client if client is not None else control_client()
         self.directory, self.journal = self.client.path.parent, self.client.path.with_name("maintenance.json")
         self.fd, self.token, self.gate, self.nested = None, "", None, False
+        self.now_fn = now_fn
+        self.expires_at = None
 
     def _states(self):
         states = self.client.request()
@@ -132,17 +207,28 @@ class MaintenanceHold:
             ):
                 raise RuntimeError("unverified inherited maintenance hold")
             self.nested = True
+            self.expires_at = entry.get("expires_at")
             return self
         gate = component_gate(self.directory, exclusive=True)
         fd = gate.__enter__()
         self.gate, self.fd = gate, fd
         try:
             self._restore()
+            budget = hold_budget(self.now_fn() if self.now_fn else None)
+            if budget <= 0:
+                raise HoldWindowClosed("quiet window leaves no time for a bounded maintenance hold")
             states = self._states()
             self.token = uuid.uuid4().hex
+            self.expires_at = time.time() + budget
             _atomic_write(
                 self.journal,
-                dict(owner=self.token, components={n: v["configured"] and not v["paused"] for n, v in states.items()}),
+                dict(
+                    owner=self.token,
+                    components={n: v["configured"] and not v["paused"] for n, v in states.items()},
+                    pid=os.getpid(),
+                    pid_start=start_time(os.getpid()),
+                    expires_at=self.expires_at,
+                ),
             )
             self._sync_directory()
             stopped = self.client.request(

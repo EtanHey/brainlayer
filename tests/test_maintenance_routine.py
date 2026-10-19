@@ -293,7 +293,7 @@ def test_weekly_backup_timeout_aborts_before_destructive_work(tmp_path, monkeypa
     checkpoints = []
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _db_path: checkpoints.append(1) or (0, 0, 0))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _db_path: 1.0)
-    monkeypatch.setattr(maintenance, "_vacuum", lambda _db_path: pytest.fail("VACUUM started"))
+    monkeypatch.setattr(maintenance, "_vacuum", lambda _db_path, **_kw: pytest.fail("VACUUM started"))
     with pytest.raises(maintenance.MaintenanceAbort) as full_exc:
         maintenance.run_maintenance("full", config=config)
     assert full_exc.value.code == 76
@@ -407,7 +407,7 @@ def test_full_rechecks_window_after_backup_wait_and_skips_vacuum(tmp_path, monke
     )
     monkeypatch.setattr(maintenance, "_checkpoint_full", lambda _path: pytest.fail("checkpoint after gate failure"))
     monkeypatch.setattr(maintenance, "_verify_search_latency", lambda _path: 1.0)
-    monkeypatch.setattr(maintenance, "_vacuum", lambda _path: pytest.fail("VACUUM started after quiet window"))
+    monkeypatch.setattr(maintenance, "_vacuum", lambda _path, **_kw: pytest.fail("VACUUM started after quiet window"))
 
     with pytest.raises(maintenance.MaintenanceAbort, match="outside quiet window") as exc:
         maintenance.run_maintenance("full", config=config)

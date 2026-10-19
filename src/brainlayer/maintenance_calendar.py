@@ -202,7 +202,9 @@ def _index_deferral_reason(path, offset):
         return None
 
 
-async def _execute_step(step, env, *, directory, logs, custody, guard, stop, guard_timeout, shutdown_timeout):
+async def _execute_step(
+    step, env, *, directory, logs, custody, guard, stop, guard_timeout, shutdown_timeout, expires_at=None
+):
     child, gate = None, None
     try:
         with (logs / f"{step.name}.out.log").open("ab") as out, (logs / f"{step.name}.err.log").open("ab") as err:
@@ -215,11 +217,17 @@ async def _execute_step(step, env, *, directory, logs, custody, guard, stop, gua
         os.write(guard.stdin.fileno(), f"+{child.pid}\n".encode())
         record(directory, event="spawn", step=step.name, pid=child.pid)
         os.write(gate, b"R")
-        deadline = time.monotonic() + backup_deadline(step)
+        budget = backup_deadline(step)
+        held = expires_at is not None and expires_at - time.time() < budget
+        if held:
+            budget = expires_at - time.time()  # The hold, not the step timeout, bounds a writer pause.
+        deadline = time.monotonic() + budget
         while child.poll() is None and not stop.is_set() and time.monotonic() < deadline:
             if guard.poll() is not None:
                 raise RuntimeError("calendar guard exited")
             await asyncio.sleep(min(0.1, guard_timeout / 4))
+        if held and child.poll() is None and not stop.is_set():
+            record(directory, event="hold-expired", step=step.name, pid=child.pid)
         return child.returncode if child.returncode is not None else (143 if stop.is_set() else 124)
     finally:
         if gate is not None:
@@ -265,16 +273,23 @@ def finish(directory, state, step, code, date, defer_after, missed=False, stoppe
     return status
 
 
+HELD_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly", "repair-fts"})
+
+
 @asynccontextmanager
-async def step_hold(client, guard, env, step):
-    if step.name not in {"maintenance-nightly", "maintenance-weekly", "repair-fts"}:
+async def step_hold(client, guard, env, step, now_fn=None):
+    if step.name not in HELD_STEPS:
         yield env
         return
-    hold = MaintenanceHold(client)
+    hold = MaintenanceHold(client, now_fn=now_fn)
     await asyncio.to_thread(hold.__enter__)  # Keep watchdog pulses alive during acknowledged pause.
     try:
         guard_lease(guard, hold.fd)
-        yield env | dict(BRAINLAYER_MAINTENANCE_FD=str(hold.fd), BRAINLAYER_MAINTENANCE_TOKEN=hold.token)
+        yield env | dict(
+            BRAINLAYER_MAINTENANCE_FD=str(hold.fd),
+            BRAINLAYER_MAINTENANCE_TOKEN=hold.token,
+            BRAINLAYER_MAINTENANCE_HOLD_EXPIRES_AT=repr(hold.expires_at),
+        )
         guard_lease(guard, None)  # Only after the child group is confirmed gone.
     finally:
         await asyncio.to_thread(hold.__exit__, None, None, None)
@@ -358,6 +373,8 @@ async def run_calendar(
                 disabled = client._disabled(client.request(), include_paused=False)
                 if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
                     code, reason = 75, "disabled"
+                elif step.name in HELD_STEPS and maintenance_control.hold_budget(now_fn()) <= 0:
+                    code, reason = 75, "maintenance-window"  # No bounded hold fits before the window closes.
                 elif not await _window(directory, step, now_fn, sleep_fn, stop):
                     code, missed = (143, False) if stop.is_set() else (75, True)
                     if missed:
@@ -371,7 +388,7 @@ async def run_calendar(
                             XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
                         )
                     )
-                    async with step_hold(client, guard, child_env, step) as held_env:
+                    async with step_hold(client, guard, child_env, step, now_fn) as held_env:
                         if stop.is_set():
                             code = 143
                         else:
@@ -390,6 +407,9 @@ async def run_calendar(
                                 stop=stop,
                                 guard_timeout=guard_timeout,
                                 shutdown_timeout=shutdown_timeout,
+                                expires_at=float(held_env["BRAINLAYER_MAINTENANCE_HOLD_EXPIRES_AT"])
+                                if "BRAINLAYER_MAINTENANCE_HOLD_EXPIRES_AT" in held_env
+                                else None,
                             )
                             ended = now_fn()
                             if step.name == "index":

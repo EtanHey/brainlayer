@@ -62,6 +62,8 @@ EXPECTED_WRITER_PATTERNS = (
 QUIESCE_EXIT_TIMEOUT_SECONDS = 45.0
 _WATCHDOG_DISABLED_BEFORE = "_fleet_watchdog_disabled_before"
 MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
+# VACUUM is interrupted this long before its hold expires, so restore wins the calendar's cut.
+HOLD_UNWIND_S = 30.0
 SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
 SEARCH_LATENCY_FAILURE_MS = 500.0
@@ -593,16 +595,19 @@ def sigterm_cleanup():
         signal.signal(signal.SIGTERM, previous)
 
 
-def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any]) -> None:
+def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any], now_fn=None) -> None:
     if not services:
         return
     if os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET"):
         # All configured components pause, including in burn/FTS modes: ticks can revive writers.
-        from .maintenance_control import MaintenanceHold
+        from .maintenance_control import HoldWindowClosed, MaintenanceHold
 
-        hold = MaintenanceHold()
+        hold = MaintenanceHold(now_fn=now_fn)  # The quiet-window clock bounds the hold's end.
         booted_out["_supervisor_hold"] = hold
-        hold.__enter__()
+        try:
+            hold.__enter__()
+        except HoldWindowClosed as exc:
+            raise MaintenanceAbort(str(exc)) from None
         return
     path = _watchdog_hold_path()
     with _watchdog_hold_lock(path):
@@ -942,12 +947,29 @@ def _verify_search_latency(db_path: Path, *, threshold_ms: float = SEARCH_LATENC
     return latency_ms
 
 
-def _vacuum(db_path: Path) -> tuple[int, int]:
+def _vacuum(db_path: Path, *, expires_at: float | None = None) -> tuple[int, int]:
+    """Interrupt at hold expiry; an interrupted VACUUM rolls back and leaves the DB intact."""
+    timer = None
+    if expires_at is not None:
+        remaining = expires_at - HOLD_UNWIND_S - time.time()
+        if remaining <= 0:
+            raise MaintenanceAbort("maintenance hold expires before VACUUM could unwind; VACUUM skipped", code=76)
     before = db_path.stat().st_size
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute("VACUUM")
+        if expires_at is not None:
+            timer = threading.Timer(remaining, conn.interrupt)
+            timer.daemon = True
+            timer.start()
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError as exc:
+            if timer is not None and timer.finished.is_set():
+                raise MaintenanceAbort("maintenance hold expired during VACUUM; VACUUM rolled back", code=76) from exc
+            raise
     finally:
+        if timer is not None:
+            timer.cancel()
         conn.close()
     return before, db_path.stat().st_size
 
@@ -1204,6 +1226,9 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
                 if receipt is None:
                     raise MaintenanceAbort("weekly local snapshot was not verified; VACUUM skipped", code=76)
                 return receipt
+        if os.environ.get("BRAINLAYER_CALENDAR_STEP"):
+            # The calendar already holds writers paused for this step; never wait on a backup inside it.
+            raise MaintenanceAbort("backup running during held calendar step; VACUUM skipped", code=76)
         waited = True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -1274,7 +1299,7 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         loaded_before = {service: _service_is_loaded(service) for service in services}
         booted_out: dict[str, Any] = {}
         try:
-            _quiesce_services(tuple(loaded_before), booted_out)
+            _quiesce_services(tuple(loaded_before), booted_out, config.now_fn)
             if not post_backup_gates_failed:
                 result.checkpoint = _checkpoint_full(config.db_path)
             if (
@@ -1287,7 +1312,10 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 result.backup_status = "unavailable"
             if mode == "full" and backup is not None:
                 result.actions.append(f"verified_local_backup={backup.get('snapshot')}")
-                result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path)
+                hold = booted_out.get("_supervisor_hold")
+                result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(
+                    config.db_path, expires_at=getattr(hold, "expires_at", None)
+                )
                 result.checkpoint = _checkpoint_full(config.db_path)
             if mode == "burn":
                 result.burn = _run_burn_until_empty(config)
