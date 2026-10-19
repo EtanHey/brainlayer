@@ -1034,7 +1034,7 @@ def test_recent_attempt_growth_is_reserved_in_disk_preflight(tmp_path, monkeypat
     recent = output_dir / ".2026-05-13.db.attempt-1-recent"
     recent.write_bytes(b"x")
     db_size = source.stat().st_size
-    base_required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    base_required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
 
     class Disk:
         free = base_required
@@ -1118,7 +1118,7 @@ def test_create_snapshot_accepts_space_for_raw_and_gzip(tmp_path, monkeypatch):
     db_size = backup_daily._database_logical_size_bytes(source)
 
     class Disk:
-        free = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+        free = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
 
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: Disk())
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
@@ -1138,7 +1138,7 @@ def test_create_snapshot_requests_purge_before_writer(tmp_path, monkeypatch, cap
     _create_source_db(source, chunk_count=2)
     db_size = 2 * 1024 * 1024 * 1024
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: db_size)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     raw_before = 5 * 1024 * 1024 * 1024
     raw_after = required + backup_daily.COPY_CHUNK_BYTES
     readings = iter([raw_before, raw_after])
@@ -1168,7 +1168,7 @@ def test_create_snapshot_skips_purge_when_raw_is_sufficient(tmp_path, monkeypatc
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=required))
     monkeypatch.setattr(backup_daily, "_request_macos_purge", lambda *_args: pytest.fail("purge not needed"))
     monkeypatch.setattr(
@@ -1187,7 +1187,7 @@ def test_create_snapshot_rejects_insufficient_purge_with_both_raw_readings(tmp_p
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     raw_before = required // 2
     raw_after = required - 1
     readings = iter([raw_before, raw_after])
@@ -1214,7 +1214,7 @@ def test_create_snapshot_reports_unavailable_purge_api(tmp_path, monkeypatch):
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     raw = required - 1
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw))
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
@@ -1241,7 +1241,7 @@ def test_create_snapshot_accepts_raw_gain_despite_purge_error(tmp_path, monkeypa
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     readings = iter([required - 1, required])
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
@@ -1264,7 +1264,7 @@ def test_create_snapshot_waits_for_delayed_raw_gain(tmp_path, monkeypatch):
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     readings = iter([required - 1, required - 1, required - 1, required])
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required + 1)
@@ -1286,7 +1286,7 @@ def test_create_snapshot_waits_beyond_one_second_for_raw_gain(tmp_path, monkeypa
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     readings = iter([required - 1, *([required - 1] * 8), required])
     waited = []
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=next(readings, required)))
@@ -1353,7 +1353,7 @@ def test_create_snapshot_does_not_purge_without_enough_important_capacity(tmp_pa
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=2)
     db_size = backup_daily._database_logical_size_bytes(source)
-    required = backup_daily._peak_backup_required_bytes(db_size, db_size, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(db_size, db_size, full=False)
     raw = required - 1
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=raw))
     monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: required - 1)
@@ -1427,16 +1427,147 @@ def test_create_snapshot_rejects_one_raw_byte_despite_important_capacity(tmp_pat
         backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out")
 
 
-def test_backup_peak_accounts_for_verify_and_prior_raw():
+def test_backup_peak_is_the_largest_phase_not_a_sum():
     from brainlayer import backup_daily
 
     db = 10_000
     gz = 4_000
     margin = backup_daily.MIN_RAW_FREE_BYTES + backup_daily.COPY_CHUNK_BYTES
-    assert backup_daily._peak_backup_required_bytes(db, gz, 0, full=False) == 2 * db + gz + margin
-    assert backup_daily._peak_backup_required_bytes(db, gz, 0, full=True) == 2 * db + 2 * gz + margin
-    assert backup_daily._peak_backup_required_bytes(db, gz, db, full=False) == db + gz + margin
-    assert backup_daily._peak_backup_required_bytes(db, gz, db, full=True) == db + 2 * gz + margin
+    # The verified raw is unlinked before restore allocates restored.db, so they never coexist.
+    assert backup_daily._backup_phase_peaks(db, gz, full=False) == {
+        "raw_copy": db,
+        "gzip": db + gz,
+        "restore": db + gz,
+    }
+    assert backup_daily._backup_phase_peaks(db, gz, full=True) == {
+        "raw_copy": db,
+        "gzip": db + gz,
+        "drive_download": 2 * gz,
+        "restore": db + 2 * gz,
+    }
+    assert backup_daily._peak_backup_required_bytes(db, gz, full=False) == db + gz + margin
+    assert backup_daily._peak_backup_required_bytes(db, gz, full=True) == db + 2 * gz + margin
+    # A gzip larger than the DB (no prior gzip estimates G=D) still takes the max phase.
+    assert backup_daily._peak_backup_required_bytes(db, 3 * db, full=True) == 7 * db + margin
+
+
+# 2026-10-19 03:22 MBP backup-daily: quick mode, D and G recovered exactly from the failure log,
+# where the old 2D+G gate demanded 52,925,467,466 bytes against raw_after=48,296,591,360.
+INCIDENT_DB_BYTES = 20_636_520_448
+INCIDENT_GZIP_BYTES = 9_503_894_346
+INCIDENT_RAW_FREE = 48_296_591_360
+INCIDENT_QUICK_REQUIRED = 32_288_947_018  # D + G + 2 GiB floor + 1 MiB copy chunk
+INCIDENT_FULL_REQUIRED = 41_792_841_364  # D + 2G + 2 GiB floor + 1 MiB copy chunk
+
+
+def _incident_capacity_gate(tmp_path, monkeypatch, *, free: int, date_stamp: str):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    if not source.exists():
+        _create_source_db(source)
+    monkeypatch.delenv(backup_daily.BACKUP_FULL_VERIFY_ENV, raising=False)
+    monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: INCIDENT_DB_BYTES)
+    monkeypatch.setattr(backup_daily, "_estimated_gzip_bytes", lambda _dir, _db: INCIDENT_GZIP_BYTES)
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=free))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(
+        backup_daily,
+        "request_brainbar_vacuum_into",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("writer reached")),
+    )
+    return backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp=date_stamp)
+
+
+def test_2026_10_19_quick_backup_passes_phase_correct_gate(tmp_path, monkeypatch, capsys):
+    from brainlayer import backup_daily
+
+    assert (
+        backup_daily._peak_backup_required_bytes(INCIDENT_DB_BYTES, INCIDENT_GZIP_BYTES, full=False)
+        == INCIDENT_QUICK_REQUIRED
+    )
+
+    with pytest.raises(RuntimeError, match="writer reached"):
+        _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_RAW_FREE, date_stamp="2026-10-19")
+    output = capsys.readouterr().out
+    assert f"required={INCIDENT_QUICK_REQUIRED}" in output
+    assert f"gzip={INCIDENT_DB_BYTES + INCIDENT_GZIP_BYTES}" in output
+    assert f"restore={INCIDENT_DB_BYTES + INCIDENT_GZIP_BYTES}" in output
+
+
+def test_2026_10_19_genuinely_tight_quick_backup_still_fails(tmp_path, monkeypatch):
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            rf"Insufficient free space.*raw_after={INCIDENT_QUICK_REQUIRED - 1} .*"
+            rf"required={INCIDENT_QUICK_REQUIRED} .*peak_phase=gzip peak={INCIDENT_DB_BYTES + INCIDENT_GZIP_BYTES} "
+            rf"phases=raw_copy={INCIDENT_DB_BYTES},gzip={INCIDENT_DB_BYTES + INCIDENT_GZIP_BYTES},"
+            rf"restore={INCIDENT_DB_BYTES + INCIDENT_GZIP_BYTES}"
+        ),
+    ):
+        _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED - 1, date_stamp="2026-10-19")
+
+
+def _lost_response_then_second_attempt(tmp_path, monkeypatch, *, free: int):
+    from brainlayer import backup_daily
+
+    source = tmp_path / "brainlayer.db"
+    _create_source_db(source)
+    calls = []
+
+    def lost_then_reached(socket_path, request, timeout_seconds):  # noqa: ARG001
+        if request.get("method") != "tools/call":
+            raise OSError("writer probe unavailable")
+        calls.append(request["params"]["arguments"]["target_path"])
+        if len(calls) == 1:
+            Path(calls[0]).write_bytes(b"x" * 4096)  # BrainBar may still be growing this to D.
+            raise OSError("connection reset before the terminal response")
+        raise RuntimeError("second attempt reached")
+
+    monkeypatch.delenv(backup_daily.BACKUP_FULL_VERIFY_ENV, raising=False)
+    monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda _path: INCIDENT_DB_BYTES)
+    monkeypatch.setattr(backup_daily, "_estimated_gzip_bytes", lambda _dir, _db: INCIDENT_GZIP_BYTES)
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: SimpleNamespace(free=free))
+    monkeypatch.setattr(backup_daily, "_important_usage_capacity_bytes", lambda _path: None)
+    monkeypatch.setattr(backup_daily, "_send_brainbar_json_request", lost_then_reached)
+    monkeypatch.setattr(backup_daily, "_sleep", lambda _seconds: None)
+    with pytest.raises(RuntimeError) as raised:
+        backup_daily.create_sqlite_backup_artifact(source, tmp_path / "out", date_stamp="2026-10-19")
+    return calls, str(raised.value)
+
+
+def test_lost_response_retry_rechecks_capacity_for_the_unconfirmed_attempt(tmp_path, monkeypatch):
+    # The preserved attempt can still grow to D while the retry writes another D.
+    calls, error = _lost_response_then_second_attempt(tmp_path, monkeypatch, free=INCIDENT_QUICK_REQUIRED)
+    assert len(calls) == 1
+    growth = INCIDENT_DB_BYTES - 4096
+    raw_copy = growth + INCIDENT_DB_BYTES
+    required = raw_copy + 2 * 1024**3 + 1024**2
+    assert "Insufficient free space for backup retry" in error
+    assert f"raw={INCIDENT_QUICK_REQUIRED} required={required} " in error
+    assert f"peak_phase=raw_copy peak={raw_copy} " in error
+    assert "1 unconfirmed attempts reserve" in error
+
+
+def test_lost_response_retry_proceeds_when_the_unconfirmed_attempt_fits(tmp_path, monkeypatch):
+    free = 2 * INCIDENT_DB_BYTES - 4096 + 2 * 1024**3 + 1024**2
+    calls, error = _lost_response_then_second_attempt(tmp_path, monkeypatch, free=free)
+    assert len(calls) == 3  # Every retry fits; the last attempt's own error surfaces.
+    assert "second attempt reached" in error
+
+
+def test_2026_10_19_numbers_in_full_mode_budget_the_drive_download(tmp_path, monkeypatch):
+    # 2026-10-18 is a Sunday, so the restore verifies a downloaded Drive copy beside the local gzip.
+    with pytest.raises(RuntimeError, match="writer reached"):
+        _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_FULL_REQUIRED, date_stamp="2026-10-18")
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            rf"Insufficient free space.*required={INCIDENT_FULL_REQUIRED} .*peak_phase=restore "
+            rf"peak={INCIDENT_DB_BYTES + 2 * INCIDENT_GZIP_BYTES} .*drive_download={2 * INCIDENT_GZIP_BYTES},"
+        ),
+    ):
+        _incident_capacity_gate(tmp_path, monkeypatch, free=INCIDENT_FULL_REQUIRED - 1, date_stamp="2026-10-18")
 
 
 def test_preflight_never_credits_raw_copy_without_valid_gzip(tmp_path, monkeypatch):
@@ -1456,8 +1587,10 @@ def test_preflight_never_credits_raw_copy_without_valid_gzip(tmp_path, monkeypat
     (symlink_prior / "2026-05-13.db").symlink_to(source)
     for folder in (with_prior, without_prior, symlink_prior):
         (folder / "2026-05-13.db.gz").write_bytes(b"z" * gzip_size)
-    budget = backup_daily._peak_backup_required_bytes(db_size, gzip_size, db_size, full=False)
-    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": budget})())
+    # A retained raw already occupies measured free space; it is never credited as forthcoming room.
+    budget = backup_daily._peak_backup_required_bytes(db_size, gzip_size, full=False)
+    free = {"bytes": budget - 1}
+    monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": free["bytes"]})())
     monkeypatch.setattr(
         backup_daily,
         "request_brainbar_vacuum_into",
@@ -1470,6 +1603,10 @@ def test_preflight_never_credits_raw_copy_without_valid_gzip(tmp_path, monkeypat
         backup_daily.create_sqlite_backup_artifact(source, without_prior, date_stamp="2026-05-14")
     with pytest.raises(RuntimeError, match="Insufficient free space"):
         backup_daily.create_sqlite_backup_artifact(source, symlink_prior, date_stamp="2026-05-14")
+    free["bytes"] = budget
+    for folder in (with_prior, without_prior, symlink_prior):
+        with pytest.raises(RuntimeError, match="writer reached"):
+            backup_daily.create_sqlite_backup_artifact(source, folder, date_stamp="2026-05-14")
 
 
 def test_decompress_aborts_when_raw_floor_breached(tmp_path, monkeypatch):
@@ -2625,7 +2762,7 @@ def test_stop_during_purge_never_reaches_writer(tmp_path, monkeypatch):
 
     source = tmp_path / "brainlayer.db"
     _create_source_db(source)
-    required = backup_daily._peak_backup_required_bytes(2 * 1024**3, 2 * 1024**3, 0, full=False)
+    required = backup_daily._peak_backup_required_bytes(2 * 1024**3, 2 * 1024**3, full=False)
     monkeypatch.setattr(backup_daily, "_brainbar_writer_started_at", lambda *_args: None)
     monkeypatch.setattr(backup_daily, "_database_logical_size_bytes", lambda *_args: 2 * 1024**3)
     monkeypatch.setattr(backup_daily.shutil, "disk_usage", lambda *_args: SimpleNamespace(free=required - 1))
