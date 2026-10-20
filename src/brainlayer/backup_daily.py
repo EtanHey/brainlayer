@@ -246,21 +246,79 @@ def _receipt_append_prefix(fd: int, read_fd: int) -> str:
     return "\n"  # Preserve a complete legacy record lacking a line terminator.
 
 
-def _read_backup_receipts(path: Path) -> list[dict[str, Any]]:
-    raw_lines = path.read_bytes().splitlines(keepends=True)
+class BackupReceiptUnreadableError(ValueError):
+    """The receipt journal cannot prove which snapshots are pending; nothing is deleted or repaired."""
+
+    error_type = "BackupReceiptUnreadableError"
+
+    def __init__(self, path: Path, *, error_code: str, detail: str):
+        self.error_code = error_code
+        self.path = Path(path)
+        super().__init__(
+            f"Backup receipt journal {path} {detail}; cannot prove which local snapshots are pending upload; "
+            "journal and all local snapshots retained for recovery"
+        )
+
+
+# The one stdout shape known to sit in real journals (printed by upload_file_to_drive_raw).
+_KNOWN_PROGRESS_NOISE = re.compile(rb"drive upload progress: \d+/\d+ bytes")
+
+
+def _scan_backup_receipts(path: Path) -> tuple[list[dict[str, Any]], int, int]:
+    """Receipts, known progress-noise lines, and other (uncertain) non-receipt lines.
+
+    Until 2026-05-18 the job's stdout was redirected into this journal (ec4a544a, moved by
+    3dca26a2), so real journals open with ``drive upload progress: N/M bytes`` lines. A line
+    that is exactly that shape is known noise. Any other line that is not a JSON object is
+    uncertainty: it could have been a receipt. A torn final record is a killed writer and
+    is neither.
+    """
+    raw = path.read_bytes()
+    if not raw:
+        # _append_json_log never leaves a journal empty; only a lost or interrupted rewrite does.
+        raise BackupReceiptUnreadableError(path, error_code="backup_receipt_empty", detail="is empty (0 bytes)")
+    raw_lines = raw.splitlines(keepends=True)
     receipts = []
+    noise = uncertain = 0
     for index, line in enumerate(raw_lines):
         if not line.strip():
             continue
         try:
             receipt = json.loads(line)
-            if not isinstance(receipt, dict):
-                raise ValueError("backup receipt is not an object")
         except (ValueError, UnicodeDecodeError):
-            if index == len(raw_lines) - 1 and not line.endswith(b"\n"):
-                break  # A killed writer cannot invalidate the preceding durable session.
-            raise
-        receipts.append(receipt)
+            receipt = None
+        if isinstance(receipt, dict):
+            receipts.append(receipt)
+        elif index == len(raw_lines) - 1 and not line.endswith(b"\n"):
+            continue  # A killed writer cannot invalidate the preceding durable session.
+        elif _KNOWN_PROGRESS_NOISE.fullmatch(line.removesuffix(b"\n")):
+            noise += 1
+        else:
+            uncertain += 1
+    if not receipts:
+        # Never quote a line: a receipt can carry a resumable-upload capability URL.
+        raise BackupReceiptUnreadableError(
+            path,
+            error_code="backup_receipt_unreadable",
+            detail=(
+                f"holds no JSON receipt object ({noise} progress-noise lines, "
+                f"{uncertain} other non-receipt lines skipped)"
+            ),
+        )
+    return receipts, noise, uncertain
+
+
+def _read_backup_receipts(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+    """``strict`` is for readers that delete, reclaim or overwrite: an uncertain line could have
+    been the receipt that superseded what remains, so any keeps those readers fail-closed.
+    Known progress noise is not uncertainty."""
+    receipts, _noise, uncertain = _scan_backup_receipts(path)
+    if strict and uncertain:
+        raise BackupReceiptUnreadableError(
+            path,
+            error_code="backup_receipt_unreadable",
+            detail=f"has {uncertain} non-receipt lines; reclamation stays disabled",
+        )
     return receipts
 
 
@@ -2048,7 +2106,7 @@ def _reclaim_superseded_local(log_path: Path, result: dict[str, Any], staging_di
     if not (result.get("uploaded") is True and result.get("verified") is True):
         return
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
     except (OSError, ValueError):
         print("Cannot validate local receipts; retaining all superseded artifacts", flush=True)
         return
@@ -2189,7 +2247,7 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
     if not log_path.exists():
         return []
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
         latest = {r["snapshot"]: r for r in receipts if isinstance(r, dict) and isinstance(r.get("snapshot"), str)}
         protected = {
             str(Path(r["snapshot"]).resolve())
@@ -2260,7 +2318,7 @@ def _retained_target_collision(log_path: Path, target: Path) -> bool:
     if not target.exists() or not log_path.exists():
         return False
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
         latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
         for receipt in latest.values():
             name = receipt.get("snapshot")
@@ -2377,6 +2435,19 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
+        if resolved_log_path.exists():
+            try:
+                _, noise_lines, skipped_lines = _scan_backup_receipts(resolved_log_path)
+            except (OSError, ValueError):
+                pass  # Each reader below decides how an unreadable journal fails.
+            else:
+                result.update(receipt_journal_noise_lines=noise_lines, receipt_journal_skipped_lines=skipped_lines)
+                if noise_lines or skipped_lines:
+                    print(
+                        f"Backup receipt journal {resolved_log_path}: skipped {noise_lines} progress-noise lines "
+                        f"and {skipped_lines} other non-receipt lines",
+                        flush=True,
+                    )
         local = (
             _local_upload_receipt(resolved_log_path, result, Path(staging_dir))
             if phase == "upload"
