@@ -376,6 +376,31 @@ def test_unreadable_receipts_fail_closed(tmp_path):
     assert backup._verified_drive_file_ids(log) is None  # malformed mid-log
 
 
+def _progress_noise(count: int, total: int = 5242019358) -> bytes:
+    """The exact legacy stdout shape #1418 classifies as known noise (production: 2,393 lines)."""
+    return b"".join(f"drive upload progress: {8388608 * (i + 1)}/{total} bytes\n".encode() for i in range(count))
+
+
+def test_known_progress_noise_before_a_verified_receipt_still_yields_evidence(tmp_path):
+    log = tmp_path / "backup-daily.log"
+    log.write_bytes(_progress_noise(2393) + (json.dumps(_receipt("last-good", verified=True)) + "\n").encode())
+    assert backup._verified_drive_file_ids(log) == {"last-good"}
+
+
+def test_uncertain_line_after_a_verified_receipt_yields_no_evidence_and_trashes_nothing(tmp_path, monkeypatch):
+    """The uncertain line could have been the receipt revoking that verification (Sol #1418/#1421)."""
+    log = tmp_path / "backup-daily.log"
+    log.write_bytes(
+        _progress_noise(2393)
+        + (json.dumps(_receipt("old-last-verified", verified=True)) + "\n").encode()
+        + b'{"drive_file": {"id": "old-last-verified"}, "uploaded": true, "verified": fa\n'
+    )
+    evidence = backup._verified_drive_file_ids(log)
+    assert evidence is None
+    files, _ = _transition(".db.zst", ".db.gz")
+    assert _prune(monkeypatch, files, keep=2, verified=evidence) == ([], [])
+
+
 def test_run_backup_feeds_receipt_verified_ids_to_drive_retention(tmp_path, monkeypatch):
     from tests.test_backup_daily import _stub_verified_backup_run
 

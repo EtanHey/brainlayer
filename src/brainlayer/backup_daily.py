@@ -2293,12 +2293,15 @@ def _verified_drive_file_ids(log_path: Path) -> set[str] | None:
     """Drive file IDs whose latest receipt proves a verified upload; None if unreadable.
 
     The latest receipt per object wins, so a later failure (md5 mismatch, aged-out weekly
-    snapshot) revokes an earlier pass. A missing or malformed log yields None, which
-    Drive retention treats as no evidence and trashes nothing.
+    snapshot) revokes an earlier pass. A missing log, or any uncertain (non-receipt,
+    non-progress-noise) line, yields None, which Drive retention treats as no evidence
+    and trashes nothing.
     """
     try:
-        receipts = _read_backup_receipts(Path(log_path))
-    except (OSError, ValueError):
+        # strict: an uncertain line could be the receipt that revoked a verification, so it
+        # authorizes no trashing. Known progress noise (#1418) is not uncertainty.
+        receipts = _read_backup_receipts(Path(log_path), strict=True)
+    except (OSError, ValueError):  # BackupReceiptUnreadableError is a ValueError
         return None
     latest: dict[str, Mapping[str, Any]] = {}
     for receipt in receipts:
