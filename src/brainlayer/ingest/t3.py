@@ -8,6 +8,8 @@ before reading, and emits ordinary BrainLayer chunks with a distinct
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import logging
 import sqlite3
@@ -460,6 +462,32 @@ def _index_chunks(
         return indexed
 
 
+@functools.lru_cache(maxsize=8192)
+def _storage_safe_identity(raw: str, *, digest_of: str, suffix: str = "") -> str:
+    """Return ``raw`` unless the at-rest secret scrubber would rewrite it.
+
+    T3 identifiers are arbitrary strings. A delegate-task thread named
+    ``...-mockapi-r1`` makes ``t3:<thread>:<message>:0`` read as
+    ``<label containing "api">:<long high-entropy value>``, the scrubber redacts
+    the tail, and ``chunk_write`` refuses the rewritten identity, failing the
+    whole run. Such ids fall back to a deterministic digest of their source
+    identity, so replay finds the same row; the raw ids stay in metadata.
+    """
+    from ..pipeline.secret_scrub import scrub_for_storage
+
+    if scrub_for_storage(raw)[0] == raw:
+        return raw
+    return f"t3:sha256:{hashlib.sha256(digest_of.encode('utf-8')).hexdigest()}{suffix}"
+
+
+def _chunk_id(thread: T3Thread, message: T3Message, index: int) -> str:
+    return _storage_safe_identity(
+        f"t3:{thread.thread_id}:{message.message_id}:{index}",
+        digest_of=f"{thread.thread_id}\0{message.message_id}",
+        suffix=f":{index}",
+    )
+
+
 def _message_chunks(thread: T3Thread, message: T3Message) -> list:
     from ..pipeline.chunk import Chunk, chunk_content
     from ..pipeline.classify import ClassifiedContent, ContentType, ContentValue
@@ -467,8 +495,8 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
     content_type = ContentType.USER_MESSAGE if message.role == "user" else ContentType.ASSISTANT_TEXT
     value = ContentValue.HIGH if message.role == "user" else ContentValue.MEDIUM
     base_metadata = {
-        "chunk_id": f"t3:{thread.thread_id}:{message.message_id}:0",
-        "conversation_id": thread.thread_id,
+        "chunk_id": _chunk_id(thread, message, 0),
+        "conversation_id": _storage_safe_identity(thread.thread_id, digest_of=thread.thread_id),
         "created_at": message.created_at,
         "allow_duplicate": True,
         "message_id": message.message_id,
@@ -507,7 +535,7 @@ def _message_chunks(thread: T3Thread, message: T3Message) -> list:
         chunk.metadata = {
             **base_metadata,
             **chunk.metadata,
-            "chunk_id": f"t3:{thread.thread_id}:{message.message_id}:{index}",
+            "chunk_id": _chunk_id(thread, message, index),
         }
     return chunks
 
@@ -600,6 +628,7 @@ def ingest_t3(
                     "code": "t3_indexing_failure",
                     "message": "T3 chunk indexing did not complete",
                     "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
                 }
             )
             from ..vector_store import WriterInUseError
