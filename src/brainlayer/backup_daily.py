@@ -234,8 +234,26 @@ def _receipt_append_prefix(fd: int, read_fd: int) -> str:
     return "\n"  # Preserve a complete legacy record lacking a line terminator.
 
 
+class BackupReceiptUnreadableError(ValueError):
+    """The receipt journal cannot prove which snapshots are pending; nothing is deleted or repaired."""
+
+    error_type = "BackupReceiptUnreadableError"
+
+    def __init__(self, path: Path, *, error_code: str, detail: str):
+        self.error_code = error_code
+        self.path = Path(path)
+        super().__init__(
+            f"Backup receipt journal {path} {detail}; cannot prove which local snapshots are pending upload; "
+            "journal and all local snapshots retained for recovery"
+        )
+
+
 def _read_backup_receipts(path: Path) -> list[dict[str, Any]]:
-    raw_lines = path.read_bytes().splitlines(keepends=True)
+    raw = path.read_bytes()
+    if not raw:
+        # _append_json_log never leaves a journal empty; only a lost or interrupted rewrite does.
+        raise BackupReceiptUnreadableError(path, error_code="backup_receipt_empty", detail="is empty (0 bytes)")
+    raw_lines = raw.splitlines(keepends=True)
     receipts = []
     for index, line in enumerate(raw_lines):
         if not line.strip():
@@ -244,10 +262,15 @@ def _read_backup_receipts(path: Path) -> list[dict[str, Any]]:
             receipt = json.loads(line)
             if not isinstance(receipt, dict):
                 raise ValueError("backup receipt is not an object")
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError) as exc:
             if index == len(raw_lines) - 1 and not line.endswith(b"\n"):
                 break  # A killed writer cannot invalidate the preceding durable session.
-            raise
+            # Never quote the line: a receipt can carry a resumable-upload capability URL.
+            raise BackupReceiptUnreadableError(
+                path,
+                error_code="backup_receipt_unreadable",
+                detail=f"line {index + 1} is not a JSON receipt object ({type(exc).__name__})",
+            ) from exc
         receipts.append(receipt)
     return receipts
 
