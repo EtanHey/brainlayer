@@ -248,30 +248,53 @@ class BackupReceiptUnreadableError(ValueError):
         )
 
 
-def _read_backup_receipts(path: Path) -> list[dict[str, Any]]:
+def _scan_backup_receipts(path: Path) -> tuple[list[dict[str, Any]], int]:
+    """Receipts plus the count of skipped non-receipt lines.
+
+    Until 2026-05-18 the job's stdout was redirected into this journal (ec4a544a, moved by
+    3dca26a2), so real journals open with plain-text ``drive upload progress`` lines.
+    _append_json_log only ever writes whole JSON objects, so a line that is not one is
+    foreign output: skip it and count it. A torn final record is a killed writer, not
+    foreign output, and is not counted.
+    """
     raw = path.read_bytes()
     if not raw:
         # _append_json_log never leaves a journal empty; only a lost or interrupted rewrite does.
         raise BackupReceiptUnreadableError(path, error_code="backup_receipt_empty", detail="is empty (0 bytes)")
     raw_lines = raw.splitlines(keepends=True)
     receipts = []
+    skipped = 0
     for index, line in enumerate(raw_lines):
         if not line.strip():
             continue
         try:
             receipt = json.loads(line)
-            if not isinstance(receipt, dict):
-                raise ValueError("backup receipt is not an object")
-        except (ValueError, UnicodeDecodeError) as exc:
-            if index == len(raw_lines) - 1 and not line.endswith(b"\n"):
-                break  # A killed writer cannot invalidate the preceding durable session.
-            # Never quote the line: a receipt can carry a resumable-upload capability URL.
-            raise BackupReceiptUnreadableError(
-                path,
-                error_code="backup_receipt_unreadable",
-                detail=f"line {index + 1} is not a JSON receipt object ({type(exc).__name__})",
-            ) from exc
-        receipts.append(receipt)
+        except (ValueError, UnicodeDecodeError):
+            receipt = None
+        if isinstance(receipt, dict):
+            receipts.append(receipt)
+        elif not (index == len(raw_lines) - 1 and not line.endswith(b"\n")):
+            skipped += 1
+    if not receipts:
+        # Never quote a line: a receipt can carry a resumable-upload capability URL.
+        raise BackupReceiptUnreadableError(
+            path,
+            error_code="backup_receipt_unreadable",
+            detail=f"holds no JSON receipt object ({skipped} non-receipt lines skipped)",
+        )
+    return receipts, skipped
+
+
+def _read_backup_receipts(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+    """``strict`` is for readers that delete, reclaim or overwrite: a skipped line could have been
+    the receipt that superseded what remains, so any skip keeps those readers fail-closed."""
+    receipts, skipped = _scan_backup_receipts(path)
+    if strict and skipped:
+        raise BackupReceiptUnreadableError(
+            path,
+            error_code="backup_receipt_unreadable",
+            detail=f"has {skipped} non-receipt lines; reclamation stays disabled",
+        )
     return receipts
 
 
@@ -2046,7 +2069,7 @@ def _reclaim_superseded_local(log_path: Path, result: dict[str, Any], staging_di
     if not (result.get("uploaded") is True and result.get("verified") is True):
         return
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
     except (OSError, ValueError):
         print("Cannot validate local receipts; retaining all superseded artifacts", flush=True)
         return
@@ -2187,7 +2210,7 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
     if not log_path.exists():
         return []
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
         latest = {r["snapshot"]: r for r in receipts if isinstance(r, dict) and isinstance(r.get("snapshot"), str)}
         protected = {
             str(Path(r["snapshot"]).resolve())
@@ -2258,7 +2281,7 @@ def _retained_target_collision(log_path: Path, target: Path) -> bool:
     if not target.exists() or not log_path.exists():
         return False
     try:
-        receipts = _read_backup_receipts(log_path)
+        receipts = _read_backup_receipts(log_path, strict=True)
         latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
         for receipt in latest.values():
             name = receipt.get("snapshot")
@@ -2375,6 +2398,18 @@ def run_backup(
                 "machine_id": resolved_machine_id,
             }
         )
+        if resolved_log_path.exists():
+            try:
+                skipped_lines = _scan_backup_receipts(resolved_log_path)[1]
+            except (OSError, ValueError):
+                pass  # Each reader below decides how an unreadable journal fails.
+            else:
+                result["receipt_journal_skipped_lines"] = skipped_lines
+                if skipped_lines:
+                    print(
+                        f"Backup receipt journal {resolved_log_path}: skipped {skipped_lines} non-receipt lines",
+                        flush=True,
+                    )
         local = (
             _local_upload_receipt(resolved_log_path, result, Path(staging_dir))
             if phase == "upload"
