@@ -268,9 +268,14 @@ Missing, stale, failed or unverified attempt evidence never enables the idle pre
 expired Drive access and retention failures still require attention. Older documents without these
 optional fields keep their previous presentation.
 
-The snapshot step has a separate timeout (`BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS`, default **45 minutes**,
-three times a measured 14m18s snapshot rounded up to five minutes) and is also
-clipped to finish its process-group cleanup before 06:00. Both phases honor the existing
+The snapshot step has a separate timeout (`BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS`). By default it is
+sized from the database file: **200 s per GB**, rounded up to five minutes, with a 45-minute floor and a
+90-minute ceiling (21 GB gets 70 minutes). The 2026-10-20 MBP run needed at least 2843 s for 20.75 GB
+(VACUUM INTO, full integrity check, live gzip, verify) and was killed by the old flat 45 minutes. The
+ceiling still leaves weekly maintenance about a 35-minute hold after a 03:45 snapshot start. An explicit
+override replaces the sized default. The step is also clipped to finish its process-group cleanup
+before 06:00, and the backup's own deadline is set up to 60 s inside the calendar budget so its
+timeout receipt is written before the calendar stops the process group. Both phases honor the existing
 `BRAINLAYER_LAUNCHD_BACKUP_DAILY_ENABLED` gate; snapshot failures have their own alert key.
 `--full --dry-run` reports a held backup lock without starting backup work.
 
