@@ -3207,8 +3207,8 @@
           "last_at": "2026-08-14T12:00:00Z",
           "verified": true
         },
-        "error_type": null,
-        "freshness": "fresh",
+        "error_type": "db_snapshot_stale: newest verified DB copy previous.db.gz is 720.0 h old (threshold 36 h)",
+        "freshness": "stale",
         "inputs": [
           {
             "mtime": null,

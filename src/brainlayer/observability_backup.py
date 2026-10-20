@@ -156,6 +156,23 @@ def _daily_snapshot(records: list[dict[str, Any]]) -> tuple[dict[str, Any] | Non
     return None, error_type, all_errors
 
 
+def _db_snapshot_freshness(snapshot: dict[str, Any] | None, now: datetime) -> tuple[str, str | None]:
+    """Judge the newest verified offsite DB copy against THRESHOLD_HOURS; never fresh by default."""
+    threshold = f"(threshold {THRESHOLD_HOURS} h)"
+    if snapshot is None:
+        return "stale", f"db_snapshot_missing: no verified offsite DB copy on record {threshold}"
+    destination = snapshot["destination"]
+    if snapshot.get("verified") is not True:
+        return "stale", f"db_snapshot_unverified: newest offsite DB copy {destination} failed verification"
+    created = datetime.fromisoformat(snapshot["last_at"].replace("Z", "+00:00"))
+    age_hours = (now.astimezone(UTC) - created).total_seconds() / 3600
+    if age_hours < 0:
+        return "unknown", f"db_snapshot_clock_skew: newest verified DB copy {destination} is dated after generated_at"
+    if age_hours > THRESHOLD_HOURS:
+        return "stale", f"db_snapshot_stale: newest verified DB copy {destination} is {age_hours:.1f} h old {threshold}"
+    return "fresh", None
+
+
 def _local_snapshot(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     real = [r for r in records if r.get("backup_log_provenance") == "real"]
     latest = {r["snapshot"]: r for r in real if isinstance(r.get("snapshot"), str)}
@@ -375,11 +392,23 @@ def build_backups_section(
         if alert_input.get("status") == "future":
             return _unmeasurable(f"input mtime is later than generated_at: {alert_input['path']}", inputs)
     if all_daily_errors or health.state in {"stale", "failed"}:
-        freshness = "stale"
+        transcript_freshness = "stale"
     elif health.state in {"no_op", "verified_bundle"}:
+        transcript_freshness = "fresh"
+    else:
+        transcript_freshness = "unknown"
+    # `freshness` is the DB + transcript verdict the UI labels it as: either copy stale is stale.
+    db_freshness, db_reason = _db_snapshot_freshness(snapshot, now)
+    if "stale" in {transcript_freshness, db_freshness}:
+        freshness = "stale"
+    elif transcript_freshness == db_freshness == "fresh":
         freshness = "fresh"
     else:
         freshness = "unknown"
+    # A measured section's `reason` must stay empty (schema v1/v2), so the DB copy's own
+    # explanation rides in error_type — only when nothing more specific already claimed it.
+    if error_type is None and db_reason is not None:
+        error_type = db_reason
     bootstrapped = not launchd_not_loaded and observed_label in launchd_text
 
     # Optional evidence, never synthesized from a missing upload or a zero archive count.
