@@ -69,8 +69,20 @@ BACKUP_FULL_VERIFY_ENV = "BRAINLAYER_BACKUP_FULL_VERIFY"
 BACKUP_LOG_PATH_ENV = "BRAINLAYER_BACKUP_LOG_PATH"
 BACKUP_LOG_PROVENANCE_ENV = "BRAINLAYER_BACKUP_LOG_PROVENANCE"
 BACKUP_RESUME_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_RESUME_MAX_AGE_HOURS"
-# Real 20.56 GB copy snapshot: 858.5s. Three times that, rounded up to five minutes.
-DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 2700
+# The snapshot budget scales with the database. MBP 2026-10-20, 20.75 GB raw, killed at 2700.3 s:
+# VACUUM INTO 54 s + full integrity_check 538 s + live gzip -6 >=2107 s (still running at 9.68 GB of a
+# 8.9-9.8 GB output) + live gunzip verify ~144 s (36 s standalone x ~4) = >=2843 s, i.e. >=137 s/GB.
+# 200 s/GB gives >=46% headroom over that lower bound: 4200 s for 21 GB.
+SNAPSHOT_SECONDS_PER_GB = 200
+# The old flat budget (3x a measured 858.5 s copy) stays the floor for small databases.
+SNAPSHOT_TIMEOUT_FLOOR_SECONDS = 2700
+# Started at 03:45 after a full index, a 5400 s snapshot ends 05:15 and still leaves weekly
+# maintenance a 2100 s hold before its 05:50 reserve (a healthy weekly took 815 s on 10-17).
+SNAPSHOT_TIMEOUT_CEILING_SECONDS = 5400
+DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = SNAPSHOT_TIMEOUT_CEILING_SECONDS
+# The calendar kills at its budget; the backup's own deadline must fire this much earlier so its
+# supervisor (SIGALRM, 10 s grace, SIGKILL) can still write the BackupTimeoutError receipt.
+SNAPSHOT_RECEIPT_RESERVE_SECONDS = 60
 BACKUP_LOCAL_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS"
 BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS_ENV = "BRAINLAYER_BACKUP_REUSE_VERIFIED_MAX_AGE_HOURS"
 BACKUP_SUPERVISED_CHILD_ENV = "BRAINLAYER_BACKUP_SUPERVISED_CHILD"
@@ -351,6 +363,19 @@ def _configured_backup_timeout_seconds() -> int:
     if seconds < 1:
         raise ValueError(f"{BACKUP_TIMEOUT_ENV} must be at least 1 second")
     return seconds
+
+
+def default_snapshot_timeout_seconds(db_path: Path | None = None) -> int:
+    """Size the snapshot budget from the database file (stat only; never opens it)."""
+    try:
+        path = Path(db_path) if db_path is not None else get_db_path()
+        size = path.stat().st_size
+        wal = Path(f"{path}-wal")
+        size += wal.stat().st_size if wal.exists() else 0
+    except OSError:
+        return SNAPSHOT_TIMEOUT_FLOOR_SECONDS
+    seconds = math.ceil(size / 1_000_000_000 * SNAPSHOT_SECONDS_PER_GB / 300) * 300  # whole five minutes
+    return int(min(SNAPSHOT_TIMEOUT_CEILING_SECONDS, max(SNAPSHOT_TIMEOUT_FLOOR_SECONDS, seconds)))
 
 
 def _configured_backup_client_timeout_seconds() -> int | None:
@@ -2871,7 +2896,7 @@ def main() -> int:
             timeout_seconds,
             int(
                 _configured_positive_number(
-                    "BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", DEFAULT_SNAPSHOT_TIMEOUT_SECONDS
+                    "BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", default_snapshot_timeout_seconds()
                 )
             ),
         )

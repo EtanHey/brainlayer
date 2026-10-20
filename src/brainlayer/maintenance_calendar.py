@@ -12,7 +12,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import maintenance_control
-from .backup_daily import DEFAULT_SNAPSHOT_TIMEOUT_SECONDS, local_backup_date
+from .backup_daily import (
+    DEFAULT_SNAPSHOT_TIMEOUT_SECONDS,
+    SNAPSHOT_RECEIPT_RESERVE_SECONDS,
+    default_snapshot_timeout_seconds,
+    local_backup_date,
+)
 from .config import configured_brainlayer_env_value, get_user_env_path
 from .drive_credentials import _atomic_write
 from .index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_budget_s
@@ -128,24 +133,24 @@ def _service_name(step):
 def _bounded_snapshot_step(step, now, shutdown_timeout):
     path = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
     configured = configured_brainlayer_env_value("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", path)
-    requested = float(
-        configured
-        if configured is not None
-        else os.environ.get("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS", step.timeout)
-    )
+    explicit = configured if configured is not None else os.environ.get("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS")
+    # An explicit override wins outright; otherwise the budget is sized from today's database.
+    requested = float(explicit if explicit is not None else min(step.timeout, default_snapshot_timeout_seconds()))
     if not math.isfinite(requested) or requested <= 0:
         raise ValueError("invalid snapshot timeout")
     end = now.replace(hour=6, minute=0, second=0, microsecond=0)
     seconds = int(min(requested, (end - now).total_seconds() - shutdown_timeout - 1))
-    if seconds < 1:
+    # The backup's own deadline fires first, so its timeout receipt is written before this kill.
+    internal = seconds - min(SNAPSHOT_RECEIPT_RESERVE_SECONDS, max(1, seconds // 4))
+    if internal < 1:
         return None
     return replace(
         step,
         timeout=seconds,
         env=step.env
         | {
-            "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(seconds),
-            "BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS": str(seconds),
+            "BRAINLAYER_BACKUP_TIMEOUT_SECONDS": str(internal),
+            "BRAINLAYER_BACKUP_CALENDAR_SNAPSHOT_BUDGET_SECONDS": str(internal),
         },
     )
 
