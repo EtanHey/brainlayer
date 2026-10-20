@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 import signal
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -28,17 +29,34 @@ def raw_lane(tmp_path, monkeypatch):
     return source, output
 
 
+def _archive_bytes(data: bytes, suffix: str) -> bytes:
+    if suffix == ".db.gz":
+        return gzip.compress(data)
+    return subprocess.run(
+        [backup._require_zstd(), "-q", "-c", "--check"], input=data, capture_output=True, check=True
+    ).stdout
+
+
+def _unarchive(path) -> bytes:
+    if path.name.endswith(".gz"):
+        with gzip.open(path) as stream:
+            return stream.read()
+    return subprocess.run([backup._require_zstd(), "-d", "-q", "-c", str(path)], capture_output=True, check=True).stdout
+
+
+@pytest.mark.parametrize("compressor,suffix", [("zstd", ".db.zst"), ("gzip", ".db.gz")])
 @pytest.mark.parametrize("exit_path", ["success", "stall", "timeout", "stop", "error", "resume"])
-def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path):
+def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path, compressor, suffix):
     source, output = raw_lane
-    raw, compressed = output / "2026-10-17.db", output / "2026-10-17.db.gz"
+    monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", compressor)
+    raw, compressed = output / "2026-10-17.db", output / f"2026-10-17{suffix}"
     creator = backup.create_sqlite_backup_artifact
     _stub_backup_for_drive_upload(backup, monkeypatch, compressed)
     monkeypatch.setattr(backup, "create_sqlite_backup_artifact", creator)
     monkeypatch.setattr(backup, "verify_drive_upload", lambda *a, **kw: None)
     if exit_path == "resume":
         raw.write_bytes(source.read_bytes())
-        compressed.write_bytes(gzip.compress(source.read_bytes()))
+        compressed.write_bytes(_archive_bytes(source.read_bytes(), suffix))
         saved = {
             "snapshot": str(compressed),
             "sentinel_snapshot_chunks": 1,
@@ -63,8 +81,7 @@ def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path):
 
     def upload(*a, **kw):
         assert not raw.exists()
-        with gzip.open(compressed) as stream:
-            assert stream.read() == source.read_bytes()
+        assert _unarchive(compressed) == source.read_bytes()
         if not success:
             raise errors[exit_path]
         return {"id": "fake"}
@@ -80,11 +97,18 @@ def test_raw_removed_before_any_upload_exit(raw_lane, monkeypatch, exit_path):
     assert compressed.exists() is (not success)
 
 
+@pytest.mark.parametrize("compressor", ["zstd", "gzip"])
 @pytest.mark.parametrize("failure", ["compress", "integrity"])
-def test_failed_gzip_keeps_only_raw_and_receipt(raw_lane, monkeypatch, failure):
+def test_failed_gzip_keeps_only_raw_and_receipt(raw_lane, monkeypatch, failure, compressor):
     source, output = raw_lane
-    target = "_copy_with_raw_floor" if failure == "compress" else "_gunzip_test"
-    monkeypatch.setattr(backup, target, lambda *a: (_ for _ in ()).throw(RuntimeError(failure)))
+    monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", compressor)
+    target = {
+        ("gzip", "compress"): "_copy_with_raw_floor",
+        ("gzip", "integrity"): "_gunzip_test",
+        ("zstd", "compress"): "_compress_zstd",
+        ("zstd", "integrity"): "_zstd_stream_digest",
+    }[compressor, failure]
+    monkeypatch.setattr(backup, target, lambda *a, **kw: (_ for _ in ()).throw(RuntimeError(failure)))
     log = output / "receipt.jsonl"
     with pytest.raises(RuntimeError, match=failure):
         backup.run_backup(source, staging_dir=output, date_stamp="2026-10-17", upload=False, log_path=log)
@@ -235,8 +259,10 @@ def test_durability_failure_keeps_both_files(raw_lane, monkeypatch, phase):
     assert raw.exists() and compressed.exists()
 
 
-def test_compression_floor_breach_names_retained_raw_with_stalled_gzip(raw_lane, monkeypatch):
+@pytest.mark.parametrize("compressor", ["zstd", "gzip"])
+def test_compression_floor_breach_names_retained_raw_with_stalled_gzip(raw_lane, monkeypatch, compressor):
     source, output = raw_lane
+    monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", compressor)
     raw = output / "2026-10-17.db"
     stalled_gzip = output / "2026-10-16.db.gz"
     stalled_gzip.write_bytes(b"retained stalled gzip")
@@ -244,7 +270,9 @@ def test_compression_floor_breach_names_retained_raw_with_stalled_gzip(raw_lane,
         backup, "_stalled_uploads", lambda *a: [{"snapshot": str(stalled_gzip), "resumable_upload": {}}]
     )
     monkeypatch.setattr(
-        backup, "_copy_with_raw_floor", lambda *a: (_ for _ in ()).throw(RuntimeError("raw free space floor breached"))
+        backup,
+        "_copy_with_raw_floor" if compressor == "gzip" else "_compress_zstd",
+        lambda *a: (_ for _ in ()).throw(RuntimeError("raw free space floor breached")),
     )
     log = output / "receipt.jsonl"
     with pytest.raises(backup.RetainedStalledBackupCapacityError, match=raw.name):

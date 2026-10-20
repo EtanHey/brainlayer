@@ -175,9 +175,10 @@ def test_drive_upload_numeric_settings_reject_non_finite_or_unusable_timeouts(mo
         )
 
 
-def test_create_snapshot_gzip_is_restorable(tmp_path):
+def test_create_snapshot_gzip_is_restorable(tmp_path, monkeypatch):
     from brainlayer.backup_daily import create_sqlite_backup_gzip
 
+    monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", "gzip")  # the rollback path
     source = tmp_path / "brainlayer.db"
     _create_source_db(source)
     socket_path = Path(f"/tmp/bb-{os.getpid()}-{uuid.uuid4().hex}.sock")
@@ -202,9 +203,13 @@ def test_create_snapshot_gzip_is_restorable(tmp_path):
         restored_conn.close()
 
 
-def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapshot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("compressor,suffix", [("zstd", ".db.zst"), ("gzip", ".db.gz")])
+def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapshot(
+    tmp_path, monkeypatch, compressor, suffix
+):
     from brainlayer import backup_daily
 
+    monkeypatch.setenv("BRAINLAYER_BACKUP_COMPRESSOR", compressor)
     source = tmp_path / "brainlayer.db"
     _create_source_db(source, chunk_count=3)
     socket_path = Path(f"/tmp/bb-{os.getpid()}-{uuid.uuid4().hex}.sock")
@@ -234,14 +239,16 @@ def test_run_backup_verifies_gzip_with_snapshot_sentinel_and_removes_raw_snapsho
         remove_local_after_upload=True,
     )
 
-    assert uploads == [staging_dir / "2026-06-05.db.gz"]
+    assert uploads == [staging_dir / f"2026-06-05{suffix}"]
     assert result["verified"] is True
+    assert result["compressor"] == compressor
+    assert result["archive_test"] is True
     assert result["verification_mode"] == "quick"
     assert result["sentinel_snapshot_chunks"] == 3
     assert result["sentinel_verified_chunks"] == 3
     assert result["pragma"] == "skipped"
     assert result["local_removed"] is True
-    assert not (staging_dir / "2026-06-05.db.gz").exists()
+    assert not (staging_dir / f"2026-06-05{suffix}").exists()
     assert not (staging_dir / "2026-06-05.db").exists()
 
 
@@ -354,8 +361,11 @@ def test_prune_local_gzip_snapshots_keeps_newest_three_and_requires_verified_cov
         },
     )
 
-    assert deleted == ["2026-06-03.db.gz", "2026-06-02.db.gz", "2026-06-01.db.gz"]
+    # 06-03 is the newest Drive-verified gzip, so it survives the keep-3 cap (zstd PR):
+    # the newest verified copy of each format is never pruned locally.
+    assert deleted == ["2026-06-02.db.gz", "2026-06-01.db.gz"]
     assert sorted(path.name for path in tmp_path.glob("*.db.gz")) == [
+        "2026-06-03.db.gz",
         "2026-06-04.db.gz",
         "2026-06-05.db.gz",
         "2026-06-06.db.gz",
@@ -533,7 +543,7 @@ def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     assert request["params"]["name"] == "brain_backup_vacuum_into"
     requested_target = Path(request["params"]["arguments"]["target_path"])
     assert requested_target.name.startswith(".2026-05-13.db.attempt-1-")
-    assert snapshot.name == "2026-05-13.db.gz"
+    assert snapshot.name == "2026-05-13.db.zst"
 
 
 def test_brainbar_vacuum_request_retries_closed_socket_with_backoff(tmp_path, monkeypatch, capsys):

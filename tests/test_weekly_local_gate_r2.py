@@ -270,7 +270,8 @@ def test_snapshot_gate_and_pin_share_local_date(local_lane, tmp_path, local_cloc
         pin = json.loads((local_lane["staging_dir"] / ".weekly-backup-pin.json").read_text())
         assert pin["date"] == local.date().isoformat()
         assert backup._protected_snapshot_names(local_lane["staging_dir"]) == {Path(receipt["snapshot"]).name}
-    assert Path(receipt["snapshot"]).name == f"{local.date().isoformat()}.db.gz"
+    # zstd is the default compressor; the weekly gate and pin accept the .db.zst archive.
+    assert Path(receipt["snapshot"]).name == f"{local.date().isoformat()}.db.zst"
     assert backup.run_backup(**local_lane, phase="snapshot")["snapshot"] == receipt["snapshot"]
 
 
