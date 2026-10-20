@@ -23,6 +23,8 @@ on:
       - "!v1.5.64"
       # Formula-only activation scan and linkage alarm fixes: retain BrainBar 1.5.61.
       - "!v1.5.65"
+      # Formula-only backup snapshot zstd/budget/receipt fixes: retain BrainBar 1.5.66.
+      - "!v1.5.67"
 
 permissions:
   contents: write
