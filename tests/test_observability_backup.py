@@ -712,3 +712,145 @@ def test_invalid_no_op_never_exposes_neutral_evidence(tmp_path, mutation) -> Non
         record_input=lambda path, **kwargs: {"path": str(path), "status": kwargs.get("status", "read")},
     )
     assert "transcript_attempt" not in result
+
+
+def _two_copy_env(tmp_path: Path, *, transcript_at: str, daily: list[dict[str, object]]) -> tuple[dict, object]:
+    env, recorder = _command_env(tmp_path)
+    launchd = tmp_path / "launchd.txt"
+    launchd.write_text("service = com.brainlayer.jsonl-backup\n")
+    env["BRAINLAYER_OBSERVABILITY_LAUNCHD_OUTPUT"] = str(launchd)
+    env["BRAINLAYER_JOB_ALERT_PATH"] = str(tmp_path / "absent-alerts.json")
+    Path(env["BRAINLAYER_OBSERVABILITY_JSONL_BACKUP_LOG"]).write_text(
+        json.dumps(
+            {
+                "archive_id": "synthetic-archive-12h",
+                "attempted_at": transcript_at,
+                "status": "uploaded",
+                "uploaded": True,
+                "verified": True,
+            }
+        )
+        + "\n"
+    )
+    Path(env["BRAINLAYER_OBSERVABILITY_BACKUP_DAILY_LOG"]).write_text(
+        "".join(json.dumps({"backup_log_provenance": "real", **record}) + "\n" for record in daily)
+    )
+    return env, recorder
+
+
+def _db_receipt(created_at: str, name: str, **extra: object) -> dict[str, object]:
+    return {
+        "attempted_at": created_at,
+        "snapshot_created_at": created_at,
+        "snapshot": f"/synthetic/backups/{name}",
+        "drive_file": {"id": "synthetic-id", "name": name},
+        "drive_md5_match": True,
+        "uploaded": True,
+        "verified": True,
+        **extra,
+    }
+
+
+def _assert_backups_schema(result: dict[str, object]) -> None:
+    for version in ("v1", "v2"):
+        schema = json.loads((FIXTURES / f"observability-schema.{version}.json").read_text())
+        jsonschema.validate(result, {"$defs": schema["$defs"], "$ref": "#/$defs/backups"})
+
+
+def test_stale_db_copy_makes_freshness_stale_even_when_transcripts_are_fresh(tmp_path: Path) -> None:
+    """Production 2026-10-20: transcripts 12.6 h old, newest verified DB copy ~87 h old, UI said "fresh"."""
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at="2026-09-13T00:00:00Z",
+        daily=[_db_receipt("2026-09-09T21:00:00+00:00", "2026-09-09.db.gz")],
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["state"] == "measured"
+    assert result["last_verified_upload"]["age_hours"] == 12.0
+    assert result["db_snapshot"]["destination"] == "2026-09-09.db.gz"
+    assert result["freshness"] == "stale"
+    assert result["error_type"] == (
+        "db_snapshot_stale: newest verified DB copy 2026-09-09.db.gz is 87.0 h old (threshold 36 h)"
+    )
+    _assert_backups_schema(result)
+
+
+def test_both_copies_inside_threshold_stay_fresh(tmp_path: Path) -> None:
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at="2026-09-13T00:00:00Z",
+        daily=[_db_receipt("2026-09-13T01:00:00+00:00", "2026-09-13.db.gz")],
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["freshness"] == "fresh"
+    assert result["error_type"] is None
+    _assert_backups_schema(result)
+
+
+@pytest.mark.parametrize(
+    ("daily", "error_type"),
+    [
+        (
+            [
+                {
+                    "attempted_at": "2026-09-13T01:00:00+00:00",
+                    "snapshot_created_at": "2026-09-13T01:00:00+00:00",
+                    "snapshot": "/synthetic/backups/2026-09-13.db.gz",
+                    "upload_in_progress": True,
+                    "uploaded": False,
+                    "verified": False,
+                }
+            ],
+            "db_snapshot_missing: no verified offsite DB copy on record (threshold 36 h)",
+        ),
+        (
+            [_db_receipt("2026-09-13T01:00:00+00:00", "2026-09-13.db.gz", drive_md5_match=False)],
+            "db_snapshot_unverified: newest offsite DB copy 2026-09-13.db.gz failed verification",
+        ),
+    ],
+)
+def test_missing_or_unverified_db_copy_is_never_fresh(
+    tmp_path: Path, daily: list[dict[str, object]], error_type: str
+) -> None:
+    env, recorder = _two_copy_env(tmp_path, transcript_at="2026-09-13T00:00:00Z", daily=daily)
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["freshness"] == "stale"
+    assert result["error_type"] == error_type
+    _assert_backups_schema(result)
+
+
+def test_future_db_copy_is_unknown_not_fresh(tmp_path: Path) -> None:
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at="2026-09-13T00:00:00Z",
+        daily=[_db_receipt("2026-09-13T13:00:00+00:00", "2026-09-13.db.gz")],
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["freshness"] == "unknown"
+    assert result["error_type"] == (
+        "db_snapshot_clock_skew: newest verified DB copy 2026-09-13.db.gz is dated after generated_at"
+    )
+
+
+def test_stale_db_copy_keeps_an_earlier_error_type(tmp_path: Path) -> None:
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at="2026-09-13T00:00:00Z",
+        daily=[_db_receipt("2026-09-09T21:00:00+00:00", "2026-09-09.db.gz")],
+    )
+    alerts = tmp_path / "alerts.json"
+    alerts.write_text(json.dumps({"backup-daily": "Database backup failed; check the backup log"}))
+    env["BRAINLAYER_JOB_ALERT_PATH"] = str(alerts)
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["freshness"] == "stale"
+    assert result["error_type"] == "job_alert:Database backup failed; check the backup log"
