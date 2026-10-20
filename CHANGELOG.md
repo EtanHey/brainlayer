@@ -39,6 +39,26 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.67] - 2026-10-20
+
+### Changed
+- DB snapshots are compressed with the zstd CLI (`zstd -3 -T0 --check`) to `YYYY-MM-DD.db.zst` instead of Python gzip -6 (about 12 s against 8+ minutes on the real 20.7 GB snapshot). Every reader (verify, restore, raw cleanup, resume, retention, observability, the weekly gate, eval snapshot materialization) accepts both `.db.zst` and legacy `.db.gz`. Local and opt-in Drive retention keep the newest verified copy of each format; on Drive only an object whose exact file ID has an `uploaded` + `verified` receipt counts as verified, and an unreadable log trashes nothing (#1421).
+
+### Fixed
+- The snapshot timeout is sized from the database (DB + WAL) at 200 s per GB, rounded up to five minutes, with a 45-minute floor and a 90-minute ceiling, instead of a flat 45 minutes that killed the 20.75 GB MBP snapshot on 2026-10-20. The backup's own deadline fires up to 60 s inside the calendar budget so its timeout receipt is written before the calendar stops the process group (#1419).
+- Backup observability `freshness` covers the offsite DB copy as well as transcripts: a missing, unverified or stale DB copy makes `freshness` `stale`; its reason is reported in `error_type` when no more specific error is already set (#1417).
+- The receipt journal reader skips and counts non-JSON lines. The known `drive upload progress: N/M bytes` lines are counted as noise, not uncertainty; a journal with no readable receipt fails with `BackupReceiptUnreadableError` and keeps the journal and all local snapshots (#1418).
+- T3 ingest: a chunk or conversation id that the at-rest secret scrubber would rewrite (for example a thread named `...-mockapi-r1`) falls back to a stable `t3:sha256:<digest>:<i>` id (a digest of the thread id for `conversation_id`); the original `message_id`, `t3_thread_id` and `source_uri` stay in metadata, and ordinary ids are unchanged. This clears the `t3_ingest_unhealthy` `indexing_failure` (`chunk identifier requires redaction`) that had blocked T3 indexing since 2026-10-18. The `t3_indexing_failure` health record now carries the underlying `error`, scrubbed before truncation to 500 characters (#1424).
+
+### Upgrade notes
+- Formula-only release: the BrainBar app and its cask stay at 1.5.66. #1421 also widens BrainBar's local-copy listing to `.db.zst`; that Swift change is on main but NOT shipped, so until the next BrainBar release the app's local-copy listing does not recognize `.db.zst` snapshots.
+- The tap formula gains `depends_on "zstd"`. If no zstd binary is found, the snapshot falls back to gzip and records `compressor_fallback` in its receipt.
+- `BRAINLAYER_BACKUP_COMPRESSOR=gzip` rolls back to `.db.gz` output; any value other than `zstd` or `gzip` is refused.
+- `BRAINLAYER_BACKUP_ZSTD_PATH` names the zstd binary (absolute and executable, or the run fails); otherwise `/opt/homebrew/bin/zstd`, `/usr/local/bin/zstd`, then `PATH` are tried, because launchd jobs run with `PATH=/usr/bin:/bin`.
+- `BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS` keeps its meaning as an explicit override that replaces the sized default; leave it unset to get the size-derived budget. Either way the step is still clipped to finish before 06:00.
+- Restore drill: decompress new snapshots with `zstd -d`; legacy `.db.gz` snapshots still use `gunzip`.
+- A stale or unverified offsite DB copy now shows as stale `freshness` in observability, even when transcripts are covered.
+
 ## [1.5.66] - 2026-10-19
 
 ### Fixed
