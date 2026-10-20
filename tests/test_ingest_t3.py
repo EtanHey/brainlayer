@@ -1102,3 +1102,146 @@ def test_s2_cap_indexes_newest_messages_first(tmp_path, monkeypatch):
     monkeypatch.setattr(index_new, "embed_chunks", embed)
     t3.ingest_t3(source, db_path=destination, health_path=None)
     assert [c.metadata["chunk_id"] for c in embedded] == ["t3:v2-b:v2-assistant:0"]
+
+
+# Production shape from the MBP statev2 projection (2026-10-18, names replaced): the delegate-task name ends in
+# "...mockapi-r1", so the derived chunk id reads "<label containing api>:<long value>" to the
+# at-rest scrubber, which rewrites it. chunk_write refuses a rewritten identity, and the whole
+# T3 run failed on every pass that selected one of these messages.
+_SCRUB_TRIPPING_THREAD = (
+    "thread:delegated-task:command%3Amcp%3A00000000-1111-4222-8333-444444444444%3Adelegate-task%3Ademo-voice-mockapi-r1"
+)
+_SCRUB_TRIPPING_MESSAGE = "message:provider:codex:native-item:msg_0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a697887"
+
+
+def test_t3_chunk_ids_that_trip_the_secret_scrubber_still_index_and_stay_stable(tmp_path, monkeypatch):
+    from brainlayer import index_new
+    from brainlayer.ingest.t3 import ingest_t3
+    from brainlayer.pipeline.secret_scrub import scrub_for_storage
+    from brainlayer.vector_store import VectorStore
+
+    raw_id = f"t3:{_SCRUB_TRIPPING_THREAD}:{_SCRUB_TRIPPING_MESSAGE}:0"
+    assert scrub_for_storage(raw_id)[0] != raw_id, "fixture must reproduce the production false positive"
+
+    source = _create_v2_fixture(tmp_path / "statev2.sqlite")
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_threads VALUES (?, ?, ?, ?, ?, ?)",
+            (_SCRUB_TRIPPING_THREAD, "brainlayer", "delegated", "2026-10-18T01:13:00Z", "codex", None),
+        )
+        conn.execute(
+            "INSERT INTO orchestration_v2_projection_messages VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                _SCRUB_TRIPPING_MESSAGE,
+                _SCRUB_TRIPPING_THREAD,
+                "assistant",
+                "2026-10-18T01:13:38Z",
+                json.dumps({"text": "delegated worker reply"}),
+                0,
+            ),
+        )
+    destination = tmp_path / "copy.db"
+    health = tmp_path / "health.json"
+    VectorStore(destination).close()
+    embedded = []
+
+    def embed(chunks, **kwargs):
+        embedded.extend(chunks)
+        return [EmbeddedChunk(chunk, [0.1] * 1024) for chunk in chunks]
+
+    monkeypatch.setattr(index_new, "embed_chunks", embed)
+    result = ingest_t3(source, db_path=destination, health_path=health, projection_version=2)
+    assert result.chunks_indexed == 3
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is False and snapshot["failures"] == []
+
+    with VectorStore(destination, readonly=True) as store:
+        rows = dict(
+            store.conn.execute("SELECT id, metadata FROM chunks WHERE content='delegated worker reply'").fetchall()
+        )
+        ids = sorted(store.conn.execute("SELECT id FROM chunks").fetchall())
+    assert len(rows) == 1
+    (stored_id,) = rows
+    # The stored identity survives the scrubber unchanged, so replay finds the same row.
+    assert scrub_for_storage(stored_id)[0] == stored_id
+    assert stored_id.startswith("t3:") and stored_id.endswith(":0")
+    # Ordinary ids keep their readable scheme; only the tripping one is digested.
+    assert ("t3:v2-a:v2-user:0",) in ids and ("t3:v2-b:v2-assistant:0",) in ids
+    # The origin still traces: the T3 message and thread ride in metadata.
+    metadata = json.loads(rows[stored_id])
+    assert metadata["message_id"] == _SCRUB_TRIPPING_MESSAGE
+    assert metadata["source_uri"] == f"t3://thread/{_SCRUB_TRIPPING_THREAD}/message/{_SCRUB_TRIPPING_MESSAGE}"
+
+    embedded.clear()
+    assert ingest_t3(source, db_path=destination, health_path=health, projection_version=2).chunks_indexed == 0
+    assert embedded == []
+
+
+def test_t3_indexing_failure_health_names_the_underlying_error(tmp_path, monkeypatch):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "health.json"
+
+    def fail(*args, **kwargs):
+        raise ValueError("chunk identifier requires redaction; refusing to change identity")
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", fail)
+    with pytest.raises(ValueError):
+        ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
+    failure = json.loads(health.read_text())["failures"][-1]
+    assert failure["code"] == "t3_indexing_failure"
+    assert failure["error"] == "chunk identifier requires redaction; refusing to change identity"
+
+
+def test_t3_conversation_id_that_trips_the_secret_scrubber_is_digested():
+    from brainlayer.ingest.t3 import T3Message, T3Thread, _message_chunks
+    from brainlayer.pipeline.secret_scrub import scrub_for_storage
+
+    thread_id = "deploy-api-run:Zq8vN3kLp0Wx7RtY2mBc5HjD9sFa"
+    assert scrub_for_storage(thread_id)[0] != thread_id
+    thread = T3Thread(thread_id=thread_id, project_id="p", title="t", created_at="2026-10-18T00:00:00Z")
+    message = T3Message("m1", thread_id, "user", "hello there", "2026-10-18T00:00:01Z")
+    (chunk,) = _message_chunks(thread, message)
+    for key in ("chunk_id", "conversation_id"):
+        assert scrub_for_storage(chunk.metadata[key])[0] == chunk.metadata[key]
+    assert chunk.metadata["conversation_id"].startswith("t3:sha256:")
+    assert chunk.metadata["t3_thread_id"] == thread_id
+    assert _message_chunks(thread, message)[0].metadata == chunk.metadata
+
+
+_SYNTHETIC_PROVIDER_KEY = "sk-proj-" + "Q7vXk2Lm9PzR4tWb" * 3
+_SYNTHETIC_LABELED_VALUE = "Zq8vN3kLp0Wx7RtY2mBc5HjD9sFa"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        f"embedding backend failed: Authorization {_SYNTHETIC_PROVIDER_KEY} api_key={_SYNTHETIC_LABELED_VALUE}",
+        # A token straddling the 500-char cap must be scrubbed before truncation hides its shape.
+        # Truncating first would keep "sk-proj-Q7vXk2Lm9Pz": too short to match, still a leak.
+        "x" * 480 + f" {_SYNTHETIC_PROVIDER_KEY} api_key={_SYNTHETIC_LABELED_VALUE}",
+    ],
+    ids=["inline", "straddles_cap"],
+)
+def test_t3_indexing_failure_health_scrubs_secrets_from_the_error(tmp_path, monkeypatch, message):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "health.json"
+    failure = RuntimeError(message)
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", fail)
+    with pytest.raises(RuntimeError) as raised:
+        ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
+    assert raised.value is failure
+    text = health.read_text()
+    assert _SYNTHETIC_LABELED_VALUE[:12] not in text
+    assert "sk-proj-Q7vX" not in text and "Q7vXk2Lm9PzR4tWb" not in text
+    error = json.loads(text)["failures"][-1]["error"]
+    assert len(error) <= 500
+    if not message.startswith("x"):
+        assert "[REDACTED:openai]" in error and "api_key=[REDACTED:assignment]" in error
