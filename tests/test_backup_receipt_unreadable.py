@@ -8,6 +8,7 @@ stdout into the journal until 3dca26a2 moved stdout to ``~/Library/Logs/brainlay
 The fixtures below copy that shape: plain lines first, then JSON receipts.
 """
 
+import gzip
 import inspect
 import json
 import plistlib
@@ -17,6 +18,8 @@ import pytest
 
 from brainlayer import backup_daily as backup
 from brainlayer import maintenance_calendar
+from tests.test_backup_daily import _DriveResponse
+from tests.test_backup_upload_resilience import lane, stalled  # noqa: F401  (pytest fixture)
 from tests.test_weekly_local_gate import local_lane  # noqa: F401  (pytest fixture)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,11 +46,12 @@ def test_production_shaped_journal_skips_and_counts_plain_lines(tmp_path):
     receipts = [_valid_receipt_line(n=1), _valid_receipt_line(n=2)]
     journal.write_bytes(_legacy_progress(623) + receipts[0] + _legacy_progress(5) + receipts[1])
 
-    found, skipped = backup._scan_backup_receipts(journal)
+    found, noise, uncertain = backup._scan_backup_receipts(journal)
 
     assert [r["n"] for r in found] == [1, 2]
-    assert skipped == 628
+    assert (noise, uncertain) == (628, 0)
     assert backup._read_backup_receipts(journal) == found
+    assert backup._read_backup_receipts(journal, strict=True) == found  # known noise is not uncertainty
 
 
 def test_upload_phase_resumes_through_legacy_plain_lines(local_lane, monkeypatch):  # noqa: F811
@@ -70,7 +74,8 @@ def test_upload_phase_resumes_through_legacy_plain_lines(local_lane, monkeypatch
     result = backup.run_backup(**local_lane, phase="upload")
 
     assert result["verified"] is True
-    assert result["receipt_journal_skipped_lines"] == 40
+    assert result["receipt_journal_noise_lines"] == 40
+    assert result["receipt_journal_skipped_lines"] == 0
     assert uploads == [Path(receipt["snapshot"])]
     assert log_path.read_bytes().startswith(_legacy_progress(40))  # never repaired
 
@@ -79,8 +84,8 @@ def test_upload_phase_resumes_through_legacy_plain_lines(local_lane, monkeypatch
     ("journal", "error_code", "detail"),
     [
         (b"", "backup_receipt_empty", "is empty (0 bytes)"),
-        (_legacy_progress(3), "backup_receipt_unreadable", "holds no JSON receipt object (3 non-receipt lines"),
-        (b'{"snapshot": "/x/2026-10-20.db.gz", "upl\n', "backup_receipt_unreadable", "(1 non-receipt lines"),
+        (_legacy_progress(3), "backup_receipt_unreadable", "holds no JSON receipt object (3 progress-noise lines, 0"),
+        (b'{"snapshot": "/x/2026-10-20.db.gz", "upl\n', "backup_receipt_unreadable", "0 progress-noise lines, 1 other"),
     ],
     ids=["empty", "plain-lines-only", "truncated-record-only"],
 )
@@ -131,7 +136,7 @@ def test_receipt_error_is_a_value_error_so_degrading_readers_keep_degrading(tmp_
 def test_torn_final_record_is_tolerated_and_not_counted(tmp_path):
     journal = tmp_path / "backup-daily.log"
     journal.write_bytes(_valid_receipt_line() + b'{"snapshot": "/x/2026-10-20.db.gz", "upl')
-    assert backup._scan_backup_receipts(journal) == ([json.loads(_valid_receipt_line())], 0)
+    assert backup._scan_backup_receipts(journal) == ([json.loads(_valid_receipt_line())], 0, 0)
 
 
 def test_missing_journal_still_means_nothing_pending(local_lane):  # noqa: F811
@@ -156,13 +161,79 @@ def test_job_stdout_never_lands_in_the_receipt_journal():
 def test_skipped_lines_keep_deleting_readers_fail_closed(tmp_path):
     """A skipped line may have been the receipt that superseded what remains (#1384 contract)."""
     journal = tmp_path / "backup-daily.log"
-    journal.write_bytes(_legacy_progress(2) + _valid_receipt_line())
+    journal.write_bytes(_legacy_progress(2) + b"garbage\n" + _valid_receipt_line())
     target = tmp_path / "2026-10-20.db.gz"
     target.write_bytes(b"existing local artifact")
 
     with pytest.raises(backup.BackupReceiptUnreadableError) as excinfo:
         backup._read_backup_receipts(journal, strict=True)
     assert excinfo.value.error_code == "backup_receipt_unreadable"
-    assert "2 non-receipt lines" in str(excinfo.value)
+    assert "1 non-receipt lines" in str(excinfo.value)
     assert backup._retained_target_collision(journal, target) is True
     assert backup._stalled_uploads(journal, {"attempted_at": "2026-10-20T00:00:00+00:00"}, tmp_path) == []
+
+
+# Lead ruling 2026-10-20: the exact stdout progress shape is known noise, not uncertainty.
+PRODUCTION_NOISE = 2393
+
+
+def _verified_raw_pair(root: Path) -> Path:
+    raw = root / "2026-10-16.db"
+    raw.write_bytes(b"SQLite format 3\x00" + b"x" * 64)
+    (root / "2026-10-16.db.gz").write_bytes(gzip.compress(raw.read_bytes()))
+    return raw
+
+
+def test_production_shape_lets_reclamation_and_raw_cleanup_proceed(lane):  # noqa: F811
+    stalled(lane)
+    lane.log.write_bytes(_legacy_progress(PRODUCTION_NOISE) + lane.log.read_bytes())
+    raw = _verified_raw_pair(lane.root)
+    lane.outcomes.extend([_DriveResponse(404), _DriveResponse(200, payload={"id": "new"})])
+
+    result = lane.run("2026-10-18")
+
+    assert result["verified"] is True
+    assert result["receipt_journal_noise_lines"] == PRODUCTION_NOISE
+    assert result["receipt_journal_skipped_lines"] == 0
+    assert result["superseded_stalled_deleted"] == [lane.snapshot.name]  # reclamation proceeded
+    assert not lane.snapshot.exists()
+    assert not raw.exists()  # raw .db removed once its gzip proved the same bytes
+    assert lane.log.read_bytes().startswith(_legacy_progress(PRODUCTION_NOISE))
+
+
+def test_production_shape_resumes_the_stalled_session(lane):  # noqa: F811
+    stalled(lane)
+    lane.log.write_bytes(_legacy_progress(PRODUCTION_NOISE) + lane.log.read_bytes())
+    lane.outcomes.extend(
+        [_DriveResponse(308, headers={"Range": "bytes=0-2"}), _DriveResponse(200, payload={"id": "done"})]
+    )
+    result = lane.run("2026-10-18")
+    assert result["uploaded"] and result["verified"]
+    assert len(lane.posts) == 1  # resumed, not re-posted
+
+
+@pytest.mark.parametrize(
+    "uncertain",
+    [b"garbage\n", b"drive upload progress: 8388608/5242019358 bytes (retry 2)\n", b'{"snapshot": "/x", "upl\n'],
+    ids=["garbage-line", "progress-line-with-extra-text", "truncated-json"],
+)
+def test_progress_noise_plus_any_other_bad_line_refuses_reclamation(lane, uncertain):  # noqa: F811
+    stalled(lane)
+    lane.log.write_bytes(_legacy_progress(PRODUCTION_NOISE) + lane.log.read_bytes() + uncertain)
+    lane.outcomes.append(_DriveResponse(200, payload={"id": "new"}))
+
+    result = lane.run("2026-10-18")
+
+    assert result["receipt_journal_noise_lines"] == PRODUCTION_NOISE
+    assert result["receipt_journal_skipped_lines"] == 1
+    assert lane.snapshot.exists()
+    assert "superseded_stalled_deleted" not in result
+    assert len(lane.posts) == 2  # no resume through an uncertain journal
+
+
+def test_progress_line_with_extra_text_is_uncertainty(tmp_path):
+    journal = tmp_path / "backup-daily.log"
+    journal.write_bytes(b"drive upload progress: 1/2 bytes and more\n" + _valid_receipt_line())
+    assert backup._scan_backup_receipts(journal)[1:] == (0, 1)
+    with pytest.raises(backup.BackupReceiptUnreadableError):
+        backup._read_backup_receipts(journal, strict=True)

@@ -248,14 +248,18 @@ class BackupReceiptUnreadableError(ValueError):
         )
 
 
-def _scan_backup_receipts(path: Path) -> tuple[list[dict[str, Any]], int]:
-    """Receipts plus the count of skipped non-receipt lines.
+# The one stdout shape known to sit in real journals (printed by upload_file_to_drive_raw).
+_KNOWN_PROGRESS_NOISE = re.compile(rb"drive upload progress: \d+/\d+ bytes")
+
+
+def _scan_backup_receipts(path: Path) -> tuple[list[dict[str, Any]], int, int]:
+    """Receipts, known progress-noise lines, and other (uncertain) non-receipt lines.
 
     Until 2026-05-18 the job's stdout was redirected into this journal (ec4a544a, moved by
-    3dca26a2), so real journals open with plain-text ``drive upload progress`` lines.
-    _append_json_log only ever writes whole JSON objects, so a line that is not one is
-    foreign output: skip it and count it. A torn final record is a killed writer, not
-    foreign output, and is not counted.
+    3dca26a2), so real journals open with ``drive upload progress: N/M bytes`` lines. A line
+    that is exactly that shape is known noise. Any other line that is not a JSON object is
+    uncertainty: it could have been a receipt. A torn final record is a killed writer and
+    is neither.
     """
     raw = path.read_bytes()
     if not raw:
@@ -263,7 +267,7 @@ def _scan_backup_receipts(path: Path) -> tuple[list[dict[str, Any]], int]:
         raise BackupReceiptUnreadableError(path, error_code="backup_receipt_empty", detail="is empty (0 bytes)")
     raw_lines = raw.splitlines(keepends=True)
     receipts = []
-    skipped = 0
+    noise = uncertain = 0
     for index, line in enumerate(raw_lines):
         if not line.strip():
             continue
@@ -273,27 +277,35 @@ def _scan_backup_receipts(path: Path) -> tuple[list[dict[str, Any]], int]:
             receipt = None
         if isinstance(receipt, dict):
             receipts.append(receipt)
-        elif not (index == len(raw_lines) - 1 and not line.endswith(b"\n")):
-            skipped += 1
+        elif index == len(raw_lines) - 1 and not line.endswith(b"\n"):
+            continue  # A killed writer cannot invalidate the preceding durable session.
+        elif _KNOWN_PROGRESS_NOISE.fullmatch(line.removesuffix(b"\n")):
+            noise += 1
+        else:
+            uncertain += 1
     if not receipts:
         # Never quote a line: a receipt can carry a resumable-upload capability URL.
         raise BackupReceiptUnreadableError(
             path,
             error_code="backup_receipt_unreadable",
-            detail=f"holds no JSON receipt object ({skipped} non-receipt lines skipped)",
+            detail=(
+                f"holds no JSON receipt object ({noise} progress-noise lines, "
+                f"{uncertain} other non-receipt lines skipped)"
+            ),
         )
-    return receipts, skipped
+    return receipts, noise, uncertain
 
 
 def _read_backup_receipts(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
-    """``strict`` is for readers that delete, reclaim or overwrite: a skipped line could have been
-    the receipt that superseded what remains, so any skip keeps those readers fail-closed."""
-    receipts, skipped = _scan_backup_receipts(path)
-    if strict and skipped:
+    """``strict`` is for readers that delete, reclaim or overwrite: an uncertain line could have
+    been the receipt that superseded what remains, so any keeps those readers fail-closed.
+    Known progress noise is not uncertainty."""
+    receipts, _noise, uncertain = _scan_backup_receipts(path)
+    if strict and uncertain:
         raise BackupReceiptUnreadableError(
             path,
             error_code="backup_receipt_unreadable",
-            detail=f"has {skipped} non-receipt lines; reclamation stays disabled",
+            detail=f"has {uncertain} non-receipt lines; reclamation stays disabled",
         )
     return receipts
 
@@ -2400,14 +2412,15 @@ def run_backup(
         )
         if resolved_log_path.exists():
             try:
-                skipped_lines = _scan_backup_receipts(resolved_log_path)[1]
+                _, noise_lines, skipped_lines = _scan_backup_receipts(resolved_log_path)
             except (OSError, ValueError):
                 pass  # Each reader below decides how an unreadable journal fails.
             else:
-                result["receipt_journal_skipped_lines"] = skipped_lines
-                if skipped_lines:
+                result.update(receipt_journal_noise_lines=noise_lines, receipt_journal_skipped_lines=skipped_lines)
+                if noise_lines or skipped_lines:
                     print(
-                        f"Backup receipt journal {resolved_log_path}: skipped {skipped_lines} non-receipt lines",
+                        f"Backup receipt journal {resolved_log_path}: skipped {noise_lines} progress-noise lines "
+                        f"and {skipped_lines} other non-receipt lines",
                         flush=True,
                     )
         local = (
