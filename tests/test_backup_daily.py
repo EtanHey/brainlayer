@@ -2365,6 +2365,10 @@ def test_run_backup_opted_in_retention_trashes_older_drive_snapshots(tmp_path, m
     service = _RetentionService(count=8)
     _stub_verified_backup_run(backup_daily, monkeypatch, snapshot, service)
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+    # Drive retention trashes only behind receipt-verified evidence for an exact listed object.
+    (tmp_path / "backup-daily.log").write_text(
+        json.dumps({"drive_file": {"id": "id-8"}, "uploaded": True, "verified": True}) + "\n"
+    )
     before = snapshot_non_trashed_drive_ids(service, folder_id="folder-id")
 
     result = backup_daily.run_backup(
@@ -2674,6 +2678,7 @@ def test_prune_drive_backups_trashes_older_snapshots_without_hard_delete():
         service,
         folder_parts=["brainlayer-db"],
         retention_policy=DriveRetentionPolicy(keep_latest=4),
+        verified_file_ids={"id-9"},
     )
 
     assert deleted == [
@@ -2736,6 +2741,7 @@ def test_weekly_shared_drive_pool_uses_the_nonshrinking_drive_cap():
         service,
         folder_parts=["brainlayer-db"],
         retention_policy=backup_daily.WEEKLY_RETENTION,
+        verified_file_ids={"id-8"},
     )
 
     assert deleted == ["2026-05-01.db.gz"]

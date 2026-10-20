@@ -286,19 +286,110 @@ class _DriveFiles:
         return SimpleNamespace(execute=lambda: {})
 
 
-def test_drive_retention_counts_both_formats_and_keeps_newest_of_each(monkeypatch):
-    files = [{"id": f"gz{d}", "name": f"2026-10-0{d}.db.gz"} for d in (1, 2, 3)] + [
-        {"id": f"zst{d}", "name": f"2026-10-0{d}.db.zst"} for d in (4, 5, 6)
-    ]
+def _prune(monkeypatch, files, *, keep, verified):
     drive = _DriveFiles(files)
     monkeypatch.setattr(backup, "ensure_drive_folder_chain", lambda service, parts: "folder")
     trashed = backup.prune_drive_backups(
         SimpleNamespace(files=lambda: drive),
         folder_parts=["x"],
-        retention_policy=backup.DriveRetentionPolicy(keep_latest=2),
+        retention_policy=backup.DriveRetentionPolicy(keep_latest=keep),
+        **({} if verified is ... else {"verified_file_ids": verified}),
     )
-    assert sorted(drive.trashed) == ["gz1", "gz2", "zst4"]
-    assert sorted(trashed) == ["2026-10-01.db.gz", "2026-10-02.db.gz", "2026-10-04.db.zst"]
+    return sorted(drive.trashed), sorted(trashed)
+
+
+def test_drive_retention_counts_both_formats_and_keeps_newest_verified_of_each(monkeypatch):
+    files = [{"id": f"gz{d}", "name": f"2026-10-0{d}.db.gz"} for d in (1, 2, 3)] + [
+        {"id": f"zst{d}", "name": f"2026-10-0{d}.db.zst"} for d in (4, 5, 6)
+    ]
+    ids, names = _prune(monkeypatch, files, keep=2, verified={item["id"] for item in files})
+    assert ids == ["gz1", "gz2", "zst4"]
+    assert names == ["2026-10-01.db.gz", "2026-10-02.db.gz", "2026-10-04.db.zst"]
+
+
+def _transition(new_suffix, old_suffix):
+    """Sol's r1 repro shape: seven newer objects of the new format fill keep-7, the newest
+    old-format upload FAILED verification, and the one before it is the last verified copy."""
+    files = [{"id": f"new-{d}", "name": f"2026-10-{d}{new_suffix}"} for d in range(14, 21)]
+    files += [
+        {"id": "old-failed", "name": f"2026-10-13{old_suffix}"},
+        {"id": "old-last-verified", "name": f"2026-10-12{old_suffix}"},
+        {"id": "old-older-verified", "name": f"2026-10-11{old_suffix}"},
+    ]
+    verified = {f"new-{d}" for d in range(14, 21)} | {"old-last-verified", "old-older-verified"}
+    return files, verified
+
+
+@pytest.mark.parametrize(
+    "new_suffix,old_suffix",
+    [(".db.zst", ".db.gz"), (".db.gz", ".db.zst")],
+    ids=["zstd-after-gzip", "gzip-rollback-after-zstd"],
+)
+def test_drive_retention_never_trashes_last_verified_copy_behind_a_failed_newer_one(
+    monkeypatch, new_suffix, old_suffix
+):
+    files, verified = _transition(new_suffix, old_suffix)
+    ids, _ = _prune(monkeypatch, files, keep=backup.DEFAULT_DRIVE_KEEP, verified=verified)
+    assert "old-last-verified" not in ids, "the last verified copy of the old format was trashed"
+    assert ids == ["old-failed", "old-older-verified"]
+
+
+@pytest.mark.parametrize("verified", [..., None, set()], ids=["omitted", "unknown", "empty"])
+def test_drive_retention_without_verification_evidence_trashes_nothing(monkeypatch, verified):
+    files, _ = _transition(".db.zst", ".db.gz")
+    assert _prune(monkeypatch, files, keep=2, verified=verified) == ([], [])
+
+
+def test_drive_retention_trashes_nothing_of_a_format_with_no_verified_copy(monkeypatch):
+    files, _ = _transition(".db.zst", ".db.gz")
+    verified = {f"new-{d}" for d in range(14, 21)}  # no gzip object has verification evidence
+    ids, _ = _prune(monkeypatch, files, keep=2, verified=verified)
+    assert ids == [f"new-{d}" for d in range(14, 19)]
+
+
+def _receipt(file_id, *, verified, **extra):
+    return {"drive_file": {"id": file_id, "name": "x"}, "uploaded": True, "verified": verified, **extra}
+
+
+def test_verified_drive_ids_come_from_the_latest_receipt_per_object(tmp_path):
+    log = tmp_path / "backup-daily.log"
+    rows = [
+        _receipt("a", verified=False, verification_pending=True),
+        _receipt("a", verified=True),
+        _receipt("b", verified=True),
+        _receipt("b", verified=False, verification_error="snapshot aged beyond weekly window"),
+        _receipt("c", verified=True, drive_md5_match=False),
+        _receipt("d", verified=True, verification_error="md5 mismatch"),
+        {"drive_file": "legacy-string", "uploaded": True, "verified": True},
+        _receipt("e", verified=True),
+    ]
+    log.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert backup._verified_drive_file_ids(log) == {"a", "e"}
+
+
+def test_unreadable_receipts_fail_closed(tmp_path):
+    log = tmp_path / "backup-daily.log"
+    assert backup._verified_drive_file_ids(log) is None  # missing
+    log.write_text(
+        json.dumps(_receipt("a", verified=True)) + "\nnot json\n" + json.dumps(_receipt("b", verified=True)) + "\n"
+    )
+    assert backup._verified_drive_file_ids(log) is None  # malformed mid-log
+
+
+def test_run_backup_feeds_receipt_verified_ids_to_drive_retention(tmp_path, monkeypatch):
+    from tests.test_backup_daily import _stub_verified_backup_run
+
+    snapshot = tmp_path / "2026-10-20.db.zst"
+    snapshot.write_bytes(b"synthetic")
+    log = tmp_path / "receipt.jsonl"
+    log.write_text(json.dumps(_receipt("old-last-verified", verified=True)) + "\n")
+    _stub_verified_backup_run(backup, monkeypatch, snapshot, SimpleNamespace())
+    seen = {}
+    monkeypatch.setattr(backup, "prune_drive_backups", lambda *a, **kw: seen.update(kw) or [])
+    monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1")
+    result = backup.run_backup(db_path=tmp_path / "fixture.db", staging_dir=tmp_path, log_path=log)
+    assert result["verified"] is True
+    assert {"old-last-verified", result["drive_file"]["id"]} <= seen["verified_file_ids"]
 
 
 # --- receipt readers ------------------------------------------------------------------------

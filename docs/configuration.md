@@ -217,7 +217,10 @@ any other value is refused. The binary is resolved from `BRAINLAYER_BACKUP_ZSTD_
 If no zstd is found the run compresses with gzip and records `compressor_fallback` in its
 receipt. Every reader (verify, restore, raw cleanup, resume, retention, observability, the
 weekly gate, BrainBar's local-copy listing) accepts both `.db.zst` and legacy `.db.gz`, and
-local and Drive retention always keep the newest verified copy of each format. The zstd child
+local and Drive retention always keep the newest verified copy of each format. For opt-in
+Drive retention "verified" means the exact Drive file ID's latest receipt in the backup log
+says `uploaded` and `verified` (no `verification_error`, no md5 mismatch); a format with no
+such object in the listing has nothing trashed, and an unreadable log trashes nothing. The zstd child
 runs in the backup's process group, so the calendar's process-group stop reaches it, and any
 timeout, stop or free-space floor breach kills and reaps it.
 

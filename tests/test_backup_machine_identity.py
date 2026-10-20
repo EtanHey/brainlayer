@@ -1,5 +1,6 @@
 """Synthetic identity/Drive fixtures: never contact Drive or the installed writer."""
 
+import json
 import re
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -121,7 +122,10 @@ def test_discovery_rejects_foreign_machine_in_prior_folder():
 def test_opt_in_retention_sees_prior_ids_without_creating_or_moving_folders():
     service = _drive_fixture()
     removed = backup_daily.prune_drive_backups(
-        service, machine_id="Locals-MacBook-Pro", retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=1)
+        service,
+        machine_id="Locals-MacBook-Pro",
+        retention_policy=backup_daily.DriveRetentionPolicy(keep_latest=1),
+        verified_file_ids={"new"},
     )
     assert removed == ["2026-10-17.db.gz"]
     service.files.return_value.update.assert_called_once_with(
@@ -145,6 +149,10 @@ def test_verified_backup_routes_opt_in_retention_to_prior_folder_inventory(tmp_p
     monkeypatch.setattr(backup_daily, "assert_drive_folder_owned_by_machine", check_owner)
     monkeypatch.setenv("BRAINLAYER_MACHINE_ID", "Locals-MacBook-Pro")
     monkeypatch.setenv("BRAINLAYER_BACKUP_DRIVE_RETENTION", "1" if enabled else "0")
+    # Receipt evidence that the listed 10-18 object verified; retention trashes only behind it.
+    (tmp_path / "backup.log").write_text(
+        json.dumps({"drive_file": {"id": "new"}, "uploaded": True, "verified": True}) + "\n"
+    )
     result = backup_daily.run_backup(
         db_path=tmp_path / "synthetic.db",
         staging_dir=tmp_path,

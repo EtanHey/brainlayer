@@ -2154,8 +2154,15 @@ def prune_drive_backups(
     machine_id: str | None = None,
     selected_folder_id: str | None = None,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
+    verified_file_ids: set[str] | frozenset[str] | None = None,
 ) -> list[str]:
-    """Trash Drive snapshots older than the explicitly enabled retention window."""
+    """Trash Drive snapshots older than the explicitly enabled retention window.
+
+    `verified_file_ids` is receipt evidence (see `_verified_drive_file_ids`) naming the
+    exact Drive objects whose upload verified. For each format (.db.zst / .db.gz) the
+    newest object in that set is never trashed; a format with no verified object in the
+    listing has nothing trashed at all. No evidence (None or empty) trashes nothing.
+    """
     if machine_id is not None and folder_parts is None:
         folder_id = selected_folder_id or ensure_drive_folder_chain(service, default_drive_folder_parts(machine_id))
         files = _list_machine_retention_backups(service, folder_id=folder_id, machine_id=machine_id)
@@ -2176,15 +2183,19 @@ def prune_drive_backups(
 
     dated.sort(key=lambda pair: (pair[0], pair[1].get("name", "")), reverse=True)
     keep_ids = {item["id"] for _, item in dated[: retention_policy.keep_latest]}
-    # Never trash the newest copy of either format (.db.zst / legacy .db.gz).
-    newest_per_kind: dict[str | None, str] = {}
+    # Never trash the newest VERIFIED object of either format, bound to its Drive file ID.
+    # The listing carries no verification evidence, so a newer upload that failed
+    # verification must not stand in for the last good copy (r1 review, #1421).
+    verified = verified_file_ids or frozenset()
+    newest_verified_per_kind: dict[str | None, str] = {}
     for _, item in dated:
-        newest_per_kind.setdefault(_snapshot_suffix(item.get("name", "")), item["id"])
-    keep_ids |= set(newest_per_kind.values())
+        if item["id"] in verified:
+            newest_verified_per_kind.setdefault(_snapshot_suffix(item.get("name", "")), item["id"])
+    keep_ids |= set(newest_verified_per_kind.values())
 
     trashed: list[str] = []
     for _, item in dated:
-        if item["id"] in keep_ids:
+        if item["id"] in keep_ids or _snapshot_suffix(item.get("name", "")) not in newest_verified_per_kind:
             continue
         service.files().update(
             fileId=item["id"],
@@ -2193,6 +2204,33 @@ def prune_drive_backups(
         ).execute()
         trashed.append(item["name"])
     return trashed
+
+
+def _verified_drive_file_ids(log_path: Path) -> set[str] | None:
+    """Drive file IDs whose latest receipt proves a verified upload; None if unreadable.
+
+    The latest receipt per object wins, so a later failure (md5 mismatch, aged-out weekly
+    snapshot) revokes an earlier pass. A missing or malformed log yields None, which
+    Drive retention treats as no evidence and trashes nothing.
+    """
+    try:
+        receipts = _read_backup_receipts(Path(log_path))
+    except (OSError, ValueError):
+        return None
+    latest: dict[str, Mapping[str, Any]] = {}
+    for receipt in receipts:
+        drive_file = receipt.get("drive_file")
+        file_id = drive_file.get("id") if isinstance(drive_file, dict) else None
+        if isinstance(file_id, str) and file_id:
+            latest[file_id] = receipt
+    return {
+        file_id
+        for file_id, receipt in latest.items()
+        if receipt.get("uploaded") is True
+        and receipt.get("verified") is True
+        and not receipt.get("verification_error")
+        and receipt.get("drive_md5_match") is not False
+    }
 
 
 def _snapshot_created_time(receipt: Mapping[str, Any]) -> dt.datetime | None:
@@ -2967,6 +3005,7 @@ def run_backup(
                             machine_id=resolved_machine_id,
                             selected_folder_id=folder_id,
                             retention_policy=retention_policy,
+                            verified_file_ids=_verified_drive_file_ids(resolved_log_path),
                         )
                     except Exception as exc:
                         result.update(
