@@ -480,6 +480,12 @@ def _storage_safe_identity(raw: str, *, digest_of: str, suffix: str = "") -> str
     return f"t3:sha256:{hashlib.sha256(digest_of.encode('utf-8')).hexdigest()}{suffix}"
 
 
+def _scrubbed_error_text(error: BaseException) -> str:
+    from ..pipeline.secret_scrub import scrub_for_storage
+
+    return scrub_for_storage(str(error))[0]
+
+
 def _chunk_id(thread: T3Thread, message: T3Message, index: int) -> str:
     return _storage_safe_identity(
         f"t3:{thread.thread_id}:{message.message_id}:{index}",
@@ -628,7 +634,8 @@ def ingest_t3(
                     "code": "t3_indexing_failure",
                     "message": "T3 chunk indexing did not complete",
                     "error_type": type(exc).__name__,
-                    "error": str(exc)[:500],
+                    # Scrub before truncating: a cut token can keep a leaking prefix too short to match.
+                    "error": _scrubbed_error_text(exc)[:500],
                 }
             )
             from ..vector_store import WriterInUseError

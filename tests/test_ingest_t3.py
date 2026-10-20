@@ -1208,3 +1208,40 @@ def test_t3_conversation_id_that_trips_the_secret_scrubber_is_digested():
     assert chunk.metadata["conversation_id"].startswith("t3:sha256:")
     assert chunk.metadata["t3_thread_id"] == thread_id
     assert _message_chunks(thread, message)[0].metadata == chunk.metadata
+
+
+_SYNTHETIC_PROVIDER_KEY = "sk-proj-" + "Q7vXk2Lm9PzR4tWb" * 3
+_SYNTHETIC_LABELED_VALUE = "Zq8vN3kLp0Wx7RtY2mBc5HjD9sFa"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        f"embedding backend failed: Authorization {_SYNTHETIC_PROVIDER_KEY} api_key={_SYNTHETIC_LABELED_VALUE}",
+        # A token straddling the 500-char cap must be scrubbed before truncation hides its shape.
+        # Truncating first would keep "sk-proj-Q7vXk2Lm9Pz": too short to match, still a leak.
+        "x" * 480 + f" {_SYNTHETIC_PROVIDER_KEY} api_key={_SYNTHETIC_LABELED_VALUE}",
+    ],
+    ids=["inline", "straddles_cap"],
+)
+def test_t3_indexing_failure_health_scrubs_secrets_from_the_error(tmp_path, monkeypatch, message):
+    from brainlayer.ingest.t3 import ingest_t3
+
+    state = _create_v2_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "health.json"
+    failure = RuntimeError(message)
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr("brainlayer.ingest.t3._index_chunks", fail)
+    with pytest.raises(RuntimeError) as raised:
+        ingest_t3(state, db_path=tmp_path / "destination.db", health_path=health, projection_version=2)
+    assert raised.value is failure
+    text = health.read_text()
+    assert _SYNTHETIC_LABELED_VALUE[:12] not in text
+    assert "sk-proj-Q7vX" not in text and "Q7vXk2Lm9PzR4tWb" not in text
+    error = json.loads(text)["failures"][-1]["error"]
+    assert len(error) <= 500
+    if not message.startswith("x"):
+        assert "[REDACTED:openai]" in error and "api_key=[REDACTED:assignment]" in error
