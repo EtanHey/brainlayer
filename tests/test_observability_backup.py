@@ -777,6 +777,25 @@ def test_stale_db_copy_makes_freshness_stale_even_when_transcripts_are_fresh(tmp
     _assert_backups_schema(result)
 
 
+def test_zstd_db_copy_after_legacy_gzip_is_the_fresh_destination(tmp_path: Path) -> None:
+    """The zstd switch: a .db.zst receipt after older .db.gz ones is the newest verified copy."""
+    env, recorder = _two_copy_env(
+        tmp_path,
+        transcript_at="2026-09-13T00:00:00Z",
+        daily=[
+            _db_receipt("2026-09-09T21:00:00+00:00", "2026-09-09.db.gz"),
+            _db_receipt("2026-09-13T01:00:00+00:00", "2026-09-13.db.zst"),
+        ],
+    )
+
+    result = build_backups_section(env=env, record_input=recorder, now=NOW)
+
+    assert result["db_snapshot"]["destination"] == "2026-09-13.db.zst"
+    assert result["freshness"] == "fresh"
+    assert result["error_type"] is None
+    _assert_backups_schema(result)
+
+
 def test_both_copies_inside_threshold_stay_fresh(tmp_path: Path) -> None:
     env, recorder = _two_copy_env(
         tmp_path,

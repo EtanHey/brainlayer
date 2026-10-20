@@ -108,13 +108,27 @@ DEFAULT_BACKUP_SQLITE_CHECK_TIMEOUT_SECONDS = 0
 DEFAULT_DRIVE_UPLOAD_DEADLINE_FLOOR_SECONDS = 120.0
 DEFAULT_DRIVE_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
 DEFAULT_DRIVE_UPLOAD_STALL_MAX_ATTEMPTS = 3
+# DB snapshot compression. zstd -T0 -3 measured 2.5-3.7 GB/s at a 0.473 mean ratio on
+# 2 GiB windows of the real 20.7 GB raw snapshot, against 24-99 MB/s and 0.491 for
+# Python gzip -6 (bl-lead backup-rc124-measure.md section 4). gzip stays selectable
+# for rollback, and every reader accepts both formats: existing .db.gz backups,
+# local and on Drive, remain valid inputs forever.
+BACKUP_COMPRESSOR_ENV = "BRAINLAYER_BACKUP_COMPRESSOR"
+BACKUP_ZSTD_PATH_ENV = "BRAINLAYER_BACKUP_ZSTD_PATH"
+ZSTD_SNAPSHOT_SUFFIX = ".db.zst"
+GZIP_SNAPSHOT_SUFFIX = ".db.gz"
+DB_SNAPSHOT_SUFFIXES = (ZSTD_SNAPSHOT_SUFFIX, GZIP_SNAPSHOT_SUFFIX)
+ZSTD_LEVEL = 3
+# launchd hands jobs PATH=/usr/bin:/bin, which has no zstd; name the Homebrew prefixes.
+ZSTD_CANDIDATE_PATHS = ("/opt/homebrew/bin/zstd", "/usr/local/bin/zstd")
+ZSTD_POLL_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
 class DriveRetentionPolicy:
     keep_latest: int
     filename_prefix: str = ""
-    filename_suffix: str = ".db.gz"
+    filename_suffix: str | tuple[str, ...] = DB_SNAPSHOT_SUFFIXES
 
     def __post_init__(self) -> None:
         if self.keep_latest < 1:
@@ -132,6 +146,7 @@ class BackupAlreadyRunningError(RuntimeError):
 
 @dataclass(frozen=True)
 class SQLiteBackupArtifact:
+    # Historical field name: the compressed snapshot, either .db.zst or .db.gz.
     gzip_path: Path
     uncompressed_path: Path | None
     sentinel_chunks: int
@@ -147,6 +162,13 @@ class SQLiteBackupArtifact:
     local_integrity_pragma: str | None = None
     snapshot_duration_seconds: float | None = None
     integrity_duration_seconds: float | None = None
+    compressor: str | None = None
+    compressor_fallback: str | None = None
+    compress_duration_seconds: float | None = None
+
+    @property
+    def archive_path(self) -> Path:
+        return self.gzip_path
 
 
 def local_backup_date(now: dt.datetime | None = None) -> dt.date:
@@ -759,7 +781,12 @@ def _prune_owned_temps_after_verified(output_dir: Path, verified_snapshot: Path)
             item.is_symlink()
             or not item.is_file()
             or item.name
-            not in {".backup-date", "restored.db", f"{marked_date.isoformat()}.db", f"{marked_date.isoformat()}.db.gz"}
+            not in {
+                ".backup-date",
+                "restored.db",
+                f"{marked_date.isoformat()}.db",
+                *(f"{marked_date.isoformat()}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES),
+            }
             for item in contents
         ):
             continue
@@ -920,6 +947,79 @@ def _stream_sha256(source: Any) -> bytes:
     return digest.digest()
 
 
+def _raw_archive_name(output_dir: Path, raw: Path) -> str:
+    """The compressed sibling that may replace `raw`: .db.zst first, then legacy .db.gz."""
+    for suffix in (".zst", ".gz"):
+        if os.path.lexists(output_dir / f"{raw.name}{suffix}"):
+            return f"{raw.name}{suffix}"
+    raise FileNotFoundError(f"No compressed snapshot beside raw snapshot: {raw.name}")
+
+
+def _remove_raw_with_verified_archive(
+    output_dir: Path, raw: Path, *, own_run: bool = False, archive_name: str | None = None
+) -> None:
+    """Prove the raw/archive pair is bound and durable before unlinking its singly owned raw.
+
+    Accepts a .db.zst or legacy .db.gz sibling; the raw survives any proof failure.
+    """
+    if raw.parent != output_dir or _parse_uncompressed_snapshot_date(raw.name) is None:
+        raise ValueError("Raw snapshot is outside the backup directory or has an invalid name")
+    archive_name = archive_name or _raw_archive_name(output_dir, raw)
+    if archive_name not in {f"{raw.name}.zst", f"{raw.name}.gz"}:
+        raise ValueError(f"Archive {archive_name!r} is not the compressed sibling of {raw.name}")
+    if archive_name.endswith(".zst"):
+        return _remove_raw_with_verified_zstd(output_dir, raw, own_run=own_run)
+    return _remove_raw_with_verified_gzip(output_dir, raw, own_run=own_run)
+
+
+def _remove_raw_with_verified_zstd(output_dir: Path, raw: Path, *, own_run: bool = False) -> None:
+    """zstd twin of the gzip proof: frame checksum, exact size, SQLite header, and SHA-256 if not ours."""
+    directory = os.open(output_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+
+        def file_identity(info: os.stat_result) -> tuple[int, ...]:
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ValueError(f"Retaining non-regular or linked snapshot: {raw.name}")
+            return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+        def identity(name: str) -> tuple[int, ...]:
+            return file_identity(os.stat(name, dir_fd=directory, follow_symlinks=False))
+
+        archive_name = f"{raw.name}.zst"
+        raw_identity, archive_identity = identity(raw.name), identity(archive_name)
+
+        def require_unchanged() -> None:
+            if raw_identity != identity(raw.name) or archive_identity != identity(archive_name):
+                raise ValueError(f"Snapshot changed during integrity check: {raw.name}")
+
+        raw_hash: bytes | None = None
+        if not own_run:
+            # A same-date archive may predate this raw. Prove every byte, not just its name/size.
+            with os.fdopen(os.open(raw.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory), "rb") as original:
+                if file_identity(os.fstat(original.fileno())) != raw_identity:
+                    raise ValueError(f"Snapshot changed before binding check: {raw.name}")
+                raw_hash = _stream_sha256(original)
+        with os.fdopen(os.open(archive_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory), "rb") as compressed:
+            if file_identity(os.fstat(compressed.fileno())) != archive_identity:
+                raise ValueError(f"Snapshot changed before binding check: {raw.name}")
+            header, size, restored_hash = _zstd_stream_digest(compressed, want_sha256=raw_hash is not None)
+            if size != raw_identity[2]:
+                raise ValueError(f"Raw/zstd snapshot binding failed (size): {raw.name}")
+            if header != b"SQLite format 3\x00":
+                raise ValueError(f"Raw/zstd snapshot binding failed (SQLite header): {raw.name}")
+            if raw_hash is not None and restored_hash != raw_hash:
+                raise ValueError(f"Raw/zstd snapshot binding failed (SHA-256): {raw.name}")
+            if sys.platform == "darwin":
+                fcntl.fcntl(compressed.fileno(), fcntl.F_FULLFSYNC)
+            else:
+                os.fsync(compressed.fileno())
+            os.fsync(directory)
+            require_unchanged()
+            os.unlink(raw.name, dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
 def _remove_raw_with_verified_gzip(output_dir: Path, raw: Path, *, own_run: bool = False) -> None:
     """Prove the pair is bound and durable before unlinking its singly owned raw."""
     if raw.parent != output_dir or _parse_uncompressed_snapshot_date(raw.name) is None:
@@ -975,6 +1075,10 @@ def _remove_raw_with_verified_gzip(output_dir: Path, raw: Path, *, own_run: bool
         os.close(directory)
 
 
+def _compressed_snapshot_names(output_dir: Path) -> list[str]:
+    return sorted(path.name for path in output_dir.iterdir() if _parse_snapshot_date(path.name) is not None)
+
+
 def _retained_raw_snapshot_names(output_dir: Path) -> list[str]:
     return sorted(path.name for path in output_dir.glob("*.db") if _parse_uncompressed_snapshot_date(path.name))
 
@@ -985,7 +1089,7 @@ def _cleanup_raw_snapshots(output_dir: Path) -> tuple[list[str], list[str]]:
         if _parse_uncompressed_snapshot_date(raw.name) is None:
             continue
         try:
-            _remove_raw_with_verified_gzip(output_dir, raw)
+            _remove_raw_with_verified_archive(output_dir, raw)
             deleted.append(raw.name)
         except BackupTimeoutError:
             raise
@@ -1009,6 +1113,147 @@ def _copy_with_raw_floor(source: Any, destination: Any, output_dir: Path) -> Non
         _require_raw_floor(output_dir)
 
 
+def _snapshot_suffix(name: str) -> str | None:
+    """The compressed-snapshot suffix of `name`, or None for anything else."""
+    return next((suffix for suffix in DB_SNAPSHOT_SUFFIXES if name.endswith(suffix)), None)
+
+
+def _resolve_zstd() -> str | None:
+    """Absolute zstd path, or None. A set-but-unusable override fails loudly, never falls through."""
+    override = os.environ.get(BACKUP_ZSTD_PATH_ENV)
+    if override is not None:
+        candidate = Path(override)
+        if not candidate.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise ValueError(f"{BACKUP_ZSTD_PATH_ENV} must name an absolute executable zstd: {override!r}")
+        return str(candidate)
+    for candidate in ZSTD_CANDIDATE_PATHS:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return shutil.which("zstd")
+
+
+def _require_zstd() -> str:
+    binary = _resolve_zstd()
+    if binary is None:
+        raise RuntimeError(
+            f"zstd binary not found (checked {BACKUP_ZSTD_PATH_ENV}, {', '.join(ZSTD_CANDIDATE_PATHS)}, PATH)"
+        )
+    return binary
+
+
+def _selected_compressor() -> tuple[str, str | None, str | None]:
+    """(compressor, zstd binary, fallback reason). Missing zstd degrades to gzip loudly, not silently."""
+    requested = os.environ.get(BACKUP_COMPRESSOR_ENV, "zstd").strip().lower() or "zstd"
+    if requested == "gzip":
+        return "gzip", None, None
+    if requested != "zstd":
+        raise ValueError(f"{BACKUP_COMPRESSOR_ENV} must be zstd or gzip, not {requested!r}")
+    binary = _resolve_zstd()
+    if binary is None:
+        reason = "zstd binary not found; compressed with gzip instead"
+        print(f"Backup compressor fallback: {reason}", flush=True)
+        return "gzip", None, reason
+    return "zstd", binary, None
+
+
+def _run_zstd(binary: str, args: list[str], *, output: Path, floor_dir: Path, stdin: Any = None) -> None:
+    """Run zstd writing to `output`, enforcing the raw free-space floor while it runs.
+
+    The child stays in this process group (no new session), so the calendar's
+    process-group stop reaches it directly. Any exception here, including the
+    SIGALRM/SIGTERM handlers' BackupTimeoutError/BackupStoppedError raised inside
+    wait(), kills and reaps it, so it can never outlive the backup as an orphan.
+    """
+    with tempfile.TemporaryFile() as errors:
+        with output.open("wb") as sink:
+            process = subprocess.Popen(
+                [binary, *args],
+                stdin=stdin if stdin is not None else subprocess.DEVNULL,
+                stdout=sink,
+                stderr=errors,
+            )
+        try:
+            while True:
+                try:
+                    returncode = process.wait(timeout=ZSTD_POLL_SECONDS)
+                    break
+                except subprocess.TimeoutExpired:
+                    _require_raw_floor(floor_dir)
+            _require_raw_floor(floor_dir)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        if returncode != 0:
+            errors.seek(0)
+            detail = errors.read(4096).decode("utf-8", "replace").strip()
+            raise RuntimeError(f"zstd {' '.join(args[:2])} exited {returncode}: {detail}")
+
+
+def _compress_zstd(binary: str, raw: Path, destination: Path, output_dir: Path) -> None:
+    _run_zstd(
+        binary,
+        [f"-{ZSTD_LEVEL}", "-T0", "--check", "-q", "-c", str(raw)],
+        output=destination,
+        floor_dir=output_dir,
+    )
+
+
+def _zstd_test(path: Path) -> None:
+    subprocess.run([_require_zstd(), "-t", "-q", str(path)], check=True, capture_output=True, text=True)
+
+
+def _zstd_stream_digest(compressed: Any, *, want_sha256: bool) -> tuple[bytes, int, bytes | None]:
+    """Decompress an already-open archive fd: (first 16 bytes, total size, sha256 or None).
+
+    Feeding the identity-checked fd on stdin binds the check to those exact bytes;
+    zstd's frame checksum (written with --check) is verified, so a nonzero exit means corruption.
+    """
+    process = subprocess.Popen(
+        [_require_zstd(), "-d", "-q", "-c"],
+        stdin=compressed,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert process.stdout is not None
+        digest = hashlib.sha256() if want_sha256 else None
+        header = b""
+        size = 0
+        while chunk := process.stdout.read(COPY_CHUNK_BYTES):
+            if len(header) < 16:
+                header += chunk[: 16 - len(header)]
+            size += len(chunk)
+            if digest is not None:
+                digest.update(chunk)
+        returncode = process.wait()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if process.stdout is not None:
+            process.stdout.close()
+    if returncode != 0:
+        raise ValueError(f"zstd archive failed its frame checksum (exit {returncode})")
+    return header, size, digest.digest() if digest is not None else None
+
+
+def _archive_test(path: Path) -> None:
+    """Integrity-test a compressed snapshot of either format."""
+    if path.name.endswith(ZSTD_SNAPSHOT_SUFFIX):
+        _zstd_test(path)
+    else:
+        _gunzip_test(path)
+
+
+def _decompress_archive_to(archive: Path, destination: Path) -> None:
+    """Restore a compressed snapshot of either format to `destination`."""
+    if archive.name.endswith(ZSTD_SNAPSHOT_SUFFIX):
+        _run_zstd(_require_zstd(), ["-d", "-q", "-c", str(archive)], output=destination, floor_dir=destination.parent)
+    else:
+        _decompress_gzip_to(archive, destination)
+
+
 def create_sqlite_backup_artifact(
     db_path: Path,
     output_dir: Path,
@@ -1021,7 +1266,8 @@ def create_sqlite_backup_artifact(
     integrity_full: bool | None = None,
     integrity_status_callback: Callable[[str, str, float], None] | None = None,
 ) -> SQLiteBackupArtifact:
-    """Create an integrity-tested gzip; retain raw only if gzip creation/checking fails.
+    """Create an integrity-tested archive (.db.zst by default, .db.gz with
+    BRAINLAYER_BACKUP_COMPRESSOR=gzip); retain raw only if compression/checking fails.
 
     The legacy keep_uncompressed/local_uncompressed_keep arguments are accepted for
     caller compatibility; they cannot authorize retaining duplicates or pruning only copies.
@@ -1037,6 +1283,7 @@ def create_sqlite_backup_artifact(
     output_dir.mkdir(parents=True, exist_ok=True)
     if _parse_uncompressed_snapshot_date(f"{date_stamp}.db") is None or output_dir.is_symlink():
         raise ValueError("Backup requires a dated snapshot in a non-symlink backup directory")
+    compressor, zstd_binary, compressor_fallback = _selected_compressor()
     deleted, retained_raw = _cleanup_raw_snapshots(output_dir)
     for name, size in _owned_temp_inventory(output_dir):
         print(f"Backup crash remnant: name={name} bytes={size}; retained until a newer backup verifies", flush=True)
@@ -1145,11 +1392,11 @@ def create_sqlite_backup_artifact(
                 f"{len(unconfirmed)} unconfirmed attempts reserve {growth} growth bytes"
             )
 
-    final_gz = output_dir / f"{date_stamp}.db.gz"
+    final_archive = output_dir / f"{date_stamp}{ZSTD_SNAPSHOT_SUFFIX if compressor == 'zstd' else GZIP_SNAPSHOT_SUFFIX}"
     final_raw = output_dir / f"{date_stamp}.db"
     sentinel_chunks = 0
     if final_raw.exists() or final_raw.is_symlink():
-        raise FileExistsError(f"Retaining existing raw snapshot without a verified gzip: {final_raw}")
+        raise FileExistsError(f"Retaining existing raw snapshot without a verified archive: {final_raw}")
 
     with tempfile.TemporaryDirectory(prefix="brainlayer-backup-", dir=output_dir) as tmp:
         (Path(tmp) / ".backup-date").write_text(date_stamp, encoding="ascii")
@@ -1179,16 +1426,22 @@ def create_sqlite_backup_artifact(
         if integrity != "ok":
             raise RuntimeError(f"Raw snapshot {pragma} failed: {integrity}; retaining raw snapshot")
 
-        temp_gz = Path(tmp) / final_gz.name
-        with raw_snapshot.open("rb") as src, gzip.open(temp_gz, "wb", compresslevel=6) as dst:
-            _copy_with_raw_floor(src, dst, output_dir)
-        shutil.move(str(temp_gz), final_gz)
+        temp_archive = Path(tmp) / final_archive.name
+        compress_started = time.monotonic()
+        if zstd_binary is not None:
+            _compress_zstd(zstd_binary, raw_snapshot, temp_archive, output_dir)
+        else:
+            with raw_snapshot.open("rb") as src, gzip.open(temp_archive, "wb", compresslevel=6) as dst:
+                _copy_with_raw_floor(src, dst, output_dir)
+        compress_duration = time.monotonic() - compress_started
+        shutil.move(str(temp_archive), final_archive)
+        print(f"Backup compressed: compressor={compressor} seconds={compress_duration:.1f}", flush=True)
 
-        _remove_raw_with_verified_gzip(output_dir, final_raw, own_run=True)
+        _remove_raw_with_verified_archive(output_dir, final_raw, own_run=True, archive_name=final_archive.name)
         deleted.append(final_raw.name)
 
     return SQLiteBackupArtifact(
-        gzip_path=final_gz,
+        gzip_path=final_archive,
         uncompressed_path=None,
         sentinel_chunks=sentinel_chunks,
         local_retention_deleted=deleted,
@@ -1203,6 +1456,9 @@ def create_sqlite_backup_artifact(
         local_integrity_pragma=pragma,
         snapshot_duration_seconds=time.monotonic() - snapshot_started,
         integrity_duration_seconds=integrity_duration,
+        compressor=compressor,
+        compressor_fallback=compressor_fallback,
+        compress_duration_seconds=compress_duration,
     )
 
 
@@ -1627,7 +1883,9 @@ def upload_file_to_drive_raw(
                     headers={
                         "Authorization": f"Bearer {credentials.token}",
                         "Content-Type": "application/json; charset=UTF-8",
-                        "X-Upload-Content-Type": "application/gzip",
+                        "X-Upload-Content-Type": (
+                            "application/zstd" if file_path.name.endswith(".zst") else "application/gzip"
+                        ),
                         "X-Upload-Content-Length": str(total),
                     },
                     data=json.dumps(
@@ -1747,12 +2005,18 @@ def download_drive_file_raw(service: Any, *, file_id: str, destination: Path) ->
     return destination
 
 
-def _parse_snapshot_date(name: str, *, prefix: str = "", suffix: str = ".db.gz") -> dt.date | None:
+def _parse_snapshot_date(
+    name: str, *, prefix: str = "", suffix: str | tuple[str, ...] = DB_SNAPSHOT_SUFFIXES
+) -> dt.date | None:
     if prefix and not name.startswith(prefix):
         return None
-    if not name.endswith(suffix):
+    matched = next(
+        (candidate for candidate in ((suffix,) if isinstance(suffix, str) else suffix) if name.endswith(candidate)),
+        None,
+    )
+    if matched is None:
         return None
-    stem = name[len(prefix) : len(name) - len(suffix)]
+    stem = name[len(prefix) : len(name) - len(matched)]
     try:
         return dt.date.fromisoformat(stem[:10])
     except ValueError:
@@ -1786,14 +2050,18 @@ def _verified_snapshot_names_from_log(log_path: Path, *, db_path: Path | None = 
     return verified
 
 
-def prune_local_gzip_snapshots(
+def prune_local_compressed_snapshots(
     output_dir: Path,
     *,
     keep_latest: int = DEFAULT_LOCAL_COMPRESSED_KEEP,
     verified_drive_names: set[str] | None = None,
     protected_names: set[str] | None = None,
 ) -> list[str]:
-    """Cap local gzip snapshots without deleting an archive lacking remote coverage."""
+    """Cap local .db.zst/.db.gz snapshots without deleting an archive lacking remote coverage.
+
+    The newest Drive-verified archive of EACH format is always kept, so switching
+    compressors (or rolling back) never deletes the last verified copy of either kind.
+    """
     if keep_latest < 1:
         raise ValueError("keep_latest must be at least 1")
     output_dir = Path(output_dir).expanduser()
@@ -1807,10 +2075,15 @@ def prune_local_gzip_snapshots(
         if parsed and path.is_file():
             dated.append((parsed, path))
 
-    dated.sort(key=lambda pair: pair[0], reverse=True)
+    dated.sort(key=lambda pair: (pair[0], pair[1].name), reverse=True)
+    newest_verified_per_kind: dict[str, str] = {}
+    for _, path in dated:
+        kind = _snapshot_suffix(path.name)
+        if kind is not None and path.name in verified_names:
+            newest_verified_per_kind.setdefault(kind, path.name)
     deleted: list[str] = []
     for index, (snapshot_date, path) in enumerate(dated):
-        if index < keep_latest:
+        if index < keep_latest or path.name in newest_verified_per_kind.values():
             continue
         if path.name in (protected_names if protected_names is not None else _protected_snapshot_names(output_dir)):
             continue
@@ -1820,6 +2093,10 @@ def prune_local_gzip_snapshots(
         path.unlink(missing_ok=True)
         deleted.append(path.name)
     return deleted
+
+
+# Pre-zstd name, kept for callers and tests that still import it.
+prune_local_gzip_snapshots = prune_local_compressed_snapshots
 
 
 def _md5_file(path: Path) -> str:
@@ -1868,7 +2145,7 @@ def verify_sqlite_backup_artifact(
     service: Any | None = None,
     file_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run restore verification against the local gzip or the downloaded Drive copy."""
+    """Run restore verification against the local archive (.db.zst or .db.gz) or the downloaded Drive copy."""
     mode = "full" if full else "quick"
     result: dict[str, Any] = {
         "verified": False,
@@ -1898,10 +2175,14 @@ def verify_sqlite_backup_artifact(
                     return result
                 verify_path = drive_copy
 
-            _gunzip_test(verify_path)
-            result["gzip_test"] = True
+            is_gzip = verify_path.name.endswith(GZIP_SNAPSHOT_SUFFIX)
+            result["compression"] = "gzip" if is_gzip else "zstd"
+            _archive_test(verify_path)
+            result["archive_test"] = True
+            if is_gzip:
+                result["gzip_test"] = True  # Pre-zstd receipt field, kept for gzip archives.
             restored = tmp_dir / "restored.db"
-            _decompress_gzip_to(verify_path, restored)
+            _decompress_archive_to(verify_path, restored)
             verified_chunks = _validate_backup_target(restored)
             result["sentinel_verified_chunks"] = verified_chunks
             if verified_chunks != artifact.sentinel_chunks:
@@ -1913,7 +2194,9 @@ def verify_sqlite_backup_artifact(
             result["pragma"] = _optional_sqlite_pragma_check(restored, pragma_name)
             result["verified"] = True
     except Exception as exc:
-        result.setdefault("gzip_test", False)
+        result.setdefault("archive_test", False)
+        if artifact.gzip_path.name.endswith(GZIP_SNAPSHOT_SUFFIX):
+            result.setdefault("gzip_test", False)
         result["verification_error"] = _redact_upload_secrets(str(exc))
     return result
 
@@ -1954,8 +2237,15 @@ def prune_drive_backups(
     machine_id: str | None = None,
     selected_folder_id: str | None = None,
     retention_policy: DriveRetentionPolicy = DAILY_RETENTION,
+    verified_file_ids: set[str] | frozenset[str] | None = None,
 ) -> list[str]:
-    """Trash Drive snapshots older than the explicitly enabled retention window."""
+    """Trash Drive snapshots older than the explicitly enabled retention window.
+
+    `verified_file_ids` is receipt evidence (see `_verified_drive_file_ids`) naming the
+    exact Drive objects whose upload verified. For each format (.db.zst / .db.gz) the
+    newest object in that set is never trashed; a format with no verified object in the
+    listing has nothing trashed at all. No evidence (None or empty) trashes nothing.
+    """
     if machine_id is not None and folder_parts is None:
         folder_id = selected_folder_id or ensure_drive_folder_chain(service, default_drive_folder_parts(machine_id))
         files = _list_machine_retention_backups(service, folder_id=folder_id, machine_id=machine_id)
@@ -1974,12 +2264,21 @@ def prune_drive_backups(
         if parsed:
             dated.append((parsed, item))
 
-    dated.sort(key=lambda pair: pair[0], reverse=True)
+    dated.sort(key=lambda pair: (pair[0], pair[1].get("name", "")), reverse=True)
     keep_ids = {item["id"] for _, item in dated[: retention_policy.keep_latest]}
+    # Never trash the newest VERIFIED object of either format, bound to its Drive file ID.
+    # The listing carries no verification evidence, so a newer upload that failed
+    # verification must not stand in for the last good copy (r1 review, #1421).
+    verified = verified_file_ids or frozenset()
+    newest_verified_per_kind: dict[str | None, str] = {}
+    for _, item in dated:
+        if item["id"] in verified:
+            newest_verified_per_kind.setdefault(_snapshot_suffix(item.get("name", "")), item["id"])
+    keep_ids |= set(newest_verified_per_kind.values())
 
     trashed: list[str] = []
     for _, item in dated:
-        if item["id"] in keep_ids:
+        if item["id"] in keep_ids or _snapshot_suffix(item.get("name", "")) not in newest_verified_per_kind:
             continue
         service.files().update(
             fileId=item["id"],
@@ -1988,6 +2287,36 @@ def prune_drive_backups(
         ).execute()
         trashed.append(item["name"])
     return trashed
+
+
+def _verified_drive_file_ids(log_path: Path) -> set[str] | None:
+    """Drive file IDs whose latest receipt proves a verified upload; None if unreadable.
+
+    The latest receipt per object wins, so a later failure (md5 mismatch, aged-out weekly
+    snapshot) revokes an earlier pass. A missing log, or any uncertain (non-receipt,
+    non-progress-noise) line, yields None, which Drive retention treats as no evidence
+    and trashes nothing.
+    """
+    try:
+        # strict: an uncertain line could be the receipt that revoked a verification, so it
+        # authorizes no trashing. Known progress noise (#1418) is not uncertainty.
+        receipts = _read_backup_receipts(Path(log_path), strict=True)
+    except (OSError, ValueError):  # BackupReceiptUnreadableError is a ValueError
+        return None
+    latest: dict[str, Mapping[str, Any]] = {}
+    for receipt in receipts:
+        drive_file = receipt.get("drive_file")
+        file_id = drive_file.get("id") if isinstance(drive_file, dict) else None
+        if isinstance(file_id, str) and file_id:
+            latest[file_id] = receipt
+    return {
+        file_id
+        for file_id, receipt in latest.items()
+        if receipt.get("uploaded") is True
+        and receipt.get("verified") is True
+        and not receipt.get("verification_error")
+        and receipt.get("drive_md5_match") is not False
+    }
 
 
 def _snapshot_created_time(receipt: Mapping[str, Any]) -> dt.datetime | None:
@@ -2098,7 +2427,7 @@ def _protected_snapshot_names(staging_dir: Path) -> set[str]:
     except FileNotFoundError:
         pass
     except (OSError, ValueError, KeyError, TypeError):
-        return {p.name for p in staging_dir.glob("*.db.gz")}  # unreadable custody fails closed
+        return {p.name for p in staging_dir.iterdir() if _snapshot_suffix(p.name)}  # unreadable custody fails closed
     return set()
 
 
@@ -2144,15 +2473,20 @@ def _reclaim_superseded_local(log_path: Path, result: dict[str, Any], staging_di
 
 
 def _local_upload_receipt(
-    log_path: Path, context: dict[str, Any], staging_dir: Path, *, snapshot_name: str | None = None
+    log_path: Path,
+    context: dict[str, Any],
+    staging_dir: Path,
+    *,
+    snapshot_name: str | tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
     """Resume only the selected destination's exact artifact, including completed sessions."""
+    snapshot_names = (snapshot_name,) if isinstance(snapshot_name, str) else snapshot_name
     try:
         receipts = _read_backup_receipts(log_path) if log_path.exists() else []
     except ValueError:
-        if snapshot_name is None or (staging_dir / snapshot_name).exists():
+        if snapshot_names is None or any((staging_dir / name).exists() for name in snapshot_names):
             raise
-        print("Cannot validate upload journal; retaining all existing gzip archives", flush=True)
+        print("Cannot validate upload journal; retaining all existing compressed archives", flush=True)
         return None
     latest = {r["snapshot"]: r for r in receipts if isinstance(r.get("snapshot"), str)}
     for receipt in sorted(
@@ -2163,7 +2497,9 @@ def _local_upload_receipt(
         if receipt.get("local_verified") is not True:
             continue
         path = Path(receipt["snapshot"])
-        if path.parent.resolve() != staging_dir.resolve() or (snapshot_name is not None and path.name != snapshot_name):
+        if path.parent.resolve() != staging_dir.resolve() or (
+            snapshot_names is not None and path.name not in snapshot_names
+        ):
             continue
         if receipt.get("uploaded") is True and receipt.get("verified") is True:
             continue
@@ -2279,7 +2615,7 @@ def _stalled_uploads(log_path: Path, context: dict[str, Any], staging_dir: Path)
                 or not path.is_file()
                 or path.parent.resolve() != staging_dir.resolve()
                 or _parse_snapshot_date(path.name) is None
-                or path.name != f"{path.name[:10]}.db.gz"
+                or path.name not in {f"{path.name[:10]}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES}
                 or path.stat().st_nlink != 1
                 or _upload_identity(path) != {k: state.get(k) for k in ("path", "size", "sha256")}
             ):
@@ -2459,7 +2795,10 @@ def run_backup(
             )
             if phase == "snapshot"
             else _local_upload_receipt(
-                resolved_log_path, result, Path(staging_dir), snapshot_name=f"{resolved_date_stamp}.db.gz"
+                resolved_log_path,
+                result,
+                Path(staging_dir),
+                snapshot_name=tuple(f"{resolved_date_stamp}{suffix}" for suffix in DB_SNAPSHOT_SUFFIXES),
             )
         )
         if phase == "snapshot" and local is not None:
@@ -2506,9 +2845,10 @@ def run_backup(
                     snapshot_duration_seconds=resume.get("snapshot_duration_seconds"),
                     integrity_duration_seconds=resume.get("integrity_duration_seconds"),
                 )
-            target = Path(staging_dir) / f"{resolved_date_stamp}.db.gz"
-            if _retained_target_collision(resolved_log_path, target):
-                raise RetainedStalledBackupConflictError(target.name)
+            for suffix in DB_SNAPSHOT_SUFFIXES:
+                target = Path(staging_dir) / f"{resolved_date_stamp}{suffix}"
+                if _retained_target_collision(resolved_log_path, target):
+                    raise RetainedStalledBackupConflictError(target.name)
             create_started = dt.datetime.now(dt.UTC).isoformat()
             try:
                 artifact = create_sqlite_backup_artifact(
@@ -2524,7 +2864,7 @@ def run_backup(
                 reason = _redact_upload_secrets(str(exc))
                 floor_breach = "raw free space floor breached" in reason
                 if "Insufficient free space" in reason or floor_breach:
-                    reason += f"; retained gzip snapshots: {[p.name for p in Path(staging_dir).glob('*.db.gz')]}"
+                    reason += f"; retained compressed snapshots: {_compressed_snapshot_names(Path(staging_dir))}"
                 if floor_breach:
                     reason += f"; retained raw snapshots: {_retained_raw_snapshot_names(Path(staging_dir))}"
                 if stalled and ("Insufficient free space" in reason or "raw free space floor breached" in reason):
@@ -2566,6 +2906,14 @@ def run_backup(
                     "local_integrity_pragma": getattr(artifact, "local_integrity_pragma", None),
                     "snapshot_duration_seconds": getattr(artifact, "snapshot_duration_seconds", None),
                     "integrity_duration_seconds": getattr(artifact, "integrity_duration_seconds", None),
+                    "compressor": getattr(artifact, "compressor", None)
+                    or ("zstd" if snapshot.name.endswith(ZSTD_SNAPSHOT_SUFFIX) else "gzip"),
+                    "compress_duration_seconds": getattr(artifact, "compress_duration_seconds", None),
+                    **(
+                        {"compressor_fallback": artifact.compressor_fallback}
+                        if getattr(artifact, "compressor_fallback", None)
+                        else {}
+                    ),
                     "sentinel_snapshot_chunks": artifact.sentinel_chunks,
                     "bytes": snapshot_size,
                 }
@@ -2740,11 +3088,13 @@ def run_backup(
                     resolved_log_path, db_path=Path(resolved_db_path)
                 )
                 verified_drive_names.add(snapshot.name)
-                result["local_gzip_retention_deleted"] = prune_local_gzip_snapshots(
+                result["local_gzip_retention_deleted"] = prune_local_compressed_snapshots(
                     snapshot.parent,
                     verified_drive_names=verified_drive_names,
                     protected_names=_protected_snapshot_names(snapshot.parent)
-                    | {p.name for p in snapshot.parent.glob("*.db.gz") if p.name not in verified_drive_names},
+                    | {
+                        name for name in _compressed_snapshot_names(snapshot.parent) if name not in verified_drive_names
+                    },
                 )
                 if retention_enabled:
                     try:
@@ -2754,6 +3104,7 @@ def run_backup(
                             machine_id=resolved_machine_id,
                             selected_folder_id=folder_id,
                             retention_policy=retention_policy,
+                            verified_file_ids=_verified_drive_file_ids(resolved_log_path),
                         )
                     except Exception as exc:
                         result.update(
@@ -2799,7 +3150,7 @@ def run_backup(
             result["upload_state"] = "failed"
         if raw.is_file() and not raw.is_symlink():
             result["local_uncompressed_snapshot"] = str(raw)
-            result["raw_snapshot_retained_reason"] = "No verified gzip replaced this raw snapshot"
+            result["raw_snapshot_retained_reason"] = "No verified compressed archive replaced this raw snapshot"
         if resume_state is not None and not result["uploaded"] and not result.get("drive_file"):
             result["resumable_upload"] = resume_state
             result.setdefault("error_code", "drive_upload_interrupted")

@@ -202,10 +202,27 @@ Weekly calendar runs use index → `backup-snapshot` → full maintenance → JS
 counters, checkpoint, decay and FTS checks → `backup-daily` in upload-only mode. Snapshot and upload use the existing
 calendar process-group supervisor sequentially; the upload keeps the existing job/history/log name; no detached worker is created. Nightly runs retain
 maintenance first and DB upload last. `BRAINLAYER_BACKUP_PHASE=snapshot` writes a durable local
-receipt after mandatory raw SQLite `integrity_check` (nightly uses `quick_check`), gzip CRC/ISIZE,
+receipt after mandatory raw SQLite `integrity_check` (nightly uses `quick_check`), the archive's
+own checksum (zstd frame checksum and exact size, or legacy gzip CRC/ISIZE),
 SQLite header/sentinel and byte-equality checks; `upload` drains retained snapshots newest first
 from those same bytes, preserving resumable sessions and retrying completed-session verification.
 The default `all` phase keeps the combined daily command.
+
+Snapshots are compressed with the zstd CLI (`zstd -3 -T0 --check`) to `YYYY-MM-DD.db.zst`.
+On the real 20.7 GB snapshot that is about 12 s, against 8+ minutes for the former Python
+gzip -6. `BRAINLAYER_BACKUP_COMPRESSOR=gzip` restores the old `.db.gz` output for rollback;
+any other value is refused. The binary is resolved from `BRAINLAYER_BACKUP_ZSTD_PATH`
+(absolute and executable, or the run fails), then `/opt/homebrew/bin/zstd`,
+`/usr/local/bin/zstd`, then `PATH`, because launchd jobs run with `PATH=/usr/bin:/bin`.
+If no zstd is found the run compresses with gzip and records `compressor_fallback` in its
+receipt. Every reader (verify, restore, raw cleanup, resume, retention, observability, the
+weekly gate, BrainBar's local-copy listing) accepts both `.db.zst` and legacy `.db.gz`, and
+local and Drive retention always keep the newest verified copy of each format. For opt-in
+Drive retention "verified" means the exact Drive file ID's latest receipt in the backup log
+says `uploaded` and `verified` (no `verification_error`, no md5 mismatch); a format with no
+such object in the listing has nothing trashed, and an unreadable log trashes nothing. The zstd child
+runs in the backup's process group, so the calendar's process-group stop reaches it, and any
+timeout, stop or free-space floor breach kills and reaps it.
 
 Weekly VACUUM requires a local verified snapshot of the same database, created since local midnight
 and at most `BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS` old (default **6**, shared by snapshot reuse and
@@ -389,7 +406,7 @@ verification. An expired session (404/410) starts a fresh snapshot and upload.
 See the [Drive resumable upload protocol](https://developers.google.com/workspace/drive/api/guides/manage-uploads#resume-upload).
 
 After a newer snapshot is uploaded and verified on Drive in the same run,
-reclamation only considers older dated `.db.gz` files
+reclamation only considers older dated `.db.zst` or `.db.gz` files
 directly in the staging directory whose stalled receipt and current SHA-256 prove
 ownership. Uploaded/verified paths, symlinks, hard links, changed bytes, malformed
 receipts, and legacy receipts without identity evidence are retained. Each removal
@@ -412,7 +429,7 @@ timeouts share the remaining whole-run deadline, reserving five seconds to write
 the receipt. Session-creation POST network failures use the same bounded backoff;
 HTTP client/auth failures still stop immediately.
 
-A fresh snapshot cannot overwrite a same-day stalled gzip. An expired or unsafe
+A fresh snapshot cannot overwrite a same-day stalled archive of either format. An expired or unsafe
 session with such a collision fails explicitly and retains the existing file.
 A later dated run can create a replacement without changing backup filenames.
 

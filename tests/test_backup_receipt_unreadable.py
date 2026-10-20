@@ -109,7 +109,7 @@ def test_upload_phase_fails_with_named_receipt_error(local_lane, journal, error_
     assert receipt["upload_state"] == "failed"
     assert receipt["retained_raw_snapshots"] == [raw.name]
     assert receipt["local_uncompressed_snapshot"] == str(raw)
-    assert receipt["raw_snapshot_retained_reason"] == "No verified gzip replaced this raw snapshot"
+    assert receipt["raw_snapshot_retained_reason"] == "No verified compressed archive replaced this raw snapshot"
 
     # Fail closed: nothing is deleted or "repaired".
     assert raw.read_bytes() == raw_bytes

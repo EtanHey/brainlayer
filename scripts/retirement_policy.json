@@ -1490,6 +1490,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "467be13b80bc6a7268fcf15825d12eed132b21f11f3425713fff6041f32942da": {
+      "non_cloud_purpose": "Local zstd CLI compress/decompress of the DB backup snapshot, in the caller's process group (calendar killpg reaches it), killed and reaped on any exception, raw free-space floor polled while it runs. No cloud/model sender.",
+      "site": {
+        "call_sha256": "ba920a899266350b89b89d889d9e799e6a902f6fe959f958f326cca675694305",
+        "kind": "child_process",
+        "owner": "<module>._run_zstd",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.Popen"
+      }
+    },
     "46ff106c7cfc7ab02276fb891215559d06247aa5b5016dffc538f66709177a4d": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/timestamp_iso.py <module>._detect_git_sha",
       "site": {
@@ -2564,6 +2574,16 @@
         "owner": "<module>._default_command_runner",
         "path": "src/brainlayer/health_check.py",
         "target": "subprocess.CompletedProcess"
+      }
+    },
+    "73717f2feb870c6d5be7c6282a3febeec03159fad39ebe58348266b634f4b37f": {
+      "non_cloud_purpose": "Local zstd -t integrity test of a DB backup archive, the zstd twin of _gunzip_test. No cloud/model sender.",
+      "site": {
+        "call_sha256": "46a98fddcc97d3776942d0c6f02f327184f077c956ebede00280aa8d19b447b3",
+        "kind": "child_process",
+        "owner": "<module>._zstd_test",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.run"
       }
     },
     "7376608b021219afc7c9464c9441b2ef4c3cd002729d962e1836ac40464a04ee": {
@@ -4390,6 +4410,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "bdcca2f4f023fb4add6223c37bb68a362773d65947540b0f893028b48e1b8e9e": {
+      "non_cloud_purpose": "Existing local command/type metadata: Git, process inspection, launchctl, backup supervision or installed helper; no cloud model subprocess. Site: src/brainlayer/backup_daily.py <module>._run_zstd subprocess.TimeoutExpired.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._run_zstd",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.TimeoutExpired"
+      }
+    },
     "bdd62edcb4b7fb8e8fef6d302ad1e77b716d4c0ad4652a5db9d5e02005ac4283": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/sprint_gate.py <module>.helper_python",
       "site": {
@@ -4770,6 +4800,16 @@
         "target": "socket.socket()"
       }
     },
+    "ce128182c578e41cd630d63cac6ded17755ff6af4a5f473871fe39b9ebf73080": {
+      "non_cloud_purpose": "Drive backup resumable session creation and network timeout classification under a bounded recovery budget; no model API. Content type now names zstd for .zst archives.",
+      "site": {
+        "call_sha256": "3ff761fc4a093f9523c70368be48d83e75c421d9ef2c496051fad7a911e597b6",
+        "kind": "generic_send",
+        "owner": "<module>.upload_file_to_drive_raw",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "requests.post"
+      }
+    },
     "cf2412ae297c17775143acee0b8828f2284f8680b545dd61da273e5d4bf3a62b": {
       "non_cloud_purpose": "Existing local URL quoting/parsing of identifiers, endpoint validation or backup metadata; no transport invocation. Site: src/brainlayer/backup_retention_invariant.py <module>._upload_requests_md5 urllib.parse.parse_qs.",
       "site": {
@@ -5034,16 +5074,6 @@
         "owner": "<module>.helper_started_at",
         "path": "scripts/sprint_gate.py",
         "target": "subprocess.run"
-      }
-    },
-    "ddd3ce0283349eeebe4ea16ba63d1a009ab519c300b5ca4a5c5f618a1ed3109d": {
-      "non_cloud_purpose": "Drive backup resumable session creation and network timeout classification under a bounded recovery budget; no model API.",
-      "site": {
-        "call_sha256": "4049e49df5e328f380d3c2e4090bce3d3b05c78e1fa5d35aba7159c06a75accf",
-        "kind": "generic_send",
-        "owner": "<module>.upload_file_to_drive_raw",
-        "path": "src/brainlayer/backup_daily.py",
-        "target": "requests.post"
       }
     },
     "de00ab5510da36ed21719375c85227f6fce4dbaf23348c6e8d035077341724c0": {
@@ -5454,6 +5484,16 @@
         "owner": "<module>.WriteQueue.submit",
         "path": "src/brainlayer/pipeline/write_queue.py",
         "target": "self._queue.put"
+      }
+    },
+    "f112778ec540290fa460244334778e164ee1202662959eee9c132ee9b0797846": {
+      "non_cloud_purpose": "Local zstd -d stream of an identity-checked DB backup archive fd to bind it to its raw snapshot (size, SQLite header, SHA-256) before the raw is unlinked; killed and reaped on any exception. No cloud/model sender.",
+      "site": {
+        "call_sha256": "eb459250d952d0b9c4dcd49bdc98735ba806ab3d92e4be1982fecfee5efd3891",
+        "kind": "child_process",
+        "owner": "<module>._zstd_stream_digest",
+        "path": "src/brainlayer/backup_daily.py",
+        "target": "subprocess.Popen"
       }
     },
     "f114c810c3abbfa9b7d8f599cee0506ef362e962557c625fe032dee6a9974e44": {
