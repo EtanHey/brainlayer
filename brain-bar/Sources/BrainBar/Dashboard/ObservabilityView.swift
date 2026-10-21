@@ -92,9 +92,8 @@ enum BadgeStateReader {
         history: BadgeReadHistory? = nil
     ) -> BadgeStatePresentation {
         let missedPreviousRead = history?.missedPreviousRead(now: now, cadence: cadence) ?? false
-        if let assumption = cadence.assumption {
-            return .failVisible("Badge freshness unknown: \(assumption).")
-        }
+        // An unknown cadence falls back to its conservative interval; staleness
+        // past twice that interval still fails visible below.
         guard FileManager.default.fileExists(atPath: url.path) else {
             return .failVisible("Badge state missing without a pending_first_run marker.")
         }
@@ -335,15 +334,34 @@ enum ObservabilityReader {
     static func healthCheckCadence(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ObservabilityCadence {
-        let path = environment["BRAINLAYER_HEALTH_CHECK_PLIST_PATH"] ??
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/LaunchAgents/com.brainlayer.health-check.plist").path
-        guard let data = FileManager.default.contents(atPath: path),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let interval = (plist as? [String: Any])?["StartInterval"] as? NSNumber else {
-            return .init(interval: 300, assumption: "cadence unknown, assuming 300s")
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let plistPath = environment["BRAINLAYER_HEALTH_CHECK_PLIST_PATH"] ??
+            home.appendingPathComponent("Library/LaunchAgents/com.brainlayer.health-check.plist").path
+        if let data = FileManager.default.contents(atPath: plistPath),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+           let interval = validInterval((plist as? [String: Any])?["StartInterval"]) {
+            return .known(interval)
         }
-        return .known(interval.doubleValue)
+        // The supervisor now owns the health check: jobs.json keys each job by label.
+        let jobsPath = environment["BRAINLAYER_SUPERVISOR_JOBS_PATH"] ??
+            home.appendingPathComponent(".local/share/brainlayer/supervisor/jobs.json").path
+        if let data = FileManager.default.contents(atPath: jobsPath),
+           let jobs = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let job = jobs["com.brainlayer.health-check"] as? [String: Any],
+           (job["enabled"] as? Bool) != false,
+           let interval = validInterval((job["plist"] as? [String: Any])?["StartInterval"]) {
+            return .known(interval)
+        }
+        return .init(interval: 300, assumption: "cadence unknown, assuming 300s")
+    }
+
+    private static func validInterval(_ value: Any?) -> TimeInterval? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let interval = number.doubleValue
+        // Untrustworthy schedules use the disclosed 300s fallback. Bounding the
+        // TimeInterval also keeps the 2x freshness window and refresh timer finite.
+        return interval.isFinite && (30.0...3600.0).contains(interval) ? interval : nil
     }
 
     private struct SchemaEnvelope: Decodable {

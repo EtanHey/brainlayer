@@ -10,9 +10,9 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let badge = BadgeStatePresentation.failVisible(reason)
         let title = BrainBarStatusPopoverController.statusLineTitle(for: badge)
 
-        XCTAssertLessThanOrEqual(title.count, 72)
+        XCTAssertLessThanOrEqual(title.count, 60)
         XCTAssertTrue(title.hasSuffix("…"))
-        XCTAssertEqual(title, "Needs attention: The example status reason keeps growing as neutral…")
+        XCTAssertEqual(title, "Needs attention: The example status reason keeps growing…")
         XCTAssertEqual(BrainBarStatusPopoverController.menuRowTitles(for: badge).first, title)
     }
 
@@ -28,15 +28,15 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
     }
 
     func testStatusTitleLimitCountsVisibleCharactersAndHandlesAnUnbrokenReason() {
-        let reason = String(repeating: "👩🏽‍💻", count: 55)
+        let reason = String(repeating: "👩🏽‍💻", count: 43)
         let atLimit = BrainBarStatusPopoverController.statusLineTitle(for: .failVisible(reason))
         XCTAssertEqual(atLimit, "Needs attention: \(reason)")
-        XCTAssertEqual(atLimit.count, 72)
+        XCTAssertEqual(atLimit.count, 60)
 
         let overLimit = BrainBarStatusPopoverController.statusLineTitle(for: .failVisible(reason + "👩🏽‍💻"))
-        XCTAssertLessThanOrEqual(overLimit.count, 72)
+        XCTAssertLessThanOrEqual(overLimit.count, 60)
         XCTAssertTrue(overLimit.hasSuffix("…"))
-        XCTAssertEqual(overLimit, "Needs attention: \(String(reason.prefix(54)))…")
+        XCTAssertEqual(overLimit, "Needs attention: \(String(reason.prefix(42)))…")
     }
 
     func testStatusRowTooltipPreservesTheFullReasonAndClearsOnRecovery() throws {
@@ -53,7 +53,7 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         let reason = String(repeating: "The example status reason keeps growing as neutral words repeat. ", count: 10)
         controller.setBadgeForTesting(.failVisible(reason), alertsURL: alertsURL)
         controller.menuNeedsUpdate(menu)
-        XCTAssertLessThanOrEqual(statusRow.title.count, 72)
+        XCTAssertLessThanOrEqual(statusRow.title.count, 60)
         XCTAssertTrue(statusRow.title.hasSuffix("…"))
         XCTAssertEqual(statusRow.toolTip, reason)
 
