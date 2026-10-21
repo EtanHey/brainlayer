@@ -247,10 +247,8 @@ private struct BrainBarJobsDashboardContent: View {
         BrainBarDashboardContent(collector: collector, workspace: workspace,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking)
-            .onAppear { model.refreshLaunchdStatus() }
-            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in
-                model.refreshLaunchdStatus()
-            }
+            // One cadence for the view's lifetime: samples on appear, then every 60 s.
+            .task { await model.monitorLaunchdStatus() }
             .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
                 if refreshing { model.refreshLaunchdStatus() }
             }

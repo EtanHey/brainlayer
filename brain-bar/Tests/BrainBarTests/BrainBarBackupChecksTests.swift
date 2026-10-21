@@ -127,7 +127,7 @@ final class BrainBarBackupChecksTests: XCTestCase {
             backups(freshness: nil, retention: nil, archives: nil),
         ]
         for state in states {
-            let lines = ObservabilityPresentation.backupStatus(for: state, locale: locale)
+            let lines = ObservabilityPresentation.backupStatus(for: state, locale: locale, now: now)
             let checks = checks(state)
             XCTAssertEqual(
                 checks.checks.map(\.tone),
