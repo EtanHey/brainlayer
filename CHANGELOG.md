@@ -39,6 +39,19 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.68] - 2026-10-21
+
+### Fixed
+- BrainBar no longer shows a false red menu-bar dot on a healthy Mac. The health check now runs under the supervisor, but BrainBar only looked for its old LaunchAgent plist, so it reported "Badge freshness unknown: cadence unknown" and went red. BrainBar now reads the cadence from that plist first, then from the `com.brainlayer.health-check` entry in the supervisor's `jobs.json` (skipped when the entry is `enabled: false`). A cadence from 30 to 3600 seconds is used as-is; anything else falls back to 300 seconds. An unknown cadence on its own no longer raises an alarm; a badge older than twice the cadence still shows "Needs attention" and the red dot. The menu's status line is capped at 60 characters (was 72), and its tooltip keeps the full reason (#1433).
+- BrainBar's local-copy listing recognizes zstd snapshots (`YYYY-MM-DD.db.zst`) as well as `.db` and legacy `.db.gz`. This Swift change merged with #1421 in 1.5.67, but 1.5.67 was formula-only, so this is the first BrainBar app that ships it (#1421).
+
+### Tests
+- The recency checkpoint test in `tests/test_consumer_scoping.py` freezes its clock at 2026-06-15, so its May/June fixtures no longer swap order as the real date moves on. Test-only; no runtime change (#1432).
+
+### Upgrade notes
+- Full release: the formula and the BrainBar app (cask) both move to 1.5.68. The app is the first since 1.5.66.
+- `BRAINLAYER_SUPERVISOR_JOBS_PATH` overrides where BrainBar reads the supervisor's `jobs.json` (default `~/.local/share/brainlayer/supervisor/jobs.json`). `BRAINLAYER_HEALTH_CHECK_PLIST_PATH` still names the LaunchAgent plist, which is checked first.
+
 ## [1.5.67] - 2026-10-20
 
 ### Changed
