@@ -141,11 +141,28 @@ def _failure(
     return None, last_exit
 
 
+NIGHTLY_LABELS = frozenset({"com.brainlayer.maintenance"})
+
+
+def _escalation(label: str, episode: dict[str, Any]) -> str:
+    exit_code = episode.get("last_exit_code", "unknown")
+    count = episode.get("consecutive")
+    if episode.get("interval") and type(count) is int:
+        if label in NIGHTLY_LABELS:
+            # Once a night is not a crashloop; the daemon-oriented reason would repeat the exit.
+            return f"{label}: failed {count} nights in a row; last exit {exit_code}"
+        failures = f"{count} failed runs"
+    else:
+        # Pre-fix persisted interval episodes carry no count; failed_heals implies the threshold.
+        failures = f"{MAX_HEAL_ATTEMPTS} " + (
+            "failed runs" if episode.get("interval") else "heal attempts failed to restore a healthy job"
+        )
+    return f"{label}: {episode.get('reason', 'job unavailable')}; last exit code {exit_code}; {failures}"
+
+
 def _escalations(state: dict[str, dict[str, Any]]) -> list[str]:
     return [
-        f"{label}: {episode.get('reason', 'job unavailable')}; last exit code "
-        f"{episode.get('last_exit_code', 'unknown')}; {MAX_HEAL_ATTEMPTS} "
-        f"{'failed runs' if episode.get('interval') else 'heal attempts failed to restore a healthy job'}"
+        _escalation(label, episode)
         for label, episode in state.items()
         if isinstance(episode, dict) and episode.get("failed_heals")
     ]
@@ -229,8 +246,9 @@ def scan_job_lifecycle(
             # Preserve this uncertain episode without healing it; known jobs still progress.
             scan_errors.append(f"{label}: {reason}")
             continue
-        if interval and reason and reason.startswith("stale keg"):
-            # Defer counting until launchd reports a completed, advanced run.
+        if interval and _pid(_output(printed)) is not None:
+            # A live run (current or stale keg) still reports the previous run's exit.
+            # Defer counting, keeping the runs watermark, until launchd reports it completed.
             continue
         if reason is None and advanced and last_exit not in (None, 0):
             reason = f"crashloop, last exit code {last_exit}"
