@@ -159,7 +159,7 @@ class T3Reader:
                 self._fail(
                     "t3_schema_drift",
                     "T3 schema changed while the reader was taking its snapshot",
-                    {"sqlite_error": str(error)},
+                    {"sqlite_error": _scrubbed_error_text(error)[:500]},
                     error,
                 )
             self._fail(
@@ -341,7 +341,7 @@ class T3Reader:
             "code": code,
             "message": message,
             "error_type": type(error).__name__,
-            "error": str(error),
+            "error": _scrubbed_error_text(error)[:500],
             **context,
         }
         self._failures.append(failure)
@@ -561,7 +561,7 @@ def ingest_t3(
     except BrainLayerAlarm as exc:
         failed_path = exc.context["state_db_path"]
         failed_reader = T3Reader(failed_path, health_path=health_path, projection_version=1)
-        failed_reader._failures.append({"code": exc.code, "message": str(exc)})
+        failed_reader._failures.append({"code": exc.code, "message": _scrubbed_error_text(exc)[:500]})
         failed_reader._write_health(alerting=True, alert_reasons=["source_selection_failure"])
         raise
     reader = T3Reader(sources[0][0], health_path=health_path, projection_version=sources[0][1])
