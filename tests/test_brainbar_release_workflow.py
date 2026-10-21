@@ -150,13 +150,13 @@ def _assert_gatekeeper_ready_release_contract(job: dict) -> None:
     assert "exit 1" in runs and "BrainBar notarization unavailable" in runs, (
         "BrainBar release workflow must fail closed when notary secrets are missing"
     )
-    assert "codesign --verify --deep --strict --verbose=4 docs.local/artifacts.noindex/release/BrainBar.app" in runs, (
+    assert "codesign --verify --deep --strict --verbose=4 dist/BrainBar.app" in runs, (
         "BrainBar release workflow must verify the signed app resource seal before notarization"
     )
-    assert "xcrun stapler validate docs.local/artifacts.noindex/release/BrainBar.app" in runs, (
+    assert "xcrun stapler validate dist/BrainBar.app" in runs, (
         "BrainBar release workflow must validate the stapled notarization ticket"
     )
-    assert "spctl --assess --type execute --verbose=4 docs.local/artifacts.noindex/release/BrainBar.app" in runs, (
+    assert "spctl --assess --type execute --verbose=4 dist/BrainBar.app" in runs, (
         "BrainBar release workflow must require Gatekeeper acceptance before packaging"
     )
     assert 'ditto -x -k dist/BrainBar.zip "$verify_dir"' in runs, (

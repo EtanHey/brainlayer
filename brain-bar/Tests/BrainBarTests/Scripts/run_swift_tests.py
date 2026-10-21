@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run Swift tests in an owned TMPDIR and reject leaked brainbar-* fixtures."""
+
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 
 def main():
@@ -14,7 +15,13 @@ def main():
         root = Path(directory)
         before = set(root.glob("brainbar-*"))
         result = subprocess.run(
-            ["swift", "test", *sys.argv[1:]],
+            [
+                "swift",
+                "test",
+                "--scratch-path",
+                str(Path(__file__).resolve().parents[4] / ".build.noindex/swift"),
+                *sys.argv[1:],
+            ],
             env={**os.environ, "TMPDIR": directory + "/", "BRAINBAR_TEST_TMP_ROOT": directory},
         )
         leaked = sorted(set(root.glob("brainbar-*")) - before)

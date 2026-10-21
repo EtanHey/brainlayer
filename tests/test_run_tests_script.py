@@ -1052,6 +1052,8 @@ def test_changed_only_scope_fails_closed_when_git_cannot_name_the_changed_files(
     script = _script_outside_a_repo(tmp_path)
 
     env = _script_env()
+    # This non-repo fixture now lives beneath the checkout's .build.noindex temp root.
+    env["GIT_CEILING_DIRECTORIES"] = str(tmp_path.parent)
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
     env["BRAINLAYER_TEST_ROOT"] = str(test_root)
     env["BRAINLAYER_USE_UV"] = "0"

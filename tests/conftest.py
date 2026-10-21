@@ -11,6 +11,7 @@ for _git_env_key in tuple(os.environ):
         os.environ.pop(_git_env_key, None)
 
 import functools
+import hashlib
 import importlib
 import shutil
 import sqlite3
@@ -62,7 +63,7 @@ else:
 
 import pytest
 
-from scripts.check_stray_apps import find_stray_apps, spotlight_excluded
+from scripts.check_stray_apps import find_stray_apps
 
 
 @pytest.fixture(autouse=True)
@@ -180,17 +181,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
+    temp_root = Path(__file__).resolve().parents[1] / ".build.noindex" / "pytest"
+    temp_root.mkdir(parents=True, exist_ok=True)
     if config.option.basetemp:
         base = Path(config.option.basetemp).resolve()
-        if not spotlight_excluded(base):
-            base.mkdir(parents=True, exist_ok=True)
-            config.option.basetemp = str(base / "pytest.noindex")
-    else:
-        base = Path(os.environ.get("PYTEST_DEBUG_TEMPROOT", tempfile.gettempdir())).resolve()
-        if not spotlight_excluded(base):
-            base = base / "pytest.noindex"
-        base.mkdir(parents=True, exist_ok=True)
-        os.environ["PYTEST_DEBUG_TEMPROOT"] = str(base)
+        if base == temp_root or not base.is_relative_to(temp_root):
+            # Keep independent explicit basetemps independent without writing outside this tree.
+            key = hashlib.sha256(str(base).encode()).hexdigest()[:12]
+            base = temp_root / f"{base.name}-{key}"
+        config.option.basetemp = str(base)
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
     _install_db_open_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
     if helper.is_file():
@@ -216,14 +216,13 @@ def pytest_configure(config):
 def pytest_sessionfinish(session, exitstatus):
     """Inspect the final artifacts after test/fixture teardown, including failed runs."""
     roots = [Path(__file__).resolve().parents[1]]
-    factory = getattr(session.config, "_tmp_path_factory", None)
-    if factory is not None and factory._basetemp is not None:
-        roots.append(factory._basetemp)
     strays = find_stray_apps(*roots)
     if strays:
         reporter = session.config.pluginmanager.getplugin("terminalreporter")
         if reporter:
-            reporter.write_sep("=", "Stray app bundles: move build/extract/QA outputs under *.noindex", red=True)
+            reporter.write_sep(
+                "=", "Artifact hygiene: outputs belong in .build.noindex; docs.local keeps text receipts", red=True
+            )
             for path in strays:
                 reporter.write_line(str(path))
         session.exitstatus = pytest.ExitCode.TESTS_FAILED

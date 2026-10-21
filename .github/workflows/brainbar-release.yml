@@ -104,13 +104,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          app_dir="$PWD/docs.local/artifacts.noindex/release/BrainBar.app"
+          app_dir="$PWD/dist/BrainBar.app"
           bin_dir="$(cd brain-bar && swift build -c release --show-bin-path)"
           plist="$app_dir/Contents/Info.plist"
           launchagents_dir="$app_dir/Contents/Resources/LaunchAgents"
           plist_buddy="/usr/libexec/PlistBuddy"
 
-          rm -rf "$PWD/docs.local/artifacts.noindex/release"
+          rm -rf "$PWD/dist"
           mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$launchagents_dir"
           cp brain-bar/bundle/Info.plist "$plist"
           cp brain-bar/bundle/AppIcon.icns "$app_dir/Contents/Resources/AppIcon.icns"
@@ -188,9 +188,9 @@ jobs:
         if: steps.signing.outputs.signed == 'true'
         run: |
           set -euo pipefail
-          codesign --force --deep --options runtime --timestamp --sign "$BRAINBAR_SIGNING_IDENTITY" docs.local/artifacts.noindex/release/BrainBar.app
-          codesign --verify --deep --strict --verbose=4 docs.local/artifacts.noindex/release/BrainBar.app
-          codesign -dv --verbose=4 docs.local/artifacts.noindex/release/BrainBar.app
+          codesign --force --deep --options runtime --timestamp --sign "$BRAINBAR_SIGNING_IDENTITY" dist/BrainBar.app
+          codesign --verify --deep --strict --verbose=4 dist/BrainBar.app
+          codesign -dv --verbose=4 dist/BrainBar.app
 
       - name: Notarize BrainBar.app
         if: steps.signing.outputs.signed == 'true'
@@ -214,23 +214,22 @@ jobs:
           fi
 
           notary_zip="$RUNNER_TEMP/BrainBar-notary.zip"
-          ditto -c -k --keepParent docs.local/artifacts.noindex/release/BrainBar.app "$notary_zip"
+          ditto -c -k --keepParent dist/BrainBar.app "$notary_zip"
           xcrun notarytool submit "$notary_zip" \
             --apple-id "$BRAINBAR_NOTARY_APPLE_ID" \
             --password "$BRAINBAR_NOTARY_PASSWORD" \
             --team-id "$BRAINBAR_NOTARY_TEAM_ID" \
             --wait
-          xcrun stapler staple docs.local/artifacts.noindex/release/BrainBar.app
-          xcrun stapler validate docs.local/artifacts.noindex/release/BrainBar.app
-          codesign --verify --deep --strict --verbose=4 docs.local/artifacts.noindex/release/BrainBar.app
-          spctl --assess --type execute --verbose=4 docs.local/artifacts.noindex/release/BrainBar.app
+          xcrun stapler staple dist/BrainBar.app
+          xcrun stapler validate dist/BrainBar.app
+          codesign --verify --deep --strict --verbose=4 dist/BrainBar.app
+          spctl --assess --type execute --verbose=4 dist/BrainBar.app
           echo "BRAINBAR_NOTARIZATION_STATUS=notarized and stapled" >> "$GITHUB_ENV"
 
       - name: Package BrainBar.zip
         run: |
           set -euo pipefail
-          mkdir -p dist
-          ditto -c -k --keepParent docs.local/artifacts.noindex/release/BrainBar.app dist/BrainBar.zip
+          ditto -c -k --keepParent dist/BrainBar.app dist/BrainBar.zip
           ls -lh dist/BrainBar.zip
 
       - name: Guard BrainBar.zip exists before release
@@ -245,7 +244,7 @@ jobs:
       - name: Verify packaged BrainBar.zip
         run: |
           set -euo pipefail
-          verify_dir="$PWD/docs.local/artifacts.noindex/release-verify"
+          verify_dir="$RUNNER_TEMP/brainbar-zip-verify"
           rm -rf "$verify_dir"
           mkdir -p "$verify_dir"
           ditto -x -k dist/BrainBar.zip "$verify_dir"

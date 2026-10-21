@@ -137,7 +137,9 @@ def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, s
     monkeypatch.setattr(wrapper.subprocess, "run", run)
     monkeypatch.setattr(wrapper.sys, "argv", [str(path), "--filter", "FixtureTest"])
     assert wrapper.main() == expected
-    assert calls == [["swift", "test", "--filter", "FixtureTest"]]
+    assert calls == [
+        ["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift"), "--filter", "FixtureTest"]
+    ]
 
 
 def test_swift_job_runs_only_for_brain_bar_changes():

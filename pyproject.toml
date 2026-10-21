@@ -118,7 +118,7 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 asyncio_mode = "auto"
 pythonpath = ["src"]
 # Keep temp trees only for failed tests: passing full-suite runs left 40+ GiB basetemps (2026-10-19).
-# tests/conftest.py routes default and explicit basetemps beneath *.noindex before fixtures start.
+# tests/conftest.py routes default and explicit basetemps beneath <worktree>/.build.noindex/pytest/ before fixtures start.
 tmp_path_retention_policy = "failed"
 markers = [
     "crash_sweep: exhaustive migration/revert SIGKILL cuts (separate required CI gate; retained by local pre-push)",
