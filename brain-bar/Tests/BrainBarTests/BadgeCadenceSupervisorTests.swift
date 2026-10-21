@@ -40,6 +40,36 @@ final class BadgeCadenceSupervisorTests: XCTestCase {
         XCTAssertNil(cadence.assumption)
     }
 
+    func testDisabledSupervisorCadenceUsesDisclosedDefaultAndBadgeStillExpires() throws {
+        try writeCadence(420, source: "supervisor", enabled: false)
+        let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+        XCTAssertEqual(cadence.interval, 300)
+        XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s")
+        try assertNoAttentionOrRedDot(readBadge(age: 600, cadence: cadence))
+        try assertStaleAttentionAndRedDot(age: 601, cadence: cadence)
+    }
+
+    func testEnabledSupervisorCadenceRemainsKnownAndUsesItsInterval() throws {
+        try writeCadence(420, source: "supervisor", enabled: true)
+        let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+        XCTAssertEqual(cadence.interval, 420)
+        XCTAssertNil(cadence.assumption)
+        try assertNoAttentionOrRedDot(readBadge(age: 840, cadence: cadence))
+        try assertStaleAttentionAndRedDot(age: 841, cadence: cadence)
+    }
+
+    func testSupervisorCadenceWithoutEnabledDefaultsToEnabled() throws {
+        let jobs: [String: Any] = [
+            "com.brainlayer.health-check": ["plist": ["StartInterval": 420]],
+        ]
+        try JSONSerialization.data(withJSONObject: jobs).write(to: root.appendingPathComponent("jobs.json"))
+        let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+        XCTAssertEqual(cadence.interval, 420)
+        XCTAssertNil(cadence.assumption)
+        try assertNoAttentionOrRedDot(readBadge(age: 840, cadence: cadence))
+        try assertStaleAttentionAndRedDot(age: 841, cadence: cadence)
+    }
+
     func testFreshBadgeWithLaunchAgentCadenceHasNoAttentionOrRedDot() throws {
         try writeLaunchAgent(interval: 420)
         let cadence = ObservabilityReader.healthCheckCadence(environment: environment)

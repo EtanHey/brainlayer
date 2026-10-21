@@ -348,6 +348,7 @@ enum ObservabilityReader {
         if let data = FileManager.default.contents(atPath: jobsPath),
            let jobs = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
            let job = jobs["com.brainlayer.health-check"] as? [String: Any],
+           (job["enabled"] as? Bool) != false,
            let interval = validInterval((job["plist"] as? [String: Any])?["StartInterval"]) {
             return .known(interval)
         }
