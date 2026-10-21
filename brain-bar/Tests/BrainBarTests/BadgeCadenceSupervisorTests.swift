@@ -103,6 +103,90 @@ final class BadgeCadenceSupervisorTests: XCTestCase {
         XCTAssertFalse(title.contains("assuming"))
     }
 
+    func testReviewerAExtremeSupervisorCadenceExpiresDayOldBadge() throws {
+        try writeCadence(1e308, source: "supervisor")
+        let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+        XCTAssertEqual(cadence.interval, 300)
+        XCTAssertNotNil(cadence.assumption)
+        try assertStaleAttentionAndRedDot(age: 86_400, cadence: cadence)
+    }
+
+    func testReviewerBExtremeDisabledSupervisorCadenceExpiresYearOldBadge() throws {
+        try writeCadence(1e308, source: "supervisor", enabled: false)
+        let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+        XCTAssertEqual(cadence.interval, 300)
+        XCTAssertNotNil(cadence.assumption)
+        try assertStaleAttentionAndRedDot(age: 365 * 86_400, cadence: cadence)
+    }
+
+    func testCadenceBoundariesStayKnownAndExpireAfterTwiceIntervalForEverySource() throws {
+        for source in ["launch-agent", "supervisor"] {
+            for interval: TimeInterval in [30, 3600] {
+                try writeCadence(interval, source: source)
+                let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+                XCTAssertEqual(cadence.interval, interval, source)
+                XCTAssertNil(cadence.assumption, source)
+                XCTAssertTrue((cadence.interval * 2.0).isFinite, source)
+                try assertNoAttentionOrRedDot(readBadge(age: interval * 2.0, cadence: cadence))
+                try assertStaleAttentionAndRedDot(age: interval * 2.0 + 1, cadence: cadence)
+            }
+        }
+    }
+
+    func testOutOfRangeCadencesUseDefaultAndStillExpireForEverySource() throws {
+        for source in ["launch-agent", "supervisor"] {
+            for interval: TimeInterval in [29, 3601, 0, -1, 1e308, Double(Int.max), .greatestFiniteMagnitude] {
+                try writeCadence(interval, source: source)
+                let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+                XCTAssertEqual(cadence.interval, 300, "\(source): \(interval)")
+                XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s", "\(source): \(interval)")
+                XCTAssertTrue((cadence.interval * 2.0).isFinite, "\(source): \(interval)")
+                try assertNoAttentionOrRedDot(readBadge(age: 600, cadence: cadence))
+                try assertStaleAttentionAndRedDot(age: 601, cadence: cadence)
+            }
+        }
+    }
+
+    func testExtremeCadenceStillExpiresObservabilitySnapshotForEverySource() throws {
+        let url = try XCTUnwrap(Bundle.module.url(
+            forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
+        ))
+        guard case let .readable(document) = ObservabilityReader.read(url: url) else {
+            return XCTFail("Expected readable observability fixture")
+        }
+        for source in ["launch-agent", "supervisor"] {
+            try writeCadence(1e308, source: source)
+            let cadence = ObservabilityReader.healthCheckCadence(environment: environment)
+            let snapshot = ObservabilityPresentation.snapshot(
+                document: document, now: document.generatedAt.addingTimeInterval(601), cadence: cadence
+            )
+            XCTAssertTrue(snapshot.isStale, source)
+            XCTAssertTrue(snapshot.cards.allSatisfy { $0.tone == .amber }, source)
+        }
+    }
+
+    private func writeCadence(_ interval: TimeInterval, source: String, enabled: Bool = true) throws {
+        for path in environment.values where FileManager.default.fileExists(atPath: path) {
+            try FileManager.default.removeItem(atPath: path)
+        }
+        let plist: [String: Any] = ["Label": "com.brainlayer.health-check", "StartInterval": interval]
+        if source == "launch-agent" {
+            try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+                .write(to: root.appendingPathComponent("health-check.plist"))
+        } else {
+            let jobs: [String: Any] = ["com.brainlayer.health-check": ["enabled": enabled, "plist": plist]]
+            try JSONSerialization.data(withJSONObject: jobs).write(to: root.appendingPathComponent("jobs.json"))
+        }
+    }
+
+    private func assertStaleAttentionAndRedDot(age: TimeInterval, cadence: ObservabilityCadence) throws {
+        let badge = try readBadge(age: age, cadence: cadence)
+        XCTAssertTrue(badge.badgeOn)
+        XCTAssertEqual(badge.reason, "Badge state is stale.")
+        XCTAssertTrue(BrainBarStatusPopoverController.statusLineTitle(for: badge).hasPrefix("Needs attention: "))
+        XCTAssertGreaterThan(try redPixelCount(for: badge), 0)
+    }
+
     private func writeSupervisor(interval: Int) throws {
         let jobs: [String: Any] = [
             "com.brainlayer.health-check": [

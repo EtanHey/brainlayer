@@ -358,7 +358,9 @@ enum ObservabilityReader {
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         let interval = number.doubleValue
-        return interval.isFinite && interval > 0 ? interval : nil
+        // Untrustworthy schedules use the disclosed 300s fallback. Bounding the
+        // TimeInterval also keeps the 2x freshness window and refresh timer finite.
+        return interval.isFinite && (30.0...3600.0).contains(interval) ? interval : nil
     }
 
     private struct SchemaEnvelope: Decodable {
