@@ -291,12 +291,14 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
             backups: .init(state: b.state, reason: b.reason, inputs: b.inputs, freshness: "stale",
                            thresholdHours: b.thresholdHours, retentionInvariant: b.retentionInvariant,
                            survivingArchives30D: b.survivingArchives30D, errorType: nil,
-                           lastVerifiedUpload: b.lastVerifiedUpload, dbSnapshot: b.dbSnapshot, launchd: b.launchd)
+                           lastVerifiedUpload: b.lastVerifiedUpload,
+                           dbSnapshot: .init(lastAt: Date().addingTimeInterval(-48 * 3600),
+                                             destination: "fixture.db.zst", verified: true), launchd: b.launchd)
         )
         let model = try viewModel(.readable(stale))
         XCTAssertNil(model.jobAlert)
         // Lead UX r1 on #1064: the Recovery checks card already says it; the header shows it once.
-        XCTAssertEqual(model.backupsHealth(drive: nil).reason, "Up to date: A copy is older than 36 hours")
+        XCTAssertEqual(model.backupsHealth(drive: nil).reason, "Database copy: Last offsite DB copy is 2 days old")
         XCTAssertNil(model.backupsBadgeReason(drive: nil))
     }
 }
