@@ -1245,3 +1245,111 @@ def test_t3_indexing_failure_health_scrubs_secrets_from_the_error(tmp_path, monk
     assert len(error) <= 500
     if not message.startswith("x"):
         assert "[REDACTED:openai]" in error and "api_key=[REDACTED:assignment]" in error
+
+
+@pytest.fixture(
+    params=[
+        (
+            f"reader failed: {_SYNTHETIC_PROVIDER_KEY} api_key={_SYNTHETIC_LABELED_VALUE}",
+            "reader failed: [REDACTED:openai] api_key=[REDACTED:assignment]",
+        ),
+        ("x" * 480 + f" {_SYNTHETIC_PROVIDER_KEY}", "x" * 480 + " [REDACTED:openai]"),
+        ("x" * 480 + f" api_key={_SYNTHETIC_LABELED_VALUE}", "x" * 480 + " api_key=[REDACTED:assignment]"),
+    ],
+    ids=["inline", "provider_straddles_cap", "assignment_straddles_cap"],
+)
+def health_exception_text(request):
+    return request.param
+
+
+@pytest.mark.parametrize("error_kind", ["os", "sqlite", "operational", "payload"])
+def test_t3_reader_failure_health_scrubs_exception_text(tmp_path, monkeypatch, health_exception_text, error_kind):
+    from brainlayer.ingest.t3 import T3PayloadError, T3Reader
+
+    state = _create_t3_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "t3-health.json"
+    message, scrubbed = health_exception_text
+    error_types = {
+        "os": OSError,
+        "sqlite": sqlite3.DatabaseError,
+        "operational": sqlite3.OperationalError,
+        "payload": T3PayloadError,
+    }
+    error = error_types[error_kind](message)
+    reader = T3Reader(state, health_path=health)
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(reader, "_read_snapshot", fail)
+    expected_code = "t3_payload_invalid" if error_kind == "payload" else "t3_reader_failed"
+    with pytest.raises(BrainLayerAlarm) as raised:
+        reader.read_threads()
+    assert raised.value.code == expected_code
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is True
+    assert snapshot["alert_reasons"] == ["reader_failure"]
+    failure = snapshot["failures"][0]
+    assert failure["code"] == expected_code
+    assert failure["error_type"] == type(error).__name__
+    assert failure["error"] == scrubbed[:500]
+
+
+@pytest.mark.parametrize("schema_error", ["no such table", "no such column"])
+def test_t3_schema_race_health_scrubs_sqlite_error(tmp_path, monkeypatch, health_exception_text, schema_error):
+    from brainlayer.ingest.t3 import T3Reader
+
+    state = _create_t3_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "t3-health.json"
+    message, scrubbed = health_exception_text
+    # Put the token at the same boundary regardless of the diagnostic prefix length.
+    prefix = f"{schema_error}: "
+    if message.startswith("x"):
+        message, scrubbed = message[len(prefix) :], scrubbed[len(prefix) :]
+    error = sqlite3.OperationalError(prefix + message)
+    reader = T3Reader(state, health_path=health)
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(reader, "_read_snapshot", fail)
+    with pytest.raises(BrainLayerAlarm) as raised:
+        reader.read_threads()
+    assert raised.value.code == "t3_schema_drift"
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is True
+    assert snapshot["alert_reasons"] == ["schema_drift"]
+    failure = snapshot["failures"][0]
+    assert failure["error_type"] == "OperationalError"
+    assert failure["sqlite_error"] == (prefix + scrubbed)[:500]
+    assert failure["error"] == (prefix + scrubbed)[:500]
+
+
+def test_t3_source_selection_failure_health_scrubs_alarm_message(tmp_path, monkeypatch, health_exception_text):
+    from brainlayer.ingest import t3
+
+    state = _create_t3_fixture(tmp_path / "state.sqlite")
+    health = tmp_path / "t3-health.json"
+    message, scrubbed = health_exception_text
+    code = "t3_source_unavailable"
+    prefix = f"{code}: "
+    if message.startswith("x"):
+        message, scrubbed = message[len(prefix) :], scrubbed[len(prefix) :]
+    alarm = BrainLayerAlarm(code, message, {"state_db_path": str(state)})
+    resolve_sources = t3.resolve_t3_sources
+
+    def fail_initial_probe(state_db_path, projection_version, **kwargs):
+        if kwargs.get("tolerate_legacy_failure"):
+            raise alarm
+        return resolve_sources(state_db_path, projection_version, **kwargs)
+
+    monkeypatch.setattr(t3, "resolve_t3_sources", fail_initial_probe)
+    with pytest.raises(BrainLayerAlarm) as raised:
+        t3.ingest_t3(state, health_path=health, dry_run=True, projection_version=1)
+    assert raised.value is alarm
+    snapshot = json.loads(health.read_text())
+    assert snapshot["alerting"] is True
+    assert snapshot["alert_reasons"] == ["source_selection_failure"]
+    failure = snapshot["failures"][0]
+    assert failure["code"] == code
+    assert failure["message"] == (prefix + scrubbed)[:500]
