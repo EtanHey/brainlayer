@@ -93,6 +93,8 @@ struct BrainBarCalendarHistory: Sendable {
         var reason: String? = nil
         var replaces: String? = nil
         var scheduledDate: String? = nil
+        // Position in this journal snapshot; wall-clock timestamps can move backwards.
+        var journalOrdinal: Int? = nil
     }
     var runs: [String: Run] = [:]
     var error: String? = nil
@@ -106,7 +108,7 @@ struct BrainBarCalendarHistory: Sendable {
             ) else { return .empty }
             var result = Self()
             var starts: [String: Date] = [:]
-            for line in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline) {
+            for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
                 guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 else { throw CocoaError(.fileReadCorruptFile) }
                 if row["event"] as? String == "spawn", let step = row["step"] as? String,
@@ -129,7 +131,7 @@ struct BrainBarCalendarHistory: Sendable {
                 else { throw CocoaError(.fileReadCorruptFile) }
                 result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
                     startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
-                    scheduledDate: result.latestScheduledDate)
+                    scheduledDate: result.latestScheduledDate, journalOrdinal: ordinal)
             }
             return result
         } catch { return Self(error: "Maintenance calendar history is unreadable") }

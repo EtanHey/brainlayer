@@ -650,11 +650,13 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         let run = history.runs[name]
         // Coverage belongs to the replacing runner's scheduled night. A later runner without a
         // nightly result must fall back to the nightly's own history, even if the weekly was ok.
+        // Only journal order proves replacement; missing order must preserve the real result.
         if job == .maintenanceNightly, let weekly = history.runs["maintenance-weekly"],
            let scheduledDate = history.latestScheduledDate, !scheduledDate.isEmpty,
            weekly.scheduledDate == scheduledDate,
            weekly.replaces == "maintenance-nightly", weekly.status == "ok", weekly.code == 0,
-           weekly.startedAt != nil, run.map({ $0.at < weekly.at }) ?? true {
+           weekly.startedAt != nil, let weeklyOrdinal = weekly.journalOrdinal,
+           run.map({ nightly in nightly.journalOrdinal.map { $0 < weeklyOrdinal } ?? false }) ?? true {
             var covered = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: nil, lastExitCode: nil,
                                                           lastRunAt: nil, nextRunAt: next, isContinuous: false)
             covered.calendarCoveredByWeeklyAt = weekly.at

@@ -174,6 +174,68 @@ final class BrainBarZeroWarningsTests: XCTestCase {
         XCTAssertEqual(maintenance.noteTone, .warning)
     }
 
+    @MainActor
+    func testReviewerAClockRollbackKeepsLaterFailedAndStoppedNightlyVisible() throws {
+        for (result, code) in [("failed", 1), ("stopped", -15)] {
+            try assertNightlyWarning(history("""
+            {"event":"runner","ts":1790769600.0,"scheduled_date":"2026-10-21"}
+            {"event":"spawn","step":"maintenance-weekly","ts":1790772600.0,"pid":4242}
+            {"event":"finished","step":"maintenance-weekly","ts":1790773200.0,"status":"ok","returncode":0,"replaces":"maintenance-nightly"}
+            {"event":"runner","ts":1790769800.0,"scheduled_date":"2026-10-21"}
+            {"event":"spawn","step":"maintenance-nightly","ts":1790769900.0,"pid":4250}
+            {"event":"finished","step":"maintenance-nightly","ts":1790770000.0,"status":"\(result)","returncode":\(code)}
+
+            """), result: result, code: Int32(code))
+        }
+    }
+
+    @MainActor
+    func testReviewerBClockRollbackKeepsLaterFailedAndStoppedNightlyVisible() throws {
+        for (result, code) in [("failed", 1), ("stopped", -15)] {
+            try assertNightlyWarning(history("""
+            {"event":"runner","ts":1792548000,"scheduled_date":"2026-10-21"}
+            {"event":"spawn","step":"maintenance-weekly","ts":1792548010,"pid":4242}
+            {"event":"finished","step":"maintenance-weekly","ts":1792548100,"status":"ok","returncode":0,"replaces":"maintenance-nightly"}
+            {"event":"runner","ts":1792548050,"scheduled_date":"2026-10-21"}
+            {"event":"spawn","step":"maintenance-nightly","ts":1792548060,"pid":4250}
+            {"event":"finished","step":"maintenance-nightly","ts":1792548070,"status":"\(result)","returncode":\(code)}
+
+            """), result: result, code: Int32(code))
+        }
+    }
+
+    @MainActor
+    func testMissingJournalOrderCannotCoverAFailedNightly() throws {
+        let history = BrainBarCalendarHistory(runs: [
+            "maintenance-weekly": .init(at: Date(timeIntervalSince1970: Self.base), code: 0, status: "ok",
+                startedAt: Date(timeIntervalSince1970: Self.base - 100), replaces: "maintenance-nightly",
+                scheduledDate: "2026-10-21"),
+            "maintenance-nightly": .init(at: Date(timeIntervalSince1970: Self.base - 50), code: 1, status: "failed"),
+        ], latestScheduledDate: "2026-10-21")
+        try assertNightlyWarning(history, result: "failed", code: 1)
+    }
+
+    @MainActor
+    private func assertNightlyWarning(_ history: BrainBarCalendarHistory, result: String, code: Int32,
+                                     file: StaticString = #filePath, line: UInt = #line) throws {
+        let observations = BrainBarSupervisorStatusTests.supervised(history: history).sampleActivity()
+        let expected = "Maintenance Nightly: calendar result \(result), exit \(code)"
+        let nightly = try XCTUnwrap(observations[.maintenanceNightly])
+        XCTAssertNil(nightly.calendarCoveredByWeeklyAt, file: file, line: line)
+        XCTAssertEqual(nightly.loadState, .failed(expected), file: file, line: line)
+        XCTAssertEqual(nightly.lastExitCode, code, file: file, line: line)
+        XCTAssertEqual(nightly.ownerNoteTone, .warning, file: file, line: line)
+        let maintenance = status(.maintenance, observations)
+        XCTAssertEqual(maintenance.health, .unhealthy, file: file, line: line)
+        XCTAssertEqual(maintenance.noteTone, .warning, file: file, line: line)
+        XCTAssertEqual(maintenance.attentionReason, expected, file: file, line: line)
+        XCTAssertFalse(maintenance.lastRunText.contains("Covered by weekly"), file: file, line: line)
+        let model = try settingsModel(observations)
+        let schedule = try XCTUnwrap(model.presentedBackupSchedules.first { $0.title == "Nightly maintenance" })
+        XCTAssertFalse(schedule.lastRun.contains("Covered by weekly"), file: file, line: line)
+        XCTAssertTrue(model.dashboardJobAttentionReasons.contains(expected), file: file, line: line)
+    }
+
     func testWeeklyCoverageExpiresAfterALaterScheduledNightWithoutNightly() throws {
         let laterNight = """
         {"event":"runner","ts":\(Self.base + 86400),"scheduled_date":"2026-10-22"}
