@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -424,7 +425,15 @@ def test_orchestrator_consumer_scope_preserves_cross_repo_and_null_visibility(st
     assert {"repo-a", "repo-b", None} <= set(_projects(results))
 
 
-def test_coach_consumer_scope_uses_personal_lane_and_recency_checkpoints(store):
+def test_coach_consumer_scope_uses_personal_lane_and_recency_checkpoints(store, monkeypatch):
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 6, 15, tzinfo=timezone.utc).astimezone(tz)
+
+    # Keep the fixed checkpoints' recency gap independent of the wall clock.
+    monkeypatch.setattr("brainlayer.search_repo.datetime", FrozenDateTime)
+
     _insert_chunk(
         store,
         chunk_id="old-personal-checkpoint",
