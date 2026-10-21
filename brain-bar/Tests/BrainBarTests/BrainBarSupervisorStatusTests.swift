@@ -74,7 +74,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         let directory = try journal("migrated").deletingLastPathComponent()
         let file = directory.appendingPathComponent("runs.jsonl")
         try Data("""
-        {"event":"runner","ts":1784466000}
+        {"event":"runner","ts":1784466000,"scheduled_date":"2026-07-19"}
         {"event":"spawn","step":"index","ts":1784466001,"pid":4241}
         {"event":"finished","step":"index","ts":1784466060,"status":"ok","returncode":0}
         {"event":"spawn","step":"maintenance-weekly","ts":1784466100,"pid":4242}
@@ -100,7 +100,8 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             XCTAssertEqual(history.runs["jsonl-backup"]?.startedAt, Date(timeIntervalSince1970: 1784466200))
             let observations = Self.supervised(history: history).sampleActivity()
             XCTAssertEqual(observations[.maintenanceWeekly]?.lastExitCode, 0)
-            XCTAssertEqual(observations[.maintenanceWeekly]?.ownerNote, "Nightly skipped: weekly ran instead")
+            XCTAssertEqual(observations[.maintenanceWeekly]?.ownerNote, "com.brainlayer.maintenance · last result: ok")
+            XCTAssertEqual(observations[.maintenanceNightly]?.calendarCoveredByWeeklyAt, Date(timeIntervalSince1970: 1784466160))
             XCTAssertEqual(observations[.jsonlBackup]?.lastExitCode, 0)
             XCTAssertEqual(observations[.jsonlBackup]?.loadState, .loaded)
             if dailyFinished {
@@ -161,6 +162,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
             XCTAssertTrue(status.note?.contains("Nightly skipped: weekly scheduled instead") == true)
         }
         try Data("""
+        {"event":"runner","ts":1784465900,"scheduled_date":"2026-07-19"}
         {"event":"spawn","step":"maintenance-weekly","ts":1784466000,"pid":4242}
         {"event":"finished","step":"maintenance-weekly","ts":1784466060,"status":"ok","returncode":0,"replaces":"maintenance-nightly"}
 
@@ -168,9 +170,11 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         let observations = Self.supervised(history: BrainBarCalendarHistory.read(directory: directory)).sampleActivity()
         let status = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
             observations: observations, formatDate: { _ in "today" })
-        XCTAssertEqual(status.health, .awaitingRun)
+        // 2026-10-21: an ok weekly that replaced the nightly covers it; the card is healthy.
+        XCTAssertEqual(status.health, .healthy)
         XCTAssertNil(status.attentionReason)
-        XCTAssertTrue(status.note?.contains("Nightly skipped: weekly ran instead") == true)
+        XCTAssertTrue(status.note?.contains("Nightly covered by weekly") == true)
+        XCTAssertEqual(status.noteTone, .info)
         // A subsequent nightly run must clear the earlier substitution note.
         let nightly = "{\"event\":\"finished\",\"step\":\"maintenance-nightly\",\"ts\":1784552460,\"status\":\"ok\",\"returncode\":0}\n"
         let handle = try FileHandle(forWritingTo: file)
@@ -181,6 +185,7 @@ final class BrainBarSupervisorStatusTests: XCTestCase {
         let recoveredStatus = BrainLayerLaunchdJobGroup.maintenance.status(settings: BrainLayerConfig.defaultConfig.launchdJobs,
             observations: recovered, formatDate: { _ in "today" })
         XCTAssertFalse(recoveredStatus.note?.contains("Nightly skipped") == true)
+        XCTAssertFalse(recoveredStatus.note?.contains("covered by weekly") == true)
     }
 
     func testIndexDeferralJournalReasonsAreNeutralButFailuresRemainAttention() throws {

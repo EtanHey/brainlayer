@@ -348,6 +348,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
         XCTAssertEqual(status.health, .healthy, "a warning never turns the card red or 'Needs attention'")
         XCTAssertNil(status.attentionReason)
         XCTAssertEqual(status.note, "Nightly last run OK · search slower than target (62 ms)")
+        XCTAssertEqual(status.noteTone, .warning)
     }
 
     func testAnUnrecognisedWarningIsShownAsWritten() {
@@ -356,6 +357,7 @@ final class BrainBarMaintenanceSkipTests: XCTestCase {
             records: [.maintenanceWeekly: .notAnAbort(writtenAt: lastRun.addingTimeInterval(60), warnings: ["vacuum reclaimed less than expected"])]
         )
         XCTAssertEqual(status.note, "Weekly last run OK · vacuum reclaimed less than expected")
+        XCTAssertEqual(status.noteTone, .warning)
     }
 
     /// CodeRabbit #1062: a value too large for Int must never trap; it is shown as written.
