@@ -79,6 +79,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 - `brain_digest` is write-heavy; do not run it in parallel with other MCP work.
 
 ## Tests
+- Build, extract and QA outputs live under `*.noindex` so Spotlight never lists a stray BrainBar.app.
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
 - **Suite hygiene is enforced for unmarked tests.** `tests/conftest.py` guards embedding model

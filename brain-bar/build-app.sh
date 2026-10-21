@@ -3,7 +3,7 @@
 #
 # Usage: bash brain-bar/build-app.sh [--dry-run] [--force-worktree-build] [--force-dirty]
 #
-# Output: ~/Applications/BrainBar.app (override with BRAINBAR_APP_DIR)
+# Output: docs.local/artifacts.noindex/build/BrainBar.app (override with BRAINBAR_APP_DIR)
 
 set -euo pipefail
 
@@ -198,7 +198,7 @@ refuse_brew_managed_app_dir() {
     if [ "$brew_status" -ne 0 ]; then
         echo "[build-app] ERROR: could not determine whether Homebrew manages $BRAINBAR_CASK_NAME" >&2
         echo "[build-app] using ${BRAINBAR_BREW_BIN:-brew discovery}; refusing to overwrite $APP_DIR." >&2
-        echo "[build-app] Build elsewhere with BRAINBAR_APP_DIR=\"\$HOME/Applications/BrainBar.app\"." >&2
+        echo "[build-app] Build elsewhere with BRAINBAR_APP_DIR=\"\$PWD/docs.local/artifacts.noindex/build/BrainBar.app\"." >&2
         exit 1
     fi
 
@@ -207,7 +207,7 @@ refuse_brew_managed_app_dir() {
     echo "[build-app] silent drift, and the next 'brew upgrade --cask' destroys the install." >&2
     echo "[build-app] Do one of these instead:" >&2
     echo "[build-app]   * update from the cask:  bash scripts/brainlayer-update-brainbar.sh" >&2
-    echo "[build-app]   * build somewhere else:  BRAINBAR_APP_DIR=\"\$HOME/Applications/BrainBar.app\" bash brain-bar/build-app.sh" >&2
+    echo "[build-app]   * build somewhere else:  BRAINBAR_APP_DIR=\"\$PWD/docs.local/artifacts.noindex/build/BrainBar.app\" bash brain-bar/build-app.sh" >&2
     exit 1
 }
 
@@ -265,8 +265,8 @@ stage_protected_resident_rebuild() {
         return 0
     fi
 
-    local tmp_parent
-    tmp_parent="${TMPDIR:-/tmp}"
+    local tmp_parent="$CURRENT_REPO_ROOT/docs.local/artifacts.noindex"
+    mkdir -p "$tmp_parent"
     PROTECTED_RESIDENT_STAGED_BUILD=1
     PROTECTED_RESIDENT_FINAL_APP_DIR="$(protected_resident_app_path)"
     PROTECTED_RESIDENT_STAGING_ROOT="$(mktemp -d "${tmp_parent%/}/brainbar-resident-rebuild.XXXXXX")"
@@ -463,19 +463,26 @@ cleanup_stale_dev_bundles() {
 
 if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ] && [ "$FORCE_WORKTREE_BUILD" -ne 1 ]; then
     echo "[build-app] ERROR: refusing non-canonical build from $CURRENT_REPO_ROOT" >&2
-    echo "[build-app] Re-run with --force-worktree-build to install a DEV bundle instead of ~/Applications/BrainBar.app" >&2
+    echo "[build-app] Re-run with --force-worktree-build to install a DEV bundle under docs.local/artifacts.noindex/build" >&2
     exit 1
 fi
 
 if [ "$CURRENT_REPO_ROOT" != "$CANONICAL_REPO_ROOT" ]; then
     DEV_BUNDLE_BUILD=1
     SAFE_BRANCH_NAME="$(sanitize_branch_name "$(resolve_branch_name)")"
-    APP_DIR="$HOME/Applications/BrainBar-DEV-$SAFE_BRANCH_NAME.app"
+    APP_DIR="$CURRENT_REPO_ROOT/docs.local/artifacts.noindex/build/BrainBar-DEV-$SAFE_BRANCH_NAME.app"
 else
-    APP_DIR="${BRAINBAR_APP_DIR:-$HOME/Applications/BrainBar.app}"
+    APP_DIR="${BRAINBAR_APP_DIR:-$CURRENT_REPO_ROOT/docs.local/artifacts.noindex/build/BrainBar.app}"
 fi
 normalize_app_dir_path
 refuse_brew_managed_app_dir
+case "$(canonical_compare_path "$APP_DIR")/" in
+    /Applications/*|*.noindex/*) ;;
+    *)
+        echo "[build-app] ERROR: build outputs outside /Applications must live under *.noindex: $APP_DIR" >&2
+        exit 1
+        ;;
+esac
 
 DIRTY_STATUS="$(git -C "$CURRENT_REPO_ROOT" status --porcelain --untracked-files=all)"
 if [ -n "$DIRTY_STATUS" ] && [ "$FORCE_DIRTY" -ne 1 ]; then

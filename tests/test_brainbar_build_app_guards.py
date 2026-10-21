@@ -67,6 +67,7 @@ def _prepare_build_repo(tmp_path: Path, repo_name: str, branch: str = "main") ->
     _write_tracked_file(repo, "brain-bar/install-services.py", helper.read_text())
     shutil.copy2(source_script, target_script)
     _write_tracked_file(repo, "README.md", "# test repo\n")
+    _write_tracked_file(repo, ".gitignore", ".venv/\ndocs.local/\n")
     _write_tracked_file(repo, "brain-bar/build-app.sh", target_script.read_text())
     _commit(repo, "chore: seed build script")
     return repo, target_script
@@ -338,7 +339,7 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar.app") in result.stdout
     assert "UI LaunchAgent: canonical install" in result.stdout
     assert "Daemon LaunchAgent: canonical install" in result.stdout
 
@@ -410,9 +411,11 @@ def test_build_app_embeds_launchagent_templates_in_app_resources(tmp_path: Path)
         extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
     )
 
-    launchagents_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
-    resources_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources"
-    info_plist = home / "Applications" / "BrainBar.app" / "Contents" / "Info.plist"
+    launchagents_dir = (
+        repo / "docs.local/artifacts.noindex/build/BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
+    )
+    resources_dir = repo / "docs.local/artifacts.noindex/build/BrainBar.app" / "Contents" / "Resources"
+    info_plist = repo / "docs.local/artifacts.noindex/build/BrainBar.app" / "Contents" / "Info.plist"
     assert result.returncode == 0, result.stderr
     assert (resources_dir / "AppIcon.icns").read_bytes() == b"fake icns"
     plist_data = plistlib.loads(info_plist.read_bytes())
@@ -766,6 +769,7 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
     old_mtime = 0
     os.utime(old_age_bundle, (old_mtime, old_mtime))
     _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=True)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
 
     result = _run_build_script(
@@ -1088,7 +1092,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar-DEV-feat-ui-guards.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar-DEV-feat-ui-guards.app") in result.stdout
     assert "LaunchAgents: skipped for DEV worktree build" in result.stdout
 
 
@@ -1125,7 +1129,7 @@ def test_build_app_allows_dirty_canonical_repo_with_force_dirty(tmp_path: Path) 
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar.app") in result.stdout
 
 
 def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_path: Path) -> None:
@@ -1144,7 +1148,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_p
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar-DEV-feat-space-case.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar-DEV-feat-space-case.app") in result.stdout
 
 
 def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) -> None:
@@ -1162,7 +1166,7 @@ def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) ->
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar.app") in result.stdout
 
 
 def test_run_build_script_strips_parent_brainbar_app_dir_for_test_isolation(
@@ -1182,7 +1186,7 @@ def test_run_build_script_strips_parent_brainbar_app_dir_for_test_isolation(
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar.app") in result.stdout
     assert "leaked.app" not in result.stdout
 
 
@@ -1190,7 +1194,7 @@ def test_build_app_honors_explicit_brainbar_app_dir_for_canonical_dry_run(tmp_pa
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
     home.mkdir()
-    explicit_app_dir = tmp_path / "custom" / "BrainBar-Custom.app"
+    explicit_app_dir = tmp_path / "custom.noindex" / "BrainBar-Custom.app"
 
     result = _run_build_script(
         repo,
@@ -1344,7 +1348,7 @@ def test_build_app_does_not_consult_brew_for_non_resident_paths(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / "docs.local/artifacts.noindex/build/BrainBar.app") in result.stdout
     assert not brew_log.exists(), "consulted brew for a path Homebrew can never own"
 
 

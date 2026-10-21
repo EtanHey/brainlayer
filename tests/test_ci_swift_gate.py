@@ -126,6 +126,7 @@ def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, s
     def run(command, *, env):
         root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
         assert root.is_absolute() and root.is_dir()
+        assert root.name.endswith(".noindex")
         assert env["TMPDIR"] == str(root) + "/"
         assert list(root.glob("brainbar-*")) == []
         calls.append(command)

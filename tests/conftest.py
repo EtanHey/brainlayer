@@ -62,6 +62,8 @@ else:
 
 import pytest
 
+from scripts.check_stray_apps import find_stray_apps, spotlight_excluded
+
 
 @pytest.fixture(autouse=True)
 def isolated_doctor_install_prefix(request, monkeypatch):
@@ -178,6 +180,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
+    if config.option.basetemp:
+        base = Path(config.option.basetemp).resolve()
+        if not spotlight_excluded(base):
+            base.mkdir(parents=True, exist_ok=True)
+            config.option.basetemp = str(base / "pytest.noindex")
+    else:
+        base = Path(os.environ.get("PYTEST_DEBUG_TEMPROOT", tempfile.gettempdir())).resolve()
+        if not spotlight_excluded(base):
+            base = base / "pytest.noindex"
+        base.mkdir(parents=True, exist_ok=True)
+        os.environ["PYTEST_DEBUG_TEMPROOT"] = str(base)
     _install_db_open_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
     if helper.is_file():
@@ -198,6 +211,22 @@ def pytest_configure(config):
         "markers",
         "live: mark test as requiring a live production DB (skipped in CI if DB absent)",
     )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Inspect the final artifacts after test/fixture teardown, including failed runs."""
+    roots = [Path(__file__).resolve().parents[1]]
+    factory = getattr(session.config, "_tmp_path_factory", None)
+    if factory is not None and factory._basetemp is not None:
+        roots.append(factory._basetemp)
+    strays = find_stray_apps(*roots)
+    if strays:
+        reporter = session.config.pluginmanager.getplugin("terminalreporter")
+        if reporter:
+            reporter.write_sep("=", "Stray app bundles: move build/extract/QA outputs under *.noindex", red=True)
+            for path in strays:
+                reporter.write_line(str(path))
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def pytest_collection_modifyitems(config, items):

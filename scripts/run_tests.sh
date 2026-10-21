@@ -446,6 +446,13 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/check_stray_apps.py)
+        test_path="$TEST_ROOT/test_app_bundle_hygiene.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       scripts/release_tag_contains.py)
         # The release gate needs a mapping of its own: no generic scripts/*.py rule exists, and an
         # unmapped gate script is the same fail-open the gate itself exists to close.
@@ -476,7 +483,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
+        src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/check_stray_apps.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;

@@ -10,7 +10,7 @@ import tempfile
 def main():
     # macOS Unix socket paths have a small fixed limit; nesting under its long default
     # /var/folders TMPDIR makes the existing private daemon fixtures exceed it.
-    with tempfile.TemporaryDirectory(prefix="brainbar-suite-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="brainbar-suite-", suffix=".noindex", dir="/tmp") as directory:
         root = Path(directory)
         before = set(root.glob("brainbar-*"))
         result = subprocess.run(
