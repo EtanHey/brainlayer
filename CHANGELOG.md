@@ -39,6 +39,25 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.68] - 2026-10-21
+
+### Fixed
+- BrainBar no longer shows a false red menu-bar dot on a healthy Mac. The health check now runs under the supervisor, but BrainBar only looked for its old LaunchAgent plist, so it reported "Badge freshness unknown: cadence unknown" and went red. BrainBar now reads the cadence from that plist first, then from the `com.brainlayer.health-check` entry in the supervisor's `jobs.json` (skipped when the entry is `enabled: false`). A cadence from 30 to 3600 seconds is used as-is; anything else falls back to 300 seconds. An unknown cadence on its own no longer raises an alarm; a badge older than twice the cadence still shows "Needs attention" and the red dot. The menu's status line is capped at 60 characters (was 72), and its tooltip keeps the full reason (#1433).
+- BrainBar's Jobs page no longer paints healthy notes amber. Informational owner notes (for example `com.brainlayer.maintenance · last result: ok` or `Supervisor component … · PID …`) are plain neutral text. Failed jobs, configured-off jobs and runs that succeeded with warnings keep the amber ⚠, and a note nobody classified defaults to amber (#1430).
+- When that night's weekly maintenance ran in place of the nightly and finished ok, the nightly row says "Nightly covered by weekly" and its last-run cell on Jobs and Backups reads "Covered by weekly · <time>". It used to say "Not yet run under the supervisor" or "No calendar run recorded". Coverage counts only for the same scheduled night, and only when the journal order shows the weekly after any nightly result. A missing scheduled date or missing order fails closed to the nightly's own result, and a later night with no nightly run goes back to the nightly's own failed or not-yet-run state. The weekly row now shows its own `last result: ok` (#1430, #1420).
+- The Dashboard's job-status refresh works again. Its 60-second timer was created inside the view body and replaced on every re-render, so it never fired, and the Dashboard could keep showing a stale "things need you" from the sample taken when it opened. A single loop owned by the view's lifetime now samples on open and then every 60 seconds (#1430).
+- The DB-copy dot and wording follow the copy's age. When observability reports backups `stale`, a verified offsite DB copy older than the freshness window turns the Dashboard's DB dot and the Backups recovery check red. The DB-copy codes read as sentences ("The database copy in Google Drive is older than N hours", "No verified database copy in Google Drive", …) instead of "DB backup error: …" (#1430; fixes #1420).
+- BrainBar's local-copy listing recognizes zstd snapshots (`YYYY-MM-DD.db.zst`) as well as `.db` and legacy `.db.gz`. This Swift change merged with #1421 in 1.5.67, but 1.5.67 was formula-only, so this is the first BrainBar app that ships it (#1421).
+- Health alerts for repeated scheduled-job failures give the real count. Nightly maintenance (`com.brainlayer.maintenance`) now reads `com.brainlayer.maintenance: failed N nights in a row; last exit E`. N is the actual streak, not the fixed heal-attempt constant (3), and the exit appears once; the text no longer says "crashloop". Other scheduled (interval) jobs report their real `N failed runs`. A run still in progress is never counted and never clears an alert, and a completed run behind a live one is counted exactly once. Alert and clear thresholds are unchanged, and so are daemon heal attempts and their wording. Alerts saved before this fix, which carry no count, keep their old text (#1427).
+- T3 ingest: every exception text written to `t3-health.json` is now scrubbed with the at-rest secret scrubber (`scrub_for_storage`) before it is cut to 500 characters, matching what #1424 did for the indexing-failure record. This covers reader failures (`failures[].error`), the SQLite schema race (`failures[].sqlite_error`) and the source-selection failure (`failures[].message`). Codes, error types, alert reasons and the re-raised alarm are unchanged (#1429).
+
+### Tests
+- The recency checkpoint test in `tests/test_consumer_scoping.py` freezes its clock at 2026-06-15, so its May/June fixtures no longer swap order as the real date moves on. Test-only; no runtime change (#1432).
+
+### Upgrade notes
+- Full release: the formula and the BrainBar app (cask) both move to 1.5.68. The app is the first since 1.5.66.
+- `BRAINLAYER_SUPERVISOR_JOBS_PATH` overrides where BrainBar reads the supervisor's `jobs.json` (default `~/.local/share/brainlayer/supervisor/jobs.json`). `BRAINLAYER_HEALTH_CHECK_PLIST_PATH` still names the LaunchAgent plist, which is checked first.
+
 ## [1.5.67] - 2026-10-20
 
 ### Changed
