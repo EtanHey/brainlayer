@@ -230,7 +230,6 @@ def scan_job_lifecycle(
         interval = "StartInterval" in plist or "StartCalendarInterval" in plist
         prior = previous_state.get(label, {})
         prior_runs = prior.get("runs")
-        advanced = prior_runs is not None and runs > prior_runs
         reason, last_exit = _failure(
             _output(printed),
             current_keg,
@@ -240,15 +239,22 @@ def scan_job_lifecycle(
             if label == "com.brainlayer.daemon"
             else None,
         )
+        if interval and _pid(_output(printed)) is not None:
+            # The live invocation has no exit yet; last_exit belongs to runs - 1.
+            # Consume that completion only once, independently of the live PID's keg.
+            if prior_runs is None:
+                state[label] = {**prior, "runs": max(0, runs - 1)}
+                continue
+            if runs <= prior_runs + 1:
+                continue
+            runs -= 1
+            reason = None
+        advanced = prior_runs is not None and runs > prior_runs
         if reason and reason.startswith("keg mapping unavailable"):
             if interval:
                 continue  # A running interval script may not have loaded a keg library yet.
             # Preserve this uncertain episode without healing it; known jobs still progress.
             scan_errors.append(f"{label}: {reason}")
-            continue
-        if interval and _pid(_output(printed)) is not None:
-            # A live run (current or stale keg) still reports the previous run's exit.
-            # Defer counting, keeping the runs watermark, until launchd reports it completed.
             continue
         if reason is None and advanced and last_exit not in (None, 0):
             reason = f"crashloop, last exit code {last_exit}"

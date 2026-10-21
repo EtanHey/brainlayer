@@ -527,3 +527,78 @@ def test_nightly_maintenance_first_success_clears_and_restarts_threshold(tmp_pat
         assert len(tick.escalations) == int(failures == 3)
         assert tick.actions == []
         state = tick.state
+
+
+@pytest.fixture(params=["log-cap", "maintenance"])
+def scheduled_success(tmp_path: Path, request):
+    tmp_path = tmp_path.resolve()
+    name = request.param
+    options = {"StartCalendarInterval": {"Hour": 3}} if name == "maintenance" else {"StartInterval": 300}
+    old, current, opt = _setup(tmp_path, (name, options))
+    fake = FakeCommands(current, old)
+    fake.runs[name], fake.exit[name], fake.pid[name] = 1, 0, None
+    tick = _tick(tmp_path, opt, fake, {}, 0, heal=False)
+    assert tick.scan_error is None and tick.escalations == []
+    return tmp_path, opt, fake, name, tick
+
+
+def test_scheduled_completed_failures_between_live_samples_then_idle(scheduled_success):
+    tmp_path, opt, fake, name, tick = scheduled_success
+    label = f"com.brainlayer.{name}"
+    fake.exit[name] = 1
+    for runs, failures in ((3, 1), (4, 2), (5, 3)):
+        fake.runs[name], fake.pid[name] = runs, 40 + runs
+        fake.keg[40 + runs] = fake.current
+        tick = _tick(tmp_path, opt, fake, tick.state, runs * 300, heal=False)
+        assert tick.scan_error is None and tick.actions == []
+        assert tick.state[label]["runs"] == runs - 1
+        assert tick.state[label]["consecutive"] == failures
+        assert len(tick.escalations) == int(failures >= 3)
+        repeated = _tick(tmp_path, opt, fake, tick.state, runs * 300 + 1, heal=False)
+        assert repeated.state == tick.state and repeated.escalations == tick.escalations
+    fake.pid[name] = None
+    idle = _tick(tmp_path, opt, fake, tick.state, 1800, heal=False)
+    assert idle.state[label]["runs"] == 5
+    assert idle.state[label]["consecutive"] == 4
+    assert len(idle.escalations) == 1 and idle.actions == []
+    repeated = _tick(tmp_path, opt, fake, idle.state, 2100, heal=False)
+    assert repeated.state == idle.state and repeated.escalations == idle.escalations
+
+
+@pytest.mark.parametrize("mapping", ["current", "old", "unmapped"])
+def test_scheduled_successors_consume_completed_exits_once_and_recover(scheduled_success, mapping):
+    tmp_path, opt, fake, name, tick = scheduled_success
+    label = f"com.brainlayer.{name}"
+    for runs, last_exit, failures in ((2, 0, 0), (3, 1, 1), (4, 1, 2), (5, 1, 3), (6, 0, 0)):
+        fake.runs[name], fake.exit[name], fake.pid[name] = runs, last_exit, 40 + runs
+        if mapping != "unmapped":
+            fake.keg[40 + runs] = fake.current if mapping == "current" else fake.current.parent / "1.5.35"
+        else:
+            fake.ps_command = "/fixture/framework/python -m brainlayer job"
+        tick = _tick(tmp_path, opt, fake, tick.state, runs * 300, heal=False)
+        assert tick.scan_error is None and tick.actions == []
+        assert tick.state[label]["runs"] == runs - 1
+        assert tick.state[label]["consecutive"] == failures
+        assert len(tick.escalations) == int(failures >= 3)
+        repeated = _tick(tmp_path, opt, fake, tick.state, runs * 300 + 1, heal=False)
+        assert repeated.state == tick.state and repeated.escalations == tick.escalations
+
+
+@pytest.mark.parametrize("prior_alert", [False, True])
+def test_scheduled_first_live_sample_seeds_watermark_without_clearing_alert(scheduled_success, prior_alert):
+    tmp_path, opt, fake, name, _ = scheduled_success
+    label = f"com.brainlayer.{name}"
+    prior = {"interval": True, "consecutive": 3, "failed_heals": True, "last_exit_code": 1} if prior_alert else {}
+    fake.runs[name], fake.exit[name], fake.pid[name] = 2, 1, 44
+    fake.keg[44] = fake.current
+    first = _tick(tmp_path, opt, fake, {label: prior} if prior_alert else {}, 0, heal=False)
+    assert first.state[label] == {**prior, "runs": 1}
+    assert len(first.escalations) == int(prior_alert)
+    repeated = _tick(tmp_path, opt, fake, first.state, 1, heal=False)
+    assert repeated.state == first.state and repeated.escalations == first.escalations
+    fake.runs[name] = 3
+    next_run = _tick(tmp_path, opt, fake, first.state, 300, heal=False)
+    assert next_run.state[label]["runs"] == 2
+    assert next_run.state[label]["consecutive"] == (4 if prior_alert else 1)
+    assert len(next_run.escalations) == int(prior_alert)
+    assert first.actions == repeated.actions == next_run.actions == []
