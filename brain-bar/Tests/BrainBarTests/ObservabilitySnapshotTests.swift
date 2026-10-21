@@ -321,6 +321,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
     func testMissingHealthCheckCadenceIsDisclosedOnCard() throws {
         let cadence = ObservabilityReader.healthCheckCadence(environment: [
             "BRAINLAYER_HEALTH_CHECK_PLIST_PATH": "/tmp/brainbar-missing-health-check-\(UUID().uuidString).plist",
+            "BRAINLAYER_SUPERVISOR_JOBS_PATH": "/tmp/brainbar-missing-jobs-\(UUID().uuidString).json",
         ])
         XCTAssertEqual(cadence.interval, 300)
         XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s")
