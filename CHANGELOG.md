@@ -43,9 +43,15 @@
 
 ### Fixed
 - The calendar runner keeps its watchdog heartbeat alive while a step finishes: receipt fsync, alert locking and macOS notifications run off the event loop, so slow completion work no longer makes the guard kill the runner and lose every later step after an index timeout. Completion writes finish even if cancellation arrives, and runner failures and cleanup errors still produce a summary (#1440).
+- BrainBar's job-log links open the actual log for every calendar step, including index, backup snapshot, P0 counter, WAL checkpoint, decay and FTS repair. The log directory follows the calendar's `--logs-dir` from its LaunchAgent or supervisor configuration, with the usual logs directory as the fallback. A step that has not written its log yet says so (#1437).
+- The Watcher chart shows "Updating…" when database activity makes flow counts temporarily unavailable but watcher health is still known. Stale or missing health stays amber or red with a matching status message; "Evidence unavailable" is reserved for an absence of watcher evidence (#1437).
+- The Watcher chart's tooltip and accessibility text now include the reason and heartbeat age when the watcher needs attention or has stopped (#1442).
+
+### Changed
+- Developer tooling: app bundles, release extracts, build output and pytest temporary files now live under `<worktree>/.build.noindex/`, which Spotlight excludes and worktree removal cleans up. `docs.local/` is text-only, enforced by `scripts/check_stray_apps.py` (#1435).
 
 ### Upgrade notes
-- Formula-only release: the BrainBar app and its cask stay at 1.5.68. The job-log links and Watcher chart changes in #1437 are on main but remain unshipped until a separate BrainBar app release.
+- Full release: the formula and the BrainBar app (cask) both move to 1.5.69.
 
 ## [1.5.68] - 2026-10-21
 
