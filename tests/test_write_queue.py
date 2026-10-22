@@ -9,7 +9,9 @@ All tests use tmp_path fixtures (no real DB contention).
 import builtins
 import fcntl
 import json
+import os
 import sqlite3
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -24,6 +26,19 @@ from brainlayer.mcp.store_handler import (
     _queue_store,
 )
 from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk, enqueue_store, enqueue_watcher_chunk
+
+
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
+@pytest.fixture
+def fallback_repo(tmp_path):
+    """Fallback provenance belongs to this repo even when tmp_path is inside a worktree."""
+    repo = tmp_path / "systems"
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True, env=_clean_git_env())
+    return repo
+
 
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
@@ -946,14 +961,14 @@ class TestFlushPendingStores:
             "test",
         )
 
-    def test_drain_marks_fallback_source_after_store_commit(self, tmp_path, monkeypatch):
+    def test_drain_marks_fallback_source_after_store_commit(self, tmp_path, monkeypatch, fallback_repo):
         """Fallback replay debt clears only after the queued store lands in the DB."""
         from brainlayer.fallback_replay import _fallback_chunk_id, inventory_fallbacks, parse_fallback_file
 
         db_path = tmp_path / "brainlayer.db"
         queue_dir = tmp_path / "queue"
         log_path = tmp_path / "drain.log"
-        repo = tmp_path / "systems"
+        repo = fallback_repo
         fallback_path = repo / "docs.local" / "decisions" / "pending.md"
         queue_dir.mkdir()
         fallback_path.parent.mkdir(parents=True)
@@ -1006,14 +1021,16 @@ class TestFlushPendingStores:
         assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
         assert inventory_fallbacks(tmp_path, scope_map={}).summary()["green"] is True
 
-    def test_drain_deduplicates_duplicate_fallback_store_queue_files_by_chunk_id(self, tmp_path, monkeypatch):
+    def test_drain_deduplicates_duplicate_fallback_store_queue_files_by_chunk_id(
+        self, tmp_path, monkeypatch, fallback_repo
+    ):
         """Downstream ingestion is idempotent even if replay queued the same fallback twice."""
         from brainlayer.fallback_replay import _fallback_chunk_id, parse_fallback_file
 
         db_path = tmp_path / "brainlayer.db"
         queue_dir = tmp_path / "queue"
         log_path = tmp_path / "drain.log"
-        repo = tmp_path / "systems"
+        repo = fallback_repo
         fallback_path = repo / "docs.local" / "decisions" / "pending.md"
         queue_dir.mkdir()
         fallback_path.parent.mkdir(parents=True)
@@ -1069,7 +1086,9 @@ class TestFlushPendingStores:
         assert updated_entry.frontmatter["chunk_id"] == fallback_chunk_id
         assert "queued_chunk_id" not in updated_entry.frontmatter
 
-    def test_drain_marks_fallback_source_with_queued_id_after_duplicate_merge(self, tmp_path, monkeypatch):
+    def test_drain_marks_fallback_source_with_queued_id_after_duplicate_merge(
+        self, tmp_path, monkeypatch, fallback_repo
+    ):
         """A duplicate merge returns the canonical DB id but the fallback file still clears by queued id."""
         from brainlayer import drain
         from brainlayer.fallback_replay import _fallback_chunk_id, parse_fallback_file
@@ -1077,7 +1096,7 @@ class TestFlushPendingStores:
         db_path = tmp_path / "brainlayer.db"
         queue_dir = tmp_path / "queue"
         log_path = tmp_path / "drain.log"
-        repo = tmp_path / "systems"
+        repo = fallback_repo
         fallback_path = repo / "docs.local" / "decisions" / "pending.md"
         queue_dir.mkdir()
         fallback_path.parent.mkdir(parents=True)

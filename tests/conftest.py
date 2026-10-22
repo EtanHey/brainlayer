@@ -11,6 +11,7 @@ for _git_env_key in tuple(os.environ):
         os.environ.pop(_git_env_key, None)
 
 import functools
+import hashlib
 import importlib
 import shutil
 import sqlite3
@@ -62,6 +63,8 @@ else:
 
 import pytest
 
+from scripts.check_stray_apps import find_stray_apps
+
 
 @pytest.fixture(autouse=True)
 def isolated_doctor_install_prefix(request, monkeypatch):
@@ -78,6 +81,32 @@ def _git_probe(*args: str, cwd: Path | None = None) -> subprocess.CompletedProce
         text=True,
         check=False,
     )
+
+
+@pytest.fixture
+def outside_repo_dir():
+    """Small no-checkout fixtures need real isolation from Git AND Python ancestor walkers.
+
+    tmp_path lives inside this checkout's .build.noindex. A Git ceiling cannot protect consumers
+    that scrub GIT_* or walk .git ancestors themselves. Keep this exception short-lived, including
+    when a test or the precondition fails; bulky test output still belongs under tmp_path.
+    """
+    with tempfile.TemporaryDirectory(prefix="brainlayer-outside-repo-") as directory:
+        root = Path(directory).resolve()
+        for ancestor in (root, *root.parents):
+            marker = ancestor / ".git"
+            assert not (marker.exists() or marker.is_symlink()), f"outside_repo_dir has a Git ancestor: {ancestor}"
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        probe = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert probe.returncode != 0, f"outside_repo_dir discovered a Git checkout: {probe.stdout.strip()}"
+        yield root
 
 
 def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
@@ -178,6 +207,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
+    build_root = Path(__file__).resolve().parents[1] / ".build.noindex"
+    temp_root = build_root / "pytest"
+    if build_root.resolve() != build_root or not temp_root.resolve().is_relative_to(build_root):
+        raise pytest.UsageError(f"pytest output must stay inside {build_root}: {temp_root.resolve()}")
+    if config.option.basetemp:
+        requested = Path(config.option.basetemp).absolute()
+        base = requested.resolve()
+        if requested.is_relative_to(build_root) and not base.is_relative_to(build_root):
+            raise pytest.UsageError(f"pytest output must stay inside {build_root}: {requested} -> {base}")
+        if base == temp_root or not base.is_relative_to(temp_root):
+            # Keep independent explicit basetemps independent without writing outside this tree.
+            key = hashlib.sha256(str(base).encode()).hexdigest()[:12]
+            base = temp_root / f"{base.name}-{key}"
+        if not base.resolve().is_relative_to(build_root):
+            raise pytest.UsageError(f"pytest output must stay inside {build_root}: {base.resolve()}")
+        config.option.basetemp = str(base)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
     _install_db_open_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
     if helper.is_file():
@@ -198,6 +245,21 @@ def pytest_configure(config):
         "markers",
         "live: mark test as requiring a live production DB (skipped in CI if DB absent)",
     )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Inspect the final artifacts after test/fixture teardown, including failed runs."""
+    roots = [Path(__file__).resolve().parents[1]]
+    strays = find_stray_apps(*roots)
+    if strays:
+        reporter = session.config.pluginmanager.getplugin("terminalreporter")
+        if reporter:
+            reporter.write_sep(
+                "=", "Artifact hygiene: outputs belong in .build.noindex; docs.local keeps text receipts", red=True
+            )
+            for path in strays:
+                reporter.write_line(str(path))
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def pytest_collection_modifyitems(config, items):

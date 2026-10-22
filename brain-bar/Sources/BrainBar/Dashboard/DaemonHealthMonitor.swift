@@ -62,7 +62,7 @@ struct DaemonIdentity: Sendable {
     }
 
     /// The running UI's own daemon when it runs from a `BrainBar.app` bundle, wherever that
-    /// lives (`build-app.sh` defaults to ~/Applications). A DEV bundle
+    /// lives (`build-app.sh` defaults to <worktree>/.build.noindex/build). A DEV bundle
     /// (`BrainBar-DEV-<branch>.app`) or a non-bundle run is never production, so it accepts
     /// only the installed /Applications daemon. Symlinks are resolved because `proc_pidpath`
     /// reports the real path.

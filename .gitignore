@@ -8,6 +8,7 @@ venv/
 env/
 
 # Build
+.build.noindex/
 dist/
 # Release build-sha stamp (written by publish.yml, shipped in the wheel, never committed)
 src/brainlayer/_build.py
