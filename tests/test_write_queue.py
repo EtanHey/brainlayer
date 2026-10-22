@@ -11,7 +11,9 @@ import fcntl
 import json
 import os
 import sqlite3
+import stat
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -43,6 +45,92 @@ def fallback_repo(tmp_path):
 # ---------------------------------------------------------------------------
 # _queue_store / _flush_pending_stores unit tests
 # ---------------------------------------------------------------------------
+
+
+def test_enqueue_syncs_file_and_directory_before_return(tmp_path, monkeypatch):
+    from brainlayer import queue_io
+
+    calls = []
+    real_fsync = os.fsync
+    real_replace = Path.replace
+
+    def sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            assert len(list(tmp_path.glob("*.jsonl"))) == 1
+            calls.append("directory")
+        else:
+            assert not list(tmp_path.glob("*.jsonl"))
+            assert json.loads(next(tmp_path.glob("*.tmp")).read_text())["content"] == "durable"
+            calls.append("file")
+        real_fsync(fd)
+
+    def replace(path, target):
+        assert calls == ["file"], "sync the flushed bytes before publishing the queue name"
+        calls.append("rename")
+        return real_replace(path, target)
+
+    monkeypatch.setattr(os, "fsync", sync)
+    monkeypatch.setattr(Path, "replace", replace)
+    path = queue_io.enqueue_jsonl({"content": "durable"}, source="test", queue_dir=tmp_path)
+    assert calls == ["file", "rename", "directory"]
+    assert path.exists()
+
+
+def test_enqueue_syncs_new_queue_directory_ancestors(tmp_path, monkeypatch):
+    from brainlayer import queue_io
+
+    synced = []
+    real_fsync = os.fsync
+
+    def sync(fd):
+        info = os.fstat(fd)
+        synced.append(info.st_ino if stat.S_ISDIR(info.st_mode) else "file")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", sync)
+    directory = tmp_path / "new-parent" / "queue"
+    queue_io.enqueue_jsonl({"content": "new directory"}, source="test", queue_dir=directory)
+    assert synced == [tmp_path.stat().st_ino, directory.parent.stat().st_ino, "file", directory.stat().st_ino]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin device-cache durability barrier")
+def test_enqueue_syncs_drive_cache_before_return(tmp_path, monkeypatch):
+    from brainlayer import queue_io
+
+    synced = []
+    real_fcntl = fcntl.fcntl
+
+    def fullsync(fd, command, *args):
+        if command == fcntl.F_FULLFSYNC:
+            synced.append("directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+        return real_fcntl(fd, command, *args)
+
+    monkeypatch.setattr(fcntl, "fcntl", fullsync)
+    queue_io.enqueue_jsonl({"content": "power loss barrier"}, source="test", queue_dir=tmp_path)
+    assert synced == ["file", "directory"]
+
+
+@pytest.mark.parametrize("failure", ["file", "rename", "directory"])
+def test_enqueue_sync_failure_never_returns_success(tmp_path, monkeypatch, failure):
+    from brainlayer import queue_io
+
+    real_fsync = os.fsync
+
+    def sync(fd):
+        kind = "directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+        if kind == failure:
+            raise OSError("injected sync failure")
+        real_fsync(fd)
+
+    def replace(*_args):
+        raise OSError("injected rename failure")
+
+    monkeypatch.setattr(os, "fsync", sync)
+    if failure == "rename":
+        monkeypatch.setattr(Path, "replace", replace)
+    with pytest.raises(OSError, match="injected"):
+        queue_io.enqueue_jsonl({"content": "must fail closed"}, source="test", queue_dir=tmp_path)
+    assert not list(tmp_path.glob("*.tmp")), "unpublished partial files must be cleaned up"
 
 
 class TestQueueStore:

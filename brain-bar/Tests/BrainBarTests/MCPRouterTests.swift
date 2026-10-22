@@ -5,6 +5,7 @@
 // - tools/list: return all registered tools with schemas
 // - tools/call: dispatch to tool handler by name
 
+import Darwin
 import XCTest
 import SQLite3
 @testable import BrainBar
@@ -2180,6 +2181,149 @@ No results found.
     }
 
     // MARK: - brain_store queue fallback
+
+    func testDeferredReceiptWaitsForQueueSyncAndFailsClosedOnSyncError() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let dbPath = tempDir.appendingPathComponent("brainbar.db").path
+        let db = BrainDatabase(path: dbPath)
+        defer { db.close() }
+        // Hold replay until the receipt and the on-disk queue have been inspected.
+        let drainQueue = DispatchQueue(label: "test.queue-sync-drain")
+        drainQueue.suspend()
+        defer { drainQueue.resume(); drainQueue.sync {} }
+        let router = MCPRouter(profile: "full", pendingStoreDrainQueue: drainQueue)
+        router.setDatabase(db)
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        db.pendingStoreSyncForTesting = { fd in
+            entered.signal()
+            guard release.wait(timeout: .now() + 5) == .success else {
+                throw BrainDatabase.DBError.exec(SQLITE_IOERR, "sync barrier timed out")
+            }
+            XCTAssertEqual(fsync(fd), 0)
+        }
+        db.failNextStoreWithBusyForTesting = true
+        DispatchQueue.global().async {
+            let response = router.handle(toolCall(id: 230, name: "brain_store", arguments: ["content": "Durable receipt barrier"]))
+            let result = response["result"] as? [String: Any]
+            XCTAssertEqual(result?["status"] as? String, "DEFERRED")
+            finished.signal()
+        }
+        // Both the queue file and its parent directory must sync before success.
+        for _ in 0..<2 {
+            XCTAssertEqual(entered.wait(timeout: .now() + 1), .success)
+            XCTAssertEqual(finished.wait(timeout: .now() + 0.02), .timedOut)
+            release.signal()
+        }
+        XCTAssertEqual(finished.wait(timeout: .now() + 5), .success)
+        let retained = try Data(contentsOf: queuePath)
+        for failureIndex in 1...2 {
+            var syncCount = 0
+            db.pendingStoreSyncForTesting = { fd in
+                syncCount += 1
+                if syncCount == failureIndex {
+                    throw BrainDatabase.DBError.exec(SQLITE_IOERR, "injected queue sync failure")
+                }
+                XCTAssertEqual(fsync(fd), 0)
+            }
+            db.failNextStoreWithBusyForTesting = true
+            let content = "Failed sync must never replay \(failureIndex)"
+            let response = router.handle(toolCall(id: 231, name: "brain_store", arguments: ["content": content]))
+            let result = try XCTUnwrap(response["result"] as? [String: Any])
+            XCTAssertEqual(result["isError"] as? Bool, true)
+            XCTAssertNil(result["status"])
+            XCTAssertNil(result["chunk_id"])
+            let text = (result["content"] as? [[String: Any]])?.first?["text"] as? String ?? ""
+            XCTAssertTrue(text.contains("ERROR"))
+            XCTAssertEqual(try Data(contentsOf: queuePath), retained, "rollback preserves earlier receipts")
+            XCTAssertFalse(try chunkContents(path: dbPath).contains(content))
+        }
+        db.pendingStoreSyncForTesting = nil
+        XCTAssertEqual(db.flushPendingStores().count, 1, "only the acknowledged item can replay")
+        XCTAssertEqual(try chunkContents(path: dbPath), ["Durable receipt barrier"])
+    }
+
+    func testPendingQueueRewriteSyncsParentDirectoryAfterReplacement() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+        try "malformed retained line\n".write(to: queuePath, atomically: false, encoding: .utf8)
+        _ = try db.queuePendingStore(content: "Rewrite durable item", tags: [], importance: 5, source: "mcp")
+        var syncedDirectory = false
+        db.pendingStoreSyncForTesting = { fd in
+            var info = stat()
+            XCTAssertEqual(fstat(fd, &info), 0)
+            if info.st_mode & S_IFMT == S_IFDIR {
+                XCTAssertEqual(try String(contentsOf: queuePath, encoding: .utf8), "malformed retained line\n")
+                syncedDirectory = true
+            }
+            XCTAssertEqual(fsync(fd), 0)
+        }
+        XCTAssertEqual(db.flushPendingStores().count, 1)
+        XCTAssertTrue(syncedDirectory, "the renamed queue must be durable before rewrite completes")
+        XCTAssertEqual(db.flushPendingStores().count, 0)
+        XCTAssertEqual(try chunkContents(path: tempDir.appendingPathComponent("brainbar.db").path), ["Rewrite durable item"])
+    }
+
+    func testDeferredStoreQueueSyncLatency() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+        var syncMilliseconds = 0.0
+        db.pendingStoreSyncForTesting = { fd in
+            let start = DispatchTime.now().uptimeNanoseconds
+            try BrainDatabase.syncPendingStoreDescriptor(fd)
+            syncMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        var samples: [Double] = []
+        for _ in 0..<100 {
+            syncMilliseconds = 0
+            _ = try db.queuePendingStore(
+                content: String(repeating: "q", count: 1_024),
+                tags: [], importance: 5, source: "mcp"
+            )
+            samples.append(syncMilliseconds)
+        }
+        samples.sort()
+        print(String(format: "DEFERRED_FSYNC_COST samples=100 payload_bytes=1024 p50_ms=%.3f p95_ms=%.3f mean_ms=%.3f max_ms=%.3f",
+                     samples[50], samples[95], samples.reduce(0, +) / 100, samples[99]))
+        XCTAssertEqual(db.pendingStoreQueueSnapshot().depth, 100)
+    }
+
+    func testDurableQueueReplaysOnceAfterDatabaseCopyAndRestart() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let queuePath = tempDir.appendingPathComponent("pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let originalPath = tempDir.appendingPathComponent("original.db").path
+        let original = BrainDatabase(path: originalPath)
+        defer { original.close() }
+        let queued = try original.queuePendingStore(content: "Restart durability fixture", tags: [], importance: 5, source: "mcp")
+        original.close()
+        let copiedPath = tempDir.appendingPathComponent("copied.db").path
+        try FileManager.default.copyItem(atPath: originalPath, toPath: copiedPath)
+        let restarted = BrainDatabase(path: copiedPath)
+        XCTAssertEqual(restarted.flushPendingStores().map(\.storedChunk.chunkID), [queued.chunkID])
+        restarted.close()
+        let reopened = BrainDatabase(path: copiedPath)
+        defer { reopened.close() }
+        XCTAssertTrue(reopened.flushPendingStores().isEmpty)
+        XCTAssertEqual(try chunkContents(path: copiedPath), ["Restart durability fixture"])
+    }
 
     func testBrainStoreQueuesWithoutDatabaseWhenRouterHasDBPath() throws {
         let tempDir = makeTempTestDirectory()

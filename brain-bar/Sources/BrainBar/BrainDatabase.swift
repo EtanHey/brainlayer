@@ -880,6 +880,7 @@ final class BrainDatabase: @unchecked Sendable {
     private var injectionRecipientIdentityCacheLoadedAt = Date.distantPast
     var failNextStoreAfterInsertForTesting = false
     var failNextStoreWithBusyForTesting = false
+    var pendingStoreSyncForTesting: ((Int32) throws -> Void)?
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -1733,7 +1734,8 @@ final class BrainDatabase: @unchecked Sendable {
             project: project,
             createdAt: createdAt,
             chunkID: chunkID,
-            conversationID: conversationID
+            conversationID: conversationID,
+            sync: pendingStoreSyncForTesting
         )
     }
 
@@ -1755,16 +1757,14 @@ final class BrainDatabase: @unchecked Sendable {
         project: String? = nil,
         createdAt: String? = nil,
         chunkID: String? = nil,
-        conversationID: String? = nil
+        conversationID: String? = nil,
+        sync: ((Int32) throws -> Void)? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
 
         let path = pendingStorePath(forDBPath: dbPath)
-        try FileManager.default.createDirectory(
-            at: path.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        try createDurableQueueDirectory(at: path.deletingLastPathComponent())
         let queueID = UUID().uuidString.lowercased()
         let queuedAt = Self.timestamp()
         let createdAt = createdAt ?? queuedAt
@@ -1785,7 +1785,7 @@ final class BrainDatabase: @unchecked Sendable {
         ).scrubbed()
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
-        if let existing = try appendPendingStoreLine(line, item: item, to: path) {
+        if let existing = try appendPendingStoreLine(line, item: item, to: path, sync: sync ?? syncPendingStoreDescriptor) {
             return existing
         }
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
@@ -4462,7 +4462,8 @@ final class BrainDatabase: @unchecked Sendable {
     private static func appendPendingStoreLine(
         _ line: Data,
         item: PendingStoreItem,
-        to path: URL
+        to path: URL,
+        sync: (Int32) throws -> Void
     ) throws -> (queueID: String, queuedAt: String, chunkID: String)? {
         try Self.withPendingStoreProcessLock(for: path) {
             let fd = open(path.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
@@ -4487,6 +4488,8 @@ final class BrainDatabase: @unchecked Sendable {
                           let queueID = existing.queueID,
                           let queuedAt = existing.queuedAt,
                           let chunkID = existing.chunkID else { continue }
+                    try sync(fd)
+                    try syncQueueDirectory(path.deletingLastPathComponent(), sync: sync)
                     return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
                 }
             }
@@ -4499,7 +4502,25 @@ final class BrainDatabase: @unchecked Sendable {
                 )
             }
 
-            try Self.writeAll(line, to: fd, context: "append pending store queue line")
+            let originalLength = lseek(fd, 0, SEEK_END)
+            guard originalLength >= 0 else {
+                throw DBError.exec(SQLITE_IOERR, "failed to measure pending store queue before append")
+            }
+            do {
+                try Self.writeAll(line, to: fd, context: "append pending store queue line")
+                try sync(fd)
+                try syncQueueDirectory(path.deletingLastPathComponent(), sync: sync)
+            } catch {
+                // No failed receipt may leave a new replayable item. Both queue locks
+                // remain held until the exact pre-append bytes have been restored.
+                while ftruncate(fd, originalLength) != 0 {
+                    if errno == EINTR { continue }
+                    throw DBError.exec(SQLITE_IOERR, "failed to roll back pending store queue append: \(error)")
+                }
+                try syncPendingStoreDescriptor(fd)
+                try syncQueueDirectory(path.deletingLastPathComponent())
+                throw error
+            }
             return nil
         }
     }
@@ -4684,33 +4705,56 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
-    private static func writePrivateAtomic(_ data: Data, to path: URL) throws {
+    // F_FULLFSYNC also flushes the device cache on Darwin; fsync alone only
+    // reaches the drive and is insufficient for the DEFERRED power-loss promise.
+    static func syncPendingStoreDescriptor(_ fd: Int32) throws {
+        for operation in [{ fsync(fd) }, { fcntl(fd, F_FULLFSYNC) }] {
+            while operation() != 0 {
+                if errno == EINTR { continue }
+                throw DBError.exec(SQLITE_IOERR, "failed to sync pending store queue: \(String(cString: strerror(errno)))")
+            }
+        }
+    }
+
+    private static func syncQueueDirectory(
+        _ directory: URL,
+        sync: (Int32) throws -> Void = syncPendingStoreDescriptor
+    ) throws {
+        let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw DBError.exec(SQLITE_IOERR, "failed to open pending store directory for sync: \(String(cString: strerror(errno)))")
+        }
+        defer { Darwin.close(fd) }
+        try sync(fd)
+    }
+
+    private static func createDurableQueueDirectory(at directory: URL) throws {
+        guard !urlIsDirectory(directory) else { return }
+        let parent = directory.deletingLastPathComponent()
+        try createDurableQueueDirectory(at: parent)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try syncQueueDirectory(parent)
+    }
+
+    private static func writePrivateAtomic(
+        _ data: Data, to path: URL,
+        sync: (Int32) throws -> Void = syncPendingStoreDescriptor
+    ) throws {
         let directory = path.deletingLastPathComponent()
         let temporaryPath = directory.appendingPathComponent(".\(path.lastPathComponent).\(UUID().uuidString).tmp")
         let fd = open(temporaryPath.path, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0o600)
         guard fd >= 0 else {
-            let message = String(cString: strerror(errno))
-            throw DBError.exec(SQLITE_CANTOPEN, "failed to create private pending store queue temp file: \(message)")
+            throw DBError.exec(SQLITE_CANTOPEN, "failed to create private pending store queue temp file: \(String(cString: strerror(errno)))")
         }
-
-        do {
-            defer { Darwin.close(fd) }
-            try enforcePendingStoreFileMode(fd: fd, path: temporaryPath)
-            try writeAll(data, to: fd, context: "write pending store queue temp file")
-            guard fsync(fd) == 0 else {
-                let message = String(cString: strerror(errno))
-                throw DBError.exec(SQLITE_IOERR, "failed to sync pending store queue temp file: \(message)")
-            }
-        } catch {
-            try? FileManager.default.removeItem(at: temporaryPath)
-            throw error
-        }
-
+        defer { Darwin.close(fd) }
+        defer { try? FileManager.default.removeItem(at: temporaryPath) }
+        try enforcePendingStoreFileMode(fd: fd, path: temporaryPath)
+        try writeAll(data, to: fd, context: "write pending store queue temp file")
+        try sync(fd)
         guard rename(temporaryPath.path, path.path) == 0 else {
-            let message = String(cString: strerror(errno))
-            try? FileManager.default.removeItem(at: temporaryPath)
-            throw DBError.exec(SQLITE_IOERR, "failed to replace pending store queue atomically: \(message)")
+            throw DBError.exec(SQLITE_IOERR, "failed to replace pending store queue atomically: \(String(cString: strerror(errno)))")
         }
+        try syncQueueDirectory(directory, sync: sync)
     }
 
     private static func enforcePendingStoreFileMode(fd: Int32? = nil, path: URL) throws {
@@ -4954,7 +4998,7 @@ final class BrainDatabase: @unchecked Sendable {
                 data.append(line)
                 data.append(0x0A)
             }
-            try Self.writePrivateAtomic(data, to: path)
+            try Self.writePrivateAtomic(data, to: path, sync: pendingStoreSyncForTesting ?? Self.syncPendingStoreDescriptor)
             try Self.enforcePendingStoreFileMode(path: path)
         } catch {
             NSLog("[BrainBar] Failed to rewrite pending stores queue: %@", String(describing: error))

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -25,12 +27,47 @@ def get_queue_dir() -> Path:
     return _guard_test_runtime_path(Path.home() / ".brainlayer" / "queue", source="canonical queue path")
 
 
+def _sync_queue_fd(fd: int) -> None:
+    os.fsync(fd)
+    if sys.platform == "darwin":
+        # fsync only reaches the drive cache; ask Darwin to flush it to media.
+        fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+
+
+def _sync_directory(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        _sync_queue_fd(fd)
+    finally:
+        os.close(fd)
+
+
+def _mkdir_durable(directory: Path) -> None:
+    if directory.is_dir():
+        return
+    _mkdir_durable(directory.parent)
+    directory.mkdir(exist_ok=True)
+    _sync_directory(directory.parent)
+
+
+def _write_synced_queue_file(path: Path, text: str) -> None:
+    handle = path.open("x", encoding="utf-8")
+    try:
+        with handle:
+            handle.write(text)
+            handle.flush()
+            _sync_queue_fd(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir: Path | None = None) -> Path:
     """Atomically append one or more write intents as a JSONL file."""
     if not events:
         raise ValueError("enqueue_jsonl_batch requires at least one event")
     resolved_dir = queue_dir or get_queue_dir()
-    resolved_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_durable(resolved_dir)
     now_ms = int(time.time() * 1000)
     queued_at = time.time()
     safe_source = _safe_source_name(source)
@@ -47,8 +84,14 @@ def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir:
     ]
     final_path = resolved_dir / f"{safe_source}-{now_ms}-{uuid.uuid4().hex}.jsonl"
     tmp_path = final_path.with_suffix(".tmp")
-    tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp_path.replace(final_path)
+    _write_synced_queue_file(tmp_path, "\n".join(lines) + "\n")
+    try:
+        tmp_path.replace(final_path)
+        _sync_directory(resolved_dir)
+    finally:
+        # A post-rename sync failure leaves the published intent for recovery,
+        # but still raises: the caller must not acknowledge durable publication.
+        tmp_path.unlink(missing_ok=True)
     return final_path
 
 
