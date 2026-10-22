@@ -9,6 +9,7 @@ All tests use tmp_path fixtures (no real DB contention).
 import builtins
 import fcntl
 import json
+import os
 import sqlite3
 import subprocess
 import threading
@@ -27,11 +28,15 @@ from brainlayer.mcp.store_handler import (
 from brainlayer.queue_io import enqueue_enrichment_updates, enqueue_hook_chunk, enqueue_store, enqueue_watcher_chunk
 
 
+def _clean_git_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 @pytest.fixture
 def fallback_repo(tmp_path):
     """Fallback provenance belongs to this repo even when tmp_path is inside a worktree."""
     repo = tmp_path / "systems"
-    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True, env=_clean_git_env())
     return repo
 
 
