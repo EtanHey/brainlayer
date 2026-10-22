@@ -310,6 +310,85 @@ def test_cancelled_start_retains_writer_lock_until_worker_finishes(tmp_path, mon
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failure", ["birth", "unexpected"])
+def test_start_failure_keeps_heartbeating_without_releasing_or_orphaning_child(native, monkeypatch, caplog, failure):
+    import asyncio
+
+    import brainlayer.service_supervisor as module
+
+    path, _, _ = native
+    spawned, records, sent = [], [], []
+    spawn, record = module.gated_spawn, module.Custody.record
+
+    def tracked_spawn(*args, **kwargs):
+        process, gate = spawn(*args, **kwargs)
+        spawned.append(process)
+        return process, gate
+
+    def tracked_record(*args):
+        records.append(args[1:])
+        return record(*args)
+
+    monkeypatch.setattr(module, "gated_spawn", tracked_spawn)
+    monkeypatch.setattr(module.Custody, "record", tracked_record)
+    monkeypatch.setattr(module, "start_time", lambda pid: None)
+
+    async def scenario():
+        marker = path / "executed"
+        child = Component((sys.executable, "-c", f"open({str(marker)!r},'w').close()"))
+        supervisor = Supervisor({"test": child}, path / "control.sock", backoff=60)
+        send = supervisor._send
+
+        def tracked_send(line):
+            sent.append(line)
+            send(line)
+
+        def unexpected(component):
+            raise ValueError("injected startup explosion")
+
+        monkeypatch.setattr(supervisor, "_send", tracked_send)
+        if failure == "unexpected":
+            monkeypatch.setattr(supervisor, "_start", unexpected)
+        task = asyncio.create_task(supervisor.run())
+
+        async def until(probe):
+            while not probe():
+                if task.done():
+                    await task
+                    pytest.fail("supervisor stopped during startup failure")
+                await asyncio.sleep(0.01)
+
+        try:
+            await asyncio.wait_for(until(lambda: child.failures == 1 and child.startup is None), 5)
+            assert child.error == (
+                "cannot establish child birth identity"
+                if failure == "birth"
+                else "startup failed: injected startup explosion"
+            )
+            assert child.retry_at > time.monotonic() and child.starts == 0 and child.process is None
+            assert not marker.exists() and not records and not supervisor.custody.groups
+            assert not any(line.startswith("+") for line in sent)
+            assert len(spawned) == (failure == "birth")
+            for process in spawned:
+                assert process.returncode == 1 and not exists(process.pid)
+                with pytest.raises(ChildProcessError):
+                    os.waitpid(process.pid, os.WNOHANG)
+            pulses = sent.count("H")
+            await asyncio.wait_for(until(lambda: sent.count("H") >= pulses + 2), 5)
+            if failure == "unexpected":
+                assert "supervisor component startup failed" in caplog.text
+                assert "ValueError: injected startup explosion" in caplog.text
+        finally:
+            supervisor.stop.set()
+            try:
+                await task
+            finally:
+                for process in spawned:
+                    process.wait(timeout=2)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("wedge", ["loop", "worker"])
 def test_guard_kills_wedged_loop_or_overdue_io_and_reaps(native, monkeypatch, wedge):
     injection = f"""
