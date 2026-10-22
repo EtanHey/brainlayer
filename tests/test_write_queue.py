@@ -1900,9 +1900,11 @@ def test_drain_limits_enrichment_events_per_transaction(tmp_path, monkeypatch):
 
     assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=log_path) == 2
     assert queue_file.exists()
-    assert len(queue_file.read_text(encoding="utf-8").splitlines()) == 2
+    # Partial progress keeps original bytes/ordinals; receipts identify the committed prefix.
+    assert len(queue_file.read_text(encoding="utf-8").splitlines()) == 4
 
     conn = apsw.Connection(str(db_path))
+    assert conn.execute("SELECT COUNT(*) FROM drain_event_receipts").fetchone() == (2,)
     summaries = dict(conn.execute("SELECT id, summary FROM chunks ORDER BY id"))
     conn.close()
 

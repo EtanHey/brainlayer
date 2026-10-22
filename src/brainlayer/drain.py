@@ -54,6 +54,7 @@ _sleep = time.sleep
 _DEFAULT_DRAIN_BUSY_TIMEOUT_MS = 30000
 _MAX_APSW_BUSY_TIMEOUT_MS = 2_147_483_647
 _DEFAULT_MAX_EVENTS_PER_TRANSACTION = 5
+_DEFAULT_TRANSACTION_BUDGET_MS = 250
 _DEFAULT_BURN_MAX_EVENTS_PER_TRANSACTION = 100
 _DEFAULT_POST_COMMIT_YIELD_MS = 10.0
 _DEFAULT_MAX_ENRICHMENT_FILES_PER_CYCLE = 16
@@ -181,6 +182,10 @@ def _nonnegative_float_env(name: str, default: float) -> float:
 
 def _max_events_per_transaction() -> int:
     return _positive_int_env("BRAINLAYER_DRAIN_MAX_EVENTS_PER_TRANSACTION", _DEFAULT_MAX_EVENTS_PER_TRANSACTION)
+
+
+def _transaction_budget_seconds() -> float:
+    return _positive_int_env("BRAINLAYER_DRAIN_TRANSACTION_BUDGET_MS", _DEFAULT_TRANSACTION_BUDGET_MS) / 1000.0
 
 
 def _max_enrichment_files_per_cycle() -> int:
@@ -546,19 +551,20 @@ def _insert_chunk(conn: apsw.Connection, values: dict[str, Any]) -> None:
     insert_canonical_chunk(conn, values, on_conflict="ignore")
 
 
-def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:
+def _prepare_content_class(values: dict[str, Any]) -> None:
     if "content" in values and "content_class" not in values:
-        values = {
-            **values,
-            "content_class": classify_content_class(
-                str(values["content"]),
-                content_type=values.get("content_type"),
-                tags=values.get("tags"),
-                source=values.get("source"),
-                source_file=values.get("source_file"),
-                project=values.get("project"),
-            ),
-        }
+        values["content_class"] = classify_content_class(
+            str(values["content"]),
+            content_type=values.get("content_type"),
+            tags=values.get("tags"),
+            source=values.get("source"),
+            source_file=values.get("source_file"),
+            project=values.get("project"),
+        )
+
+
+def _insert_or_merge_chunk(conn: apsw.Connection, values: dict[str, Any]) -> str:
+    _prepare_content_class(values)
     chunk_id = values["id"]
     duplicate, _ = find_duplicate(
         conn,
@@ -912,15 +918,15 @@ def _apply_store_supersedes(conn: apsw.Connection, old_chunk_id: str | None, new
             conn.execute(f"DELETE FROM {vector_table} WHERE chunk_id = ?", (old_chunk_id,))
 
 
-def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+def _prepare_store(event: dict[str, Any]) -> Callable[[apsw.Connection], ApplyResult]:
     raw_content = event.get("content")
     if raw_content is None:
         logger.warning("Skipping malformed store event without content")
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed store event with empty content")
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     # Scrub before anything is derived from the text: stored row, FTS copy,
     # summary and content_hash (so dedup keys on the scrubbed text) all follow.
     content, scrub_metadata = scrub_for_storage(content)
@@ -934,7 +940,7 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     )
     if recursive_reason:
         logger.warning("Skipping recursive MCP store event: %s", recursive_reason)
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     now = datetime.now(timezone.utc).isoformat()
     created_at = _event_created_at(event)
     metadata = {"memory_type": event.get("memory_type", "note")}
@@ -952,88 +958,89 @@ def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     supersedes = event.get("supersedes") or metadata.get("supersedes")
     explicit_chunk_origin = event.get("chunk_origin") or metadata.get("chunk_origin")
     conversation_id = event.get("conversation_id") or metadata.get("conversation_id")
-    position = None
-    if conversation_id:
-        position_row = conn.execute(
-            """
-            SELECT COALESCE(MAX(position), -1) + 1
-            FROM chunks
-            WHERE conversation_id = ?
-            """,
-            (conversation_id,),
-        ).fetchone()
-        position = int(position_row[0]) if position_row else 0
-    existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
-    if existing:
-        if str(existing[0]).strip() == content:
-            merge_existing_chunk_seen(
-                conn,
-                chunk_id=chunk_id,
-                incoming={
-                    "id": chunk_id,
-                    "content": content,
-                    "tags": json.dumps(tags) if tags else None,
-                    "importance": float(event["importance"]) if event.get("importance") is not None else None,
-                    "created_at": created_at,
-                    "last_seen_at": now,
-                },
-            )
-            _apply_store_supersedes(conn, supersedes, chunk_id)
-            marker = _fallback_replay_marker(event, chunk_id)
-            return ApplyResult(chunk_id=chunk_id, fallback_markers=(marker,) if marker else ())
-        return ApplyResult(collision_chunk_id=chunk_id)
-    stored_chunk_id = _insert_or_merge_chunk(
-        conn,
-        {
-            "id": chunk_id,
-            "content": content,
-            "metadata": json.dumps(metadata),
-            "source_file": "brainlayer-queue",
-            "project": event.get("project"),
-            "content_type": event.get("memory_type", "note"),
-            "value_type": "high",
-            "char_count": len(content),
-            "source": event.get("source") or "manual",
-            "created_at": created_at,
-            "enriched_at": now,
-            "enrich_status": "success",
-            "summary": content[:200],
-            "tags": json.dumps(tags) if tags else None,
-            "importance": float(event["importance"]) if event.get("importance") is not None else None,
-            "content_hash": _content_hash(content),
-            "conversation_id": conversation_id,
-            "position": position,
-            "chunk_origin": detect_chunk_origin(content, explicit_chunk_origin),
-        },
-    )
-    _apply_store_supersedes(conn, supersedes, stored_chunk_id)
-    entity_id = event.get("entity_id") or metadata.get("entity_id")
-    if entity_id and {"kg_entities", "kg_entity_chunks"}.issubset(_table_names(conn)):
-        if conn.execute("SELECT id FROM kg_entities WHERE id = ?", (entity_id,)).fetchone():
-            conn.execute(
+    values = {
+        "id": chunk_id,
+        "content": content,
+        "metadata": json.dumps(metadata),
+        "source_file": "brainlayer-queue",
+        "project": event.get("project"),
+        "content_type": event.get("memory_type", "note"),
+        "value_type": "high",
+        "char_count": len(content),
+        "source": event.get("source") or "manual",
+        "created_at": created_at,
+        "enriched_at": now,
+        "enrich_status": "success",
+        "summary": content[:200],
+        "tags": json.dumps(tags) if tags else None,
+        "importance": float(event["importance"]) if event.get("importance") is not None else None,
+        "content_hash": _content_hash(content),
+        "conversation_id": conversation_id,
+        "position": None,
+        "chunk_origin": detect_chunk_origin(content, explicit_chunk_origin),
+    }
+    _prepare_content_class(values)
+
+    def apply(conn: apsw.Connection) -> ApplyResult:
+        position = None
+        if conversation_id:
+            position_row = conn.execute(
                 """
-                INSERT OR REPLACE INTO kg_entity_chunks(entity_id, chunk_id, relevance, context)
-                VALUES (?, ?, ?, ?)
+                SELECT COALESCE(MAX(position), -1) + 1
+                FROM chunks
+                WHERE conversation_id = ?
                 """,
-                (entity_id, stored_chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
-            )
-        else:
-            logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
-    marker_chunk_id = str(event.get("chunk_id") or stored_chunk_id)
-    marker = _fallback_replay_marker(event, marker_chunk_id)
-    return ApplyResult(chunk_id=stored_chunk_id, fallback_markers=(marker,) if marker else ())
+                (conversation_id,),
+            ).fetchone()
+            position = int(position_row[0]) if position_row else 0
+        values["position"] = position
+        existing = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+        if existing:
+            if str(existing[0]).strip() == content:
+                merge_existing_chunk_seen(
+                    conn,
+                    chunk_id=chunk_id,
+                    incoming={**values, "last_seen_at": now},
+                )
+                _apply_store_supersedes(conn, supersedes, chunk_id)
+                marker = _fallback_replay_marker(event, chunk_id)
+                return ApplyResult(chunk_id=chunk_id, fallback_markers=(marker,) if marker else ())
+            return ApplyResult(collision_chunk_id=chunk_id)
+        stored_chunk_id = _insert_or_merge_chunk(conn, values)
+        _apply_store_supersedes(conn, supersedes, stored_chunk_id)
+        entity_id = event.get("entity_id") or metadata.get("entity_id")
+        if entity_id and {"kg_entities", "kg_entity_chunks"}.issubset(_table_names(conn)):
+            if conn.execute("SELECT id FROM kg_entities WHERE id = ?", (entity_id,)).fetchone():
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO kg_entity_chunks(entity_id, chunk_id, relevance, context)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (entity_id, stored_chunk_id, 1.0, f"Stored via brain_store: {event.get('memory_type', 'note')}"),
+                )
+            else:
+                logger.warning("Skipping entity link for unknown entity_id=%s chunk_id=%s", entity_id, chunk_id)
+        marker_chunk_id = str(event.get("chunk_id") or stored_chunk_id)
+        marker = _fallback_replay_marker(event, marker_chunk_id)
+        return ApplyResult(chunk_id=stored_chunk_id, fallback_markers=(marker,) if marker else ())
+
+    return apply
 
 
-def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+def _apply_store(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+    return _prepare_store(event)(conn)
+
+
+def _prepare_watcher(event: dict[str, Any]) -> Callable[[apsw.Connection], ApplyResult]:
     chunk_id = event.get("chunk_id")
     raw_content = event.get("content")
     if not chunk_id or raw_content is None:
         logger.warning("Skipping malformed watcher event without chunk_id/content")
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed watcher event with empty content")
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     source_file = event.get("source_file") or "realtime-watcher"
     recursive_reason = recursive_mcp_output_reason(
         content,
@@ -1043,7 +1050,7 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     )
     if recursive_reason:
         logger.warning("Skipping recursive MCP watcher event: %s", recursive_reason)
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     tags = event.get("tags")
     ingested_at = int(time.time())
     values = {
@@ -1081,15 +1088,21 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     if provenance_class is not None:
         values["provenance_class"] = provenance_class
     source_class = normalize_source_class(event.get("source_class"))
-    if source_class is not None and "source_class" in _columns(conn, "chunks"):
-        values["source_class"] = source_class
-    stored_chunk_id = _insert_or_merge_chunk(
-        conn,
-        values,
-    )
-    _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
-    _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
-    return ApplyResult(chunk_id=stored_chunk_id)
+    _prepare_content_class(values)
+
+    def apply(conn: apsw.Connection) -> ApplyResult:
+        if source_class is not None and "source_class" in _columns(conn, "chunks"):
+            values["source_class"] = source_class
+        stored_chunk_id = _insert_or_merge_chunk(conn, values)
+        _refresh_realtime_watcher_ingested_at(conn, stored_chunk_id, ingested_at)
+        _record_watcher_liveness(conn, stored_chunk_id, ingested_at)
+        return ApplyResult(chunk_id=stored_chunk_id)
+
+    return apply
+
+
+def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+    return _prepare_watcher(event)(conn)
 
 
 def _apply_rewind_archive(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
@@ -1129,15 +1142,15 @@ def _apply_rewind_archive(conn: apsw.Connection, event: dict[str, Any]) -> Apply
     return ApplyResult()
 
 
-def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+def _prepare_hook(event: dict[str, Any]) -> Callable[[apsw.Connection], ApplyResult]:
     raw_content = event.get("content")
     if raw_content is None:
         logger.warning("Skipping malformed hook event without content")
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     content = str(raw_content).strip()
     if not content:
         logger.warning("Skipping malformed hook event with empty content")
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     content, scrub_metadata = scrub_for_storage(content)
     content = content.strip()
     # Truncated digest that NAMES the chunk (id suffix + queue key). It is not a
@@ -1154,7 +1167,7 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
     )
     if recursive_reason:
         logger.warning("Skipping recursive MCP hook event: %s", recursive_reason)
-        return ApplyResult()
+        return lambda _conn: ApplyResult()
     ts_raw = event.get("timestamp")
     try:
         timestamp = float(ts_raw) if ts_raw is not None else time.time()
@@ -1166,26 +1179,28 @@ def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         if event.get("created_at")
         else datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
     )
-    stored_chunk_id = _insert_or_merge_chunk(
-        conn,
-        {
-            "id": chunk_id,
-            "content": content,
-            "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest, **scrub_metadata}),
-            "source_file": source_file,
-            "project": event.get("project"),
-            "content_type": "assistant_text",
-            "value_type": "high",
-            "char_count": len(content),
-            "source": "realtime",
-            "created_at": created_at,
-            "conversation_id": session_id,
-            "importance": 5,
-            "content_hash": _content_hash(content),
-            "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
-        },
-    )
-    return ApplyResult(chunk_id=stored_chunk_id)
+    values = {
+        "id": chunk_id,
+        "content": content,
+        "metadata": json.dumps({"session_id": session_id, "id_digest": id_digest, **scrub_metadata}),
+        "source_file": source_file,
+        "project": event.get("project"),
+        "content_type": "assistant_text",
+        "value_type": "high",
+        "char_count": len(content),
+        "source": "realtime",
+        "created_at": created_at,
+        "conversation_id": session_id,
+        "importance": 5,
+        "content_hash": _content_hash(content),
+        "chunk_origin": detect_chunk_origin(content, event.get("chunk_origin")),
+    }
+    _prepare_content_class(values)
+    return lambda conn: ApplyResult(chunk_id=_insert_or_merge_chunk(conn, values))
+
+
+def _apply_hook(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+    return _prepare_hook(event)(conn)
 
 
 def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
@@ -1281,7 +1296,19 @@ def _apply_enrichment(conn: apsw.Connection, event: dict[str, Any]) -> None:
     )
 
 
-def _apply_event(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
+def _prepare_event(event: dict[str, Any]) -> Callable[[apsw.Connection], ApplyResult]:
+    payload = _event_payload(event)
+    prepare = {"store_memory": _prepare_store, "watcher_chunk": _prepare_watcher, "hook_chunk": _prepare_hook}.get(
+        payload.get("kind")
+    )
+    return prepare(payload) if prepare else lambda conn: _apply_event(conn, payload)
+
+
+def _apply_event(
+    conn: apsw.Connection, event: dict[str, Any] | Callable[[apsw.Connection], ApplyResult]
+) -> ApplyResult:
+    if callable(event):
+        return event(conn)
     event = _event_payload(event)
     kind = event.get("kind")
     if kind == "store_memory":
@@ -1311,6 +1338,22 @@ def _read_events(path: Path) -> list[dict[str, Any]]:
             else:
                 logger.warning("Skipping non-object JSON in %s:%d", path, lineno)
     return events
+
+
+def _queue_file_key(path: Path, events: list[dict[str, Any]]) -> str:
+    # Keep the original spool unchanged during partial progress: its full contents
+    # and event ordinals identify retries, including identical lines in one file.
+    identity = json.dumps([str(path.resolve()), events], sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
+def _ensure_drain_receipts_schema(conn: apsw.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS drain_event_receipts (
+            file_key TEXT NOT NULL, event_index INTEGER NOT NULL, chunk_id TEXT,
+            PRIMARY KEY (file_key, event_index)
+        ) WITHOUT ROWID
+    """)
 
 
 def _table_names(conn: apsw.Connection) -> set[str]:
@@ -1468,8 +1511,8 @@ def _preserve_remaining_events(path: Path, events: list[dict[str, Any]]) -> None
     if events and all(_event_payload(event).get("kind") == "enrichment_update" for event in events):
         if not _is_enrichment_queue_file(path):
             enrichment_path = path.with_name(f"enrichment-paused-{uuid.uuid4().hex}-{path.name}")
-            _rewrite_events_file(enrichment_path, events)
-            path.unlink()
+            _rewrite_events_file(path, events)
+            path.rename(enrichment_path)
             return
     _rewrite_events_file(path, events)
 
@@ -1630,6 +1673,7 @@ def burn_drain_once(
         if not batch:
             return result
 
+        file_keys = {path: _queue_file_key(path, events) for path, events in batch}
         paused_events_by_path: dict[Path, list[dict[str, Any]]] = {}
         if pause_enrichment:
             apply_batch: list[tuple[Path, list[dict[str, Any]]]] = []
@@ -1680,6 +1724,12 @@ def burn_drain_once(
                 _ensure_watcher_liveness_schema(conn)
                 _ensure_rewind_archive_schema(conn)
                 ensure_dedupe_schema(conn)
+                if "drain_event_receipts" in _table_names(conn):
+                    for file_key in file_keys.values():
+                        if conn.execute(
+                            "SELECT 1 FROM drain_event_receipts WHERE file_key = ? LIMIT 1", (file_key,)
+                        ).fetchone():
+                            raise RuntimeError("partially committed live spool: resume with drain_once, not burn mode")
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
@@ -1811,18 +1861,30 @@ def drain_once(
             if not events:
                 _unlink_processed_file(path, log_path)
                 continue
+            file_key = _queue_file_key(path, events)
             events_to_apply: list[dict[str, Any]] = []
             remaining_events: list[dict[str, Any]] = []
             for event in events:
                 if pause_enrichment and _event_payload(event).get("kind") == "enrichment_update":
                     remaining_events.append(event)
-                elif len(events_to_apply) < _max_events_per_transaction():
-                    events_to_apply.append(event)
                 else:
-                    remaining_events.append(event)
+                    events_to_apply.append(event)
             if not events_to_apply:
                 if not _is_enrichment_queue_file(path):
                     try:
+                        # A pause can arrive between transactions. Renaming an
+                        # already-started spool would invalidate its receipt key.
+                        if db_path.exists():
+                            conn = _open_connection(db_path)
+                            try:
+                                if "drain_event_receipts" in _table_names(conn) and list(
+                                    conn.execute(
+                                        "SELECT 1 FROM drain_event_receipts WHERE file_key = ? LIMIT 1", (file_key,)
+                                    )
+                                ):
+                                    continue
+                            finally:
+                                conn.close()
                         _preserve_remaining_events(path, remaining_events)
                     except OSError as exc:
                         _log(log_path, f"drain could not preserve held historical metadata updates in {path}: {exc}")
@@ -1837,7 +1899,7 @@ def drain_once(
                 break
 
             stop_draining = False
-            precomputed_embeddings = _precompute_event_embeddings(events_to_apply, embed_fn)
+            eligible_event_ids = {id(event) for event in events_to_apply}
             for attempt in range(5):
                 conn: apsw.Connection | None = None
                 telemetry_span = None
@@ -1847,6 +1909,32 @@ def drain_once(
                 fallback_markers: list[FallbackReplayMarker] = []
                 try:
                     conn = _open_connection(db_path)
+                    _ensure_enrichment_update_schema(conn)
+                    _ensure_watcher_liveness_schema(conn)
+                    _ensure_rewind_archive_schema(conn)
+                    ensure_dedupe_schema(conn)
+                    _ensure_drain_receipts_schema(conn)
+                    receipts = dict(
+                        conn.execute(
+                            "SELECT event_index, chunk_id FROM drain_event_receipts WHERE file_key = ?", (file_key,)
+                        )
+                    )
+                    pending = [
+                        (index, event)
+                        for index, event in enumerate(events)
+                        if index not in receipts and id(event) in eligible_event_ids
+                    ]
+                    selected = pending[: _max_events_per_transaction()]
+                    events_to_apply = [event for _, event in selected]
+                    precomputed_embeddings = _precompute_event_embeddings(events_to_apply, embed_fn)
+                    prepared = [
+                        _prepare_event(
+                            {**event, "chunk_id": f"manual-{file_key[:16]}-{index}"}
+                            if _event_payload(event).get("kind") == "store_memory" and not event.get("chunk_id")
+                            else event
+                        )
+                        for index, event in selected
+                    ]
                     telemetry_span = start_writer_span(
                         conn,
                         db_path=db_path,
@@ -1857,13 +1945,11 @@ def drain_once(
                         queue_wait_ms=queue_telemetry["queue_wait_ms"],
                         queue_source=queue_telemetry["queue_source"],
                     )
-                    _ensure_enrichment_update_schema(conn)
-                    _ensure_watcher_liveness_schema(conn)
-                    _ensure_rewind_archive_schema(conn)
-                    ensure_dedupe_schema(conn)
                     conn.execute("BEGIN IMMEDIATE")
-                    for event in events_to_apply:
-                        result = _apply_event(conn, event)
+                    lock_started = time.monotonic()
+                    budget_seconds = _transaction_budget_seconds()
+                    for (event_index, event), apply in zip(selected, prepared, strict=True):
+                        result = _apply_event(conn, apply)
                         if result.chunk_id:
                             store_chunk_ids.append(result.chunk_id)
                             fallback_markers.extend(result.fallback_markers)
@@ -1873,8 +1959,20 @@ def drain_once(
                                 _insert_precomputed_embedding(conn, result.chunk_id, embedding_bytes)
                         if result.collision_chunk_id:
                             collision_ids.append(result.collision_chunk_id)
+                        conn.execute(
+                            "INSERT INTO drain_event_receipts(file_key, event_index, chunk_id) VALUES (?, ?, ?)",
+                            (file_key, event_index, result.chunk_id),
+                        )
                         attempt_drained += 1
+                        # An event (including FTS/vectors/receipt) is indivisible. The
+                        # budget gates admission of the NEXT event, never partial writes.
+                        if time.monotonic() - lock_started >= budget_seconds:
+                            break
                     conn.execute("COMMIT")
+                    telemetry_span.add_metadata(
+                        event_budget_ms=budget_seconds * 1000,
+                        event_budget_exceeded=time.monotonic() - lock_started >= budget_seconds,
+                    )
                     telemetry_span.finish("commit", rows_touched=attempt_drained)
                     _record_drain_unblocked(db_path, log_path, blocked_reporter)
                     # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
@@ -1887,10 +1985,19 @@ def drain_once(
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:
                         _log(log_path, f"WARN: queued chunk_id {chunk_id} collided with existing row, dropped")
-                    queue_cleanup_succeeded = True
-                    if remaining_events:
+                    queue_cleanup_succeeded = False
+                    incomplete = attempt_drained < len(pending)
+                    remaining_events = [
+                        event
+                        for index, event in enumerate(events)
+                        if id(event) not in eligible_event_ids and index not in receipts
+                    ]
+                    if incomplete:
+                        pass  # Keep bytes, ordinals and enqueue mtime stable until fully committed.
+                    elif remaining_events:
                         try:
                             _preserve_remaining_events(path, remaining_events)
+                            queue_cleanup_succeeded = True
                         except OSError as exc:
                             queue_cleanup_succeeded = False
                             _log(
@@ -1900,7 +2007,23 @@ def drain_once(
                     else:
                         queue_cleanup_succeeded = _unlink_processed_file(path, log_path)
                     if queue_cleanup_succeeded:
+                        for event_index, chunk_id in receipts.items():
+                            payload = _event_payload(events[event_index])
+                            marker = _fallback_replay_marker(payload, str(payload.get("chunk_id") or chunk_id or ""))
+                            if marker:
+                                fallback_markers.append(marker)
                         _mark_fallback_replays_best_effort(fallback_markers, log_path)
+                        # Failure leaves harmless orphan receipts; never erase a receipt
+                        # before its original spool is gone or atomically rewritten.
+                        try:
+                            step = min(_max_events_per_transaction(), _DEFAULT_MAX_EVENTS_PER_TRANSACTION)
+                            for first in range(0, len(events), step):
+                                conn.execute(
+                                    "DELETE FROM drain_event_receipts WHERE file_key = ? AND event_index >= ? AND event_index < ?",
+                                    (file_key, first, first + step),
+                                )
+                        except Exception as exc:
+                            _log(log_path, f"drain receipt cleanup skipped: {exc}")
                     yield_seconds = _post_commit_yield_seconds()
                     if yield_seconds > 0:
                         _sleep(yield_seconds)
