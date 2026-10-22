@@ -1674,6 +1674,27 @@ def burn_drain_once(
             return result
 
         file_keys = {path: _queue_file_key(path, events) for path, events in batch}
+        # Inspect original identities before pause handling can rewrite/rename a
+        # spool, including the all-paused branch that never opens a transaction.
+        if db_path.exists():
+            try:
+                with _without_connection_maintenance_hooks():
+                    receipt_conn = apsw.Connection(str(db_path), flags=apsw.SQLITE_OPEN_READONLY)
+                try:
+                    if "drain_event_receipts" in _table_names(receipt_conn):
+                        for file_key in file_keys.values():
+                            if receipt_conn.execute(
+                                "SELECT 1 FROM drain_event_receipts WHERE file_key = ? LIMIT 1", (file_key,)
+                            ).fetchone():
+                                raise RuntimeError(
+                                    "partially committed live spool: resume with drain_once, not burn mode"
+                                )
+                finally:
+                    receipt_conn.close()
+            except Exception as exc:
+                result.failed_files = len(batch)
+                _log(log_path, f"burn drain failed before transaction; batch preserved: {exc}")
+                return result
         paused_events_by_path: dict[Path, list[dict[str, Any]]] = {}
         if pause_enrichment:
             apply_batch: list[tuple[Path, list[dict[str, Any]]]] = []
@@ -1724,12 +1745,6 @@ def burn_drain_once(
                 _ensure_watcher_liveness_schema(conn)
                 _ensure_rewind_archive_schema(conn)
                 ensure_dedupe_schema(conn)
-                if "drain_event_receipts" in _table_names(conn):
-                    for file_key in file_keys.values():
-                        if conn.execute(
-                            "SELECT 1 FROM drain_event_receipts WHERE file_key = ? LIMIT 1", (file_key,)
-                        ).fetchone():
-                            raise RuntimeError("partially committed live spool: resume with drain_once, not burn mode")
                 conn.execute("BEGIN IMMEDIATE")
                 prefetched_state = _prefetch_enrichment_state(conn, all_events)
                 fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}

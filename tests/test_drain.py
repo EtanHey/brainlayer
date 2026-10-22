@@ -143,3 +143,51 @@ def test_drain_prepares_chunk_values_without_writer_lock(tmp_path, monkeypatch, 
     assert drain.drain_once(db_path=db, queue_dir=queue, log_path=tmp_path / "drain.log") == 1
     assert checked
     assert not spool.exists()
+
+
+def test_paused_burn_preserves_live_enrichment_receipts_before_renaming(tmp_path, monkeypatch):
+    db, queue, spool = _queued_events(tmp_path, monkeypatch)
+    spool = spool.rename(queue / "legacy-batch.jsonl")
+    pause = tmp_path / "pause.sentinel"
+    log = tmp_path / "drain.log"
+    monkeypatch.setenv("BRAINLAYER_DRAIN_MAX_EVENTS_PER_TRANSACTION", "1")
+    with apsw.Connection(str(db)) as conn:
+        conn.execute(
+            "INSERT INTO chunks(id, content, source_file, metadata) VALUES ('target', 'Original memory', 'test', '{}')"
+        )
+        conn.execute("CREATE TABLE applied_updates(label TEXT)")
+        conn.execute("""
+            CREATE TRIGGER record_summary AFTER UPDATE OF summary ON chunks
+            WHEN new.id = 'target' BEGIN
+                INSERT INTO applied_updates(label) VALUES (new.summary);
+            END
+        """)
+    events = [
+        {"kind": "enrichment_update", "chunk_id": "target", "enrichment": {"summary": f"update-{i}"}} for i in range(3)
+    ]
+    spool.write_text("".join(json.dumps(event) + "\n" for event in events))
+    assert drain.drain_once(db_path=db, queue_dir=queue, log_path=log, pause_sentinel_path=pause) == 1
+    original = (spool.read_bytes(), spool.stat().st_mtime_ns)
+    with apsw.Connection(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM drain_event_receipts").fetchone() == (1,)
+
+    pause.write_text(json.dumps({"labels": ["com.brainlayer.enrichment"]}))
+    burned = drain.burn_drain_once(db_path=db, queue_dir=queue, log_path=log, pause_sentinel_path=pause)
+    preserved = spool.exists() and (spool.read_bytes(), spool.stat().st_mtime_ns) == original
+    paths_after_burn = list(queue.glob("*.jsonl"))
+    pause.unlink()
+    for _ in range(4):
+        drain.drain_once(db_path=db, queue_dir=queue, log_path=log, pause_sentinel_path=pause)
+
+    with apsw.Connection(str(db)) as conn:
+        assert list(conn.execute("SELECT label FROM applied_updates ORDER BY rowid")) == [
+            ("update-0",),
+            ("update-1",),
+            ("update-2",),
+        ]
+        assert conn.execute("SELECT COUNT(*) FROM drain_event_receipts").fetchone() == (0,)
+    assert preserved, "paused burn changed a partially committed spool's identity"
+    assert paths_after_burn == [spool]
+    assert burned.failed_files == 1 and burned.applied_events == 0
+    assert "resume with drain_once" in log.read_text()
+    assert not list(queue.glob("*.jsonl"))
