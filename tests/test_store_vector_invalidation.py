@@ -269,9 +269,7 @@ def test_original_replay_cannot_fill_merged_canonical_with_original_vector(priva
     if replay == "index":
         index_incoming(store, changed, body_encode(changed))
     else:
-        result = put(
-            store, changed, chunk_id="canonical" if replay == "same-id" else "incoming", embed_fn=body_encode
-        )
+        result = put(store, changed, chunk_id="canonical" if replay == "same-id" else "incoming", embed_fn=body_encode)
         assert result["id"] == "canonical"
         if replay == "same-id":
             assert result["outcome"] == "duplicate"
@@ -400,8 +398,10 @@ def test_failed_repair_rolls_back_both_vectors(private_store, monkeypatch, mode)
 
     def failed_write(cursor, chunk_id, embedding):
         original(cursor, chunk_id, embedding)
-        if store.conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()[0].startswith(
-            "[Merged duplicate originals]"
+        if (
+            store.conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,))
+            .fetchone()[0]
+            .startswith("[Merged duplicate originals]")
         ):
             raise RuntimeError("vector publication failure")
 
