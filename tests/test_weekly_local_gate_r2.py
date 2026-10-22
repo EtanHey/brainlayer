@@ -310,6 +310,9 @@ def test_calendar_default_date_uses_local_day_of_injected_utc_clock(tmp_path, lo
         def __enter__(self):
             raise BlockingIOError
 
+        def __exit__(self, *_args):
+            return None
+
     monkeypatch.setattr(calendar, "Custody", lambda _: BusyCustody())
     monkeypatch.setattr(calendar, "record", lambda _, **event: events.append(event))
     assert asyncio.run(calendar.run_calendar([], tmp_path, tmp_path, now_fn=lambda: now)) == 0
