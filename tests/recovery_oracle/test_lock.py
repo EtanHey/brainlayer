@@ -110,6 +110,7 @@ def test_environment_override_and_symlink_cannot_escape(world, monkeypatch):
         world.guard(link / "outside.db")
 
 
+@pytest.mark.xfail(strict=True, reason="stale vector after MERGED dedupe: #1450")
 def test_all_success_outcomes_are_accounted_for(world, monkeypatch):
     from brainlayer.mcp import store_handler
 

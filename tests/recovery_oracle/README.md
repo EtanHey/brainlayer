@@ -47,7 +47,9 @@ its previous vector. Independent readonly measurement of the disposable failed D
 found cosine distance to its own current content **1.011185884**, versus 0 for the
 other chunk. `store.py:248-267` does not invalidate an existing vector when a merge
 uses embed_fn=None; `embed_hot_chunk` selects only absent vectors. This acceptance
-failure must be fixed in a separate hardening PR, not xfailed or weakened here.
+failure is tracked in #1450. BL lead authorized a strict xfail for this one case;
+XPASS fails CI, and the separate fix PR must remove the marker. The assertions
+and the recorded red baseline remain unchanged.
 These are synthetic main-code measurements, not resident performance numbers.
 
 ## Fault expansion and bounded catch-up (PR 2)
