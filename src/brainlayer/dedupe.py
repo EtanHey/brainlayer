@@ -422,6 +422,29 @@ def _merged_content(existing: str, incoming: str) -> str:
     return marker + "".join(f"\n\n{index}. {item}" for index, item in enumerate(originals, start=1))
 
 
+def _changed_merge_fields(
+    *, existing_content: str, merged_content: str, existing_tags: Any, merged_tags: list[str], created_at: str | None
+) -> dict[str, Any]:
+    """Omit unchanged indexed columns: SQLite UPDATE OF fires even for equal values."""
+    updates: dict[str, Any] = {}
+    if merged_content != existing_content:
+        fields = compute_dedupe_fields(merged_content, created_at)
+        updates.update(
+            content=merged_content,
+            char_count=len(merged_content),
+            dedupe_hash=fields.dedupe_hash,
+            simhash=fields.simhash,
+            simhash_band_0=fields.bands[0],
+            simhash_band_1=fields.bands[1],
+            simhash_band_2=fields.bands[2],
+            simhash_band_3=fields.bands[3],
+        )
+    merged_tags_json = json.dumps(merged_tags) if merged_tags else None
+    if not _tags_json_equivalent(existing_tags, merged_tags_json):
+        updates["tags"] = merged_tags_json
+    return updates
+
+
 def record_dedupe_audit(
     conn: Any,
     *,
@@ -550,24 +573,23 @@ def merge_duplicate_chunk(
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
     merged_content = _merged_content(str(existing_content), str(incoming.get("content") or ""))
     content_changed = merged_content != str(existing_content)
-    fields = compute_dedupe_fields(merged_content, existing_created)
     last_seen_at = _latest_timestamp(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
     )
 
     updates: dict[str, Any] = {
-        "content": merged_content,
-        "char_count": len(merged_content),
-        "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + incoming_seen,
         "last_seen_at": last_seen_at,
-        "dedupe_hash": fields.dedupe_hash,
-        "simhash": fields.simhash,
-        "simhash_band_0": fields.bands[0],
-        "simhash_band_1": fields.bands[1],
-        "simhash_band_2": fields.bands[2],
-        "simhash_band_3": fields.bands[3],
     }
+    updates.update(
+        _changed_merge_fields(
+            existing_content=str(existing_content),
+            merged_content=merged_content,
+            existing_tags=existing_tags,
+            merged_tags=merged_tags,
+            created_at=existing_created,
+        )
+    )
     if merged_importance is not None:
         updates["importance"] = merged_importance
     if merged_half_life is not None:
@@ -743,7 +765,6 @@ def merge_existing_chunk_content(
     incoming_content = str(incoming.get("content") or "")
     merged_content = _merged_content(str(existing_content), incoming_content)
     content_changed = merged_content != str(existing_content)
-    fields = compute_dedupe_fields(merged_content, existing_created)
     merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
     merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
@@ -751,18 +772,18 @@ def merge_existing_chunk_content(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
     )
     updates: dict[str, Any] = {
-        "content": merged_content,
-        "char_count": len(merged_content),
-        "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + int(incoming.get("seen_count") or 1),
         "last_seen_at": last_seen_at,
-        "dedupe_hash": fields.dedupe_hash,
-        "simhash": fields.simhash,
-        "simhash_band_0": fields.bands[0],
-        "simhash_band_1": fields.bands[1],
-        "simhash_band_2": fields.bands[2],
-        "simhash_band_3": fields.bands[3],
     }
+    updates.update(
+        _changed_merge_fields(
+            existing_content=str(existing_content),
+            merged_content=merged_content,
+            existing_tags=existing_tags,
+            merged_tags=merged_tags,
+            created_at=existing_created,
+        )
+    )
     if merged_importance is not None:
         updates["importance"] = merged_importance
     if merged_half_life is not None:
