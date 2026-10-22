@@ -141,7 +141,7 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
 
 
 def append_event(event: dict[str, Any]) -> bool:
-    """Append one JSON event, returning False rather than affecting a writer."""
+    """Append one JSON event; drop on sink-lock contention or failure."""
     if not telemetry_enabled():
         return False
     try:
@@ -150,10 +150,12 @@ def append_event(event: dict[str, Any]) -> bool:
         encoded = (json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         max_bytes = _int_env("BRAINLAYER_WRITER_TELEMETRY_MAX_BYTES", _DEFAULT_MAX_BYTES, minimum=1)
         backups = _int_env("BRAINLAYER_WRITER_TELEMETRY_BACKUPS", _DEFAULT_BACKUPS)
-        with _SINK_LOCK:
+        if not _SINK_LOCK.acquire(blocking=False):
+            return False
+        try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.with_name(f".{path.name}.lock").open("ab") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 if len(encoded) > max_bytes:
                     return False
                 if path.exists() and path.stat().st_size + len(encoded) > max_bytes:
@@ -161,6 +163,8 @@ def append_event(event: dict[str, Any]) -> bool:
                 with path.open("ab") as handle:
                     handle.write(encoded)
                 _rollup(path, payload)
+        finally:
+            _SINK_LOCK.release()
         return True
     except Exception:
         return False
