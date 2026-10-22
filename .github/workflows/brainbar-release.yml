@@ -3,7 +3,7 @@ name: BrainBar Release
 on:
   push:
     tags:
-      # Full package and BrainBar app release, including v1.5.69.
+      # Package tags build BrainBar unless explicitly excluded below.
       - "v*"
       # Python-only release: retain BrainBar 1.5.51 and its existing cask.
       - "!v1.5.52"
@@ -25,6 +25,8 @@ on:
       - "!v1.5.65"
       # Formula-only backup snapshot zstd/budget/receipt fixes: retain BrainBar 1.5.66.
       - "!v1.5.67"
+      # Formula-only calendar runner heartbeat fix: retain BrainBar 1.5.68.
+      - "!v1.5.69"
 
 permissions:
   contents: write
