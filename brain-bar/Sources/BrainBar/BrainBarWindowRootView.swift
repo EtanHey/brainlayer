@@ -1505,8 +1505,10 @@ private struct BrainBarDashboardView: View {
                 if isUnavailable || isEmpty {
                     HStack(spacing: 5) {
                         if isUnavailable {
-                            Circle().fill(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention)).frame(width: 5, height: 5)
-                            Text("Evidence unavailable")
+                            if lane.status != .running {
+                                Circle().fill(lane.status.stateTheme.theme.swiftUIColor).frame(width: 5, height: 5)
+                            }
+                            Text(lane.evidencePlaceholder ?? "Evidence unavailable")
                         } else {
                             Text("0 in window")
                         }
@@ -3196,7 +3198,10 @@ struct BrainBarIngestSeriesPresentation: Equatable {
 
     init(lane: DashboardFlowLane, locale: Locale = .current) {
         guard lane.evidenceStatus != .unavailable else {
-            metricText = "Unavailable"
+            switch lane.status {
+            case .running, .stopped, .attention: metricText = lane.evidencePlaceholder ?? "Unavailable"
+            default: metricText = "Unavailable"
+            }
             showsSparkline = false
             return
         }
@@ -3245,9 +3250,9 @@ struct BrainBarDashboardChartDisclosure: Equatable {
 
         }
 
-        if lane.evidenceStatus == .unavailable {
-            accessibilitySummary = "\(lane.name). Evidence unavailable. Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
-            tooltipDisclosure = "Evidence unavailable"
+        if let placeholder = lane.evidencePlaceholder {
+            accessibilitySummary = "\(lane.name). \(placeholder). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
+            tooltipDisclosure = placeholder
         } else {
             accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
             tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"

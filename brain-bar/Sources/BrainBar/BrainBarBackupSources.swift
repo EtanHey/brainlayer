@@ -31,6 +31,11 @@ struct BrainBarBackupSources: Sendable {
         /// The nightly light pass's log, from its own LaunchAgent; nil when not resolved.
         var nightlyMaintenanceLog: URL?
 
+        /// `maintenance-calendar --logs-dir` defaults to ~/Library/Logs/brainlayer.
+        var calendarLogDirectory: URL {
+            launchAgents.deletingLastPathComponent().appendingPathComponent("Logs/brainlayer")
+        }
+
         /// The same paths the Python jobs use (#1016 R1 B1). Each value comes from the environment
         /// its job runs with: the job's installed LaunchAgent `EnvironmentVariables`, overlaid by the
         /// env file that agent names (`brainlayer-env-run.sh` exports it last), then BrainBar's own

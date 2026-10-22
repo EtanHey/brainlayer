@@ -371,6 +371,17 @@ struct DashboardFlowLane: Sendable, Equatable {
 
     /// The status the chart uses to decide whether its evidence is available.
     var evidenceStatus: DashboardFlowLaneStatus { flowEvidence ?? status }
+
+    /// Missing flow counts do not erase independent watcher-health evidence.
+    var evidencePlaceholder: String? {
+        guard evidenceStatus == .unavailable else { return nil }
+        return switch status {
+        case .running: "Updating…"
+        case .stopped: "Watcher stopped"
+        case .attention: "Watcher needs attention"
+        default: "Evidence unavailable"
+        }
+    }
 }
 
 struct DashboardQueueSummary: Sendable, Equatable {

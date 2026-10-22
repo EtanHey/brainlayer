@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import BrainBar
 
@@ -53,6 +55,61 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     }
 
     // MARK: #1014 review round 1
+
+    func testFreshWatcherHeartbeatKeepsUnreadableFlowNeutral() {
+        for process in [WatcherProcessProbeResult.running(pid: 42), .failure("launchctl timed out")] {
+            let flow = DashboardFlowSummary.derive(daemon: nil,
+                stats: stats(replayDebt: 0, process: process, flowReadable: false), now: now)
+            let lane = flow.lane(for: .jsonlWatcher)
+            XCTAssertTrue(flow.watcherStatus.isRunning)
+            XCTAssertEqual(lane.evidenceStatus, .unavailable, "heartbeat does not supply chart counts")
+            XCTAssertEqual(lane.status, .running)
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            XCTAssertEqual(disclosure.tooltipDisclosure, "Updating…")
+            XCTAssertTrue(disclosure.accessibilitySummary.contains("Updating…"))
+            XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
+            XCTAssertEqual(BrainBarIngestSeriesPresentation(lane: lane).metricText, "Updating…")
+        }
+    }
+
+    func testUnreadableFlowNeverHidesStoppedOrStaleWatcherEvidence() {
+        let cases: [(WatcherProcessProbeResult, WatcherHealthFileRead?, DashboardFlowLaneStatus, String)] = [
+            (.absent, BrainBarDashboardFixture.healthyWatcherHealth, .stopped, "Watcher stopped"),
+            (.running(pid: 42), degradedHealth(), .attention, "Watcher needs attention"),
+            (.running(pid: 42), .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-900), pollCount: 72)), .attention, "Watcher needs attention"),
+            (.failure("launchctl timed out"), .missing(path: "/fixture/health.json"), .unknown, "Evidence unavailable"),
+        ]
+        for (process, health, expected, message) in cases {
+            let lane = DashboardFlowSummary.derive(daemon: nil,
+                stats: stats(replayDebt: 0, process: process, health: health, flowReadable: false), now: now)
+                .lane(for: .jsonlWatcher)
+            XCTAssertEqual(lane.status, expected)
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            XCTAssertEqual(disclosure.tooltipDisclosure, message)
+            XCTAssertFalse(BrainBarIngestSeriesPresentation(lane: lane).showsSparkline)
+            if expected == .stopped { XCTAssertEqual(lane.status.stateTheme, .error) }
+        }
+    }
+
+    func testRenderFreshHeartbeatWithUnreadableFlow() throws {
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(stats: stats(replayDebt: 0, flowReadable: false)),
+            now: now
+        ).frame(width: 960, height: 640)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 960, height: 640)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try png.write(to: directory.appendingPathComponent("watcher-flow-updating.png"))
+        XCTAssertGreaterThan(png.count, 5_000)
+    }
 
     /// B1: the lane's status pill rendered "live" (chunks flowed recently) while its body said
     /// NEEDS ATTENTION. The pill comes from the same `WatcherHealthStatus`.

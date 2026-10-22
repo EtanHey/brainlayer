@@ -153,6 +153,21 @@ final class BrainBarJobAlertTests: XCTestCase {
 
     // MARK: Show log
 
+    func testCalendarStepsHaveLogLinksAndKnownMissingLogMessages() {
+        let home = root.appendingPathComponent("home")
+        let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home)
+        for key in ["index", "backup-snapshot", "p0-counter", "wal-checkpoint", "decay", "repair-fts"] {
+            XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live),
+                home.appendingPathComponent("Library/Logs/brainlayer/\(key).err.log"), key)
+            XCTAssertFalse(BrainBarJobAlerts.missingLogMessage(forKey: key).contains("doesn't know"), key)
+        }
+        for key in ["maintenance-nightly", "maintenance-weekly", "maintenance-light", "maintenance-full"] {
+            XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live), live.maintenanceLog, key)
+        }
+        XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "backup-daily", paths: live), live.databaseLog)
+        XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "jsonl-backup", paths: live), live.archiveLog)
+    }
+
     private var paths: BrainBarBackupSources.Paths {
         .init(
             launchAgents: root, databaseLog: root.appendingPathComponent("logs/backup-daily.log"),
