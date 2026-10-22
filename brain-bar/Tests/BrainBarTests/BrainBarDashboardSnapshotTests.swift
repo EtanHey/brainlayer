@@ -15,11 +15,23 @@ import XCTest
 /// The renders are deterministic: fixture data (`BrainBarDashboardFixture`) with
 /// every relative-time `Date` nil, `accessibilityReduceMotion = true` so SwiftUI
 /// animations resolve immediately, and fixed host sizes. Output PNGs land in
-/// `brain-bar/docs.local/brainbar-render/` (override with `BRAINBAR_RENDER_DIR`).
+/// `<worktree>/.build.noindex/brainbar-render/` (override with `BRAINBAR_RENDER_DIR`).
 ///
 /// Run just this suite:
-///   swift test --filter BrainBarDashboardSnapshotTests
+///   python3 Tests/BrainBarTests/Scripts/run_swift_tests.py --filter BrainBarDashboardSnapshotTests
 final class BrainBarDashboardSnapshotTests: XCTestCase {
+    func testDefaultRenderOutputStaysInsideWorktreeBuildRoot() throws {
+        try XCTSkipIf(
+            !(ProcessInfo.processInfo.environment["BRAINBAR_RENDER_DIR"] ?? "").isEmpty,
+            "This check exercises the default, not an explicit render-directory override"
+        )
+        let worktree = packageRoot().deletingLastPathComponent()
+        XCTAssertEqual(
+            outputDirectory().standardizedFileURL,
+            worktree.appendingPathComponent(".build.noindex/brainbar-render", isDirectory: true).standardizedFileURL
+        )
+    }
+
     private var shouldSkipDisplayDependentRenderInCI: Bool {
         let environment = ProcessInfo.processInfo.environment
         return environment["CI"] == "true" && environment["BRAINBAR_RENDER_IN_CI"] != "1"
@@ -800,12 +812,13 @@ final class BrainBarDashboardSnapshotTests: XCTestCase {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         // #filePath = .../brain-bar/Tests/BrainBarTests/BrainBarDashboardSnapshotTests.swift
-        // up 3 → brain-bar/
+        // up 4 → worktree root
         return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("docs.local/brainbar-render", isDirectory: true)
+            .deletingLastPathComponent()
+            .appendingPathComponent(".build.noindex/brainbar-render", isDirectory: true)
     }
 
     private func packageRoot() -> URL {

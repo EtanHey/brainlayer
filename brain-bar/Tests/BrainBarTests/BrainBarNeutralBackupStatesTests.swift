@@ -285,7 +285,8 @@ final class BrainBarNeutralBackupStatesTests: XCTestCase {
         // No real producer emits this state yet; exercise the defensive decoder branch directly.
         documents.append(("nothing_pending", try document(attempt: true, pending: "nothing_pending", historicalUpload: true)))
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build.noindex/brainbar-render")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         for (name, original) in documents {
             let doc = name == "verified" ? try XCTUnwrap(documents.first { $0.0 == "verified_bundle" }?.1) : original

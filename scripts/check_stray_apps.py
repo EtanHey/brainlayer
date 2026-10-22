@@ -1,8 +1,9 @@
-"""Reject stray apps and bulky docs.local binaries inside supplied repo/worktree trees.
+"""Reject stray apps and all docs.local binaries inside supplied repo/worktree trees.
 
 Only .build.noindex is disposable build output. docs.local (including old archives and
-.noindex subdirectories) has no app exemption. Binary files over 1 MiB are identified
-by archive suffix, NUL bytes or non-UTF-8 data anywhere in the file. Never follow links.
+.noindex subdirectories) has no app exemption. Binary files of any size are identified
+by known binary suffixes, non-text control bytes or non-UTF-8 data anywhere in the
+file. Never follow links.
 """
 
 import codecs
@@ -11,13 +12,40 @@ import stat
 import sys
 from pathlib import Path
 
-MAX_BINARY_BYTES = 1024 * 1024
-BINARY_SUFFIXES = {".zip", ".gz", ".bz2", ".xz", ".tar", ".dmg", ".pkg", ".a", ".so", ".dylib"}
+BINARY_SUFFIXES = {
+    ".zip",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".tar",
+    ".dmg",
+    ".pkg",
+    ".a",
+    ".so",
+    ".dylib",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".heic",
+    ".ico",
+    ".pdf",
+    ".db",
+    ".sqlite",
+    ".mp3",
+    ".mp4",
+    ".mov",
+    ".wav",
+    ".bin",
+}
+# Tabs, line endings, form feed, backspace and ANSI escapes can occur in text logs.
+NON_TEXT_BYTES = bytes(value for value in range(32) if value not in b"\t\n\r\f\b\x1b") + b"\x7f"
 
 
-def large_binary(path: Path) -> bool:
+def is_binary(path: Path) -> bool:
     info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_size <= MAX_BINARY_BYTES:
+    if not stat.S_ISREG(info.st_mode):
         return False
     if path.suffix.lower() in BINARY_SUFFIXES:
         return True
@@ -25,7 +53,7 @@ def large_binary(path: Path) -> bool:
     try:
         with path.open("rb") as stream:
             while block := stream.read(8192):
-                if b"\x00" in block:
+                if any(value in block for value in NON_TEXT_BYTES):
                     return True
                 decoder.decode(block, final=False)
             decoder.decode(b"", final=True)
@@ -55,7 +83,7 @@ def find_stray_apps(*roots: Path) -> list[Path]:
                     children.remove(name)
             for name in files:
                 path = here / name
-                if name.endswith(".app") or (in_docs and large_binary(path)):
+                if name.endswith(".app") or (in_docs and is_binary(path)):
                     strays.add(path)
     return sorted(strays)
 

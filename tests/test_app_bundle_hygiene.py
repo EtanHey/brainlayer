@@ -14,7 +14,9 @@ CHECK = ROOT / "scripts/check_stray_apps.py"
 
 
 @pytest.fixture
-def scan_root():
+def scan_root(monkeypatch):
+    # These deliberate docs.local source probes must not emit binary bytecode there.
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
     parent = ROOT / "docs.local"
     parent.mkdir(exist_ok=True)
     # Deliberately indexable fixtures to prove the guard; removed even on assertion failure.
@@ -47,7 +49,8 @@ def test_scan_allows_only_build_noindex_and_scans_nested_worktrees(tmp_path):
 @pytest.mark.parametrize(
     "archive", ["artifacts.noindex", "archive/worktrees-old", "archive/worktrees-old/.build.noindex"]
 )
-def test_docs_local_archive_excludes_apps_and_large_binaries_even_under_noindex(tmp_path, archive):
+@pytest.mark.parametrize("binary_size", [16, 1024 * 1024 + 1])
+def test_docs_local_archive_excludes_apps_and_binaries_even_under_noindex(tmp_path, archive, binary_size):
     repo = tmp_path / "repo"
     archived = repo / "docs.local" / archive
     app = archived / "BrainBar.app"
@@ -55,7 +58,7 @@ def test_docs_local_archive_excludes_apps_and_large_binaries_even_under_noindex(
     binary = archived / "BrainBarDaemon"
     with binary.open("wb") as stream:
         stream.write(b"\x00Mach-O")
-        stream.truncate(1024 * 1024 + 1)
+        stream.truncate(binary_size)
     receipt = archived / "receipt.log"
     receipt.write_text("version=1.5.68 sha=abc cdhash=def\n")
     result = subprocess.run([sys.executable, str(CHECK), str(repo)], capture_output=True, text=True)
@@ -65,12 +68,37 @@ def test_docs_local_archive_excludes_apps_and_large_binaries_even_under_noindex(
     assert str(receipt) not in result.stdout
 
 
-def test_binary_threshold_and_scan_boundary(tmp_path):
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("small.png", b"\x89PNG\r\n\x1a\n"),
+        ("small.zip", b"PK\x03\x04"),
+        ("empty.zip", b""),
+        ("small.bin", b"\x00"),
+        ("receipt.log", b"valid prefix\x01"),
+        ("exactly-one-mib.bin", b"\x00" * (1024 * 1024)),
+    ],
+    ids=["png", "zip", "empty-zip", "nul", "control-byte", "one-mib"],
+)
+def test_docs_local_rejects_binaries_of_any_size(tmp_path, name, content):
+    docs = tmp_path / "repo/brain-bar/docs.local/qa"
+    docs.mkdir(parents=True)
+    binary = docs / name
+    binary.write_bytes(content)
+    result = subprocess.run([sys.executable, str(CHECK), str(tmp_path / "repo")], capture_output=True, text=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert str(binary) in result.stdout
+
+
+def test_text_receipts_and_scan_boundary(tmp_path):
     repo = tmp_path / "repo"
     docs = repo / "docs.local"
     docs.mkdir(parents=True)
-    (docs / "small.bin").write_bytes(b"\x00" * (1024 * 1024))
+    (docs / "small.log").write_text("SHA=abc\tversion=1.5.68\n\u05e9\u05dc\u05d5\u05dd\n")
     (docs / "large.log").write_text("x" * (1024 * 1024 + 1))
+    fixture = repo / "docs/test-artifacts/fixture.png"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes(b"\x89PNG\r\n\x1a\n")
     outside = tmp_path / "outside"
     (outside / "BrainBar.app").mkdir(parents=True)
     (repo / "external").symlink_to(outside, target_is_directory=True)
@@ -164,7 +192,8 @@ def test_pytest_routes_temp_bundles_under_worktree_build_root(scan_root, explici
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_session_end_scan_fails_for_a_bundle_left_by_teardown(scan_root):
+@pytest.mark.parametrize("artifact", ["BrainBar.app", "small.png"])
+def test_session_end_scan_fails_for_an_artifact_left_by_teardown(scan_root, artifact):
     probe = scan_root / "test_probe.py"
     probe.write_text(
         "from pathlib import Path\n"
@@ -172,7 +201,8 @@ def test_session_end_scan_fails_for_a_bundle_left_by_teardown(scan_root):
         "@pytest.fixture\n"
         "def leave_bundle():\n"
         "    yield\n"
-        "    (Path(__file__).parent / 'BrainBar.app').mkdir()\n"
+        f"    path = Path(__file__).parent / {artifact!r}\n"
+        "    path.mkdir() if path.suffix == '.app' else path.write_bytes(b'\\x89PNG\\r\\n\\x1a\\n')\n"
         "def test_passing(leave_bundle):\n"
         "    pass\n"
     )
@@ -185,7 +215,7 @@ def test_session_end_scan_fails_for_a_bundle_left_by_teardown(scan_root):
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "1 passed" in result.stdout
-    assert str(scan_root / "BrainBar.app") in result.stdout
+    assert str(scan_root / artifact) in result.stdout
 
 
 def test_build_refuses_an_indexable_output_override(tmp_path, scan_root):
