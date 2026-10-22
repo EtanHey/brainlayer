@@ -1661,6 +1661,8 @@ def test_repeated_icloud_failures_preserve_every_quarantined_copy(tmp_path):
 def test_same_day_incremental_icloud_bundles_do_not_overwrite(tmp_path, monkeypatch):
     from brainlayer import jsonl_backup
 
+    # Naming/byte preservation must not depend on host scheduling or disk latency.
+    monkeypatch.setattr(jsonl_backup, "_monotonic", lambda: 100.0)
     first = tmp_path / "first" / "claude-jsonl-2026-09-09.tar.gz"
     second = tmp_path / "second" / "claude-jsonl-2026-09-10.tar.gz"
     first.parent.mkdir()
