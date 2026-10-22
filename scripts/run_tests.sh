@@ -182,13 +182,18 @@ map_changed_files_to_pytests() {
     mapped=0
     case "$changed" in
       .github/workflows/*.yml|.github/workflows/*.yaml)
-        # Workflow edits must run their CI contracts, including the Swift job budget.
-        if [ -f "$TEST_ROOT/test_ci_swift_gate.py" ] && [ -f "$TEST_ROOT/test_ci_crash_sweeps.py" ]; then
-          for test_path in "$TEST_ROOT"/test_ci_*.py; do
-            [ -f "$test_path" ] || continue
+        # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.
+        for test_path in "$TEST_ROOT"/test_*.py; do
+          [ -f "$test_path" ] || continue
+          if grep -Fq -- "${changed##*/}" "$test_path"; then
             append_unique "$test_path"
+            mapped=1
+          fi
+        done
+        if [ "$mapped" -eq 1 ] && [ "${changed##*/}" = "ci.yml" ]; then
+          for test_path in "$TEST_ROOT"/test_ci_*.py; do
+            [ -f "$test_path" ] && append_unique "$test_path"
           done
-          mapped=1
         fi
         ;;
       src/brainlayer/launchd_consolidation.py|src/brainlayer/launchd_revert.py|src/brainlayer/migration_journal.py|src/brainlayer/migration_runtime.py|src/brainlayer/migration_custody.py)

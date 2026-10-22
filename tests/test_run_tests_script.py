@@ -2091,31 +2091,33 @@ def test_idx_cohort_mapping_escalates_when_a_companion_is_missing(tmp_path: Path
     assert f"{test_root}/ -v" in pytest_log.read_text()
 
 
-@pytest.mark.parametrize("workflow", ["ci.yml", "release.yaml"])
-@pytest.mark.parametrize("guard_count", [0, 1, 2])
-def test_workflow_changes_run_ci_guards_or_escalate(tmp_path, workflow, guard_count):
+@pytest.mark.parametrize("workflow", ["brainbar-release.yml", "ci.yml", "unowned.yaml"])
+def test_workflow_changes_run_referencing_guards_or_escalate(tmp_path, workflow):
     test_root = tmp_path / "tests"
     test_root.mkdir()
-    guards = ["test_ci_swift_gate.py", "test_ci_crash_sweeps.py"][:guard_count]
-    for name in guards:
-        (test_root / name).write_text("test placeholder\n")
-    pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
-    env = _script_env()
-    env.update(
-        PATH=f"{tmp_path / 'bin'}:{env['PATH']}",
-        BRAINLAYER_TEST_ROOT=str(test_root),
-        BRAINLAYER_USE_UV="0",
-        BRAINLAYER_PREPUSH="1",
-        BRAINLAYER_PREPUSH_SCOPE="changed-only",
-        BRAINLAYER_CHANGED_FILES=f".github/workflows/{workflow}",
-        PYTEST_LOG=str(pytest_log),
-        BUN_LOG=str(bun_log),
-    )
-    result = subprocess.run(["bash", str(SCRIPT_PATH)], capture_output=True, text=True, env=env)
+    references = {
+        "test_brainbar_release_workflow.py": "brainbar-release.yml",
+        "test_release_version_sync.py": "brainbar-release.yml",
+        "test_ci_swift_gate.py": "ci.yml",
+        "test_fleet_watchdog.py": "ci.yml",
+        "test_ci_crash_sweeps.py": "generic CI contract",
+    }
+    for name, reference in references.items():
+        (test_root / name).write_text(reference + "\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = f".github/workflows/{workflow}"
+    result = _run_cli_root_script(env)
     assert result.returncode == 0, result.stdout + result.stderr
     unit = pytest_log.read_text().splitlines()[0]
-    if guard_count == 2:
-        assert all(str(test_root / name) in unit for name in guards)
+    expected = {
+        name
+        for name, reference in references.items()
+        if reference == workflow or (workflow == "ci.yml" and name.startswith("test_ci_"))
+    }
+    if expected:
+        assert all(str(test_root / name) in unit for name in expected)
+        assert all(str(test_root / name) not in unit for name in references.keys() - expected)
         assert f"{test_root}/ -v" not in unit
     else:
+        assert f"unmapped: .github/workflows/{workflow}" in result.stdout
         assert f"{test_root}/ -v" in unit
