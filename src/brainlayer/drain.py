@@ -1692,7 +1692,7 @@ def burn_drain_once(
                 _ensure_rewind_archive_schema(conn)
                 ensure_dedupe_schema(conn)
                 metrics.run("begin", conn.execute, "BEGIN IMMEDIATE")
-                prefetched_state = _prefetch_enrichment_state(conn, all_events)
+                prefetched_state = metrics.run("apply", _prefetch_enrichment_state, conn, all_events)
                 fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
                 attempt_applied_events = 0
                 attempt_skipped_verified_stale = 0
@@ -1701,7 +1701,9 @@ def burn_drain_once(
                     for event in events:
                         if _is_verified_redundant_enrichment(event, prefetched_state):
                             payload = _event_payload(event)
-                            enqueue_provenance_resolution_for_entities(
+                            metrics.run(
+                                "apply",
+                                enqueue_provenance_resolution_for_entities,
                                 conn,
                                 payload.get("entities"),
                                 chunk_id=payload.get("chunk_id"),
@@ -1716,7 +1718,9 @@ def burn_drain_once(
                             content = str(_event_payload(event).get("content") or "").strip()
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
-                                _insert_precomputed_embedding(conn, applied.chunk_id, embedding_bytes)
+                                metrics.run(
+                                    "apply", _insert_precomputed_embedding, conn, applied.chunk_id, embedding_bytes
+                                )
                         path_fallback_markers.extend(applied.fallback_markers)
                     if path_fallback_markers:
                         fallback_markers_by_path[path] = path_fallback_markers
