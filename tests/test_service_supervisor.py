@@ -212,3 +212,253 @@ def test_retirement_and_constructor_remain_inactive(tmp_path):
             Supervisor({name: Component((sys.executable,))}, tmp_path / "unused.sock")
     inactive = Supervisor({"watch": Component((sys.executable,))}, tmp_path / "unused.sock")
     assert inactive.components["watch"].process is None and not inactive.path.exists()
+
+
+@pytest.mark.parametrize(
+    "stage,timeout,delay", [("spawn", 0.4, 0.9), ("record", 0.4, 0.9), ("record", 30, 31), ("forget", 0.4, 0.9)]
+)
+def test_slow_control_io_keeps_loop_and_guard_live(native, monkeypatch, stage, timeout, delay):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from brainlayer.supervisor_adapters import SupervisorCommands
+
+    injection = f"""
+import time
+import brainlayer.service_supervisor as module
+from brainlayer.supervisor_guard import Custody
+original = module.gated_spawn if {stage!r} == 'spawn' else getattr(Custody, {stage!r})
+def slow(*args, **kwargs):
+ if (p/'slow').exists() and ({stage!r} != 'record' or args[2] is not None):
+  (p/'slow').unlink()
+  (p/'entered').touch()
+  time.sleep({delay})
+ return original(*args, **kwargs)
+if {stage!r} == 'spawn': module.gated_spawn = slow
+else: setattr(Custody, {stage!r}, slow)
+"""
+    boot = BOOT.replace("s=Supervisor(", injection + "\ns=Supervisor(")
+    monkeypatch.setattr(
+        sys.modules[__name__], "BOOT", boot.replace("backoff=.3)", f"backoff=.3,guard_timeout={timeout})")
+    )
+    path, start, request = native
+    process, before, _ = start()
+    client = SupervisorCommands(path / "control.sock", lambda args: None)
+    (path / "slow").touch()
+    with ThreadPoolExecutor() as executor:
+        pending = executor.submit(client.request, "restart", "drain", timeout=delay + 5)
+        eventually(lambda: (path / "entered").exists())
+        try:
+            # A status client must still run while the mutation is waiting on real blocking I/O.
+            during = request()
+            assert "components" in during
+            assert during["components"]["drain"]["pid"] is None  # Gated startup is not readiness.
+            after = pending.result(timeout=delay + 5)
+        except (OSError, ValueError):
+            # Before the fix the real guard kills this exact parent at its unchanged deadline.
+            if process.poll() is None:
+                process.wait(timeout=timeout + 3)
+            assert process.returncode != -signal.SIGKILL, f"guard killed parent during {stage}"
+            raise
+    assert after["drain"]["starts"] == before["drain"]["starts"] + 1
+    assert request()["components"]["drain"]["pid"] == after["drain"]["pid"]
+    process.terminate()
+    assert process.wait(timeout=2) == 0
+
+
+def test_disconnected_control_runs_mutation_once(native):
+    path, start, request = native
+    process, before, _ = start()
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(str(path / "control.sock"))
+        client.sendall(b'{"action":"restart","component":"drain"}\n')
+        client.shutdown(socket.SHUT_RDWR)
+    eventually(lambda: request()["components"]["drain"]["starts"] == before["drain"]["starts"] + 1)
+    assert request()["components"]["watch"]["pid"] == before["watch"]["pid"]
+    process.terminate()
+    assert process.wait(timeout=2) == 0
+    assert "Unhandled exception" not in (path / "errors").read_text()
+
+
+def test_cancelled_start_retains_writer_lock_until_worker_finishes(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+
+    async def scenario():
+        supervisor = Supervisor({}, tmp_path / "unused")
+        entered, release, finished = threading.Event(), threading.Event(), []
+
+        def write(child):
+            entered.set()
+            release.wait(5)
+            finished.append(True)
+
+        monkeypatch.setattr(supervisor, "_start", write)
+        task = supervisor._schedule_start(Component(("unused",)))
+        try:
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+            for _ in range(2):
+                task.cancel()
+                await asyncio.sleep(0.01)
+                assert not task.done() and supervisor.io_lock.locked() and not finished
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert finished and not supervisor.io_lock.locked() and not supervisor.operations
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["birth", "unexpected"])
+def test_start_failure_keeps_heartbeating_without_releasing_or_orphaning_child(native, monkeypatch, caplog, failure):
+    import asyncio
+
+    import brainlayer.service_supervisor as module
+
+    path, _, _ = native
+    spawned, records, sent = [], [], []
+    spawn, record = module.gated_spawn, module.Custody.record
+
+    def tracked_spawn(*args, **kwargs):
+        process, gate = spawn(*args, **kwargs)
+        spawned.append(process)
+        return process, gate
+
+    def tracked_record(*args):
+        records.append(args[1:])
+        return record(*args)
+
+    monkeypatch.setattr(module, "gated_spawn", tracked_spawn)
+    monkeypatch.setattr(module.Custody, "record", tracked_record)
+    monkeypatch.setattr(module, "start_time", lambda pid: None)
+
+    async def scenario():
+        marker = path / "executed"
+        child = Component((sys.executable, "-c", f"open({str(marker)!r},'w').close()"))
+        supervisor = Supervisor({"test": child}, path / "control.sock", backoff=60)
+        send = supervisor._send
+
+        def tracked_send(line):
+            sent.append(line)
+            send(line)
+
+        def unexpected(component):
+            raise ValueError("injected startup explosion")
+
+        monkeypatch.setattr(supervisor, "_send", tracked_send)
+        if failure == "unexpected":
+            monkeypatch.setattr(supervisor, "_start", unexpected)
+        task = asyncio.create_task(supervisor.run())
+
+        async def until(probe):
+            while not probe():
+                if task.done():
+                    await task
+                    pytest.fail("supervisor stopped during startup failure")
+                await asyncio.sleep(0.01)
+
+        try:
+            await asyncio.wait_for(until(lambda: child.failures == 1 and child.startup is None), 5)
+            assert child.error == (
+                "cannot establish child birth identity"
+                if failure == "birth"
+                else "startup failed: injected startup explosion"
+            )
+            assert child.retry_at > time.monotonic() and child.starts == 0 and child.process is None
+            assert not marker.exists() and not records and not supervisor.custody.groups
+            assert not any(line.startswith("+") for line in sent)
+            assert len(spawned) == (failure == "birth")
+            for process in spawned:
+                assert process.returncode == 1 and not exists(process.pid)
+                with pytest.raises(ChildProcessError):
+                    os.waitpid(process.pid, os.WNOHANG)
+            pulses = sent.count("H")
+            await asyncio.wait_for(until(lambda: sent.count("H") >= pulses + 2), 5)
+            if failure == "unexpected":
+                assert "supervisor component startup failed" in caplog.text
+                assert "ValueError: injected startup explosion" in caplog.text
+        finally:
+            supervisor.stop.set()
+            try:
+                await task
+            finally:
+                for process in spawned:
+                    process.wait(timeout=2)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("wedge", ["loop", "worker"])
+def test_guard_kills_wedged_loop_or_overdue_io_and_reaps(native, monkeypatch, wedge):
+    injection = f"""
+import time
+import brainlayer.service_supervisor as module
+original = module.gated_spawn
+def stuck(*args, **kwargs):
+ if (p/'wedge').exists():
+  while True: time.sleep(.05)
+ return original(*args, **kwargs)
+if {wedge!r} == 'worker': module.gated_spawn = stuck
+else:
+ tick = Supervisor._tick
+ def blocked(self):
+  if (p/'wedge').exists():
+   while True: time.sleep(.05)
+  return tick(self)
+ Supervisor._tick = blocked
+"""
+    boot = BOOT.replace("s=Supervisor(", injection + "\ns=Supervisor(")
+    boot = boot.replace("backoff=.3)", "backoff=.3,guard_timeout=.4,operation_timeout=.5)")
+    monkeypatch.setattr(sys.modules[__name__], "BOOT", boot)
+    path, start, _ = native
+    process, before, _ = start()
+    (path / "wedge").touch()
+    if wedge == "worker":
+        with socket.socket(socket.AF_UNIX) as client:
+            client.connect(str(path / "control.sock"))
+            client.sendall(b'{"action":"restart","component":"drain"}\n')
+    assert process.wait(timeout=3) == -signal.SIGKILL
+    eventually(lambda: not any(exists(c["pid"]) for c in before.values() if c["pid"]))
+
+
+@pytest.mark.parametrize("failure", ["write", "drain", "wait_closed"])
+def test_control_disconnect_is_expected_but_other_errors_surface(tmp_path, monkeypatch, failure):
+    import asyncio
+
+    monkeypatch.setattr("brainlayer.service_supervisor.peer_uid", lambda sock: os.getuid())
+
+    class Writer:
+        closed = False
+
+        def get_extra_info(self, key):
+            return None
+
+        def write(self, data):
+            if failure == "write":
+                raise BrokenPipeError("peer left")
+
+        async def drain(self):
+            if failure == "drain":
+                raise ConnectionResetError("peer left")
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            raise BrokenPipeError("peer left")
+
+    async def scenario():
+        reader, writer = asyncio.StreamReader(), Writer()
+        reader.feed_data(b'{"action":"status"}\n')
+        await Supervisor({}, tmp_path / "unused")._control(reader, writer)
+        assert writer.closed
+        writer.wait_closed = unexpected
+        reader.feed_data(b'{"action":"status"}\n')
+        with pytest.raises(RuntimeError, match="unexpected"):
+            await Supervisor({}, tmp_path / "unused")._control(reader, writer)
+
+    async def unexpected():
+        raise RuntimeError("unexpected")
+
+    asyncio.run(scenario())
