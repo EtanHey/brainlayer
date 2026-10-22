@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import signal
@@ -181,6 +182,7 @@ class Supervisor:
 
     def _start(self, child: Component):
         gate = None
+        unidentified = None
         try:
             with ExitStack() as files:
                 files.enter_context(supervisor_guard.component_gate(self.path.parent))
@@ -191,7 +193,9 @@ class Supervisor:
                 )
             birth = start_time(child.process.pid)
             if birth is None:
-                raise RuntimeError("cannot establish child birth identity")
+                unidentified = child.process
+                self._failed(child, "cannot establish child birth identity")
+                return
             self.custody.record(child.process.pid, birth)
             self._send(f"+{child.process.pid}")
             os.write(gate, b"R")
@@ -208,6 +212,9 @@ class Supervisor:
         finally:
             if gate is not None:
                 os.close(gate)  # On failure the wrapper exits without running the command.
+            if unidentified is not None:
+                unidentified.wait()  # Reap the unregistered wrapper after gate EOF, in this worker.
+                child.process = None
 
     def _tick(self):
         if self.recovery and self.recovery.done():
@@ -229,8 +236,13 @@ class Supervisor:
             if child.startup is not None:
                 if not child.startup.done():
                     continue
-                child.startup.result()
-                child.startup = None
+                try:
+                    child.startup.result()
+                except Exception as exc:
+                    logging.getLogger(__name__).exception("supervisor component startup failed")
+                    self._failed(child, f"startup failed: {exc}")
+                finally:
+                    child.startup = None
             if child.cleanup and child.cleanup.done():
                 try:
                     child.cleanup.result()
