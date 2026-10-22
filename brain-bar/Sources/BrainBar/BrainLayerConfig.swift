@@ -726,14 +726,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
     }
 
     private static func readCalendarLogsDirectory() -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let url = home.appendingPathComponent("Library/LaunchAgents/com.brainlayer.maintenance.plist")
-        if let data = try? Data(contentsOf: url),
-           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-           let args = plist["ProgramArguments"] as? [String], let index = args.firstIndex(of: "--logs-dir"), index + 1 < args.count {
-            return URL(fileURLWithPath: args[index + 1])
-        }
-        return home.appendingPathComponent("Library/Logs/brainlayer")
+        BrainBarBackupSources.Paths.readCalendarLogsDirectory()
     }
 
     private func integerLine(named key: String, in output: String) -> Int? {

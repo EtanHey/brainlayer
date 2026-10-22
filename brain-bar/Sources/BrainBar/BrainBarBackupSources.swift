@@ -30,10 +30,35 @@ struct BrainBarBackupSources: Sendable {
         let archiveDirectory: URL
         /// The nightly light pass's log, from its own LaunchAgent; nil when not resolved.
         var nightlyMaintenanceLog: URL?
+        var configuredCalendarLogDirectory: URL?
 
-        /// `maintenance-calendar --logs-dir` defaults to ~/Library/Logs/brainlayer.
+        /// The calendar job's `--logs-dir`, or its default when no argument was resolved.
         var calendarLogDirectory: URL {
-            launchAgents.deletingLastPathComponent().appendingPathComponent("Logs/brainlayer")
+            configuredCalendarLogDirectory
+                ?? launchAgents.deletingLastPathComponent().appendingPathComponent("Logs/brainlayer")
+        }
+
+        static func readCalendarLogsDirectory(
+            environment: [String: String] = ProcessInfo.processInfo.environment,
+            home: URL = FileManager.default.homeDirectoryForCurrentUser,
+            readFile: (URL) -> Data? = { FileManager.default.contents(atPath: $0.path) }
+        ) -> URL {
+            func logsDirectory(_ plist: [String: Any]?) -> URL? {
+                guard let args = plist?["ProgramArguments"] as? [String],
+                      let index = args.firstIndex(of: "--logs-dir"), index + 1 < args.count,
+                      !args[index + 1].isEmpty, !args[index + 1].hasPrefix("--") else { return nil }
+                return URL(fileURLWithPath: args[index + 1])
+            }
+            let plistURL = home.appendingPathComponent("Library/LaunchAgents/com.brainlayer.maintenance.plist")
+            let plist = readFile(plistURL)
+                .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+            if let directory = logsDirectory(plist) { return directory }
+            let jobsURL = environment["BRAINLAYER_SUPERVISOR_JOBS_PATH"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+                ?? home.appendingPathComponent(".local/share/brainlayer/supervisor/jobs.json")
+            let jobs = readFile(jobsURL).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let calendar = jobs?["com.brainlayer.maintenance"] as? [String: Any]
+            return logsDirectory(calendar?["plist"] as? [String: Any])
+                ?? home.appendingPathComponent("Library/Logs/brainlayer")
         }
 
         /// The same paths the Python jobs use (#1016 R1 B1). Each value comes from the environment
@@ -68,7 +93,8 @@ struct BrainBarBackupSources: Sendable {
                 maintenanceLog: path(.maintenanceWeekly, "BRAINLAYER_MAINTENANCE_LOG_PATH", data.appendingPathComponent("logs/maintenance.log")),
                 snapshotDirectory: path(.backupDaily, "BRAINLAYER_BACKUP_STAGING_DIR", data.appendingPathComponent("backups")),
                 archiveDirectory: path(.jsonlBackup, "BRAINLAYER_JSONL_BACKUP_STAGING_DIR", data.appendingPathComponent("jsonl-backups")),
-                nightlyMaintenanceLog: path(.maintenanceNightly, "BRAINLAYER_MAINTENANCE_LOG_PATH", data.appendingPathComponent("logs/maintenance.log"))
+                nightlyMaintenanceLog: path(.maintenanceNightly, "BRAINLAYER_MAINTENANCE_LOG_PATH", data.appendingPathComponent("logs/maintenance.log")),
+                configuredCalendarLogDirectory: readCalendarLogsDirectory(environment: environment, home: home, readFile: readFile)
             )
         }
     }

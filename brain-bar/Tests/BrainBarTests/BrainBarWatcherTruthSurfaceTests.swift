@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Vision
 import XCTest
 @testable import BrainBar
 
@@ -20,7 +21,8 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         process: WatcherProcessProbeResult = .running(pid: 4242),
         health: WatcherHealthFileRead? = BrainBarDashboardFixture.healthyWatcherHealth,
         recentWatcherChunks: Int = 0,
-        flowReadable: Bool = true
+        flowReadable: Bool = true,
+        watcherBuckets: [Int] = [0, 0, 0, 0]
     ) -> DashboardStats {
         DashboardStats(
             chunkCount: 120,
@@ -31,7 +33,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             databaseSizeBytes: 4_096,
             recentActivityBuckets: [0, 0, 0, 0],
             recentAgentWriteBuckets: [0, 0, 0, 0],
-            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: watcherBuckets,
             recentEnrichmentBuckets: [0, 0, 0, 0],
             activityWindowMinutes: 30,
             bucketCount: 4,
@@ -77,7 +79,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             (.absent, BrainBarDashboardFixture.healthyWatcherHealth, .stopped, "Watcher stopped"),
             (.running(pid: 42), degradedHealth(), .attention, "Watcher needs attention"),
             (.running(pid: 42), .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-900), pollCount: 72)), .attention, "Watcher needs attention"),
-            (.failure("launchctl timed out"), .missing(path: "/fixture/health.json"), .unknown, "Evidence unavailable"),
+            (.failure("launchctl timed out"), .missing(path: "/fixture/health.json"), .unknown, "Watcher status unknown"),
         ]
         for (process, health, expected, message) in cases {
             let lane = DashboardFlowSummary.derive(daemon: nil,
@@ -85,9 +87,31 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 .lane(for: .jsonlWatcher)
             XCTAssertEqual(lane.status, expected)
             let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
-            XCTAssertEqual(disclosure.tooltipDisclosure, message)
+            XCTAssertEqual(disclosure.tooltipDisclosure, expected == .unknown ? "\(message) · \(lane.lastEventText)" : message)
             XCTAssertFalse(BrainBarIngestSeriesPresentation(lane: lane).showsSparkline)
             if expected == .stopped { XCTAssertEqual(lane.status.stateTheme, .error) }
+        }
+    }
+
+    func testUnreadableFlowKeepsUnknownMissingAndStaleHealthAmber() {
+        let cases: [(WatcherProcessProbeResult, WatcherHealthFileRead, String)] = [
+            (.running(pid: 42), .missing(path: "/fixture/watcher-health.json"), "missing"),
+            (.failure("launchctl timed out"), .readable(WatcherHealthFile(
+                updatedAt: now.addingTimeInterval(-900), pollCount: 72
+            )), "15m ago"),
+        ]
+        for (process, health, reason) in cases {
+            let lane = DashboardFlowSummary.derive(daemon: nil,
+                stats: stats(replayDebt: 0, process: process, health: health, flowReadable: false), now: now)
+                .lane(for: .jsonlWatcher)
+            XCTAssertEqual(lane.status, .unknown, "do not invent a process verdict")
+            XCTAssertEqual(lane.status.stateTheme, .degraded, "unknown health must retain its amber warning")
+            XCTAssertEqual(lane.evidencePlaceholder, "Watcher status unknown")
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            XCTAssertTrue(disclosure.tooltipDisclosure.contains(reason), disclosure.tooltipDisclosure)
+            XCTAssertTrue(disclosure.accessibilitySummary.contains(reason), disclosure.accessibilitySummary)
+            XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
+            XCTAssertEqual(BrainBarIngestSeriesPresentation(lane: lane).metricText, "Watcher status unknown")
         }
     }
 
@@ -109,6 +133,38 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try png.write(to: directory.appendingPathComponent("watcher-flow-updating.png"))
         XCTAssertGreaterThan(png.count, 5_000)
+    }
+
+    func testPreviewHidesUnreadableWatcherCountsAndKeepsUpdatingDisclosure() throws {
+        for readable in [false, true] {
+            let sample = stats(replayDebt: 0, flowReadable: readable, watcherBuckets: [9876, 9876, 9876, 9876])
+            let view = BrainBarPipelinePanelPreview.make(
+                stats: sample, containerSize: CGSize(width: 960, height: 1400), fetchedAt: now,
+                signalCoverageExpanded: false
+            ).frame(width: 960, height: 1400)
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: 960, height: 1400)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent(readable ? "watcher-preview-readable.png" : "watcher-preview-updating.png"))
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage)).perform([request])
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            XCTAssertEqual(text.contains("39,504"), readable, text)
+            if !readable {
+                XCTAssertTrue(text.contains("Updating"), text)
+                XCTAssertFalse(text.contains("1316.8/min"), text)
+                XCTAssertFalse(text.contains("latest:"), text)
+            }
+        }
     }
 
     /// B1: the lane's status pill rendered "live" (chunks flowed recently) while its body said

@@ -177,6 +177,40 @@ final class BrainBarJobAlertTests: XCTestCase {
         )
     }
 
+    func testCalendarLogLinksUseConfiguredPlistOrSupervisorArguments() throws {
+        let home = root.appendingPathComponent("home")
+        let plistURL = home.appendingPathComponent("Library/LaunchAgents/com.brainlayer.maintenance.plist")
+        let jobsURL = home.appendingPathComponent(".local/share/brainlayer/supervisor/jobs.json")
+        let custom = root.appendingPathComponent("custom calendar logs")
+        let plist: [String: Any] = ["ProgramArguments": ["brainlayer", "maintenance-calendar", "--logs-dir", custom.path]]
+        let cases: [(URL, Data)] = [
+            (plistURL, try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)),
+            (jobsURL, try JSONSerialization.data(withJSONObject: ["com.brainlayer.maintenance": ["plist": plist]])),
+        ]
+        for (source, data) in cases {
+            let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home,
+                readFile: { $0 == source ? data : nil })
+            for key in ["index", "backup-snapshot", "p0-counter", "wal-checkpoint", "decay", "repair-fts"] {
+                let expected = custom.appendingPathComponent("\(key).err.log")
+                XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live), expected, source.path)
+                let workspace = BrainBarRecordingWorkspace()
+                XCTAssertEqual(BrainBarJobAlerts.showLog(forKey: key, paths: live, workspace: workspace,
+                    fileExists: { $0 == expected }), .opened(expected))
+                XCTAssertEqual(workspace.recorded.map(\.1), [expected.path])
+            }
+        }
+    }
+
+    func testCalendarLogDirectoryFallsBackWithoutAValidArgument() throws {
+        let home = root.appendingPathComponent("home")
+        for args in [["brainlayer", "maintenance-calendar"], ["brainlayer", "--logs-dir"], ["brainlayer", "--logs-dir", ""]] {
+            let data = try PropertyListSerialization.data(fromPropertyList: ["ProgramArguments": args], format: .xml, options: 0)
+            let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home,
+                readFile: { $0.lastPathComponent == "com.brainlayer.maintenance.plist" ? data : nil })
+            XCTAssertEqual(live.calendarLogDirectory, home.appendingPathComponent("Library/Logs/brainlayer"))
+        }
+    }
+
     func test_the_nightly_alert_opens_the_nightly_jobs_own_log() {
         // Macroscope #1062: the nightly LaunchAgent can name its own BRAINLAYER_MAINTENANCE_LOG_PATH.
         var paths = self.paths

@@ -3045,6 +3045,8 @@ private struct BrainBarPipelineSeriesCard: View {
     let fetchedAt: Date
     let timeframe: PipelineTimeframe
 
+    private var isUnavailable: Bool { lane.evidenceStatus == .unavailable }
+
     private var presentation: SparklineChartPresentation {
         let disclosure = chartDisclosure
         return SparklineChartPresentation(
@@ -3087,61 +3089,77 @@ private struct BrainBarPipelineSeriesCard: View {
         VStack(alignment: .leading, spacing: compact ? 8 : 10) {
             header
 
-            ZStack(alignment: .bottomTrailing) {
-                BrainBarHeroSparkline(
-                    label: lane.sparklineLabel,
-                    values: lane.values,
-                    secondaryValues: [],
-                    primarySeriesLabel: nil,
-                    secondarySeriesLabel: nil,
-                    tertiaryValues: [],
-                    tertiarySeriesLabel: nil,
-                    latestBucketName: lane.latestBucketName,
-                    accentColor: lane.accentColor,
-                    secondaryAccentColor: nil,
-                    tertiaryAccentColor: nil,
-                    activityWindowMinutes: lane.activityWindowMinutes,
-                fetchedAt: fetchedAt,
-                pulseRevision: pulseRevision,
-                referenceValue: nil,
-                metricDisclosure: chartDisclosure.tooltipDisclosure,
-                accessibilitySummary: chartDisclosure.accessibilitySummary
-                )
-                .frame(height: chartHeight)
-
-                Text(scaleCaptionText)
-                    .font(.system(size: 10, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.62))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule().fill(Color.brainBarGlassSecondary.opacity(0.85))
+            if isUnavailable {
+                HStack(spacing: 5) {
+                    if lane.status != .running {
+                        Circle().fill(lane.status.stateTheme.theme.swiftUIColor).frame(width: 5, height: 5)
+                    }
+                    Text(lane.evidencePlaceholder ?? "Evidence unavailable")
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.brainBarTextSecondary)
+                .frame(maxWidth: .infinity, minHeight: chartHeight)
+                .help(chartDisclosure.tooltipDisclosure)
+                .accessibilityLabel(chartDisclosure.accessibilitySummary)
+            } else {
+                ZStack(alignment: .bottomTrailing) {
+                    BrainBarHeroSparkline(
+                        label: lane.sparklineLabel,
+                        values: lane.values,
+                        secondaryValues: [],
+                        primarySeriesLabel: nil,
+                        secondarySeriesLabel: nil,
+                        tertiaryValues: [],
+                        tertiarySeriesLabel: nil,
+                        latestBucketName: lane.latestBucketName,
+                        accentColor: lane.accentColor,
+                        secondaryAccentColor: nil,
+                        tertiaryAccentColor: nil,
+                        activityWindowMinutes: lane.activityWindowMinutes,
+                        fetchedAt: fetchedAt,
+                        pulseRevision: pulseRevision,
+                        referenceValue: nil,
+                        metricDisclosure: chartDisclosure.tooltipDisclosure,
+                        accessibilitySummary: chartDisclosure.accessibilitySummary
                     )
-                    .padding(6)
-                    .allowsHitTesting(false)
+                    .frame(height: chartHeight)
+
+                    Text(scaleCaptionText)
+                        .font(.system(size: 10, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.62))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(Color.brainBarGlassSecondary.opacity(0.85))
+                        )
+                        .padding(6)
+                        .allowsHitTesting(false)
+                }
             }
 
             // ONE caption line: volume for the selected window, plus the window
             // label so the shared selector visibly relabels every card.
             HStack(spacing: 8) {
-                Text(lane.volumeText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text("·")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
-                if let latestBucketCaptionText {
-                    Text(latestBucketCaptionText)
-                        .font(.system(size: 11, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(accent.opacity(0.88))
+                if !isUnavailable {
+                    Text(lane.volumeText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
                         .lineLimit(1)
+                        .truncationMode(.tail)
                     Text("·")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
+                    if let latestBucketCaptionText {
+                        Text(latestBucketCaptionText)
+                            .font(.system(size: 11, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(accent.opacity(0.88))
+                            .lineLimit(1)
+                        Text("·")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
+                    }
                 }
                 Text("window: \(timeframeWindowText)")
                     .font(.system(size: 11, weight: .semibold))
@@ -3163,7 +3181,7 @@ private struct BrainBarPipelineSeriesCard: View {
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.80)
                     .foregroundStyle(Color.brainBarTextSecondary.opacity(0.60))
-                Text(lane.rateText)
+                Text(isUnavailable ? "—" : lane.rateText)
                     .font(.system(size: compact ? 22 : 26, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextPrimary)
@@ -3199,7 +3217,7 @@ struct BrainBarIngestSeriesPresentation: Equatable {
     init(lane: DashboardFlowLane, locale: Locale = .current) {
         guard lane.evidenceStatus != .unavailable else {
             switch lane.status {
-            case .running, .stopped, .attention: metricText = lane.evidencePlaceholder ?? "Unavailable"
+            case .running, .stopped, .attention, .unknown: metricText = lane.evidencePlaceholder ?? "Unavailable"
             default: metricText = "Unavailable"
             }
             showsSparkline = false
@@ -3251,8 +3269,9 @@ struct BrainBarDashboardChartDisclosure: Equatable {
         }
 
         if let placeholder = lane.evidencePlaceholder {
-            accessibilitySummary = "\(lane.name). \(placeholder). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
-            tooltipDisclosure = placeholder
+            let detail = lane.status == .unknown ? "\(placeholder) · \(lane.lastEventText)" : placeholder
+            accessibilitySummary = "\(lane.name). \(detail). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
+            tooltipDisclosure = detail
         } else {
             accessibilitySummary = "\(lane.name). Window: \(windowLabel). Count: \(DashboardMetricFormatter.integerString(totalCount)). Unit: \(unitLabel). Clock: \(clockLabel)."
             tooltipDisclosure = "Window: \(windowLabel) · Count: hovered value below · Unit: \(unitLabel) · Clock: \(clockLabel)"

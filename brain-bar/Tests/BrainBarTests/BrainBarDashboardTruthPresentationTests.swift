@@ -284,7 +284,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
             stats: BrainBarDashboardFixture.watcherUnknownStats, now: BrainBarDashboardFixture.fetchedAt)
             .lane(for: .jsonlWatcher)
         XCTAssertEqual(BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: unavailable, timeframe: .live)
-            .tooltipDisclosure, "Evidence unavailable", "Unavailable charts must remain explicit.")
+            .tooltipDisclosure, "Watcher status unknown · \(unavailable.lastEventText)", "Missing watcher health must remain explicit.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
     }

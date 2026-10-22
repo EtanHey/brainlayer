@@ -269,9 +269,9 @@ extension DashboardFlowLaneStatus {
         switch self {
         case .live, .running:
             return .active
-        case .recent, .idle, .unknown:
+        case .recent, .idle:
             return .idle
-        case .attention:
+        case .attention, .unknown:
             return .degraded
         case .stopped:
             return .error
@@ -379,6 +379,7 @@ struct DashboardFlowLane: Sendable, Equatable {
         case .running: "Updating…"
         case .stopped: "Watcher stopped"
         case .attention: "Watcher needs attention"
+        case .unknown: "Watcher status unknown"
         default: "Evidence unavailable"
         }
     }
