@@ -3,9 +3,8 @@ import SQLite3
 @testable import BrainBar
 
 final class BrainBarReliabilityTests: XCTestCase {
-    /// Hosted macOS runners occasionally add a few milliseconds around the
-    /// contested SQLite lock path. Keep this tight enough to catch a blocking
-    /// prompt-path regression while avoiding false negatives at 0.200s + jitter.
+    /// The configured lock budget is structural; host scheduling is measured only
+    /// by the separate, loose prompt-path backstop.
     private static let interactiveQueueBudget: TimeInterval = 0.25
 
     private var servers: [BrainBarServer] = []
@@ -137,11 +136,20 @@ final class BrainBarReliabilityTests: XCTestCase {
         setenv("BRAINBAR_PENDING_STORES_PATH", queuePath, 1)
         defer { unsetenv("BRAINBAR_PENDING_STORES_PATH") }
 
+        // Replay stays owned and cannot enter store() while this oracle observes it.
+        let drainQueue = DispatchQueue(label: "reliability-held-store-drain")
+        drainQueue.suspend()
+        defer { drainQueue.resume() }
         let db = BrainDatabase(path: dbPath)
         XCTAssertTrue(db.isOpen)
         defer { db.close() }
 
-        let router = MCPRouter()
+        var observedPolicy: (Int32, Int)?
+        var enteredStoreTransaction = false
+        db.observeStorePolicyForTesting = { observedPolicy = ($0, $1) }
+        db.onStoreTransactionForTesting = { enteredStoreTransaction = true }
+        db.failNextStoreWithBusyForTesting = true
+        let router = MCPRouter(pendingStoreDrainQueue: drainQueue)
         router.setDatabase(db)
 
         let lockDB = try openReliabilitySQLiteConnection(path: dbPath)
@@ -164,9 +172,16 @@ final class BrainBarReliabilityTests: XCTestCase {
             ] as [String: Any]
         ])
 
-        XCTAssertLessThan(Date().timeIntervalSince(started), Self.interactiveQueueBudget)
+        let policy = try XCTUnwrap(observedPolicy, "Observe the policy actually selected by brain_store")
+        XCTAssertEqual(policy.0, 25)
+        XCTAssertEqual(policy.1, 0, "The prompt path must never enter a retry sleep")
+        XCTAssertLessThan(TimeInterval(policy.0) / 1_000, Self.interactiveQueueBudget)
+        XCTAssertFalse(db.failNextStoreWithBusyForTesting, "The injected BUSY outcome must be consumed")
+        XCTAssertFalse(enteredStoreTransaction, "BUSY must queue before entering the lock-wait path")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.0, "Loose prompt-path stall backstop")
         let result = try XCTUnwrap(response["result"] as? [String: Any])
         XCTAssertEqual(result["queued"] as? Bool, true)
+        XCTAssertEqual(result["status"] as? String, "DEFERRED")
         let queueID = try XCTUnwrap(result["queue_id"] as? String)
         let queuedAt = try XCTUnwrap(result["queued_at"] as? String)
         XCTAssertFalse(queueID.isEmpty)
