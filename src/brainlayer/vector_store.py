@@ -2506,6 +2506,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         earlier sub-batches commit, the committed chunks are intentionally not
         replayed on retry; callers should retry the failed call with the same
         inputs to converge via the existing dedupe/replay-tolerant paths.
+
+        A BusyError that escapes carries the durable prefix: ``committed_count``
+        admitted chunks committed, and ``committed_input_count`` leading inputs
+        need no replay. Replaying them would re-merge them as new sightings.
         """
         if len(chunks) != len(embeddings):
             raise ValueError("Chunks and embeddings must have same length")
@@ -2515,8 +2519,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
         scrubbed_chunks = [scrub_chunk_values(chunk) for chunk in chunks]
 
         valid_pairs: list[tuple[Dict[str, Any], List[float] | None]] = []
+        valid_inputs: list[int] = []
         rejected_error: ValueError | None = None
-        for chunk, embedding, original in zip(scrubbed_chunks, embeddings, chunks):
+        for input_index, (chunk, embedding, original) in enumerate(zip(scrubbed_chunks, embeddings, chunks)):
             # The caller's vector describes raw content. Defer embedding if the
             # at-rest boundary changed it; never blend that stale vector.
             if chunk.get("content") != original.get("content"):
@@ -2531,6 +2536,7 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 rejected_error = rejected_error or exc
                 continue
             valid_pairs.append((chunk, embedding))
+            valid_inputs.append(input_index)
         if not valid_pairs and rejected_error is not None:
             raise rejected_error
 
@@ -2826,6 +2832,9 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                     if attempt == 4:
                         if committed_any:
                             invalidate_upsert_caches()
+                        # Only this sub-batch rolled back; earlier ones are durable.
+                        exc.committed_count = processed_count
+                        exc.committed_input_count = valid_inputs[processed_count]
                         raise
                     _sleep(0.1 * (2**attempt))
                 except Exception as exc:

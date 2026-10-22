@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import os
 import signal
 import socket
 import subprocess
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,6 +48,7 @@ class Component:
     error: str = field(default="", init=False)
     started_at: float = field(default=0, init=False)
     cleanup: asyncio.Task | None = field(default=None, init=False)
+    startup: asyncio.Task | None = field(default=None, init=False)
     last_exit_code: int | None = field(default=None, init=False)
     last_run_at: float | None = field(default=None, init=False)
     cleanup_retry_at: float = field(default=0, init=False)
@@ -57,7 +59,9 @@ class Component:
             exit_timeout=self.exit_timeout,
             paused=self.paused,
             pause_owner=self.pause_owner,
-            pid=self.process.pid if self.process and self.process.poll() is None else None,
+            pid=self.process.pid
+            if self.process and self.process.poll() is None and (self.startup is None or self.startup.done())
+            else None,
             starts=self.starts,
             failures=self.failures,
             error=self.error,
@@ -80,11 +84,13 @@ class Supervisor:
         guard_timeout: float = 30,
         shutdown_timeout: float = 15,
         stable_uptime: float = 60,
+        operation_timeout: float = 120,
     ):
         if any(name.removeprefix("com.brainlayer.") in {"enrich", "enrichment"} for name in components):
             raise ValueError("enrichment is retired")
         if not all(
-            math.isfinite(v) and v > 0 for v in (backoff, guard_timeout, shutdown_timeout, stable_uptime)
+            math.isfinite(v) and v > 0
+            for v in (backoff, guard_timeout, shutdown_timeout, stable_uptime, operation_timeout)
         ) or any(
             not c.argv
             or not math.isfinite(c.exit_timeout)
@@ -104,6 +110,43 @@ class Supervisor:
         self.custody, self.deadline = None, None
         self.recovery = None
         self.recovery_at = 0
+        self.io_lock, self.operations = asyncio.Lock(), {}
+        self.operation_timeout = operation_timeout
+
+    async def _blocking(self, operation, *args):
+        """Keep loop progress observable; never abandon a worker holding custody on cancellation."""
+        worker = asyncio.get_running_loop().run_in_executor(None, operation, *args)
+        self.operations[worker] = time.monotonic()
+        cancelled = None
+        try:
+            while True:
+                try:
+                    result = await asyncio.shield(worker)
+                    break
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            if cancelled is not None:
+                raise cancelled
+            return result
+        finally:
+            self.operations.pop(worker, None)
+
+    async def _start_pending(self, child):
+        async with self.io_lock:  # Spawn/record/forget share one durable journal writer.
+            if not self.stop.is_set() and not child.paused:
+                await self._blocking(self._start, child)
+
+    def _schedule_start(self, child):
+        if child.startup is None:
+            child.startup = asyncio.create_task(self._start_pending(child))
+        return child.startup
+
+    async def _wait_start(self, child):
+        if child.startup is not None:
+            startup = child.startup
+            await asyncio.shield(startup)
+            if child.startup is startup:
+                child.startup = None
 
     def status(self) -> dict:
         return {"components": {name: child.status() for name, child in self.components.items()}}
@@ -120,11 +163,13 @@ class Supervisor:
             child.exit_timeout,
             lambda: (self.deadline, self.shutdown_timeout / 2) if self.deadline is not None else None,
         )
-        self.custody.forget(self.guard, process.pid)
+        async with self.io_lock:
+            await self._blocking(self.custody.forget, self.guard, process.pid)
         child.cleanup_retry_at = 0
         child.process = None
 
     async def _stop_child(self, child: Component):
+        await self._wait_start(child)  # A gated launch must finish before reaping or releasing custody.
         if child.cleanup is None:
             child.cleanup = asyncio.create_task(self._reap(child))
         await asyncio.shield(child.cleanup)
@@ -137,6 +182,7 @@ class Supervisor:
 
     def _start(self, child: Component):
         gate = None
+        unidentified = None
         try:
             with ExitStack() as files:
                 files.enter_context(supervisor_guard.component_gate(self.path.parent))
@@ -147,7 +193,9 @@ class Supervisor:
                 )
             birth = start_time(child.process.pid)
             if birth is None:
-                raise RuntimeError("cannot establish child birth identity")
+                unidentified = child.process
+                self._failed(child, "cannot establish child birth identity")
+                return
             self.custody.record(child.process.pid, birth)
             self._send(f"+{child.process.pid}")
             os.write(gate, b"R")
@@ -164,6 +212,9 @@ class Supervisor:
         finally:
             if gate is not None:
                 os.close(gate)  # On failure the wrapper exits without running the command.
+            if unidentified is not None:
+                unidentified.wait()  # Reap the unregistered wrapper after gate EOF, in this worker.
+                child.process = None
 
     def _tick(self):
         if self.recovery and self.recovery.done():
@@ -172,21 +223,26 @@ class Supervisor:
             except BlockingIOError:
                 pass  # A live holder or inherited child still owns the lease.
             except Exception as exc:
-                for child in self.components.values():
-                    if child.pause_owner:
-                        child.error = f"maintenance recovery failed: {exc}"
+                # After a restart nothing carries a pause owner; report on every component then.
+                owners = [c for c in self.components.values() if c.pause_owner] or self.components.values()
+                for child in owners:
+                    child.error = f"maintenance recovery failed: {exc}"
             self.recovery = None
-        if (
-            self.recovery is None
-            and time.monotonic() >= self.recovery_at
-            and any(c.pause_owner for c in self.components.values())
-            and self.path.with_name("maintenance.json").exists()
-        ):
-            from .maintenance_control import recover_hold
-
-            self.recovery = asyncio.create_task(asyncio.to_thread(recover_hold, self.path))
+        # The journal alone drives recovery and expiry: a restarted supervisor has no pause owners.
+        if self.recovery is None and time.monotonic() >= self.recovery_at:
+            self.recovery = asyncio.create_task(self._blocking(self._recover_hold))
             self.recovery_at = time.monotonic() + 1
         for child in self.components.values():
+            if child.startup is not None:
+                if not child.startup.done():
+                    continue
+                try:
+                    child.startup.result()
+                except Exception as exc:
+                    logging.getLogger(__name__).exception("supervisor component startup failed")
+                    self._failed(child, f"startup failed: {exc}")
+                finally:
+                    child.startup = None
             if child.cleanup and child.cleanup.done():
                 try:
                     child.cleanup.result()
@@ -233,7 +289,13 @@ class Supervisor:
             ):
                 child.failures = 0
             if child.enabled and not child.paused and child.process is None and time.monotonic() >= child.retry_at:
-                self._start(child)
+                self._schedule_start(child)
+
+    def _recover_hold(self):
+        from .maintenance_control import recover_hold
+
+        if self.path.with_name("maintenance.json").exists():
+            recover_hold(self.path)
 
     async def _control(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         try:
@@ -270,7 +332,8 @@ class Supervisor:
                     if action != "pause" and not self.stop.is_set():
                         for child in selected:
                             child.paused, child.retry_at, child.pause_owner = False, 0, ""
-                            self._start(child)
+                            self._schedule_start(child)
+                            await self._wait_start(child)
                         if action == "restart" and any(c.process is None for c in selected):
                             raise RuntimeError(
                                 "restart did not start every component: " + "; ".join(c.error for c in selected)
@@ -281,9 +344,12 @@ class Supervisor:
         try:
             writer.write(json.dumps(response).encode() + b"\n")
             await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            pass  # An ambiguous disconnect never authorizes replaying the mutation.
         finally:
             writer.close()
-            await writer.wait_closed()
+            with suppress(ConnectionResetError, BrokenPipeError):
+                await writer.wait_closed()
 
     async def run(self, *, install_signals: bool = False):
         """Kernel exclusion precedes stale endpoint cleanup and recorded-group recovery."""
@@ -306,7 +372,9 @@ class Supervisor:
                 while not self.stop.is_set():
                     if self.guard.poll() is not None:
                         raise RuntimeError("supervisor heartbeat guard exited")
-                    self._send("H")
+                    # A responsive loop may wait for slow I/O, but a stuck worker has a finite budget.
+                    if all(time.monotonic() - began < self.operation_timeout for began in self.operations.values()):
+                        self._send("H")
                     self._tick()
                     await asyncio.sleep(min(0.1, self.guard_timeout / 4))
             finally:

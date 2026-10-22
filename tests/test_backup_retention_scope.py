@@ -166,6 +166,7 @@ def test_explicit_folder_does_not_expand_to_default_or_prior(monkeypatch):
         folder_parts=["custom", "only"],
         machine_id="Locals-MacBook-Pro",
         retention_policy=b.DriveRetentionPolicy(1),
+        verified_file_ids={"new"},
     ) == ["2026-10-16.db.gz"]
     ensure.assert_called_once_with(service, ["custom", "only"])
     assert service.files.return_value.list.call_args.kwargs["q"] == "'custom-id' in parents and trashed = false"
@@ -217,7 +218,10 @@ def test_retention_scopes_paginated_prior_siblings_and_deduplicates(missing_prio
 
     service.files.return_value.list.side_effect = scoped
     removed = b.prune_drive_backups(
-        service, machine_id="Locals-MacBook-Pro", retention_policy=b.DriveRetentionPolicy(keep_latest=1)
+        service,
+        machine_id="Locals-MacBook-Pro",
+        retention_policy=b.DriveRetentionPolicy(keep_latest=1),
+        verified_file_ids={"new"},
     )
     assert removed == ([] if missing_prior else ["2026-10-17.db.gz"])
     assert service.files.return_value.update.call_count == int(not missing_prior)

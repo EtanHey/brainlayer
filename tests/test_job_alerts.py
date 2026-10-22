@@ -10,6 +10,18 @@ import pytest
 from brainlayer.job_alerts import active_alerts, report
 
 
+def test_macos_notification_has_bounded_subprocess_timeout(monkeypatch):
+    from brainlayer import job_alerts
+
+    calls = []
+    monkeypatch.delenv("BRAINLAYER_TEST_PATH_PROVENANCE", raising=False)
+    monkeypatch.setattr(job_alerts.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    job_alerts._notify("fixture")
+    assert calls[0][0][0][0] == "osascript"
+    assert 0 < calls[0][1]["timeout"] <= 8
+    assert calls[0][1]["check"] is True
+
+
 @pytest.fixture(autouse=True)
 def isolated_maintenance_log(tmp_path, monkeypatch):
     path = tmp_path / "maintenance.log"
@@ -198,5 +210,5 @@ def test_maintenance_deliberate_deferrals_match_swift_allowlist():
     ).read_text()
     block = swift.split("static let deliberateDeferrals = [", 1)[1].split("]", 1)[0]
     patterns = re.findall(r'#"(.*?)"#', block)
-    assert len(patterns) == 4
+    assert len(patterns) == 5
     assert tuple(patterns) == maintenance.DELIBERATE_DEFERRALS

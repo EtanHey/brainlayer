@@ -883,6 +883,10 @@ final class BrainDatabase: @unchecked Sendable {
     private var injectionRecipientIdentityCacheLoadedAt = Date.distantPast
     var failNextStoreAfterInsertForTesting = false
     var failNextStoreWithBusyForTesting = false
+#if DEBUG
+    var observeStorePolicyForTesting: ((Int32, Int) -> Void)?
+    var onStoreTransactionForTesting: (() -> Void)?
+#endif
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -1543,6 +1547,9 @@ final class BrainDatabase: @unchecked Sendable {
         metadata: [String: Any] = [:]
     ) throws -> StoredChunk {
         guard let db else { throw DBError.notOpen }
+#if DEBUG
+        onStoreTransactionForTesting?()
+#endif
         // Scrub before anything is derived from the text: the row, its FTS copies
         // (filled by triggers from this row), preview_text, and content_hash, so
         // dedup keys on the scrubbed text. Every caller goes through here: MCP,
@@ -1672,6 +1679,9 @@ final class BrainDatabase: @unchecked Sendable {
         busyTimeoutMillis: Int32 = 30_000,
         retries: Int = 3
     ) throws -> StoreWriteOutcome {
+#if DEBUG
+        observeStorePolicyForTesting?(busyTimeoutMillis, retries)
+#endif
         let chunkID = Self.makeChunkID()
         let createdAt = Self.timestamp()
         do {

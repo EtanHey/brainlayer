@@ -363,7 +363,7 @@ final class DaemonHealthMonitorRestartTests: XCTestCase {
     }
 
     func test_a_symlinked_ui_bundle_resolves_to_its_real_daemon_path() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = brainBarTestTemporaryDirectory().appendingPathComponent(UUID().uuidString + ".noindex")
         let real = root.appendingPathComponent("real/BrainBar.app")
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

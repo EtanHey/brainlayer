@@ -19,10 +19,10 @@ test, then `Read` the emitted PNG.
 
 ```bash
 cd brain-bar
-swift test --filter BrainBarDashboardSnapshotTests
+../.venv/bin/python Tests/BrainBarTests/Scripts/run_swift_tests.py --filter BrainBarDashboardSnapshotTests
 ```
 
-That writes PNGs to **`brain-bar/docs.local/brainbar-render/`**:
+That writes PNGs to **`<worktree>/.build.noindex/brainbar-render/`**:
 
 | File | What it shows | Layout breakpoint |
 |------|---------------|-------------------|
@@ -32,7 +32,9 @@ That writes PNGs to **`brain-bar/docs.local/brainbar-render/`**:
 | `settings.png`           | Settings panel (launchd jobs and backup status) | width 700 |
 
 Then `Read` any PNG to inspect the UI. Override the output directory with
-`BRAINBAR_RENDER_DIR=/abs/path swift test --filter BrainBarDashboardSnapshotTests`.
+`export BRAINBAR_RENDER_DIR="$PWD/../.build.noindex/brainbar-render-custom"` before running the command.
+Keep overrides inside the worktree's `.build.noindex/`. Wave 3 QA PNGs use
+`<worktree>/.build.noindex/wave3-qa/`; text receipts may stay in `docs.local/`.
 
 ## Why the renders are deterministic (byte-stable)
 

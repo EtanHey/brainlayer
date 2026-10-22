@@ -297,7 +297,22 @@ final class BrainBarSettingsViewModel: ObservableObject {
         }
     }
 
-    func refreshLaunchdStatus() {
+    /// The Dashboard's refresh cadence (2026-10-21): sample now, then once per tick, for as long as
+    /// the calling view's `.task` lives. Owned here, not by a `Timer.publish` built in a view body,
+    /// which every re-render replaced before it could fire — so the Dashboard kept the reasons of
+    /// whatever sample it took on appear.
+    func monitorLaunchdStatus(
+        waitForNextTick: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(60)) }
+    ) async {
+        while !Task.isCancelled {
+            await refreshLaunchdStatus().value
+            do { try await waitForNextTick() } catch { return }
+        }
+    }
+
+    /// One launchd/calendar sample, off the main actor; only the newest request publishes.
+    @discardableResult
+    func refreshLaunchdStatus() -> Task<Void, Never> {
         launchdSampleGeneration &+= 1
         let generation = launchdSampleGeneration
         isRefreshingLaunchdStatus = true
@@ -305,7 +320,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         refreshWatcherHealth()
         refreshBackupSchedules()
         let provider = launchdStatusProvider
-        Task {
+        return Task {
             let observations = await Task.detached {
                 provider.sampleActivity()
             }.value
@@ -345,7 +360,8 @@ final class BrainBarSettingsViewModel: ObservableObject {
             case .legacy: ""
             }
             return BrainBarBackupScheduleRow(title: title, cadence: cadence,
-                lastRun: observation?.lastRunAt.map(DashboardMetricFormatter.jobDateTimeString) ?? "No calendar run recorded",
+                lastRun: observation?.lastRunText(formatDate: DashboardMetricFormatter.jobDateTimeString,
+                                                  never: "No calendar run recorded") ?? "No calendar run recorded",
                 nextRun: observation?.nextRunAt.map(DashboardMetricFormatter.jobDateTimeString) ?? "Unavailable",
                 localCopy: backupSchedules.first { $0.title == title }?.localCopy)
         }
@@ -1326,11 +1342,20 @@ struct BrainBarJobGroupCard: View {
                     .foregroundStyle(badge.reasonColor)
             }
             // N1: a run that succeeded with warnings is a quiet amber note; the badge stays as is.
+            // An informational note (owner, "last result: ok", covered by weekly) is plain text.
             if let note = status.note {
-                Label(note, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
-                    .accessibilityIdentifier("brainbar.jobs.\(group.rawValue).note")
+                switch status.noteTone {
+                case .warning:
+                    Label(note, systemImage: "exclamationmark.circle")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color(nsColor: BrainBarDesignTokens.Colors.statusAttention))
+                        .accessibilityIdentifier("brainbar.jobs.\(group.rawValue).note")
+                case .info:
+                    Text(note)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.brainBarTextSecondary)
+                        .accessibilityIdentifier("brainbar.jobs.\(group.rawValue).note")
+                }
             }
             // The Backups page's Schedule section is its one source of last/next runs (lead UX r1).
             if backupsHealth == nil {

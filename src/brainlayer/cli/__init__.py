@@ -203,6 +203,7 @@ class _CalendarIndexCheckpoint:
         self.resource_faults = {}
         self.check = lambda: None
         self.rejected_chunks = 0
+        self.backlog_before = None
         if not force:
             try:
                 saved = json.loads(self.path.read_text())
@@ -469,6 +470,23 @@ class _CalendarIndexCheckpoint:
     def summary(self):
         return " ".join(f"{key}={value}" for key, value in self.backlog().items())
 
+    def mark_backlog_before(self):
+        self.backlog_before = self.backlog()
+
+    def delta_summary(self):
+        """Per-pass backlog before/after, so the next night's delta is measurable."""
+        before = self.backlog_before
+        if before is None:
+            return "backlog_before=unmeasured"
+        after = self.backlog()
+        return (
+            f"backlog_before_files={before['files_remaining']} "
+            f"backlog_before_chunks={before['chunks_remaining']} "
+            f"backlog_before_uncounted={before['uncounted_files']} "
+            f"backlog_delta_files={after['files_remaining'] - before['files_remaining']} "
+            f"backlog_delta_chunks={after['chunks_remaining'] - before['chunks_remaining']}"
+        )
+
     @staticmethod
     def backlog_keys():
         return ("files_remaining", "chunks_remaining", "uncounted_files")
@@ -507,6 +525,7 @@ class _CalendarIndexCheckpoint:
             database=self.database,
             pipeline_version=self.pipeline_version,
             **backlog,
+            backlog_before=self.backlog_before,
             stalled_passes=stalled,
             best_backlog=best,
             deferred=deferred,
@@ -518,7 +537,8 @@ class _CalendarIndexCheckpoint:
         _atomic_write(self.backlog_path, state)
         rprint(
             f"INDEX_BACKLOG {self.summary()} stalled_passes={stalled} "
-            f"quarantined_files={len(quarantined)} resource_files={len(self.resource_faults)}"
+            f"quarantined_files={len(quarantined)} resource_files={len(self.resource_faults)} "
+            f"{self.delta_summary()}"
         )
         for path, cause in self.resource_faults.items():
             rprint(f"INDEX_RESOURCE_SKIPPED file={path} cause={cause}")
@@ -4052,6 +4072,7 @@ def index_fast(
     skipped_empty_chunks = 0
     rejected_chunks = 0
     pass_deferred = False
+    admission = None
 
     def note_skipped_empty(count: int) -> None:
         nonlocal skipped_empty_chunks
@@ -4069,6 +4090,7 @@ def index_fast(
 
         import apsw
 
+        from ..index_admission import AdmissionBackoff, IndexAdmissionExhausted
         from ..index_budget import CALENDAR_INDEX_UNWIND_S
         from ..index_new import index_chunks_to_sqlite
         from ..index_watchdog import IndexWatchdog
@@ -4169,6 +4191,7 @@ def index_fast(
                         checkpoint.skip_resource(path, exc)
                         # Count and classify deterministic failures only once in the actual file attempt.
                         continue
+                checkpoint.mark_backlog_before()
             rprint(f"[bold blue]זיכרון[/] - Fast Indexing: [bold]{len(jsonl_files)}[/] files")
 
             watchdog.set_phase("open_store")
@@ -4176,13 +4199,25 @@ def index_fast(
                 # Reuse the resident writer's bounded SQLite coordination. Keep
                 # retries within this pass, then yield without discarding progress.
                 stack.enter_context(temporary_write_busy_timeout_ms(1000, deadline=deadline_monotonic))
+                # Resident writers commit around us; one lost race is not the night.
+                # Back off and retry inside this budget -- never a second concurrent
+                # writer, never a longer busy_timeout -- and defer only if no
+                # writer-idle window opens before the deadline.
+                admission = AdmissionBackoff(
+                    deadline_monotonic,
+                    on_wait=lambda retry, delay, exc: rprint(
+                        f"INDEX_ADMISSION_WAIT retry={retry} delay_s={delay:.1f} cause={type(exc).__name__}"
+                    ),
+                )
+
             # sqlite3_interrupt is the only lever that reaches the inner statements FTS5 and
             # vec0 drive; apsw documents calling it from another thread as safe. The hook hands
             # it over BEFORE the schema probe runs, so open_store -- which has no cap of its
             # own and is the likeliest phase behind the M1's 12h run -- is abortable too.
-            runtime_store = stack.enter_context(
-                open_writer_store(get_db_path(), on_connection=_attach_interrupt(watchdog))
-            )
+            def open_store():
+                return stack.enter_context(open_writer_store(get_db_path(), on_connection=_attach_interrupt(watchdog)))
+
+            runtime_store = admission.run(open_store) if admission is not None else open_store()
             if calendar:
                 # The sidecar may survive a host crash. Commit its rows durably
                 # BEFORE publishing a skip offset: EXTRA equals FULL in WAL and
@@ -4270,7 +4305,19 @@ def index_fast(
                                         start_position=start,
                                         on_skipped_empty=note_skipped_empty,
                                         on_rejected=note_rejected,
+                                        on_busy=admission.wait if admission is not None else None,
                                     )
+                                    if admission is not None:
+                                        admission.admitted()
+                                except (IndexAdmissionExhausted, apsw.BusyError) as exc:
+                                    # Rows committed before the lost race are durable:
+                                    # count them and resume after them, never replay them.
+                                    cause = getattr(exc, "cause", exc)
+                                    durable = getattr(cause, "committed_count", 0)
+                                    if durable:
+                                        total_chunks += durable
+                                        checkpoint.save(jsonl_file, signature, cause.next_position)
+                                    raise
                                 except IndexDeadlineExceeded as exc:
                                     if exc.completed_input_count == len(batch):
                                         checkpoint.save(
@@ -4351,6 +4398,16 @@ def index_fast(
     except typer.Exit:
         raise
     except Exception as e:
+        if calendar and isinstance(e, IndexAdmissionExhausted):
+            # rc75 means exactly this: the budget ran out without a writer-idle window.
+            pass_deferred = True
+            rprint(
+                "[yellow]INDEX_DEFERRED resident_writer_busy[/] "
+                f"committed_chunks={total_chunks} files_completed={files_completed} "
+                f"cause={type(e.cause).__name__} admission_retries={e.retries} "
+                f"admission_wait_s={e.waited_s:.1f} {checkpoint.delta_summary() if checkpoint else ''}"
+            )
+            raise typer.Exit(75) from e
         if calendar and isinstance(e, (apsw.BusyError, WriterInUseError)):
             # Attribute a deadline-shaped busy error to the cap; genuine writer
             # contention before that deadline still defers with rc75.
@@ -4373,7 +4430,8 @@ def index_fast(
             rprint(
                 "[yellow]INDEX_DEFERRED resident_writer_busy[/] "
                 f"committed_chunks={total_chunks} files_completed={files_completed} "
-                f"cause={type(e).__name__}"
+                f"cause={type(e).__name__} admission_retries={admission.retries if admission else 0} "
+                f"{checkpoint.delta_summary() if checkpoint else ''}"
             )
             raise typer.Exit(75) from e
         # An expired watchdog means the cap is part of the story -- but NOT that this

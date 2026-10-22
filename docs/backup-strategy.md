@@ -59,19 +59,23 @@ PYTHONPATH=~/Gits/brainlayer/src python3 -m brainlayer.backup_daily
 
 ## Restore Drill
 
-1. Pick the newest good snapshot from Google Drive:
+1. Pick the newest good snapshot from Google Drive. New snapshots are zstd
+   (`YYYY-MM-DD.db.zst`); older ones, and any made with
+   `BRAINLAYER_BACKUP_COMPRESSOR=gzip`, are gzip (`YYYY-MM-DD.db.gz`):
 
-   `Brain Drive/06_ARCHIVE/backups/brainlayer-db/YYYY-MM-DD.db.gz`
+   `Brain Drive/06_ARCHIVE/backups/brainlayer-db/YYYY-MM-DD.db.zst`
 
 2. Download it to a local scratch path, for example:
 
-   `/tmp/brainlayer-restore/YYYY-MM-DD.db.gz`
+   `/tmp/brainlayer-restore/YYYY-MM-DD.db.zst`
 
 3. Decompress and verify integrity:
 
    ```bash
    mkdir -p /tmp/brainlayer-restore
-   gunzip -c /tmp/brainlayer-restore/YYYY-MM-DD.db.gz > /tmp/brainlayer-restore/brainlayer.db
+   zstd -d -c /tmp/brainlayer-restore/YYYY-MM-DD.db.zst > /tmp/brainlayer-restore/brainlayer.db
+   # legacy gzip snapshot instead:
+   # gunzip -c /tmp/brainlayer-restore/YYYY-MM-DD.db.gz > /tmp/brainlayer-restore/brainlayer.db
    sqlite3 /tmp/brainlayer-restore/brainlayer.db 'PRAGMA integrity_check; SELECT count(*) FROM chunks;'
    ```
 

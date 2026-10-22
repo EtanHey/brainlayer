@@ -90,7 +90,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
     /// Includes the attention prefix and ellipsis, so long errors cannot widen the menu.
-    private static let statusLineTitleMaxCharacters = 72
+    private static let statusLineTitleMaxCharacters = 60
 
     /// The menu's first, informational row; its tooltip retains the full reason.
     static func statusLineTitle(for badge: BadgeStatePresentation) -> String {

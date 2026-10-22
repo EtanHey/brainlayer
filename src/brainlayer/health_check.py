@@ -881,7 +881,7 @@ def _jsonl_backup_attempt_time(payload: dict[str, Any]) -> datetime | None:
     pattern = r"claude-jsonl-(\d{4}-\d{2}-\d{2})\.tar\.gz$"
     if not isinstance(artifact, str):
         artifact = payload.get("snapshot")
-        pattern = r"(?:^|/)(\d{4}-\d{2}-\d{2})\.db\.gz$"
+        pattern = r"(?:^|/)(\d{4}-\d{2}-\d{2})\.db\.(?:gz|zst)$"
     if not isinstance(artifact, str):
         return None
     legacy_date = re.search(pattern, artifact)

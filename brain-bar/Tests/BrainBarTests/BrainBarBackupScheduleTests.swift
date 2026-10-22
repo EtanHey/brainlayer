@@ -143,6 +143,20 @@ final class BrainBarBackupScheduleTests: XCTestCase {
         XCTAssertNil(BackupLocalFiles.latestSnapshot(in: [".backup.lock"]))
     }
 
+    func testLatestLocalSnapshotAcceptsZstdBesideLegacyGzip() {
+        XCTAssertEqual(
+            BackupLocalFiles.latestSnapshot(in: [
+                "2026-10-19.db.gz", "2026-10-20.db.zst", "2026-10-21.db.zst.tmp", "x2026-10-22.db.zst",
+            ]),
+            "2026-10-20.db.zst"
+        )
+        XCTAssertEqual(
+            BackupLocalFiles.latestSnapshot(in: ["2026-10-21.db.gz", "2026-10-20.db.zst"]),
+            "2026-10-21.db.gz",
+            "a newer legacy gzip still wins by date"
+        )
+    }
+
     // MARK: #1015 review round 1
 
     private func calendarPlist(_ entry: String) -> Data {

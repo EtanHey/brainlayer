@@ -282,8 +282,19 @@ def materialize_snapshot(
         raise FileExistsError(f"Snapshot already exists: {target}. Pass overwrite=True to replace it.")
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_target = target.with_suffix(target.suffix + ".tmp")
-    with gzip.open(source, "rb") as compressed, temporary_target.open("wb") as output:
-        shutil.copyfileobj(compressed, output)
+    if source.name.endswith(".zst"):
+        # Backups from the zstd compressor (.db.zst); legacy .db.gz stays on the gzip path.
+        from brainlayer import backup_daily
+
+        backup_daily._run_zstd(
+            backup_daily._require_zstd(),
+            ["-d", "-q", "-c", str(source)],
+            output=temporary_target,
+            floor_dir=temporary_target.parent,
+        )
+    else:
+        with gzip.open(source, "rb") as compressed, temporary_target.open("wb") as output:
+            shutil.copyfileobj(compressed, output)
     temporary_target.replace(target)
     target.chmod(0o444)
     return target

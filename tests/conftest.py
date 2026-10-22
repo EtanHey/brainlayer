@@ -11,7 +11,9 @@ for _git_env_key in tuple(os.environ):
         os.environ.pop(_git_env_key, None)
 
 import functools
+import hashlib
 import importlib
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -22,6 +24,8 @@ import uuid
 from pathlib import Path
 
 _PROTECTED_TEST_HOME = Path.home().resolve()
+# Read before any fixture swaps HOME: resolving `node` needs the operator's own runtime store.
+_OPERATOR_PATH = os.environ.get("PATH", os.defpath)
 _OPERATOR_BRAINBAR_SOCKET_PATH = os.environ.get("BRAINBAR_SOCKET_PATH")
 _OPERATOR_MCP_SOCKET = os.environ.get("BRAINLAYER_MCP_SOCKET")
 
@@ -59,6 +63,8 @@ else:
 
 import pytest
 
+from scripts.check_stray_apps import find_stray_apps
+
 
 @pytest.fixture(autouse=True)
 def isolated_doctor_install_prefix(request, monkeypatch):
@@ -75,6 +81,32 @@ def _git_probe(*args: str, cwd: Path | None = None) -> subprocess.CompletedProce
         text=True,
         check=False,
     )
+
+
+@pytest.fixture
+def outside_repo_dir():
+    """Small no-checkout fixtures need real isolation from Git AND Python ancestor walkers.
+
+    tmp_path lives inside this checkout's .build.noindex. A Git ceiling cannot protect consumers
+    that scrub GIT_* or walk .git ancestors themselves. Keep this exception short-lived, including
+    when a test or the precondition fails; bulky test output still belongs under tmp_path.
+    """
+    with tempfile.TemporaryDirectory(prefix="brainlayer-outside-repo-") as directory:
+        root = Path(directory).resolve()
+        for ancestor in (root, *root.parents):
+            marker = ancestor / ".git"
+            assert not (marker.exists() or marker.is_symlink()), f"outside_repo_dir has a Git ancestor: {ancestor}"
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        probe = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert probe.returncode != 0, f"outside_repo_dir discovered a Git checkout: {probe.stdout.strip()}"
+        yield root
 
 
 def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
@@ -175,6 +207,24 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
+    build_root = Path(__file__).resolve().parents[1] / ".build.noindex"
+    temp_root = build_root / "pytest"
+    if build_root.resolve() != build_root or not temp_root.resolve().is_relative_to(build_root):
+        raise pytest.UsageError(f"pytest output must stay inside {build_root}: {temp_root.resolve()}")
+    if config.option.basetemp:
+        requested = Path(config.option.basetemp).absolute()
+        base = requested.resolve()
+        if requested.is_relative_to(build_root) and not base.is_relative_to(build_root):
+            raise pytest.UsageError(f"pytest output must stay inside {build_root}: {requested} -> {base}")
+        if base == temp_root or not base.is_relative_to(temp_root):
+            # Keep independent explicit basetemps independent without writing outside this tree.
+            key = hashlib.sha256(str(base).encode()).hexdigest()[:12]
+            base = temp_root / f"{base.name}-{key}"
+        if not base.resolve().is_relative_to(build_root):
+            raise pytest.UsageError(f"pytest output must stay inside {build_root}: {base.resolve()}")
+        config.option.basetemp = str(base)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
     _install_db_open_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
     if helper.is_file():
@@ -197,10 +247,31 @@ def pytest_configure(config):
     )
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """Inspect the final artifacts after test/fixture teardown, including failed runs."""
+    # Nested sessions can import this plugin from another checkout. Ownership follows rootdir,
+    # and a main-checkout run must leave sibling worktrees to their own sessions or a CLI sweep.
+    strays = find_stray_apps(session.config.rootpath, include_worktrees=False)
+    if strays:
+        reporter = session.config.pluginmanager.getplugin("terminalreporter")
+        if reporter:
+            reporter.write_sep(
+                "=", "Artifact hygiene: outputs belong in .build.noindex; docs.local keeps text receipts", red=True
+            )
+            for path in strays:
+                reporter.write_line(str(path))
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 def pytest_collection_modifyitems(config, items):
     """Make the pure-library engine suite runnable as `pytest -m engine`."""
+    repo_root = Path(__file__).resolve().parents[1]
     for item in items:
-        rel_path = Path(str(item.fspath)).resolve().relative_to(Path(__file__).resolve().parents[1]).as_posix()
+        path = Path(str(item.fspath)).resolve()
+        # A suite outside the repo (an inner probe session loading this conftest) holds no engine file.
+        if not path.is_relative_to(repo_root):
+            continue
+        rel_path = path.relative_to(repo_root).as_posix()
         if rel_path in ENGINE_TEST_FILES:
             item.add_marker(pytest.mark.engine)
 
@@ -323,20 +394,132 @@ def isolate_fallback_gits_root(monkeypatch, request):
     monkeypatch.delenv("BRAINLAYER_FALLBACK_GITS_ROOT", raising=False)
 
 
+# A Node runtime is ~117 MiB; a test home that holds one, or anything like it, is a disk leak.
+ISOLATED_HOME_BYTE_BOUND = 32 * 1024 * 1024
+# Bound at import: the HOME teardown runs before `monkeypatch` undoes a test's patches, and tests do
+# patch the shared `os.walk` (test_ratchet_margins) -- the guard must not run their fake.
+_walk = os.walk
+_rmtree = shutil.rmtree
+
+
+def isolated_home_overage(home: Path) -> str | None:
+    """Describe *home* when its files exceed the bound, else None.
+
+    Reads apparent size (`st_size`), not allocated blocks: it is deterministic across filesystems,
+    and it never under-reads an APFS clone of a runtime as free.
+    """
+    sizes = []
+    for root, _dirs, files in _walk(home):
+        for name in files:
+            path = Path(root) / name
+            try:
+                sizes.append((path.lstat().st_size, path))
+            except OSError:
+                continue
+    total = sum(size for size, _path in sizes)
+    if total <= ISOLATED_HOME_BYTE_BOUND:
+        return None
+    largest = ", ".join(
+        f"{path.relative_to(home).as_posix()} ({size // (1024 * 1024)} MiB)"
+        for size, path in sorted(sizes, reverse=True)[:5]
+    )
+    return (
+        f"isolated test HOME {home} holds {total // (1024 * 1024)} MiB, over the "
+        f"{ISOLATED_HOME_BYTE_BOUND // (1024 * 1024)} MiB bound; largest: {largest}"
+    )
+
+
+_ISOLATED_HOME_KEY = pytest.StashKey[Path]()
+_PHASE_FAILED_KEY = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """Remove a test's isolated HOME only after its LAST phase, and only when no phase failed.
+
+    Deciding inside the fixture's own teardown is too early: fixtures set up before it finalize
+    after it, so a later teardown failure would be judged a pass and its evidence deleted (review
+    r1 of #1412). The teardown report is made after every finalizer ran, so it sees all three.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if report.failed:
+        item.stash[_PHASE_FAILED_KEY] = True
+    if report.when != "teardown":
+        return
+    home = item.stash.get(_ISOLATED_HOME_KEY, None)
+    if home is None or item.stash.get(_PHASE_FAILED_KEY, False):
+        return
+    if item.config.getini("tmp_path_retention_policy") in {"failed", "none"}:
+        _rmtree(home, ignore_errors=True)
+
+
+@functools.cache
+def _real_node_binary() -> str | None:
+    """The executable `node` on the operator's PATH really runs, resolved under the real HOME.
+
+    Version-manager shims (vite-plus `vp`, and any other HOME-keyed store) pick their runtime from
+    HOME. Inside a fresh isolated HOME the vite-plus shim copied a ~117 MiB Node runtime into every
+    test home -- 42 GiB in one basetemp on 2026-10-19. Asking the shim once, under the real HOME,
+    for `process.execPath` gives the binary every shim ends up exec'ing.
+    """
+    shim = shutil.which("node", path=_OPERATOR_PATH)
+    if shim is None:
+        return None
+    env = {key: value for key, value in os.environ.items() if key not in {"NODE_OPTIONS", "NODE_PATH"}}
+    env["HOME"] = str(_PROTECTED_TEST_HOME)
+    env["PATH"] = _OPERATOR_PATH
+    try:
+        resolved = subprocess.run([shim, "-p", "process.execPath"], capture_output=True, text=True, timeout=60, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    path = resolved.stdout.strip()
+    if resolved.returncode != 0 or not os.path.isabs(path) or not os.access(path, os.X_OK):
+        return None
+    return path
+
+
+@pytest.fixture(scope="session")
+def real_node_bin_dir(tmp_path_factory) -> Path | None:
+    """A one-entry bin dir whose `node` is the real binary, shared read-only by every test.
+
+    None when no node resolves; the isolated-home bound below then fails loudly on any copy.
+    """
+    node = _real_node_binary()
+    if node is None:
+        return None
+    bin_dir = tmp_path_factory.mktemp("real-node-bin")
+    (bin_dir / "node").symlink_to(node)
+    return bin_dir
+
+
 @pytest.fixture(autouse=True)
-def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
-    """Keep unit-test runtime resolvers out of production BrainLayer paths."""
+def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request, real_node_bin_dir):
+    """Keep unit-test runtime resolvers out of production BrainLayer paths, and keep the HOME small.
+
+    The isolated HOME sits beside `tmp_path`, so pytest's own retention never reaches it:
+    `pytest_runtest_makereport` removes it once no phase failed. Teardown fails any test whose HOME
+    grew past `ISOLATED_HOME_BYTE_BOUND`, and keeps that HOME as the evidence. `embedding_model`
+    tests are exempt from the bound: they may legitimately hold a model cache under HOME.
+    """
     if request.node.get_closest_marker("integration") or request.node.get_closest_marker("live"):
         monkeypatch.setenv("BRAINLAYER_TEST_PATH_PROVENANCE", "live")
+        yield
         return
 
-    isolated_home = tmp_path.parent / f".{tmp_path.name}-brainlayer-home"
+    # Unique per test, never derived from tmp_path's number alone: pytest reuses a removed tmp dir's
+    # number (a setup skip or error leaves no call report, so its tmp_path is removed) while a kept
+    # HOME stays -- a numbered name would then collide on mkdir.
+    isolated_home = tmp_path.parent / f".{tmp_path.name}-{uuid.uuid4().hex[:8]}-brainlayer-home"
     isolated_home.mkdir()
+    request.node.stash[_ISOLATED_HOME_KEY] = isolated_home
     runtime_root = isolated_home / ".brainlayer"
     queue_dir = runtime_root / "queue"
     data_dir = isolated_home / ".local" / "share" / "brainlayer"
 
     monkeypatch.setenv("HOME", str(isolated_home))
+    if real_node_bin_dir is not None:
+        monkeypatch.setenv("PATH", f"{real_node_bin_dir}{os.pathsep}{os.environ.get('PATH', os.defpath)}")
     monkeypatch.setenv("BRAINLAYER_DB", str(data_dir / "brainlayer.db"))
     monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
     monkeypatch.setenv("BRAINLAYER_DRAIN_LOG_PATH", str(runtime_root / "logs" / "drain.log"))
@@ -366,6 +549,14 @@ def isolate_brainlayer_runtime_paths(monkeypatch, tmp_path, request):
                 if resolved == protected_root or protected_root in resolved.parents:
                     monkeypatch.setattr(module, attribute, isolated_root / resolved.relative_to(protected_root))
                     break
+
+    yield
+
+    if request.node.get_closest_marker(EMBEDDING_MODEL_MARK) is not None:
+        return
+    overage = isolated_home_overage(isolated_home)
+    if overage is not None:
+        pytest.fail(overage, pytrace=False)
 
 
 @pytest.fixture(autouse=True)

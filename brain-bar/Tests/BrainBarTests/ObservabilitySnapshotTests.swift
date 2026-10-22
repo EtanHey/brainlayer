@@ -96,7 +96,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).freshness.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).snapshot.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups, now: live.generatedAt).snapshot.tone, .green)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).freshness.tone, .red)
     }
 
@@ -114,7 +114,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
 
     func testBackupStatusSaysWhenWhereAndWhy() throws {
         let live = try liveShapedDocument()
-        let status = ObservabilityPresentation.backupStatus(for: live.backups)
+        let status = ObservabilityPresentation.backupStatus(for: live.backups, now: live.generatedAt)
 
         XCTAssertEqual(status.upload.text, "No verified transcript upload on record")
         XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot (verified):"))
@@ -321,6 +321,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
     func testMissingHealthCheckCadenceIsDisclosedOnCard() throws {
         let cadence = ObservabilityReader.healthCheckCadence(environment: [
             "BRAINLAYER_HEALTH_CHECK_PLIST_PATH": "/tmp/brainbar-missing-health-check-\(UUID().uuidString).plist",
+            "BRAINLAYER_SUPERVISOR_JOBS_PATH": "/tmp/brainbar-missing-jobs-\(UUID().uuidString).json",
         ])
         XCTAssertEqual(cadence.interval, 300)
         XCTAssertEqual(cadence.assumption, "cadence unknown, assuming 300s")

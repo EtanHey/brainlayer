@@ -256,9 +256,9 @@ enum BackupLogReader {
 }
 
 enum BackupLocalFiles {
-    /// The newest local DB snapshot (`YYYY-MM-DD.db` or `.db.gz`) in `names`.
+    /// The newest local DB snapshot (`YYYY-MM-DD.db`, `.db.zst`, or legacy `.db.gz`) in `names`.
     static func latestSnapshot(in names: [String]) -> String? {
-        latest(names, matching: #"^\d{4}-\d{2}-\d{2}\.db(\.gz)?$"#)
+        latest(names, matching: #"^\d{4}-\d{2}-\d{2}\.db(\.gz|\.zst)?$"#)
     }
 
     /// The newest local transcript archive (`claude-jsonl-YYYY-MM-DD.tar.gz`) in `names`.

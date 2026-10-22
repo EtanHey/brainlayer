@@ -86,10 +86,11 @@ final class BrainBarSettingsViewModelTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(
             forResource: "observability-main-58849a70", withExtension: "json", subdirectory: "Fixtures"
         ))
+        let fixtureNow = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-14T02:26:10Z"))
         let viewModel = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: fixture.store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             refreshStatusOnLoad: false,
-            observabilityURL: url
+            now: { fixtureNow }, observabilityURL: url
         )
 
         let status = try await waitForBackupStatus(viewModel)

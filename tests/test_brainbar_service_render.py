@@ -24,7 +24,7 @@ spec.loader.exec_module(service)
 
 @pytest.fixture
 def fixture():
-    scratch = tempfile.TemporaryDirectory(prefix="bbs-", dir="/tmp")
+    scratch = tempfile.TemporaryDirectory(prefix="bbs-", suffix=".noindex", dir="/tmp")
     home = Path(scratch.name) / "home &| <café>"
     home.mkdir(mode=0o700)
     app = home / "Applications/BrainBar.app"

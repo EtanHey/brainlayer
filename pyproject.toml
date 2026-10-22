@@ -1,6 +1,6 @@
 [project]
 name = "brainlayer"
-version = "1.5.65"
+version = "1.5.70"
 description = "Persistent local memory for AI agents — 16 BrainBar MCP tools, semantic search, knowledge graph, SQLite"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -77,7 +77,7 @@ telemetry = [
 dev = [
     "deepchecks>=0.19.1",
     "numpy<2",
-    "pytest>=7.0.0",
+    "pytest>=7.3.0",
     "pytest-asyncio>=0.21.0",
     "pytest-timeout>=2.3.1",
     "ruff>=0.1.0",
@@ -117,7 +117,14 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+testpaths = ["tests"]
+# Keep pytest's default exclusions as well as the worktree-owned build output boundary.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", ".build.noindex"]
+# Keep temp trees only for failed tests: passing full-suite runs left 40+ GiB basetemps (2026-10-19).
+# tests/conftest.py routes default and explicit basetemps beneath <worktree>/.build.noindex/pytest/ before fixtures start.
+tmp_path_retention_policy = "failed"
 markers = [
+    "recovery_oracle: disposable seeded queue, SQLite, FTS and vector recovery acceptance gate",
     "crash_sweep: exhaustive migration/revert SIGKILL cuts (separate required CI gate; retained by local pre-push)",
     "retired_enrichment: retirement tests that forbid cloud-client construction and inet sends",
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",

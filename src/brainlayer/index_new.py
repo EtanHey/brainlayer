@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import apsw
+
 from .agent_provenance import resolve_source_class
 from .claude_paths import extract_claude_conversation_id as _extract_claude_conversation_id
 from .embeddings import EmbeddedChunk, embed_chunks
@@ -39,8 +41,13 @@ def index_chunks_to_sqlite(
     start_position: int = 0,
     on_skipped_empty: Callable[[int], None] | None = None,
     on_rejected: Callable[[int], None] | None = None,
+    on_busy: Callable[[BaseException], None] | None = None,
 ) -> int:
-    """Index chunks to sqlite-vec database."""
+    """Index chunks to sqlite-vec database.
+
+    ``on_busy`` admits a busy rollback: it waits and returns to retry the same
+    upsert with the embeddings already computed, or raises to end the attempt.
+    """
     if not chunks:
         return 0
 
@@ -194,14 +201,34 @@ def index_chunks_to_sqlite(
     # A complete CLI index run injects one shared runtime store. Standalone
     # callers still get one bounded runtime open for this adapter invocation.
     def upsert(writer):
-        try:
-            return writer.upsert_chunks(chunk_data, embeddings, deadline_monotonic=deadline_monotonic)
-        except IndexDeadlineExceeded as exc:
-            # Complete ordered embeddings above + complete store admission below
-            # proves the WHOLE input call, never a count-shaped survivor prefix.
-            if exc.input_complete:
-                exc.completed_input_count = len(chunks)
-            raise
+        # upsert_chunks commits bounded sub-batches, and a busy rollback keeps the
+        # committed prefix. Retry only the uncommitted suffix: replaying a durable
+        # row would re-merge it (seen_count, alias and audit rows) as a new sighting.
+        offset = committed = 0
+        while True:
+            try:
+                return committed + writer.upsert_chunks(
+                    chunk_data[offset:], embeddings[offset:], deadline_monotonic=deadline_monotonic
+                )
+            except IndexDeadlineExceeded as exc:
+                exc.processed_count += committed
+                # Complete ordered embeddings above + complete store admission below
+                # proves the WHOLE input call, never a count-shaped survivor prefix.
+                if exc.input_complete:
+                    exc.completed_input_count = len(chunks)
+                raise
+            except apsw.BusyError as exc:
+                suffix_start = getattr(exc, "committed_input_count", None)
+                # Without a known durable prefix a retry could replay committed rows.
+                if on_busy is None or suffix_start is None:
+                    raise
+                offset += suffix_start
+                committed += exc.committed_count
+                # Absolute progress of this call, for whoever ends the attempt: the
+                # durable count and the input position the next attempt resumes at.
+                exc.committed_count = committed
+                exc.next_position = chunk_data[offset]["position"]
+                on_busy(exc)
 
     if store is not None:
         return upsert(store)

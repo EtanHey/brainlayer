@@ -17,6 +17,8 @@ extension BrainBarJobAlerts {
     /// The log a job writes, by its alert key; nil for a job without a log BrainBar knows.
     static func logURL(forKey key: String?, paths: BrainBarBackupSources.Paths) -> URL? {
         switch key {
+        case let key? where ["index", "backup-snapshot", "p0-counter", "wal-checkpoint", "decay", "repair-fts"].contains(key):
+            paths.calendarLogDirectory.appendingPathComponent("\(key).err.log")
         // The nightly LaunchAgent may name its own log; the weekly's is the shared default.
         case "maintenance-light": paths.nightlyMaintenanceLog ?? paths.maintenanceLog
         case let key? where key.hasPrefix("maintenance-"): paths.maintenanceLog
@@ -29,6 +31,8 @@ extension BrainBarJobAlerts {
     /// The sentence a surface shows when the job has no log file yet.
     static func missingLogMessage(forKey key: String?) -> String {
         switch key {
+        case let key? where ["index", "backup-snapshot", "p0-counter", "wal-checkpoint", "decay", "repair-fts"].contains(key):
+            "No \(key) log yet; it's written on the next run."
         case let key? where key.hasPrefix("maintenance-"): "No maintenance log yet; it's written on the next run."
         case "backup-daily": "No database backup log yet; it's written on the next run."
         case "jsonl-backup": "No transcript backup log yet; it's written on the next run."

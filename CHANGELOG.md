@@ -39,6 +39,93 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.70] - 2026-10-22
+
+### Fixed
+- The supervisor keeps sending heartbeats while starting children or writing their custody records, so slow disk and process startup no longer make its own guard kill it and repeatedly restart the watcher. These operations run off the event loop with one custody writer; a stuck operation still stops heartbeats after its 120-second budget. Guard readiness now allows 30 seconds for interpreter startup and reports why it failed (#1464).
+- A child whose start identity cannot be established is marked failed and its gated wrapper is reaped without running the command. The supervisor retries with backoff instead of crashing its heartbeat loop. Unexpected startup-task failures are also recorded per child (#1465).
+
+### Tests and CI
+- Concurrent pytest children use separate temporary directories for retention cleanup (#1452). The iCloud backup naming test freezes its clock (#1458), the BrainBar store-budget test checks the selected lock policy with debug-only hooks (#1461), and the activation lock test isolates its clock and lock doubles from other threads (#1463).
+- The disposable recovery oracle adds interrupted-index, encoder failure/stall, drain-restart and bounded catch-up checks, with negative controls. The known MERGED stale-vector case remains a strict expected failure tracked in #1450; this adds coverage rather than fixing that defect (#1457).
+- Swift CI has a 15-minute job budget, and changed-only pushes map workflow changes to their owning Python checks (#1462).
+
+### Upgrade notes
+- Formula-only supervisor hotfix: BrainLayer moves to 1.5.70; the BrainBar app and cask stay at 1.5.69.
+
+## [1.5.69] - 2026-10-22
+
+### Fixed
+- The calendar runner keeps its watchdog heartbeat alive while a step finishes: receipt fsync, alert locking and macOS notifications run off the event loop, so slow completion work no longer makes the guard kill the runner and lose every later step after an index timeout. Completion writes finish even if cancellation arrives, and runner failures and cleanup errors still produce a summary (#1440).
+- BrainBar's job-log links open the actual log for every calendar step, including index, backup snapshot, P0 counter, WAL checkpoint, decay and FTS repair. The log directory follows the calendar's `--logs-dir` from its LaunchAgent or supervisor configuration, with the usual logs directory as the fallback. A step that has not written its log yet says so (#1437).
+- The Watcher chart shows "Updating…" when database activity makes flow counts temporarily unavailable but watcher health is still known. Stale or missing health stays amber or red with a matching status message; "Evidence unavailable" is reserved for an absence of watcher evidence (#1437).
+- The Watcher chart's tooltip and accessibility text now include the reason and heartbeat age when the watcher needs attention or has stopped (#1442).
+
+### Changed
+- Developer tooling: app bundles, release extracts, build output and pytest temporary files now live under `<worktree>/.build.noindex/`, which Spotlight excludes and worktree removal cleans up. `docs.local/` is text-only, enforced by `scripts/check_stray_apps.py` (#1435).
+
+### Upgrade notes
+- Full release: the formula and the BrainBar app (cask) both move to 1.5.69.
+
+## [1.5.68] - 2026-10-21
+
+### Fixed
+- BrainBar no longer shows a false red menu-bar dot on a healthy Mac. The health check now runs under the supervisor, but BrainBar only looked for its old LaunchAgent plist, so it reported "Badge freshness unknown: cadence unknown" and went red. BrainBar now reads the cadence from that plist first, then from the `com.brainlayer.health-check` entry in the supervisor's `jobs.json` (skipped when the entry is `enabled: false`). A cadence from 30 to 3600 seconds is used as-is; anything else falls back to 300 seconds. An unknown cadence on its own no longer raises an alarm; a badge older than twice the cadence still shows "Needs attention" and the red dot. The menu's status line is capped at 60 characters (was 72), and its tooltip keeps the full reason (#1433).
+- BrainBar's Jobs page no longer paints healthy notes amber. Informational owner notes (for example `com.brainlayer.maintenance · last result: ok` or `Supervisor component … · PID …`) are plain neutral text. Failed jobs, configured-off jobs and runs that succeeded with warnings keep the amber ⚠, and a note nobody classified defaults to amber (#1430).
+- When that night's weekly maintenance ran in place of the nightly and finished ok, the nightly row says "Nightly covered by weekly" and its last-run cell on Jobs and Backups reads "Covered by weekly · <time>". It used to say "Not yet run under the supervisor" or "No calendar run recorded". Coverage counts only for the same scheduled night, and only when the journal order shows the weekly after any nightly result. A missing scheduled date or missing order fails closed to the nightly's own result, and a later night with no nightly run goes back to the nightly's own failed or not-yet-run state. The weekly row now shows its own `last result: ok` (#1430, #1420).
+- The Dashboard's job-status refresh works again. Its 60-second timer was created inside the view body and replaced on every re-render, so it never fired, and the Dashboard could keep showing a stale "things need you" from the sample taken when it opened. A single loop owned by the view's lifetime now samples on open and then every 60 seconds (#1430).
+- The DB-copy dot and wording follow the copy's age. When observability reports backups `stale`, a verified offsite DB copy older than the freshness window turns the Dashboard's DB dot and the Backups recovery check red. The DB-copy codes read as sentences ("The database copy in Google Drive is older than N hours", "No verified database copy in Google Drive", …) instead of "DB backup error: …" (#1430; fixes #1420).
+- BrainBar's local-copy listing recognizes zstd snapshots (`YYYY-MM-DD.db.zst`) as well as `.db` and legacy `.db.gz`. This Swift change merged with #1421 in 1.5.67, but 1.5.67 was formula-only, so this is the first BrainBar app that ships it (#1421).
+- Health alerts for repeated scheduled-job failures give the real count. Nightly maintenance (`com.brainlayer.maintenance`) now reads `com.brainlayer.maintenance: failed N nights in a row; last exit E`. N is the actual streak, not the fixed heal-attempt constant (3), and the exit appears once; the text no longer says "crashloop". Other scheduled (interval) jobs report their real `N failed runs`. A run still in progress is never counted and never clears an alert, and a completed run behind a live one is counted exactly once. Alert and clear thresholds are unchanged, and so are daemon heal attempts and their wording. Alerts saved before this fix, which carry no count, keep their old text (#1427).
+- T3 ingest: every exception text written to `t3-health.json` is now scrubbed with the at-rest secret scrubber (`scrub_for_storage`) before it is cut to 500 characters, matching what #1424 did for the indexing-failure record. This covers reader failures (`failures[].error`), the SQLite schema race (`failures[].sqlite_error`) and the source-selection failure (`failures[].message`). Codes, error types, alert reasons and the re-raised alarm are unchanged (#1429).
+
+### Tests
+- The recency checkpoint test in `tests/test_consumer_scoping.py` freezes its clock at 2026-06-15, so its May/June fixtures no longer swap order as the real date moves on. Test-only; no runtime change (#1432).
+
+### Upgrade notes
+- Full release: the formula and the BrainBar app (cask) both move to 1.5.68. The app is the first since 1.5.66.
+- `BRAINLAYER_SUPERVISOR_JOBS_PATH` overrides where BrainBar reads the supervisor's `jobs.json` (default `~/.local/share/brainlayer/supervisor/jobs.json`). `BRAINLAYER_HEALTH_CHECK_PLIST_PATH` still names the LaunchAgent plist, which is checked first.
+
+## [1.5.67] - 2026-10-20
+
+### Changed
+- DB snapshots are compressed with the zstd CLI (`zstd -3 -T0 --check`) to `YYYY-MM-DD.db.zst` instead of Python gzip -6 (about 12 s against 8+ minutes on the real 20.7 GB snapshot). Every reader (verify, restore, raw cleanup, resume, retention, observability, the weekly gate, eval snapshot materialization) accepts both `.db.zst` and legacy `.db.gz`. Local and opt-in Drive retention keep the newest verified copy of each format; on Drive only an object whose exact file ID has an `uploaded` + `verified` receipt counts as verified, and an unreadable log trashes nothing (#1421).
+
+### Fixed
+- The snapshot timeout is sized from the database (DB + WAL) at 200 s per GB, rounded up to five minutes, with a 45-minute floor and a 90-minute ceiling, instead of a flat 45 minutes that killed the 20.75 GB MBP snapshot on 2026-10-20. The backup's own deadline fires up to 60 s inside the calendar budget so its timeout receipt is written before the calendar stops the process group (#1419).
+- Backup observability `freshness` covers the offsite DB copy as well as transcripts: a missing, unverified or stale DB copy makes `freshness` `stale`; its reason is reported in `error_type` when no more specific error is already set (#1417).
+- The receipt journal reader skips and counts non-JSON lines. The known `drive upload progress: N/M bytes` lines are counted as noise, not uncertainty; a journal with no readable receipt fails with `BackupReceiptUnreadableError` and keeps the journal and all local snapshots (#1418).
+- T3 ingest: a chunk or conversation id that the at-rest secret scrubber would rewrite (for example a thread named `...-mockapi-r1`) falls back to a stable `t3:sha256:<digest>:<i>` id (a digest of the thread id for `conversation_id`); the original `message_id`, `t3_thread_id` and `source_uri` stay in metadata, and ordinary ids are unchanged. This clears the `t3_ingest_unhealthy` `indexing_failure` (`chunk identifier requires redaction`) that had blocked T3 indexing since 2026-10-18. The `t3_indexing_failure` health record now carries the underlying `error`, scrubbed before truncation to 500 characters (#1424).
+
+### Upgrade notes
+- Formula-only release: the BrainBar app and its cask stay at 1.5.66. #1421 also widens BrainBar's local-copy listing to `.db.zst`; that Swift change is on main but NOT shipped, so until the next BrainBar release the app's local-copy listing does not recognize `.db.zst` snapshots.
+- The tap formula gains `depends_on "zstd"`. If no zstd binary is found, the snapshot falls back to gzip and records `compressor_fallback` in its receipt.
+- `BRAINLAYER_BACKUP_COMPRESSOR=gzip` rolls back to `.db.gz` output; any value other than `zstd` or `gzip` is refused.
+- `BRAINLAYER_BACKUP_ZSTD_PATH` names the zstd binary (absolute and executable, or the run fails); otherwise `/opt/homebrew/bin/zstd`, `/usr/local/bin/zstd`, then `PATH` are tried, because launchd jobs run with `PATH=/usr/bin:/bin`.
+- `BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS` keeps its meaning as an explicit override that replaces the sized default; leave it unset to get the size-derived budget. Either way the step is still clipped to finish before 06:00.
+- Restore drill: decompress new snapshots with `zstd -d`; legacy `.db.gz` snapshots still use `gunzip`.
+- A stale or unverified offsite DB copy now shows as stale `freshness` in observability, even when transcripts are covered.
+
+## [1.5.66] - 2026-10-19
+
+### Fixed
+- Weekly VACUUM is gated on a fresh, restore-checked local snapshot instead of an offsite copy, and the Drive upload runs after maintenance; live scrubbing keeps its 24-hour offsite-backup contract (#1401).
+- BrainBar shows verified idle transcript backups and pending DB uploads as neutral states across Backups, Dashboard and Jobs. A recent local snapshot cannot hide a stale offsite copy, and unrelated DB or weekly maintenance errors no longer turn covered transcripts red (#1406; closes #1396, #1398).
+- The backup capacity gate is sized by the largest per-phase peak (raw copy, gzip, Drive download, restore) instead of a raw+restore sum; a lost-response retry gets its own explicit capacity check (#1408).
+- A BrainBar "snapshot already in progress" rejection no longer releases or unlinks an earlier, still-running VACUUM INTO target; the run fails with `BrainBarSnapshotBusyError` and the next run reserves the surviving attempt's growth (#1411).
+- Maintenance writer holds get a capped deadline (`BRAINLAYER_MAINTENANCE_HOLD_MAX_S`) that falls before the maintenance window closes, and supervisor ticks enforce overdue holds with generation-tied escalation. VACUUM starts only when its size-based estimate fits inside the hold, and is interrupted via SQLite progress callbacks before the hold cutoff; the non-interruptible final copy-back is bounded by the calendar cut and the supervisor watchdog (#1409).
+- The calendar index pass backs off and retries on a lost writer-busy race inside its existing budget, resuming from its checkpoint, instead of exiting 75 `resident-writer-busy` (#1410).
+- Isolated test HOMEs no longer accumulate copies of the vite-plus node runtime: a test HOME over 32 MiB fails its test, and pytest keeps temp trees only for failures (#1412).
+
+### Changed
+- Release the BrainLayer formula and BrainBar app together. This is the first BrainBar app build to ship the Settings watcher-heartbeat re-read from #1400 (merged in 1.5.65, which was formula-only).
+
+### Upgrade notes
+- Weekly calendar order is now index → backup-snapshot → weekly maintenance → … → backup upload.
+- New environment knobs: `BRAINLAYER_BACKUP_LOCAL_MAX_AGE_HOURS` (local snapshot freshness for the weekly gate, default 6), `BRAINLAYER_MAINTENANCE_HOLD_MAX_S` (writer-hold cap, default 3600), `BRAINLAYER_VACUUM_SECONDS_PER_GB` (VACUUM duration estimate, default 30).
+- Observability schema v2 adds optional `backups.local_snapshot` and `transcript_attempt` evidence; schema v1 is unchanged.
+- BrainBar app: new neutral backup states (idle transcript coverage, pending upload).
+
 ## [1.5.65] - 2026-10-18
 
 ### Fixed

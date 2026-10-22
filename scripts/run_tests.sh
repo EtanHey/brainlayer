@@ -181,6 +181,25 @@ map_changed_files_to_pytests() {
     changed_files_seen=1
     mapped=0
     case "$changed" in
+      .github/workflows/*.yml|.github/workflows/*.yaml)
+        # Select the workflow's actual owners; unrelated CI guards cannot establish coverage.
+        for test_path in "$TEST_ROOT"/test_*.py; do
+          [ -f "$test_path" ] || continue
+          if grep -Fq -- "${changed##*/}" "$test_path"; then
+            append_unique "$test_path"
+            mapped=1
+          fi
+        done
+        # ci.yml needs both named contracts even when another test references it.
+        if [ "${changed##*/}" = "ci.yml" ] &&
+          { [ ! -f "$TEST_ROOT/test_ci_swift_gate.py" ] || [ ! -f "$TEST_ROOT/test_ci_crash_sweeps.py" ]; }; then
+          mapped=0
+        elif [ "$mapped" -eq 1 ] && [ "${changed##*/}" = "ci.yml" ]; then
+          for test_path in "$TEST_ROOT"/test_ci_*.py; do
+            [ -f "$test_path" ] && append_unique "$test_path"
+          done
+        fi
+        ;;
       src/brainlayer/launchd_consolidation.py|src/brainlayer/launchd_revert.py|src/brainlayer/migration_journal.py|src/brainlayer/migration_runtime.py|src/brainlayer/migration_custody.py)
         # Either direction can break durable recovery. Require BOTH complete sweeps;
         # a renamed/missing sibling must fall back to the full suite, never narrow.
@@ -446,6 +465,13 @@ map_changed_files_to_pytests() {
           mapped=1
         fi
         ;;
+      scripts/check_stray_apps.py)
+        test_path="$TEST_ROOT/test_app_bundle_hygiene.py"
+        if [ -f "$test_path" ]; then
+          append_unique "$test_path"
+          mapped=1
+        fi
+        ;;
       scripts/release_tag_contains.py)
         # The release gate needs a mapping of its own: no generic scripts/*.py rule exists, and an
         # unmapped gate script is the same fail-open the gate itself exists to close.
@@ -476,7 +502,7 @@ map_changed_files_to_pytests() {
         # test_release_tag_contains.py must escalate, never narrow to nothing. Mapping it to
         # zero targets and still printing "test gate passed" is the same unchecked-claim
         # fail-open the gate exists to close, one level up.
-        src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
+        .github/workflows/*.yml|.github/workflows/*.yaml|src/brainlayer/*.py|scripts/launchd/install.sh|scripts/kg_rebuild.py|scripts/release_tag_contains.py|scripts/check_stray_apps.py|scripts/harness_probe_contract.py|scripts/harness_probe.py|scripts/harness_probe_native.py|scripts/harness_probe_t3.py|scripts/harness_probe_aqua.py)
           changed_source_unmapped=1
           unmapped_changed_files+=("$changed")
           ;;

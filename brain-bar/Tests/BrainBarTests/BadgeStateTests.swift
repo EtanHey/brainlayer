@@ -66,8 +66,13 @@ final class BadgeStateTests: XCTestCase {
         )
     }
 
-    func testUnknownCadenceFailsVisibleWithBadgeOn() throws {
-        let url = try mutatedFixture { _ in }
+    func testUnknownCadenceWithFreshHealthyBadgeDoesNotRaiseAlarm() throws {
+        let url = try mutatedFixture {
+            var alerts = try XCTUnwrap($0["alerts"] as? [String: Any])
+            alerts["badge_on"] = false
+            alerts["active"] = []
+            $0["alerts"] = alerts
+        }
         defer { try? FileManager.default.removeItem(at: url) }
 
         let presentation = BadgeStateReader.read(
@@ -76,8 +81,8 @@ final class BadgeStateTests: XCTestCase {
             cadence: .init(interval: 300, assumption: "cadence unknown, assuming 300s")
         )
 
-        XCTAssertTrue(presentation.badgeOn)
-        XCTAssertTrue(presentation.reason.localizedCaseInsensitiveContains("freshness unknown"))
+        XCTAssertFalse(presentation.badgeOn)
+        XCTAssertLessThanOrEqual(presentation.reason.count, 60)
     }
 
     func testStaleBadgeStateFailsVisibleWithBadgeOn() throws {

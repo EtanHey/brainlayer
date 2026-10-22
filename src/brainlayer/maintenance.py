@@ -62,6 +62,14 @@ EXPECTED_WRITER_PATTERNS = (
 QUIESCE_EXIT_TIMEOUT_SECONDS = 45.0
 _WATCHDOG_DISABLED_BEFORE = "_fleet_watchdog_disabled_before"
 MAINTENANCE_LOCK_TIMEOUT_SECONDS = 4 * 60 * 60
+# VACUUM is interrupted this long before its hold expires, so restore wins the calendar's cut.
+HOLD_UNWIND_S = 30.0
+VACUUM_PROGRESS_OPS = 100_000  # SQLite VM steps between deadline polls during VACUUM.
+# VACUUM's final copy-back into the main DB runs no VM steps, so the progress handler cannot stop
+# it: a 20.7 GB copy (MBP, 2026-10-19) overran a 60 s cutoff and completed at 328 s, 15.9 s/GB.
+# Default to about twice that; a VACUUM starts only when its estimate fits inside the hold.
+VACUUM_SECONDS_PER_GB_ENV = "BRAINLAYER_VACUUM_SECONDS_PER_GB"
+DEFAULT_VACUUM_SECONDS_PER_GB = 30.0
 SEARCH_LATENCY_TARGET_MS = 50.0
 # Ten times the target distinguishes sustained pathological delay from scheduler jitter.
 SEARCH_LATENCY_FAILURE_MS = 500.0
@@ -73,6 +81,7 @@ DELIBERATE_DEFERRALS = (
     r"^recent queue write activity: \d+ file\(s\) modified recently$",
     r"^queue depth growing: before=\d+ after=\d+$",
     r"^unexpected writer holds brainlayer db: pid=\d+ command=.+ fd=\S+$",
+    r"^quiet window leaves no time for a bounded maintenance hold$",
 )
 
 
@@ -593,16 +602,19 @@ def sigterm_cleanup():
         signal.signal(signal.SIGTERM, previous)
 
 
-def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any]) -> None:
+def _quiesce_services(services: Sequence[str], booted_out: dict[str, Any], now_fn=None, window=None) -> None:
     if not services:
         return
     if os.environ.get("BRAINLAYER_SUPERVISOR_SOCKET"):
         # All configured components pause, including in burn/FTS modes: ticks can revive writers.
-        from .maintenance_control import MaintenanceHold
+        from .maintenance_control import DEFAULT_WINDOW, HoldWindowClosed, MaintenanceHold
 
-        hold = MaintenanceHold()
+        hold = MaintenanceHold(now_fn=now_fn, window=window or DEFAULT_WINDOW)  # Window-bound with a clock.
         booted_out["_supervisor_hold"] = hold
-        hold.__enter__()
+        try:
+            hold.__enter__()
+        except HoldWindowClosed as exc:
+            raise MaintenanceAbort(str(exc)) from None
         return
     path = _watchdog_hold_path()
     with _watchdog_hold_lock(path):
@@ -942,11 +954,48 @@ def _verify_search_latency(db_path: Path, *, threshold_ms: float = SEARCH_LATENC
     return latency_ms
 
 
-def _vacuum(db_path: Path) -> tuple[int, int]:
+def _vacuum_seconds_per_gb() -> float:
+    from .maintenance_control import _seconds
+
+    return _seconds(VACUUM_SECONDS_PER_GB_ENV, DEFAULT_VACUUM_SECONDS_PER_GB)
+
+
+def _vacuum(db_path: Path, *, deadline: float | None = None) -> tuple[int, int]:
+    """Run VACUUM, abandoning it ``HOLD_UNWIND_S`` before the hold's deadline (hold clock).
+
+    Only VACUUM unwinds itself: during its rebuild a progress handler makes SQLite abort with
+    SQLITE_INTERRUPT and roll the statement back. Its final copy-back cannot be interrupted, so
+    VACUUM starts only when its size-based estimate fits; an overrun there is ended by the calendar
+    cut (SQLite discards the uncommitted WAL frames). The checkpoints around VACUUM rely on the cut
+    and the supervisor watchdog too.
+    """
+    from . import maintenance_control
+
+    cutoff = None
+    if deadline is not None:
+        cutoff, now = deadline - HOLD_UNWIND_S, maintenance_control.hold_clock()
+        if now >= cutoff:
+            raise MaintenanceAbort("maintenance hold expires before VACUUM could unwind; VACUUM skipped", code=76)
+        estimate = db_path.stat().st_size / 1e9 * _vacuum_seconds_per_gb()
+        if now + estimate > cutoff:
+            raise MaintenanceAbort(
+                f"maintenance hold leaves too little time for VACUUM (estimate {estimate:.0f}s, "
+                f"{cutoff - now:.0f}s left); VACUUM skipped",
+                code=76,
+            )
     before = db_path.stat().st_size
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute("VACUUM")
+        if cutoff is not None:
+            # Polled on the VACUUM's own thread: no timer race, and an expiry before the statement
+            # starts still interrupts it (sqlite3_interrupt with no running statement is a no-op).
+            conn.set_progress_handler(lambda: maintenance_control.hold_clock() >= cutoff, VACUUM_PROGRESS_OPS)
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError as exc:
+            if cutoff is not None and getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+                raise MaintenanceAbort("maintenance hold expired during VACUUM; VACUUM rolled back", code=76) from exc
+            raise
     finally:
         conn.close()
     return before, db_path.stat().st_size
@@ -1204,6 +1253,9 @@ def _weekly_backup(config: MaintenanceConfig) -> dict[str, Any]:
                 if receipt is None:
                     raise MaintenanceAbort("weekly local snapshot was not verified; VACUUM skipped", code=76)
                 return receipt
+        if os.environ.get("BRAINLAYER_CALENDAR_STEP"):
+            # The calendar already holds writers paused for this step; never wait on a backup inside it.
+            raise MaintenanceAbort("backup running during held calendar step; VACUUM skipped", code=76)
         waited = True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -1274,7 +1326,12 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
         loaded_before = {service: _service_is_loaded(service) for service in services}
         booted_out: dict[str, Any] = {}
         try:
-            _quiesce_services(tuple(loaded_before), booted_out)
+            _quiesce_services(
+                tuple(loaded_before),
+                booted_out,
+                config.now_fn,
+                (config.quiet_window_start_hour, config.quiet_window_duration_minutes),
+            )
             if not post_backup_gates_failed:
                 result.checkpoint = _checkpoint_full(config.db_path)
             if (
@@ -1287,7 +1344,10 @@ def run_maintenance(mode: str, *, config: MaintenanceConfig | None = None, dry_r
                 result.backup_status = "unavailable"
             if mode == "full" and backup is not None:
                 result.actions.append(f"verified_local_backup={backup.get('snapshot')}")
-                result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(config.db_path)
+                hold = booted_out.get("_supervisor_hold")
+                result.vacuum_before_bytes, result.vacuum_after_bytes = _vacuum(
+                    config.db_path, deadline=getattr(hold, "deadline", None)
+                )
                 result.checkpoint = _checkpoint_full(config.db_path)
             if mode == "burn":
                 result.burn = _run_burn_until_empty(config)

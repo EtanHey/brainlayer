@@ -280,9 +280,9 @@ def test_version_check_fails_loudly_when_latest_git_tag_drifts(tmp_path: Path) -
 
 
 def test_version_check_reports_controlled_error_outside_git_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    outside_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fixture_root, tap_root, _package_version = _copy_version_fixture(tmp_path)
+    fixture_root, tap_root, _package_version = _copy_version_fixture(outside_repo_dir)
     repo_git_path = REPO_ROOT / ".git"
     if repo_git_path.is_file():
         git_dir = repo_git_path.read_text(encoding="utf-8").strip().removeprefix("gitdir: ")
@@ -300,8 +300,8 @@ def test_version_check_reports_controlled_error_outside_git_checkout(
     assert "fatal:" not in result.stderr
 
 
-def test_version_check_ignores_parent_git_env_outside_git_checkout(tmp_path: Path) -> None:
-    fixture_root, tap_root, _package_version = _copy_version_fixture(tmp_path)
+def test_version_check_ignores_parent_git_env_outside_git_checkout(outside_repo_dir: Path) -> None:
+    fixture_root, tap_root, _package_version = _copy_version_fixture(outside_repo_dir)
 
     result = _run(fixture_root, tap_root, extra_env=_repo_git_env())
 

@@ -126,6 +126,7 @@ def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, s
     def run(command, *, env):
         root = Path(env["BRAINBAR_TEST_TMP_ROOT"])
         assert root.is_absolute() and root.is_dir()
+        assert root.name.endswith(".noindex")
         assert env["TMPDIR"] == str(root) + "/"
         assert list(root.glob("brainbar-*")) == []
         calls.append(command)
@@ -136,7 +137,9 @@ def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, s
     monkeypatch.setattr(wrapper.subprocess, "run", run)
     monkeypatch.setattr(wrapper.sys, "argv", [str(path), "--filter", "FixtureTest"])
     assert wrapper.main() == expected
-    assert calls == [["swift", "test", "--filter", "FixtureTest"]]
+    assert calls == [
+        ["swift", "test", "--scratch-path", str(REPO_ROOT / ".build.noindex/swift"), "--filter", "FixtureTest"]
+    ]
 
 
 def test_swift_job_runs_only_for_brain_bar_changes():
@@ -215,4 +218,7 @@ def test_swift_required_gate_has_a_bounded_job_timeout():
 
     _job_id, job = swift_job
 
-    assert job.get("timeout-minutes") == 10
+    # PR #1462: 15 full-suite successes measured p95=10m; add 5m runner/post-test headroom.
+    value = job.get("timeout-minutes")
+    assert value == 15
+    assert 10 <= value <= 20, "Swift job must retain a finite hang-protection budget"

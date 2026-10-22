@@ -79,6 +79,7 @@ Call `expand_palette` or set `BRAINLAYER_MCP_PROFILE=full` for the rest.
 - `brain_digest` is write-heavy; do not run it in parallel with other MCP work.
 
 ## Tests
+- Bulky local build, extract, QA and pytest output lives inside `<repo-or-worktree>/.build.noindex/` (pytest under `pytest/`) and dies with the worktree; `docs.local/` holds only small text receipts (version, SHA, cdhash, logs), never app bundles or binaries of any size, including archives. Temporary fake Applications roots may use `*.noindex`; GitHub release runners retain `dist/BrainBar.app` and `$RUNNER_TEMP`. Worktree archiving must exclude `.build.noindex/`, `*.app` and binaries over 1 MiB.
 - Run `pytest` before claiming behavior changed safely.
 - Current suite size: 4,386 Python tests (`pytest tests/ --collect-only -q`) + 890 Swift tests in `brain-bar/Tests/`.
 - **Suite hygiene is enforced for unmarked tests.** `tests/conftest.py` guards embedding model
