@@ -1,3 +1,6 @@
+import AppKit
+import SwiftUI
+import Vision
 import XCTest
 @testable import BrainBar
 
@@ -8,6 +11,12 @@ import XCTest
 final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     private let now = BrainBarDashboardFixture.fetchedAt
 
+    private var renderDirectory: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build.noindex/brainbar-render", isDirectory: true)
+    }
+
     private func healthyBackups() -> ObservabilityBackupStatus {
         let green = ObservabilityStatusLine(text: "verified", tone: .green)
         return .init(upload: green, snapshot: green, job: green, freshness: green, retention: green, archives: green, error: nil)
@@ -15,10 +24,11 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
 
     private func stats(
         replayDebt: Int,
-        process: WatcherProcessProbeResult = .running(pid: 4242),
+        process: WatcherProcessProbeResult? = .running(pid: 4242),
         health: WatcherHealthFileRead? = BrainBarDashboardFixture.healthyWatcherHealth,
         recentWatcherChunks: Int = 0,
-        flowReadable: Bool = true
+        flowReadable: Bool = true,
+        watcherBuckets: [Int] = [0, 0, 0, 0]
     ) -> DashboardStats {
         DashboardStats(
             chunkCount: 120,
@@ -29,7 +39,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             databaseSizeBytes: 4_096,
             recentActivityBuckets: [0, 0, 0, 0],
             recentAgentWriteBuckets: [0, 0, 0, 0],
-            recentWatcherWriteBuckets: [0, 0, 0, 0],
+            recentWatcherWriteBuckets: watcherBuckets,
             recentEnrichmentBuckets: [0, 0, 0, 0],
             activityWindowMinutes: 30,
             bucketCount: 4,
@@ -53,6 +63,163 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     }
 
     // MARK: #1014 review round 1
+
+    func testFreshWatcherHeartbeatKeepsUnreadableFlowNeutral() {
+        for process in [WatcherProcessProbeResult.running(pid: 42), .failure("launchctl timed out")] {
+            let flow = DashboardFlowSummary.derive(daemon: nil,
+                stats: stats(replayDebt: 0, process: process, flowReadable: false), now: now)
+            let lane = flow.lane(for: .jsonlWatcher)
+            XCTAssertTrue(flow.watcherStatus.isRunning)
+            XCTAssertEqual(lane.evidenceStatus, .unavailable, "heartbeat does not supply chart counts")
+            XCTAssertEqual(lane.status, .running)
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            XCTAssertEqual(disclosure.tooltipDisclosure, "Updating…")
+            XCTAssertTrue(disclosure.accessibilitySummary.contains("Updating…"))
+            XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
+            XCTAssertEqual(BrainBarIngestSeriesPresentation(lane: lane).metricText, "Updating…")
+        }
+    }
+
+    func testUnreadableFlowNeverHidesStoppedOrStaleWatcherEvidence() {
+        let cases: [(WatcherProcessProbeResult, WatcherHealthFileRead?, DashboardFlowLaneStatus, String)] = [
+            (.absent, BrainBarDashboardFixture.healthyWatcherHealth, .stopped, "Watcher stopped"),
+            (.running(pid: 42), degradedHealth(), .attention, "Watcher needs attention"),
+            (.running(pid: 42), .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-900), pollCount: 72)), .attention, "Watcher needs attention"),
+            (.failure("launchctl timed out"), .missing(path: "/fixture/health.json"), .unknown, "Watcher status unknown"),
+        ]
+        for (process, health, expected, message) in cases {
+            let lane = DashboardFlowSummary.derive(daemon: nil,
+                stats: stats(replayDebt: 0, process: process, health: health, flowReadable: false), now: now)
+                .lane(for: .jsonlWatcher)
+            XCTAssertEqual(lane.status, expected)
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            XCTAssertEqual(disclosure.tooltipDisclosure, expected == .unknown ? "\(message) · \(lane.lastEventText)" : message)
+            XCTAssertFalse(BrainBarIngestSeriesPresentation(lane: lane).showsSparkline)
+            if expected == .stopped { XCTAssertEqual(lane.status.stateTheme, .error) }
+        }
+    }
+
+    func testUnreadableFlowKeepsUnknownMissingAndStaleHealthAmber() {
+        let cases: [(WatcherProcessProbeResult?, WatcherHealthFileRead, String)] = [
+            (.running(pid: 42), .missing(path: "/fixture/watcher-health.json"), "missing"),
+            (nil, .missing(path: "/fixture/watcher-health.json"), "missing"),
+            (nil, .unreadable(path: "/fixture/watcher-health.json", reason: "permission denied"), "permission denied"),
+            (.failure("launchctl timed out"), .readable(WatcherHealthFile(
+                updatedAt: now.addingTimeInterval(-900), pollCount: 72
+            )), "15m ago"),
+        ]
+        for (process, health, reason) in cases {
+            let lane = DashboardFlowSummary.derive(daemon: nil,
+                stats: stats(replayDebt: 0, process: process, health: health, flowReadable: false), now: now)
+                .lane(for: .jsonlWatcher)
+            XCTAssertEqual(lane.status, .unknown, "do not invent a process verdict")
+            XCTAssertEqual(lane.status.stateTheme, .degraded, "unknown health must retain its amber warning")
+            XCTAssertEqual(lane.evidencePlaceholder, "Watcher status unknown")
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            XCTAssertTrue(disclosure.tooltipDisclosure.contains(reason), disclosure.tooltipDisclosure)
+            XCTAssertTrue(disclosure.accessibilitySummary.contains(reason), disclosure.accessibilitySummary)
+            XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
+            XCTAssertEqual(BrainBarIngestSeriesPresentation(lane: lane).metricText, "Watcher status unknown")
+        }
+    }
+
+    func testRenderFreshHeartbeatWithUnreadableFlow() throws {
+        let view = BrainBarDashboardPreview.make(
+            collector: BrainBarDashboardFixture.makeCollector(stats: stats(replayDebt: 0, flowReadable: false)),
+            now: now
+        ).frame(width: 960, height: 640)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 960, height: 640)
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let directory = renderDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try png.write(to: directory.appendingPathComponent("watcher-flow-updating.png"))
+        XCTAssertGreaterThan(png.count, 5_000)
+    }
+
+    func testPreviewHidesUnreadableWatcherCountsAndKeepsUpdatingDisclosure() {
+        for readable in [false, true] {
+            let sample = stats(replayDebt: 0, flowReadable: readable, watcherBuckets: [9876, 9876, 9876, 9876])
+            // Match BrainBarPipelinePanelPreviewView.flowSummary and seriesCard: the raw
+            // buckets remain populated even when the query's evidence is unreadable.
+            let lane = DashboardFlowSummary.derive(daemon: nil, stats: sample, now: now).lane(for: .jsonlWatcher)
+            let presentation = BrainBarIngestSeriesPresentation(lane: lane)
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            let presentedText = [
+                presentation.metricText, presentation.rateText, presentation.volumeText,
+                presentation.latestBucketCaptionText, disclosure.subtitle, disclosure.visibleDetail,
+                disclosure.statusLabel, disclosure.tooltipDisclosure, disclosure.accessibilitySummary,
+            ].compactMap { $0 }.joined(separator: "\n")
+
+            XCTAssertEqual(presentation.showsSparkline, readable)
+            for token in ["39,504", "1316.8/min", "latest:"] {
+                XCTAssertEqual(presentedText.contains(token), readable, "\(token): \(presentedText)")
+            }
+            if readable {
+                XCTAssertEqual(presentation.metricText, "39,504 · peak 9.9k")
+                XCTAssertEqual(presentation.rateText, "1316.8/min")
+                XCTAssertEqual(presentation.volumeText, "39,504 in 30m")
+                XCTAssertEqual(presentation.latestBucketCaptionText, "latest: 9.9k")
+                XCTAssertEqual(disclosure.accessibilitySummary,
+                    "Watcher-ingested chunks. Window: Last 1h. Count: 39,504. Unit: unique chunk IDs first seen in this window. Clock: ingest time.")
+                XCTAssertEqual(disclosure.tooltipDisclosure,
+                    "Window: Last 1h · Count: hovered value below · Unit: unique chunk IDs first seen in this window · Clock: ingest time")
+                XCTAssertFalse(presentedText.contains("Updating…"))
+            } else {
+                XCTAssertEqual(presentation.metricText, "Updating…")
+                XCTAssertEqual(presentation.rateText, "—")
+                XCTAssertNil(presentation.volumeText)
+                XCTAssertNil(presentation.latestBucketCaptionText)
+                XCTAssertEqual(disclosure.tooltipDisclosure, "Updating…")
+                XCTAssertEqual(disclosure.accessibilitySummary,
+                    "Watcher-ingested chunks. Updating…. Window: Last 1h. Unit: unique chunk IDs first seen in this window. Clock: ingest time.")
+                XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
+            }
+        }
+    }
+
+    func testRenderPreviewWatcherCountsForOptionalLocalEvidence() throws {
+        guard ProcessInfo.processInfo.environment["BRAINBAR_RENDER_EVIDENCE"] == "1",
+              ProcessInfo.processInfo.environment["CI"] == nil else {
+            throw XCTSkip("Set BRAINBAR_RENDER_EVIDENCE=1 locally for preview PNGs and diagnostic OCR.")
+        }
+        for readable in [false, true] {
+            let sample = stats(replayDebt: 0, flowReadable: readable, watcherBuckets: [9876, 9876, 9876, 9876])
+            let view = BrainBarPipelinePanelPreview.make(
+                stats: sample, containerSize: CGSize(width: 960, height: 1400), fetchedAt: now,
+                signalCoverageExpanded: false
+            ).frame(width: 960, height: 1400)
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: 960, height: 1400)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+            host.layoutSubtreeIfNeeded()
+            // OCR is diagnostic only: Vision can misread the correctly rendered 11pt label.
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(host.bounds.width * 3),
+                pixelsHigh: Int(host.bounds.height * 3),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            bitmap.size = host.bounds.size
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let directory = renderDirectory
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent(readable ? "watcher-preview-readable.png" : "watcher-preview-updating.png"))
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage)).perform([request])
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            print("Watcher preview diagnostic OCR (readable=\(readable)):\n\(text)")
+        }
+    }
 
     /// B1: the lane's status pill rendered "live" (chunks flowed recently) while its body said
     /// NEEDS ATTENTION. The pill comes from the same `WatcherHealthStatus`.

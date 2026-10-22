@@ -153,6 +153,21 @@ final class BrainBarJobAlertTests: XCTestCase {
 
     // MARK: Show log
 
+    func testCalendarStepsHaveLogLinksAndKnownMissingLogMessages() {
+        let home = root.appendingPathComponent("home")
+        let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home)
+        for key in ["index", "backup-snapshot", "p0-counter", "wal-checkpoint", "decay", "repair-fts"] {
+            XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live),
+                home.appendingPathComponent("Library/Logs/brainlayer/\(key).err.log"), key)
+            XCTAssertFalse(BrainBarJobAlerts.missingLogMessage(forKey: key).contains("doesn't know"), key)
+        }
+        for key in ["maintenance-nightly", "maintenance-weekly", "maintenance-light", "maintenance-full"] {
+            XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live), live.maintenanceLog, key)
+        }
+        XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "backup-daily", paths: live), live.databaseLog)
+        XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: "jsonl-backup", paths: live), live.archiveLog)
+    }
+
     private var paths: BrainBarBackupSources.Paths {
         .init(
             launchAgents: root, databaseLog: root.appendingPathComponent("logs/backup-daily.log"),
@@ -160,6 +175,40 @@ final class BrainBarJobAlertTests: XCTestCase {
             maintenanceLog: root.appendingPathComponent("logs/maintenance.log"),
             snapshotDirectory: root, archiveDirectory: root
         )
+    }
+
+    func testCalendarLogLinksUseConfiguredPlistOrSupervisorArguments() throws {
+        let home = root.appendingPathComponent("home")
+        let plistURL = home.appendingPathComponent("Library/LaunchAgents/com.brainlayer.maintenance.plist")
+        let jobsURL = home.appendingPathComponent(".local/share/brainlayer/supervisor/jobs.json")
+        let custom = root.appendingPathComponent("custom calendar logs")
+        let plist: [String: Any] = ["ProgramArguments": ["brainlayer", "maintenance-calendar", "--logs-dir", custom.path]]
+        let cases: [(URL, Data)] = [
+            (plistURL, try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)),
+            (jobsURL, try JSONSerialization.data(withJSONObject: ["com.brainlayer.maintenance": ["plist": plist]])),
+        ]
+        for (source, data) in cases {
+            let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home,
+                readFile: { $0 == source ? data : nil })
+            for key in ["index", "backup-snapshot", "p0-counter", "wal-checkpoint", "decay", "repair-fts"] {
+                let expected = custom.appendingPathComponent("\(key).err.log")
+                XCTAssertEqual(BrainBarJobAlerts.logURL(forKey: key, paths: live), expected, source.path)
+                let workspace = BrainBarRecordingWorkspace()
+                XCTAssertEqual(BrainBarJobAlerts.showLog(forKey: key, paths: live, workspace: workspace,
+                    fileExists: { $0 == expected }), .opened(expected))
+                XCTAssertEqual(workspace.recorded.map(\.1), [expected.path])
+            }
+        }
+    }
+
+    func testCalendarLogDirectoryFallsBackWithoutAValidArgument() throws {
+        let home = root.appendingPathComponent("home")
+        for args in [["brainlayer", "maintenance-calendar"], ["brainlayer", "--logs-dir"], ["brainlayer", "--logs-dir", ""]] {
+            let data = try PropertyListSerialization.data(fromPropertyList: ["ProgramArguments": args], format: .xml, options: 0)
+            let live = BrainBarBackupSources.Paths.live(databasePath: "/db/brainlayer.db", environment: [:], home: home,
+                readFile: { $0.lastPathComponent == "com.brainlayer.maintenance.plist" ? data : nil })
+            XCTAssertEqual(live.calendarLogDirectory, home.appendingPathComponent("Library/Logs/brainlayer"))
+        }
     }
 
     func test_the_nightly_alert_opens_the_nightly_jobs_own_log() {

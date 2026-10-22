@@ -266,6 +266,7 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(source.contains("role: .destructive"))
     }
 
+    @MainActor
     func testOnePageTileLabelsAndChartStatusColorsRemainSemanticallyLegible() throws {
         let dashboard = try sourceFile("Sources/BrainBar/BrainBarWindowRootView.swift")
         let pipeline = try sourceFile("Sources/BrainBar/Dashboard/PipelineState.swift")
@@ -279,7 +280,11 @@ final class BrainBarDashboardTruthPresentationTests: XCTestCase {
         XCTAssertTrue(tilesSource.contains("title: \"Today\""))
         XCTAssertTrue(tilesSource.contains("private func ingestBand"))
         XCTAssertFalse(tilesSource.contains("minHeight: height, maxHeight: height"), "Cards must size to their content.")
-        XCTAssertTrue(dashboard.contains("Text(\"Evidence unavailable\")"), "Unavailable charts must remain explicit.")
+        let unavailable = DashboardFlowSummary.derive(daemon: nil,
+            stats: BrainBarDashboardFixture.watcherUnknownStats, now: BrainBarDashboardFixture.fetchedAt)
+            .lane(for: .jsonlWatcher)
+        XCTAssertEqual(BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: unavailable, timeframe: .live)
+            .tooltipDisclosure, "Watcher status unknown · \(unavailable.lastEventText)", "Missing watcher health must remain explicit.")
         XCTAssertTrue(pipeline.contains("extension DashboardFlowLaneStatus"))
         XCTAssertTrue(pipeline.contains("case .live:\n            return .active"))
     }
