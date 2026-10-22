@@ -2,10 +2,24 @@ import Foundation
 import XCTest
 @testable import BrainBar
 
-func finishBrainBarSocketFixture(_ server: BrainBarServer, database: BrainDatabase, path: String) {
+enum BrainBarFixtureCleanupResult: Equatable, Sendable {
+    case finished
+    case timedOut
+}
+
+@discardableResult
+func finishBrainBarSocketFixture(
+    _ server: BrainBarServer,
+    database: BrainDatabase,
+    path: String,
+    deadline: DispatchTime = .now() + 5
+) -> BrainBarFixtureCleanupResult {
+    // Red-stage baseline: preserve the legacy blocking call until an admitted
+    // regression run. The deadline must reach the server before this can pass.
     server.stopAndDrainForTesting()
     database.close()
     removeBrainBarTestDatabase(path)
+    return .finished
 }
 
 /// Darwin Foundation can ignore TMPDIR; use the runner's explicit suite-owned root.
