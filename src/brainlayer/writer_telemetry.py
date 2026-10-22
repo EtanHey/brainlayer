@@ -290,9 +290,8 @@ class IngestMetrics:
         self.fields.update(committed_at=now, rows_committed=len(events))
         for source, metric in (("queued_at", "queue_to_commit_ms"), ("ingest_observed_at", "observed_to_commit_ms")):
             origins = self.origins(events, source)
-            if origins:
-                self.fields[f"oldest_{source}"] = min(origins)
-                self.fields[metric] = (now - min(origins)) * 1000
+            self.fields[f"oldest_{source}"] = min(origins) if origins else None
+            self.fields[metric] = (now - min(origins)) * 1000 if origins else None
         self.emit("ingest_committed", "commit")
 
     def emit(self, event, outcome):
