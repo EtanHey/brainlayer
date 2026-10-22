@@ -1,10 +1,14 @@
 """Independent #1450 repro: real store/FTS/vec paths in a private temp universe."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
+import apsw
 import pytest
 
-from brainlayer.store import embed_hot_chunk, store_memory
+from brainlayer._helpers import serialize_f32
+from brainlayer.store import embed_hot_chunk, embed_pending_chunks, store_memory
 from brainlayer.vector_store import VectorStore
 
 BASE = (
@@ -212,3 +216,235 @@ def test_unchanged_index_merge_keeps_existing_vector(private_store):
     before = vectors(store)
     index_incoming(store, BASE.strip(), [0.0, 1.0] + [0.0] * 1022)
     assert vectors(store) == before
+
+
+SECOND_CHANGE = BASE + "secondmerge"
+REPAIR_MODES = ["hot", "pending", "batch", "batch-fallback", "sync"]
+
+
+def body_encode(text):
+    """Different float AND binary vectors for originals, M1 and M2."""
+    if text.startswith("[Merged duplicate originals]"):
+        stage = 3 if "secondmerge" in text else 2
+    else:
+        stage = 1 if "canarymerge" in text else 0
+    return [1.0 if index == stage else -1.0 for index in range(4)] + [0.0] * 1020
+
+
+def assert_current_vectors(store, *, allow_missing=False):
+    rows = vectors(store)
+    if allow_missing and rows == [[], []]:
+        return
+    content = store.get_chunk("canonical")["content"]
+    expected_float = serialize_f32(body_encode(content))
+    expected_binary = store.conn.execute("SELECT vec_quantize_binary(?)", (expected_float,)).fetchone()[0]
+    assert rows == [[("canonical", expected_float)], [("canonical", expected_binary)]]
+
+
+@pytest.mark.parametrize("replay", ["same-id", "cross-id", "index"])
+def test_original_replay_cannot_fill_merged_canonical_with_original_vector(private_store, replay):
+    store = private_store
+    # Cross-ID detection rejects differing numeric token sets. Include the
+    # merged list's numbering in both originals so the real detector admits it.
+    base = BASE if replay == "same-id" else BASE + "1 2"
+    changed = CHANGED if replay == "same-id" else CHANGED + " 1 2"
+    put(store, base, embed_fn=body_encode)
+    put(store, changed)
+    merged = store.get_chunk("canonical")["content"]
+    assert merged.startswith("[Merged duplicate originals]")
+    assert vectors(store) == [[], []]
+
+    if replay != "same-id":
+        from brainlayer.dedupe import find_duplicate
+
+        hit, _ = find_duplicate(
+            store.conn,
+            chunk_id="incoming",
+            content=changed,
+            created_at="2026-10-22T00:00:00Z",
+            project="merge-vectors",
+            content_type="note",
+        )
+        assert hit is not None and hit.canonical_chunk_id == "canonical"
+    if replay == "index":
+        index_incoming(store, changed, body_encode(changed))
+    else:
+        result = put(
+            store, changed, chunk_id="canonical" if replay == "same-id" else "incoming", embed_fn=body_encode
+        )
+        assert result["id"] == "canonical"
+        if replay == "same-id":
+            assert result["outcome"] == "duplicate"
+    assert store.conn.execute("SELECT count(*) FROM chunks").fetchone() == (1,)
+    assert store.get_chunk("canonical")["content"] == merged
+    assert_current_vectors(store, allow_missing=True)
+    if vectors(store) == [[], []]:
+        assert embed_hot_chunk(store, body_encode, "canonical")
+    assert_current_vectors(store)
+
+
+def run_repair(store, mode, encoder):
+    if mode == "sync":
+        return put(store, CHANGED, embed_fn=encoder)
+    if mode == "hot":
+        return embed_hot_chunk(store, encoder, "canonical")
+
+    def batch(texts):
+        if mode == "batch-fallback":
+            raise RuntimeError("deliberate batch encoder failure")
+        return [encoder(text) for text in texts]
+
+    return embed_pending_chunks(store, encoder, embed_batch_fn=batch if mode.startswith("batch") else None)
+
+
+@pytest.mark.parametrize("mode", REPAIR_MODES)
+@pytest.mark.parametrize("interleave", ["merge", "repaired", "archived_at", "superseded_by", "aggregated_into"])
+def test_repair_rechecks_snapshot_and_eligibility_after_encoding(private_store, mode, interleave):
+    store = private_store
+    put(store, embed_fn=body_encode)
+    if mode != "sync":
+        put(store, CHANGED)
+    entered, release = Event(), Event()
+    encoded = []
+
+    def paused_encoder(text):
+        if text.startswith("[Merged duplicate originals]"):
+            assert not store.conn.in_transaction, "encoding acquired the writer lock"
+            encoded.append(text)
+            entered.set()
+            assert release.wait(10), "encoder barrier was not released"
+        return body_encode(text)
+
+    # Open the second connection before the encoder pauses, so schema setup is
+    # never confused with the writer whose commit must beat vector publication.
+    with VectorStore(store.db_path) as writer, ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(run_repair, store, mode, paused_encoder)
+        try:
+            assert entered.wait(10), "repair did not reach the M1 encoder barrier"
+            m1 = writer.get_chunk("canonical")["content"]
+            assert encoded == [m1]
+            assert m1.startswith("[Merged duplicate originals]")
+            if interleave in {"merge", "repaired"}:
+                put(writer, SECOND_CHANGE)
+                m2 = writer.get_chunk("canonical")["content"]
+                assert m2 != m1 and "secondmerge" in m2
+                assert body_encode(m2) != body_encode(m1) != body_encode(CHANGED)
+                if interleave == "repaired":
+                    assert embed_hot_chunk(writer, body_encode, "canonical")
+            else:
+                writer.conn.execute(
+                    f"UPDATE chunks SET {interleave} = ? WHERE id = ?",
+                    ("2026-10-23T00:00:00Z" if interleave == "archived_at" else "successor", "canonical"),
+                )
+            committed_vectors = vectors(writer)
+        finally:
+            release.set()
+        result = pending.result(timeout=10)
+
+    assert vectors(store) == committed_vectors, "stale repair published or overwrote a vector"
+    assert not store.conn.in_transaction
+    if mode != "sync":
+        assert result == 0, "skipped publication must not count as repaired"
+    if interleave == "merge":
+        assert embed_hot_chunk(store, body_encode, "canonical")
+        assert_current_vectors(store)
+        assert list(store.conn.execute("SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH 'secondmerge'")) == [
+            ("canonical",)
+        ]
+    elif interleave == "repaired":
+        assert_current_vectors(store)
+    else:
+        assert not embed_hot_chunk(store, body_encode, "canonical")
+
+
+@pytest.mark.parametrize("mode", REPAIR_MODES)
+def test_repair_preserves_concurrent_vector_for_same_body(private_store, mode):
+    store = private_store
+    put(store, embed_fn=body_encode)
+    if mode != "sync":
+        put(store, CHANGED)
+    entered, release = Event(), Event()
+
+    def paused_encoder(text):
+        if text.startswith("[Merged duplicate originals]"):
+            assert not store.conn.in_transaction
+            entered.set()
+            assert release.wait(10)
+            # Distinguish this repair from the concurrent valid encoder even
+            # though both encoded the same body (e.g. model version changed).
+            return [-value for value in body_encode(text)]
+        return body_encode(text)
+
+    with VectorStore(store.db_path) as writer, ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(run_repair, store, mode, paused_encoder)
+        try:
+            assert entered.wait(10)
+            assert embed_hot_chunk(writer, body_encode, "canonical")
+            committed_vectors = vectors(writer)
+        finally:
+            release.set()
+        result = pending.result(timeout=10)
+    assert vectors(store) == committed_vectors
+    assert_current_vectors(store)
+    if mode != "sync":
+        assert result == 0
+
+
+@pytest.mark.parametrize("mode", REPAIR_MODES)
+def test_failed_repair_rolls_back_both_vectors(private_store, monkeypatch, mode):
+    store = private_store
+    put(store, embed_fn=body_encode)
+    if mode != "sync":
+        put(store, CHANGED)
+    original = store._upsert_chunk_vector
+
+    def failed_write(cursor, chunk_id, embedding):
+        original(cursor, chunk_id, embedding)
+        if store.conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()[0].startswith(
+            "[Merged duplicate originals]"
+        ):
+            raise RuntimeError("vector publication failure")
+
+    monkeypatch.setattr(store, "_upsert_chunk_vector", failed_write)
+    if mode == "sync":
+        with pytest.raises(RuntimeError, match="vector publication failure"):
+            run_repair(store, mode, body_encode)
+    else:
+        assert run_repair(store, mode, body_encode) == 0
+    assert vectors(store) == [[], []], "failed repair leaked a committed vector"
+    assert not store.conn.in_transaction
+
+
+@pytest.mark.parametrize("mode", REPAIR_MODES)
+def test_repair_publishes_vector_pair_under_exclusive_transaction(private_store, monkeypatch, mode):
+    store = private_store
+    put(store, embed_fn=body_encode)
+    if mode != "sync":
+        put(store, CHANGED)
+    original = store._upsert_chunk_vector
+    publication_locks = []
+
+    with VectorStore(store.db_path) as contender:
+        contender.conn.setbusytimeout(0)
+
+        def checked_write(cursor, chunk_id, embedding):
+            publication_locks.append(store.conn.in_transaction)
+            try:
+                contender.conn.execute("BEGIN IMMEDIATE")
+            except apsw.BusyError:
+                pass
+            else:
+                contender.conn.execute("ROLLBACK")
+                raise AssertionError("another writer entered during float/binary publication")
+            original(cursor, chunk_id, embedding)
+
+        def unlocked_encoder(text):
+            assert not store.conn.in_transaction
+            return body_encode(text)
+
+        monkeypatch.setattr(store, "_upsert_chunk_vector", checked_write)
+        result = run_repair(store, mode, unlocked_encoder)
+    assert publication_locks == [True]
+    if mode != "sync":
+        assert result == 1
+    assert_current_vectors(store)
