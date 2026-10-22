@@ -93,7 +93,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
                 .lane(for: .jsonlWatcher)
             XCTAssertEqual(lane.status, expected)
             let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
-            XCTAssertEqual(disclosure.tooltipDisclosure, expected == .unknown ? "\(message) · \(lane.lastEventText)" : message)
+            XCTAssertEqual(disclosure.tooltipDisclosure, "\(message) · \(lane.lastEventText)")
             XCTAssertFalse(BrainBarIngestSeriesPresentation(lane: lane).showsSparkline)
             if expected == .stopped { XCTAssertEqual(lane.status.stateTheme, .error) }
         }
@@ -121,6 +121,47 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
             XCTAssertEqual(BrainBarIngestSeriesPresentation(lane: lane).metricText, "Watcher status unknown")
         }
+    }
+
+    private func assertUnavailableFlowDisclosure(
+        process: WatcherProcessProbeResult?, health: WatcherHealthFileRead?,
+        status: DashboardFlowLaneStatus, detail: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let lane = DashboardFlowSummary.derive(daemon: nil,
+            stats: stats(replayDebt: 0, process: process, health: health, flowReadable: false), now: now)
+            .lane(for: .jsonlWatcher)
+        XCTAssertEqual(lane.status, status, file: file, line: line)
+        let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+        XCTAssertEqual(disclosure.tooltipDisclosure, detail, file: file, line: line)
+        XCTAssertEqual(disclosure.accessibilitySummary,
+            "Watcher-ingested chunks. \(detail). Window: Last 1h. Unit: unique chunk IDs first seen in this window. Clock: ingest time.", file: file, line: line)
+    }
+
+    func testUnavailableFlowRunningDisclosure() {
+        assertUnavailableFlowDisclosure(process: .running(pid: 42), health: BrainBarDashboardFixture.healthyWatcherHealth,
+            status: .running, detail: "Updating…")
+    }
+
+    func testUnavailableFlowAttentionDisclosure() {
+        assertUnavailableFlowDisclosure(process: .running(pid: 42), health: degradedHealth(), status: .attention,
+            detail: "Watcher needs attention · 2 transcript files could not be ingested · since 2h ago · See file_ingestion_failures in watcher-health.json")
+        assertUnavailableFlowDisclosure(process: .running(pid: 42),
+            health: .readable(WatcherHealthFile(updatedAt: now.addingTimeInterval(-900), pollCount: 72)), status: .attention,
+            detail: "Watcher needs attention · Watcher heartbeat stopped updating · since 15m ago · Check ~/Library/Logs/brainlayer/watch.err.log, then restart the Watcher job")
+    }
+
+    func testUnavailableFlowStoppedDisclosure() {
+        assertUnavailableFlowDisclosure(process: .absent, health: BrainBarDashboardFixture.healthyWatcherHealth, status: .stopped,
+            detail: "Watcher stopped · Watcher is not running (launchd reports com.brainlayer.watch is not running) · stop time unknown; last heartbeat 1m ago · Restart it from Settings → Jobs → Ingest, or check ~/Library/Logs/brainlayer/watch.err.log")
+    }
+
+    func testUnavailableFlowUnknownDisclosure() {
+        assertUnavailableFlowDisclosure(process: .running(pid: 42), health: .missing(path: "/fixture/health.json"), status: .unknown,
+            detail: "Watcher status unknown · Watcher is running, but its health file is missing at /fixture/health.json.")
+    }
+
+    func testUnavailableFlowWithoutWatcherEvidenceDisclosure() {
+        assertUnavailableFlowDisclosure(process: nil, health: nil, status: .unknown, detail: "Evidence unavailable")
     }
 
     func testRenderFreshHeartbeatWithUnreadableFlow() throws {
