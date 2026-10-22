@@ -380,6 +380,10 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
             )
         waiting, admission = False, None
         while True:
+            if full and maintenance_control.hold_clock() >= deadline:
+                record(directory, event="calendar-admission-timeout", scheduled_date=date.isoformat())
+                leases.close()
+                return None, 1
             try:
                 if (full or transcript_recovery) and admission is None:
                     admission = leases.enter_context(
@@ -392,15 +396,10 @@ async def _admit_calendar(steps, directory, date, transcript_recovery, guard_tim
             except BlockingIOError:
                 if not full:
                     raise
-                remaining = deadline - maintenance_control.hold_clock()
-                if remaining <= 0:
-                    record(directory, event="calendar-admission-timeout", scheduled_date=date.isoformat())
-                    leases.close()
-                    return None, 1
                 if not waiting:
                     record(directory, event="calendar-admission-wait", scheduled_date=date.isoformat())
                     waiting = True
-                await sleep_fn(min(1, remaining))
+                await sleep_fn(min(1, max(0, deadline - maintenance_control.hold_clock())))
     except BlockingIOError:
         leases.close()
         record(directory, event="already-running", scheduled_date=date.isoformat())

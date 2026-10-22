@@ -184,6 +184,33 @@ def test_recovery_admission_probe_cannot_drop_a_scheduled_full_invocation(priori
     asyncio.run(exercise())
 
 
+def test_expired_wait_cannot_start_an_old_plan_after_custody_becomes_free(priority_runner, monkeypatch):
+    runner = priority_runner
+    plan = calendar.calendar_steps(sys.executable, "/unused", runner.logs, NOW.date())
+    elapsed = [0.0]
+    monkeypatch.setattr(calendar.maintenance_control, "hold_clock", lambda: elapsed[0])
+
+    async def forbidden(*_a, **_k):
+        pytest.fail("an overdue invocation started heavy work after wake")
+
+    monkeypatch.setattr(calendar, "_execute_step", forbidden)
+    owner = calendar.Custody(runner.directory)
+
+    async def wake_next_day(_seconds):
+        elapsed[0] += 86400
+        owner.__exit__(None, None, None)
+
+    with owner:
+        assert (
+            asyncio.run(
+                calendar.run_calendar(plan, runner.directory, runner.logs, now_fn=lambda: NOW, sleep_fn=wake_next_day)
+            )
+            == 1
+        )
+    assert not any(row["event"] == "runner" for row in runner.rows())
+    assert runner.rows()[-1]["event"] == "calendar-admission-timeout"
+
+
 def test_cancelled_admission_releases_priority_without_starting_workers(priority_runner, monkeypatch):
     runner = priority_runner
     plan = calendar.calendar_steps(sys.executable, "/unused", runner.logs, NOW.date())
