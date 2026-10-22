@@ -2121,3 +2121,18 @@ def test_workflow_changes_run_referencing_guards_or_escalate(tmp_path, workflow)
     else:
         assert f"unmapped: .github/workflows/{workflow}" in result.stdout
         assert f"{test_root}/ -v" in unit
+
+
+@pytest.mark.parametrize("missing", ["test_ci_swift_gate.py", "test_ci_crash_sweeps.py"])
+def test_ci_workflow_missing_named_contract_escalates(tmp_path, missing):
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in ["test_ci_swift_gate.py", "test_ci_crash_sweeps.py", "test_fleet_watchdog.py"]:
+        if name != missing:
+            (test_root / name).write_text("ci.yml\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = ".github/workflows/ci.yml"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "unmapped: .github/workflows/ci.yml" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text().splitlines()[0]

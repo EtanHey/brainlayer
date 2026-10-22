@@ -190,7 +190,11 @@ map_changed_files_to_pytests() {
             mapped=1
           fi
         done
-        if [ "$mapped" -eq 1 ] && [ "${changed##*/}" = "ci.yml" ]; then
+        # ci.yml needs both named contracts even when another test references it.
+        if [ "${changed##*/}" = "ci.yml" ] &&
+          { [ ! -f "$TEST_ROOT/test_ci_swift_gate.py" ] || [ ! -f "$TEST_ROOT/test_ci_crash_sweeps.py" ]; }; then
+          mapped=0
+        elif [ "$mapped" -eq 1 ] && [ "${changed##*/}" = "ci.yml" ]; then
           for test_path in "$TEST_ROOT"/test_ci_*.py; do
             [ -f "$test_path" ] && append_unique "$test_path"
           done
