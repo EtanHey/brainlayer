@@ -102,13 +102,13 @@ def _repo_with_an_empty_head_commit(tmp_path: Path) -> Path:
     return repo
 
 
-def _script_outside_a_repo(tmp_path: Path) -> Path:
+def _script_outside_a_repo(outside_repo_dir: Path) -> Path:
     """A copy of the script whose ROOT_DIR is not a git work tree.
 
     `changed_files()` resolves the changed set from git when `BRAINLAYER_CHANGED_FILES` is unset;
     running the real script from the repo can never exercise the path where that fails.
     """
-    scripts_dir = tmp_path / "scripts"
+    scripts_dir = outside_repo_dir / "scripts"
     scripts_dir.mkdir()
     copied = scripts_dir / "run_tests.sh"
     copied.write_text(SCRIPT_PATH.read_text(encoding="utf-8"), encoding="utf-8")
@@ -1036,7 +1036,9 @@ def test_default_unit_mark_expression_deselects_embedding_model_tests() -> None:
     )
 
 
-def test_changed_only_scope_fails_closed_when_git_cannot_name_the_changed_files(tmp_path: Path) -> None:
+def test_changed_only_scope_fails_closed_when_git_cannot_name_the_changed_files(
+    tmp_path: Path, outside_repo_dir: Path
+) -> None:
     """Detection FAILING must not read as "nothing changed".
 
     `changed_files()` used to swallow a git error into an empty list with rc 0, so a missing
@@ -1049,7 +1051,7 @@ def test_changed_only_scope_fails_closed_when_git_cannot_name_the_changed_files(
     (test_root / "test_think_recall_integration.py").write_text("test placeholder\n")
 
     pytest_log, bun_log = _make_stub_bin(tmp_path, pytest_exit=0, bun_exit=0)
-    script = _script_outside_a_repo(tmp_path)
+    script = _script_outside_a_repo(outside_repo_dir)
 
     env = _script_env()
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"

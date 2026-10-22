@@ -117,7 +117,11 @@ per-file-ignores = {"src/brainlayer/cli/__init__.py" = ["F401"]}
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+testpaths = ["tests"]
+# Keep pytest's default exclusions as well as the worktree-owned build output boundary.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", ".build.noindex"]
 # Keep temp trees only for failed tests: passing full-suite runs left 40+ GiB basetemps (2026-10-19).
+# tests/conftest.py routes default and explicit basetemps beneath <worktree>/.build.noindex/pytest/ before fixtures start.
 tmp_path_retention_policy = "failed"
 markers = [
     "crash_sweep: exhaustive migration/revert SIGKILL cuts (separate required CI gate; retained by local pre-push)",

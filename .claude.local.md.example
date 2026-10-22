@@ -9,7 +9,7 @@
 
 ## BrainBar Daemon
 # - Socket: /tmp/brainbar.sock
-# - App: /Users/YOURUSERNAME/Applications/BrainBar.app
+# - App: /Users/YOURUSERNAME/Gits/brainlayer/.build.noindex/build/BrainBar.app
 
 ## Enrichment Config
 # - BRAINLAYER_ENRICH_BACKEND: mlx (default on Apple Silicon) or ollama

@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -42,6 +44,10 @@ def _linked_repo(tmp_path: Path, *, origin_main: bool = True, detached: bool = F
     tests_dir = linked / "tests"
     tests_dir.mkdir()
     shutil.copy2(REPO_ROOT / "tests" / "conftest.py", tests_dir / "conftest.py")
+    # The copied conftest enforces artifact hygiene through this checkout-local helper.
+    scripts_dir = linked / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy2(REPO_ROOT / "scripts" / "check_stray_apps.py", scripts_dir / "check_stray_apps.py")
     return repo, linked, Path(_git(linked, "rev-parse", "--absolute-git-dir"))
 
 
@@ -170,3 +176,55 @@ def test_probe():
 
     assert result.returncode != 0, output
     assert "shared Git state changed during pytest: origin/main" in output
+
+
+@pytest.mark.parametrize("test_passes", [True, False])
+def test_outside_repo_fixture_cleans_up_after_success_and_failure(tmp_path: Path, test_passes: bool) -> None:
+    repo, linked, git_dir = _linked_repo(tmp_path)
+    (linked / "tests" / "test_probe.py").write_text(
+        f"""
+import os
+import subprocess
+from pathlib import Path
+
+
+def test_probe(tmp_path, outside_repo_dir):
+    assert tmp_path.is_relative_to(Path.cwd() / ".build.noindex")
+    assert not outside_repo_dir.is_relative_to(Path.cwd())
+    assert all(not (parent / ".git").exists() for parent in (outside_repo_dir, *outside_repo_dir.parents))
+    assert subprocess.run(["git", "rev-parse", "--git-dir"], cwd=outside_repo_dir).returncode != 0
+    Path("outside-path.txt").write_text(str(outside_repo_dir))
+    (outside_repo_dir / "owned.txt").write_text("fixture output")
+    assert {test_passes!r}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = _run_nested_pytest(linked, _hook_env(repo, linked, git_dir))
+
+    assert result.returncode == (0 if test_passes else 1), result.stdout + result.stderr
+    outside = Path((linked / "outside-path.txt").read_text())
+    assert not outside.exists()
+
+
+def test_outside_repo_fixture_rejects_a_temp_root_inside_a_checkout(tmp_path: Path) -> None:
+    repo, linked, git_dir = _linked_repo(tmp_path)
+    (linked / "tests" / "test_probe.py").write_text(
+        """
+import tempfile
+from pathlib import Path
+
+tempfile.tempdir = str(Path.cwd())
+
+
+def test_probe(outside_repo_dir):
+    raise AssertionError("the fixture must reject this checkout before yielding")
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = _run_nested_pytest(linked, _hook_env(repo, linked, git_dir))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "outside_repo_dir has a Git ancestor" in result.stdout
+    assert not list(linked.glob("brainlayer-outside-repo-*"))

@@ -55,6 +55,20 @@ def _pending_file(repo: Path, relative: str, *, project: str | None = None) -> P
     return path
 
 
+def test_attribution_without_git_uses_docs_local_parent(outside_repo_dir):
+    from brainlayer.fallback_replay import _heuristic_repo_root, parse_fallback_file
+
+    root = outside_repo_dir / "systems"
+    path = _pending_file(root, "docs.local/decisions/offline.md")
+
+    entry = parse_fallback_file(path, scope_map={})
+
+    assert entry.origin_repo_path == root
+    assert entry.project == "systems"
+    # The Python fallback must agree with the real Git probe; it ignores Git ceilings entirely.
+    assert _heuristic_repo_root(path) == root
+
+
 def test_attribution_uses_scopes_mapping_for_originating_repo(tmp_path):
     from brainlayer.fallback_replay import load_scope_map, parse_fallback_file
 

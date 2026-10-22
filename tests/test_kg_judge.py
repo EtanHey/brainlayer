@@ -373,6 +373,7 @@ def test_git_shellout_tests_scrub_inherited_git_env():
         "test_retirement_dependency.py",
         "test_run_tests_script.py",
         "test_version_consistency.py",
+        "test_write_queue.py",
     }
     for name, text in git_shellout_files.items():
         # The contract is "GIT_* is DROPPED", not "one exact line of code": a file that must also

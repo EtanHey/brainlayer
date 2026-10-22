@@ -3274,7 +3274,7 @@ struct BrainBarDashboardChartDisclosure: Equatable {
         }
 
         if let placeholder = lane.evidencePlaceholder {
-            let detail = lane.hasWatcherEvidence && lane.status == .unknown
+            let detail = lane.hasWatcherEvidence && lane.status != .running
                 ? "\(placeholder) · \(lane.lastEventText)" : placeholder
             accessibilitySummary = "\(lane.name). \(detail). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
             tooltipDisclosure = detail

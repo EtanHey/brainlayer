@@ -67,6 +67,7 @@ def _prepare_build_repo(tmp_path: Path, repo_name: str, branch: str = "main") ->
     _write_tracked_file(repo, "brain-bar/install-services.py", helper.read_text())
     shutil.copy2(source_script, target_script)
     _write_tracked_file(repo, "README.md", "# test repo\n")
+    _write_tracked_file(repo, ".gitignore", ".venv/\ndocs.local/\n.build.noindex/\n")
     _write_tracked_file(repo, "brain-bar/build-app.sh", target_script.read_text())
     _commit(repo, "chore: seed build script")
     return repo, target_script
@@ -171,6 +172,7 @@ def _prepare_fake_build_tools(tmp_path: Path) -> tuple[Path, Path]:
     os.chmod(bin_dir / "BrainBarDaemon", 0o755)
     (tool_dir / "swift").write_text(
         """#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${BRAINBAR_FAKE_SWIFT_LOG:-/dev/null}"
 if [[ "$*" == *"--show-bin-path"* ]]; then
   printf '%s\n' "$BRAINBAR_FAKE_BIN_DIR"
 fi
@@ -317,6 +319,7 @@ def _fake_build_env(tmp_path: Path, tool_dir: Path, bin_dir: Path) -> dict[str, 
     return {
         "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
         "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
+        "BRAINBAR_FAKE_SWIFT_LOG": str(tmp_path / "swift.log"),
         "BRAINBAR_LSREGISTER": str(tool_dir / "lsregister"),
         "BRAINBAR_PLIST_BUDDY": str(tool_dir / "plistbuddy"),
         "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}-{tmp_path.name}.sock",
@@ -338,7 +341,7 @@ def test_build_app_allows_clean_canonical_repo_in_dry_run(tmp_path: Path) -> Non
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar.app") in result.stdout
     assert "UI LaunchAgent: canonical install" in result.stdout
     assert "Daemon LaunchAgent: canonical install" in result.stdout
 
@@ -410,10 +413,13 @@ def test_build_app_embeds_launchagent_templates_in_app_resources(tmp_path: Path)
         extra_env=_fake_build_env(tmp_path, tool_dir, bin_dir),
     )
 
-    launchagents_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
-    resources_dir = home / "Applications" / "BrainBar.app" / "Contents" / "Resources"
-    info_plist = home / "Applications" / "BrainBar.app" / "Contents" / "Info.plist"
+    launchagents_dir = repo / ".build.noindex/build/BrainBar.app" / "Contents" / "Resources" / "LaunchAgents"
+    resources_dir = repo / ".build.noindex/build/BrainBar.app" / "Contents" / "Resources"
+    info_plist = repo / ".build.noindex/build/BrainBar.app" / "Contents" / "Info.plist"
     assert result.returncode == 0, result.stderr
+    swift_calls = (tmp_path / "swift.log").read_text().splitlines()
+    assert len(swift_calls) == 3
+    assert all(f"--scratch-path {repo / '.build.noindex/swift'}" in call for call in swift_calls)
     assert (resources_dir / "AppIcon.icns").read_bytes() == b"fake icns"
     plist_data = plistlib.loads(info_plist.read_bytes())
     assert plist_data["CFBundleIconFile"] == "AppIcon"
@@ -552,6 +558,7 @@ def test_build_app_runs_hardened_codesign_and_notarization_when_profile_is_avail
     notarytool_parts = notarytool_call.split()
     assert notarytool_parts[0] == "submit"
     assert notarytool_parts[1].endswith(".zip")
+    assert Path(notarytool_parts[1]).is_relative_to(repo / ".build.noindex")
     assert not notarytool_parts[1].endswith(".app")
     assert "--keychain-profile brainbar-notary-test" in notarytool_call
     assert "--wait" in notarytool_call
@@ -562,7 +569,7 @@ def test_build_app_runs_hardened_codesign_and_notarization_when_profile_is_avail
 def test_build_app_refuses_to_clobber_notarized_resident_with_unnotarized_rebuild(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
@@ -594,7 +601,7 @@ def test_build_app_refuses_to_clobber_notarized_resident_with_unnotarized_rebuil
 def test_build_app_refuses_equivalent_protected_resident_path(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
     linked_apps = tmp_path / "LinkedApplications"
@@ -625,7 +632,7 @@ def test_build_app_keeps_notarized_resident_when_notarization_fails(tmp_path: Pa
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
     (home / "Library" / "LaunchAgents").mkdir(parents=True)
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     marker = resident_app / "Contents" / "resident-marker"
     marker.parent.mkdir(parents=True)
@@ -659,7 +666,7 @@ def test_build_app_keeps_notarized_resident_when_notarization_fails(tmp_path: Pa
 def test_build_app_allows_notarized_resident_rebuild_when_notary_profile_is_set(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
@@ -685,10 +692,10 @@ def test_build_app_allows_notarized_resident_rebuild_when_notary_profile_is_set(
 def test_build_app_allows_dev_app_dir_when_resident_is_notarized(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
-    dev_app = tmp_path / "dist" / "BrainBar.app"
+    dev_app = repo / ".build.noindex/dist" / "BrainBar.app"
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
 
     result = _run_build_script(
@@ -766,6 +773,7 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
     old_mtime = 0
     os.utime(old_age_bundle, (old_mtime, old_mtime))
     _prepare_bundle_inputs(repo)
+    _install_fake_venv_python(repo, import_brainlayer_succeeds=True)
     tool_dir, bin_dir = _prepare_fake_build_tools(tmp_path)
 
     result = _run_build_script(
@@ -778,6 +786,7 @@ def test_canonical_build_removes_only_stale_dev_bundles(tmp_path: Path) -> None:
             "BRAINBAR_CODESIGN_IDENTITY": "Test Identity",
             "BRAINBAR_DEV_STALE_DAYS": "1",
             "BRAINBAR_FAKE_BIN_DIR": str(bin_dir),
+            "BRAINBAR_FAKE_SWIFT_LOG": str(tmp_path / "swift.log"),
             "BRAINBAR_LSREGISTER": str(tool_dir / "lsregister"),
             "BRAINBAR_PLIST_BUDDY": str(tool_dir / "plistbuddy"),
             "BRAINBAR_SOCKET_PATH": f"/tmp/brainbar-test-{os.getpid()}.sock",
@@ -836,7 +845,7 @@ def test_canonical_dev_cleanup_scans_home_applications_when_app_dir_is_overridde
     home = tmp_path / "home"
     apps_dir = home / "Applications"
     apps_dir.mkdir(parents=True)
-    custom_app_dir = tmp_path / "custom" / "BrainBar-Custom.app"
+    custom_app_dir = repo / ".build.noindex/custom" / "BrainBar-Custom.app"
     remote = tmp_path / "origin.git"
     _git(remote.parent, "init", "--bare", remote.name)
     _git(repo, "remote", "add", "origin", str(remote))
@@ -1088,7 +1097,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_dev_bundle(tmp_path: Path)
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar-DEV-feat-ui-guards.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar-DEV-feat-ui-guards.app") in result.stdout
     assert "LaunchAgents: skipped for DEV worktree build" in result.stdout
 
 
@@ -1125,7 +1134,7 @@ def test_build_app_allows_dirty_canonical_repo_with_force_dirty(tmp_path: Path) 
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar.app") in result.stdout
 
 
 def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_path: Path) -> None:
@@ -1144,7 +1153,7 @@ def test_build_app_routes_forced_noncanonical_repo_to_sanitized_dev_bundle(tmp_p
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar-DEV-feat-space-case.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar-DEV-feat-space-case.app") in result.stdout
 
 
 def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) -> None:
@@ -1162,7 +1171,7 @@ def test_build_app_allows_symlinked_canonical_root_in_dry_run(tmp_path: Path) ->
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar.app") in result.stdout
 
 
 def test_run_build_script_strips_parent_brainbar_app_dir_for_test_isolation(
@@ -1182,7 +1191,7 @@ def test_run_build_script_strips_parent_brainbar_app_dir_for_test_isolation(
     )
 
     assert result.returncode == 0
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar.app") in result.stdout
     assert "leaked.app" not in result.stdout
 
 
@@ -1190,7 +1199,7 @@ def test_build_app_honors_explicit_brainbar_app_dir_for_canonical_dry_run(tmp_pa
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
     home.mkdir()
-    explicit_app_dir = tmp_path / "custom" / "BrainBar-Custom.app"
+    explicit_app_dir = repo / ".build.noindex/custom" / "BrainBar-Custom.app"
 
     result = _run_build_script(
         repo,
@@ -1276,7 +1285,7 @@ def test_build_app_refuses_to_overwrite_a_brew_managed_resident_app(tmp_path: Pa
     """VoiceBar's root cause: building in place over a brew-managed app creates silent drift."""
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
     brew_log = tmp_path / "brew.log"
@@ -1303,7 +1312,7 @@ def test_build_app_refuses_to_overwrite_a_brew_managed_resident_app(tmp_path: Pa
 def test_build_app_allows_the_resident_path_when_brew_does_not_manage_it(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_apps.mkdir(parents=True)
     resident_app = resident_apps / "BrainBar.app"
 
@@ -1328,7 +1337,7 @@ def test_build_app_does_not_consult_brew_for_non_resident_paths(tmp_path: Path) 
     """A ~/Applications build is never brew-managed, so it must not be blocked."""
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_apps.mkdir(parents=True)
     brew_log = tmp_path / "brew.log"
 
@@ -1344,14 +1353,14 @@ def test_build_app_does_not_consult_brew_for_non_resident_paths(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert str(home / "Applications" / "BrainBar.app") in result.stdout
+    assert str(repo / ".build.noindex/build/BrainBar.app") in result.stdout
     assert not brew_log.exists(), "consulted brew for a path Homebrew can never own"
 
 
 def test_build_app_fails_closed_when_brew_inventory_query_errors(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
 
@@ -1374,7 +1383,7 @@ def test_build_app_fails_closed_when_brew_inventory_query_errors(tmp_path: Path)
 def test_build_app_fails_closed_for_unusable_explicit_brew_path(tmp_path: Path) -> None:
     repo, script = _prepare_build_repo(tmp_path, "brainlayer-canonical")
     home = tmp_path / "home"
-    resident_apps = tmp_path / "Applications"
+    resident_apps = repo / ".build.noindex/Applications"
     resident_app = resident_apps / "BrainBar.app"
     resident_app.mkdir(parents=True)
     missing_brew = tmp_path / "missing-brew"
