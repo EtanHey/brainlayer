@@ -262,8 +262,12 @@ async def _window(directory, step, now_fn, sleep_fn, stop):
     return not stop.is_set() and 4 <= now_fn().hour < 6
 
 
+def _step_status(code, stopped=False):
+    return "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
+
+
 def finish(directory, state, step, code, date, defer_after, missed=False, stopped=False, *, reason=None, replaces=None):
-    status = "stopped" if stopped else "deferred" if code == 75 else "ok" if code == 0 else "failed"
+    status = _step_status(code, stopped)
     detail = {key: value for key, value in dict(reason=reason, replaces=replaces).items() if value is not None}
     record(directory, event="finished", step=step.name, status=status, returncode=code, **detail)
     key = KEYS.get(step.name)
@@ -357,26 +361,30 @@ async def run_calendar(
             BRAINLAYER_SUPERVISOR_SOCKET=str(client.path),
         )
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
+
+        async def finish_step(step, code, missed=False, stopped=False, **detail):
+            # Account before reporting/persistence: an exception there must not erase a child failure.
+            results[step.name] = _step_status(code, stopped)
+            # Notification I/O must not starve the custody watchdog's event-loop pulses.
+            await asyncio.to_thread(finish, directory, state, step, code, date, defer_after, missed, stopped, **detail)
+
         for step in steps:
             if stop.is_set():
                 record(directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
+            results[step.name] = "failed"  # An unexpected exception while attempting this step is a failure.
             code, missed, reason = 1, False, None
             try:
                 if step.name == "index":
                     bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
                     if bounded is None:
-                        results[step.name] = finish(
-                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
-                        )
+                        await finish_step(step, 75, reason="maintenance-window")
                         continue
                     step = bounded
                 if step.name == "backup-snapshot":
                     bounded = _bounded_snapshot_step(step, now_fn(), shutdown_timeout)
                     if bounded is None:
-                        results[step.name] = finish(
-                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
-                        )
+                        await finish_step(step, 75, reason="maintenance-window")
                         continue
                     step = bounded
                 disabled = client._disabled(client.request(), include_paused=False)
@@ -435,15 +443,11 @@ async def run_calendar(
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
-            results[step.name] = finish(
-                directory,
-                state,
+            await finish_step(
                 step,
                 code,
-                date,
-                defer_after,
                 missed,
-                stop.is_set(),
+                stop.is_set() and code == 143,
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
             )
@@ -451,25 +455,34 @@ async def run_calendar(
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             _atomic_write(directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
-        record(directory, event="summary", failed=failed, deferred=sum(v == "deferred" for v in results.values()))
         return int(failed > 0 or stop.is_set())
     finally:
-        stop.set()
-        if heartbeat:
-            await asyncio.gather(heartbeat, return_exceptions=True)
         try:
-            if guard:
-                guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
-            if guard and guard.poll() is None:
-                os.write(guard.stdin.fileno(), b"Q\n")
-                guard.stdin.close()
-                deadline = time.monotonic() + shutdown_timeout
-                while guard.poll() is None and time.monotonic() < deadline:
-                    await asyncio.sleep(0.02)
-                if guard.poll() is None:
-                    raise RuntimeError("calendar guard retains unresolved custody")
+            stop.set()
+            if heartbeat:
+                await asyncio.gather(heartbeat, return_exceptions=True)
+            try:
+                if guard:
+                    guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
+                if guard and guard.poll() is None:
+                    os.write(guard.stdin.fileno(), b"Q\n")
+                    guard.stdin.close()
+                    deadline = time.monotonic() + shutdown_timeout
+                    while guard.poll() is None and time.monotonic() < deadline:
+                        await asyncio.sleep(0.02)
+                    if guard.poll() is None:
+                        raise RuntimeError("calendar guard retains unresolved custody")
+            finally:
+                for sig, previous in handlers.items():
+                    loop.remove_signal_handler(sig)
+                    signal.signal(sig, previous)
         finally:
-            for sig, previous in handlers.items():
-                loop.remove_signal_handler(sig)
-                signal.signal(sig, previous)
-            custody.__exit__(None, None, None)
+            try:
+                record(
+                    directory,
+                    event="summary",
+                    failed=sum(v == "failed" for v in results.values()),
+                    deferred=sum(v == "deferred" for v in results.values()),
+                )
+            finally:
+                custody.__exit__(None, None, None)

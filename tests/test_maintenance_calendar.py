@@ -333,3 +333,145 @@ def test_index_deferral_reason_is_current_run_and_allowlisted(request, monkeypat
         if json.loads(line)["event"] == "finished"
     )
     assert row.get("reason") == expected
+
+
+@pytest.mark.parametrize("failure", ["TimeoutExpired", "OSError", "CalledProcessError"])
+def test_notification_failure_keeps_heartbeat_and_runs_independent_steps(request, monkeypatch, caplog, failure):
+    import subprocess
+    import threading
+
+    from brainlayer import maintenance_calendar
+
+    path, _, _, _ = request.getfixturevalue("control")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(path / "fixture.env"))
+    (path / "fixture.env").write_text("")
+    directory = path / "calendar"
+    directory.mkdir(mode=0o700)
+    (directory / "state.json").write_text(json.dumps(dict(deferrals={}, last_weekly="2026-10-11")))
+    notifying, pulsed = threading.Event(), threading.Event()
+    seen, heartbeat_during_notice = [], []
+
+    async def pulse(guard, stop, interval):
+        while not stop.is_set():
+            if notifying.is_set():
+                pulsed.set()
+            await asyncio.sleep(0.001)
+
+    def notify(message):
+        notifying.set()
+        heartbeat_during_notice.append(pulsed.wait(timeout=0.3))
+        errors = {
+            "TimeoutExpired": subprocess.TimeoutExpired("osascript", 8),
+            "OSError": OSError("synthetic notification failure"),
+            "CalledProcessError": subprocess.CalledProcessError(1, "osascript"),
+        }
+        raise errors[failure]
+
+    async def execute(step, env, **kwargs):
+        seen.append(step.name)
+        return 124 if step.name == "index" else 0
+
+    monkeypatch.setattr(maintenance_calendar, "pulse", pulse)
+    monkeypatch.setattr(maintenance_calendar, "_execute_step", execute)
+    monkeypatch.setattr(
+        maintenance_calendar,
+        "report",
+        lambda key, reason: job_alerts.report(key, reason, path=path / "alerts.json", notify=notify),
+    )
+    clock = [dt.datetime(2026, 10, 12, 3, 15)]
+
+    async def sleep(seconds):
+        clock[0] = clock[0].replace(hour=4, minute=0)
+        await asyncio.sleep(0)
+
+    plan = calendar_steps(sys.executable, "/unused/cli", path, dt.date(2026, 10, 12))
+    assert asyncio.run(run_calendar(plan, directory, path / "logs", now_fn=lambda: clock[0], sleep_fn=sleep)) == 1
+    assert seen == ["index", "maintenance-nightly", "jsonl-backup", "p0-counter", "wal-checkpoint", "backup-daily"]
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    assert rows[-1]["event"] == "summary"
+    assert rows[-1]["failed"] == 1
+    assert rows[-1]["deferred"] == 0
+    assert f"macOS notification failed for index: {failure}" in caplog.text
+    assert heartbeat_during_notice == [True]
+
+
+@pytest.mark.parametrize("crash_at", ["execute", "finish", "setup"])
+def test_unexpected_exception_still_summarizes_true_failures(request, monkeypatch, crash_at):
+    from brainlayer import maintenance_calendar
+    from brainlayer.maintenance_calendar import Step
+
+    path, _, _, _ = request.getfixturevalue("control")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(path / "fixture.env"))
+    (path / "fixture.env").write_text("")
+    directory = path / "calendar"
+    directory.mkdir(mode=0o700)
+    monkeypatch.setattr(maintenance_calendar, "report", lambda *_: None)
+
+    def crash(*args, **kwargs):
+        raise LookupError("synthetic unexpected exception")
+
+    async def execute(step, env, **kwargs):
+        if step.name == "p0-counter":
+            if crash_at == "execute":
+                crash()
+            return 1
+        return 124
+
+    monkeypatch.setattr(maintenance_calendar, "_execute_step", execute)
+    if crash_at == "finish":
+        original = maintenance_calendar.finish
+
+        def finish(*args, **kwargs):
+            if args[2].name == "p0-counter":
+                crash()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(maintenance_calendar, "finish", finish)
+    elif crash_at == "setup":
+        monkeypatch.setattr(maintenance_calendar.maintenance_control, "control_client", crash)
+    with pytest.raises(LookupError, match="synthetic unexpected exception"):
+        asyncio.run(
+            run_calendar(
+                [Step(name, (sys.executable, "-c", "pass"), 60) for name in ("index", "p0-counter")],
+                directory,
+                path / "logs",
+                now_fn=lambda: dt.datetime(2026, 10, 12, 3, 15),
+            )
+        )
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    summaries = [row for row in rows if row["event"] == "summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["failed"] == (0 if crash_at == "setup" else 2)
+
+
+def test_protocol_failure_stops_unsafe_steps_and_counts_failure(request, monkeypatch):
+    from brainlayer import maintenance_calendar
+    from brainlayer.maintenance_calendar import Step
+
+    path, _, _, _ = request.getfixturevalue("control")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(path / "fixture.env"))
+    (path / "fixture.env").write_text("")
+    monkeypatch.setattr(maintenance_calendar, "report", lambda *_: None)
+    seen = []
+
+    async def execute(step, env, **kwargs):
+        seen.append(step.name)
+        raise RuntimeError("synthetic custody failure")
+
+    monkeypatch.setattr(maintenance_calendar, "_execute_step", execute)
+    directory = path / "calendar"
+    assert (
+        asyncio.run(
+            run_calendar(
+                [Step(name, (sys.executable, "-c", "pass"), 60) for name in ("index", "p0-counter")],
+                directory,
+                path / "logs",
+                now_fn=lambda: dt.datetime(2026, 10, 12, 3, 15),
+            )
+        )
+        == 1
+    )
+    assert seen == ["index"]
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    assert rows[-1]["failed"] == 1
+    assert [row["status"] for row in rows if row["event"] == "finished"] == ["failed", "skipped"]

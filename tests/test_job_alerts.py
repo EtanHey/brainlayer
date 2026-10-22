@@ -200,3 +200,15 @@ def test_maintenance_deliberate_deferrals_match_swift_allowlist():
     patterns = re.findall(r'#"(.*?)"#', block)
     assert len(patterns) == 5
     assert tuple(patterns) == maintenance.DELIBERATE_DEFERRALS
+
+
+def test_macos_notification_has_bounded_subprocess_timeout(monkeypatch):
+    from brainlayer import job_alerts
+
+    monkeypatch.delenv("BRAINLAYER_TEST_PATH_PROVENANCE", raising=False)
+    calls = []
+    monkeypatch.setattr(job_alerts.subprocess, "run", lambda argv, **kwargs: calls.append((argv, kwargs)))
+    job_alerts._notify("synthetic notice")
+    assert calls[0][0][0] == "osascript"
+    assert 0 < calls[0][1]["timeout"] <= 8
+    assert calls[0][1]["check"] is True
