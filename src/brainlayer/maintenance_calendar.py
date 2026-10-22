@@ -344,6 +344,7 @@ async def run_calendar(
         return 0
     stop, handlers, results = asyncio.Event(), {}, {}
     guard, heartbeat = None, None
+    active_step, runner_failed = None, 0
     loop = asyncio.get_running_loop()
     try:
         custody.recover(min(1, shutdown_timeout / 2))  # Reap stale writers before reacquiring their lease.
@@ -374,10 +375,11 @@ async def run_calendar(
         )
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
         for step in steps:
+            active_step = step.name
             if stop.is_set():
                 record(directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
-            code, missed, reason = 1, False, None
+            code, missed, reason, step_failed = 1, False, None, False
             try:
                 if step.name == "index":
                     bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
@@ -450,8 +452,13 @@ async def run_calendar(
                         code, reason = 75, "maintenance-window"
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
+                code = 1
+                step_failed = True
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
             # Receipt fsync, alert locking and osascript must not starve the guard heartbeat.
+            stopped = stop.is_set() and not step_failed
+            if code not in (0, 75) and not stopped:
+                results[step.name] = "failed"  # Retain the child failure even if completion is cancelled.
             results[step.name] = await _finish_step(
                 directory,
                 state,
@@ -460,33 +467,54 @@ async def run_calendar(
                 date,
                 defer_after,
                 missed,
-                stop.is_set(),
+                stopped,
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
             )
+        active_step = None
         if all(results.get(n) == "ok" for n in ("maintenance-weekly", "decay", "repair-fts")):
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             _atomic_write(directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
-        record(directory, event="summary", failed=failed, deferred=sum(v == "deferred" for v in results.values()))
         return int(failed > 0 or stop.is_set())
+    except Exception as exc:
+        if active_step is not None:
+            results[active_step] = "failed"
+        else:
+            runner_failed = 1
+        record(directory, event="runner-error", step=active_step, error=type(exc).__name__)
+        raise
     finally:
-        stop.set()
-        if heartbeat:
-            await asyncio.gather(heartbeat, return_exceptions=True)
         try:
-            if guard:
-                guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
-            if guard and guard.poll() is None:
-                os.write(guard.stdin.fileno(), b"Q\n")
-                guard.stdin.close()
-                deadline = time.monotonic() + shutdown_timeout
-                while guard.poll() is None and time.monotonic() < deadline:
-                    await asyncio.sleep(0.02)
-                if guard.poll() is None:
-                    raise RuntimeError("calendar guard retains unresolved custody")
+            stop.set()
+            if heartbeat:
+                await asyncio.gather(heartbeat, return_exceptions=True)
+            try:
+                if guard:
+                    guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
+                if guard and guard.poll() is None:
+                    os.write(guard.stdin.fileno(), b"Q\n")
+                    guard.stdin.close()
+                    deadline = time.monotonic() + shutdown_timeout
+                    while guard.poll() is None and time.monotonic() < deadline:
+                        await asyncio.sleep(0.02)
+                    if guard.poll() is None:
+                        raise RuntimeError("calendar guard retains unresolved custody")
+            finally:
+                for sig, previous in handlers.items():
+                    loop.remove_signal_handler(sig)
+                    signal.signal(sig, previous)
+        except Exception as exc:
+            runner_failed += 1
+            record(directory, event="runner-error", phase="cleanup", error=type(exc).__name__)
+            raise
         finally:
-            for sig, previous in handlers.items():
-                loop.remove_signal_handler(sig)
-                signal.signal(sig, previous)
-            custody.__exit__(None, None, None)
+            try:
+                record(
+                    directory,
+                    event="summary",
+                    failed=sum(v == "failed" for v in results.values()) + runner_failed,
+                    deferred=sum(v == "deferred" for v in results.values()),
+                )
+            finally:
+                custody.__exit__(None, None, None)
