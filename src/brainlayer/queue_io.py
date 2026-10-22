@@ -43,10 +43,14 @@ def _sync_directory(directory: Path) -> None:
 
 
 def _mkdir_durable(directory: Path) -> None:
-    if directory.is_dir():
+    directory = directory.absolute()
+    # Existence cannot prove another creator (or a failed attempt) synced the
+    # parent entry. Recheck each ancestor, with the filesystem root as anchor.
+    if directory.parent == directory:
         return
     _mkdir_durable(directory.parent)
-    directory.mkdir(exist_ok=True)
+    if not directory.is_dir():
+        directory.mkdir(exist_ok=True)
     _sync_directory(directory.parent)
 
 

@@ -2182,6 +2182,79 @@ No results found.
 
     // MARK: - brain_store queue fallback
 
+    func testDeferredReceiptSyncsAncestorsCreatedByRouterSnapshot() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let first = tempDir.appendingPathComponent("first")
+        let nested = first.appendingPathComponent("nested")
+        let queuePath = nested.appendingPathComponent("queue/pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+        let drainQueue = DispatchQueue(label: "test.ancestor-sync")
+        drainQueue.suspend()
+        defer { drainQueue.resume(); drainQueue.sync {} }
+        let router = MCPRouter(profile: "full", pendingStoreDrainQueue: drainQueue)
+        router.setDatabase(db)
+        let required = Set([tempDir.path, first.path, nested.path])
+        var synced = Set<String>()
+        db.pendingStoreDirectorySyncForTesting = { directory in
+            try syncPendingStoreTestDirectory(directory)
+            synced.insert(directory.path)
+        }
+        db.pendingStoreSyncForTesting = { fd in
+            XCTAssertTrue(required.isSubset(of: synced), "ancestor barriers precede the queue-file barrier")
+            try BrainDatabase.syncPendingStoreDescriptor(fd)
+        }
+        db.failNextStoreWithBusyForTesting = true
+        let response = router.handle(toolCall(id: 240, name: "brain_store", arguments: ["content": "Nested durable queue"]))
+        XCTAssertEqual((response["result"] as? [String: Any])?["status"] as? String, "DEFERRED")
+        XCTAssertTrue(required.isSubset(of: synced), "the router snapshot must not create unsynced ancestors")
+        XCTAssertEqual(db.flushPendingStores().count, 1)
+    }
+
+    func testDeferredReceiptRetriesFailedAncestorSyncBeforeAcknowledging() throws {
+        let tempDir = makeTempTestDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let parent = tempDir.appendingPathComponent("parent")
+        let queuePath = parent.appendingPathComponent("queue/pending-stores.jsonl")
+        let restore = setPendingStoreQueuePath(queuePath)
+        defer { restore() }
+        let db = BrainDatabase(path: tempDir.appendingPathComponent("brainbar.db").path)
+        defer { db.close() }
+        let drainQueue = DispatchQueue(label: "test.ancestor-sync-retry")
+        drainQueue.suspend()
+        defer { drainQueue.resume(); drainQueue.sync {} }
+        let router = MCPRouter(profile: "full", pendingStoreDrainQueue: drainQueue)
+        router.setDatabase(db)
+        var failures = 0
+        var failSync = true
+        db.pendingStoreDirectorySyncForTesting = { directory in
+            if directory.path == parent.path && failSync {
+                failures += 1
+                throw BrainDatabase.DBError.exec(SQLITE_IOERR, "injected ancestor sync failure")
+            }
+            try syncPendingStoreTestDirectory(directory)
+        }
+        for _ in 0..<2 {
+            db.failNextStoreWithBusyForTesting = true
+            let response = router.handle(toolCall(id: 241, name: "brain_store", arguments: ["content": "Retry ancestor barrier"]))
+            let result = try XCTUnwrap(response["result"] as? [String: Any])
+            XCTAssertEqual(result["isError"] as? Bool, true)
+            XCTAssertNil(result["status"])
+            XCTAssertNil(result["chunk_id"])
+            XCTAssertFalse(FileManager.default.fileExists(atPath: queuePath.path))
+        }
+        XCTAssertGreaterThanOrEqual(failures, 2, "an existing directory must not waive the failed parent barrier")
+        failSync = false
+        db.failNextStoreWithBusyForTesting = true
+        let response = router.handle(toolCall(id: 242, name: "brain_store", arguments: ["content": "Retry ancestor barrier"]))
+        XCTAssertEqual((response["result"] as? [String: Any])?["status"] as? String, "DEFERRED")
+        XCTAssertEqual(db.pendingStoreQueueSnapshot().depth, 1)
+        XCTAssertEqual(db.flushPendingStores().count, 1)
+    }
+
     func testDeferredReceiptWaitsForQueueSyncAndFailsClosedOnSyncError() throws {
         let tempDir = makeTempTestDirectory()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -2288,6 +2361,11 @@ No results found.
             try BrainDatabase.syncPendingStoreDescriptor(fd)
             syncMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
         }
+        db.pendingStoreDirectorySyncForTesting = { directory in
+            let start = DispatchTime.now().uptimeNanoseconds
+            try syncPendingStoreTestDirectory(directory)
+            syncMilliseconds += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
         var samples: [Double] = []
         for _ in 0..<100 {
             syncMilliseconds = 0
@@ -2298,7 +2376,7 @@ No results found.
             samples.append(syncMilliseconds)
         }
         samples.sort()
-        print(String(format: "DEFERRED_FSYNC_COST samples=100 payload_bytes=1024 p50_ms=%.3f p95_ms=%.3f mean_ms=%.3f max_ms=%.3f",
+        print(String(format: "DEFERRED_FSYNC_COST includes_ancestors=true samples=100 payload_bytes=1024 p50_ms=%.3f p95_ms=%.3f mean_ms=%.3f max_ms=%.3f",
                      samples[50], samples[95], samples.reduce(0, +) / 100, samples[99]))
         XCTAssertEqual(db.pendingStoreQueueSnapshot().depth, 100)
     }
@@ -3454,6 +3532,13 @@ private func makeTempTestDirectory() -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
+}
+
+private func syncPendingStoreTestDirectory(_ directory: URL) throws {
+    let fd = open(directory.path, O_RDONLY | O_DIRECTORY)
+    guard fd >= 0 else { throw BrainDatabase.DBError.exec(SQLITE_IOERR, "test directory open failed") }
+    defer { Darwin.close(fd) }
+    try BrainDatabase.syncPendingStoreDescriptor(fd)
 }
 
 private func setPendingStoreQueuePath(_ path: URL) -> () -> Void {

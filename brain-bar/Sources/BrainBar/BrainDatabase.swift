@@ -881,6 +881,7 @@ final class BrainDatabase: @unchecked Sendable {
     var failNextStoreAfterInsertForTesting = false
     var failNextStoreWithBusyForTesting = false
     var pendingStoreSyncForTesting: ((Int32) throws -> Void)?
+    var pendingStoreDirectorySyncForTesting: ((URL) throws -> Void)?
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
     private(set) var lastOpenError: Error?
@@ -1735,7 +1736,8 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID,
-            sync: pendingStoreSyncForTesting
+            sync: pendingStoreSyncForTesting,
+            directorySync: pendingStoreDirectorySyncForTesting
         )
     }
 
@@ -1758,13 +1760,13 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         chunkID: String? = nil,
         conversationID: String? = nil,
-        sync: ((Int32) throws -> Void)? = nil
+        sync: ((Int32) throws -> Void)? = nil,
+        directorySync: ((URL) throws -> Void)? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
 
         let path = pendingStorePath(forDBPath: dbPath)
-        try createDurableQueueDirectory(at: path.deletingLastPathComponent())
         let queueID = UUID().uuidString.lowercased()
         let queuedAt = Self.timestamp()
         let createdAt = createdAt ?? queuedAt
@@ -1785,7 +1787,9 @@ final class BrainDatabase: @unchecked Sendable {
         ).scrubbed()
         var line = try JSONEncoder().encode(item)
         line.append(0x0A)
-        if let existing = try appendPendingStoreLine(line, item: item, to: path, sync: sync ?? syncPendingStoreDescriptor) {
+        if let existing = try appendPendingStoreLine(
+            line, item: item, to: path, sync: sync ?? syncPendingStoreDescriptor, directorySync: directorySync
+        ) {
             return existing
         }
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
@@ -1801,7 +1805,7 @@ final class BrainDatabase: @unchecked Sendable {
         defer { Self.pendingStoreFileLock.unlock() }
 
         do {
-            return try Self.withPendingStoreProcessLock(for: path) {
+            return try Self.withPendingStoreProcessLock(for: path, directorySync: pendingStoreDirectorySyncForTesting) {
                 guard FileManager.default.fileExists(atPath: path.path) else { return [] }
                 guard let snapshot = Self.readPendingStoreData(at: path) else {
                     NSLog("[BrainBar] Failed to read pending stores queue at %@", path.path)
@@ -4463,9 +4467,10 @@ final class BrainDatabase: @unchecked Sendable {
         _ line: Data,
         item: PendingStoreItem,
         to path: URL,
-        sync: (Int32) throws -> Void
+        sync: (Int32) throws -> Void,
+        directorySync: ((URL) throws -> Void)?
     ) throws -> (queueID: String, queuedAt: String, chunkID: String)? {
-        try Self.withPendingStoreProcessLock(for: path) {
+        try Self.withPendingStoreProcessLock(for: path, directorySync: directorySync) {
             let fd = open(path.path, O_RDWR | O_CREAT | O_APPEND, 0o600)
             guard fd >= 0 else {
                 let message = String(cString: strerror(errno))
@@ -4569,7 +4574,7 @@ final class BrainDatabase: @unchecked Sendable {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
 
-        return try Self.withPendingStoreProcessLock(for: path) {
+        return try Self.withPendingStoreProcessLock(for: path, directorySync: pendingStoreDirectorySyncForTesting) {
             guard FileManager.default.fileExists(atPath: path.path) else {
                 return PendingStoreQueueSnapshot(depth: 0, oldestQueuedAt: nil)
             }
@@ -4657,12 +4662,11 @@ final class BrainDatabase: @unchecked Sendable {
         path.deletingLastPathComponent().appendingPathComponent(".\(path.lastPathComponent).lock")
     }
 
-    private static func withPendingStoreProcessLock<T>(for path: URL, _ body: () throws -> T) throws -> T {
+    private static func withPendingStoreProcessLock<T>(
+        for path: URL, directorySync: ((URL) throws -> Void)? = nil, _ body: () throws -> T
+    ) throws -> T {
         let lockPath = pendingStoreLockPath(for: path)
-        try FileManager.default.createDirectory(
-            at: lockPath.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        try createDurableQueueDirectory(at: lockPath.deletingLastPathComponent(), sync: directorySync)
 
         let fd = open(lockPath.path, O_RDWR | O_CREAT, 0o600)
         guard fd >= 0 else {
@@ -4728,12 +4732,19 @@ final class BrainDatabase: @unchecked Sendable {
         try sync(fd)
     }
 
-    private static func createDurableQueueDirectory(at directory: URL) throws {
-        guard !urlIsDirectory(directory) else { return }
+    private static func createDurableQueueDirectory(
+        at directory: URL, sync: ((URL) throws -> Void)? = nil
+    ) throws {
         let parent = directory.deletingLastPathComponent()
-        try createDurableQueueDirectory(at: parent)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try syncQueueDirectory(parent)
+        // Only the filesystem root is an implicit durable anchor. Visibility
+        // cannot prove a creator (or a previous failed attempt) synced a dirent.
+        guard parent.path != directory.path else { return }
+        try createDurableQueueDirectory(at: parent, sync: sync)
+        var isDirectory: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) || !isDirectory.boolValue {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        }
+        if let sync { try sync(parent) } else { try syncQueueDirectory(parent) }
     }
 
     private static func writePrivateAtomic(
