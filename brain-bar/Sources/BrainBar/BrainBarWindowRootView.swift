@@ -3216,10 +3216,7 @@ struct BrainBarIngestSeriesPresentation: Equatable {
 
     init(lane: DashboardFlowLane, locale: Locale = .current) {
         guard lane.evidenceStatus != .unavailable else {
-            switch lane.status {
-            case .running, .stopped, .attention, .unknown: metricText = lane.evidencePlaceholder ?? "Unavailable"
-            default: metricText = "Unavailable"
-            }
+            metricText = lane.hasWatcherEvidence ? (lane.evidencePlaceholder ?? "Unavailable") : "Unavailable"
             showsSparkline = false
             return
         }
@@ -3269,7 +3266,8 @@ struct BrainBarDashboardChartDisclosure: Equatable {
         }
 
         if let placeholder = lane.evidencePlaceholder {
-            let detail = lane.status == .unknown ? "\(placeholder) · \(lane.lastEventText)" : placeholder
+            let detail = lane.hasWatcherEvidence && lane.status == .unknown
+                ? "\(placeholder) · \(lane.lastEventText)" : placeholder
             accessibilitySummary = "\(lane.name). \(detail). Window: \(windowLabel). Unit: \(unitLabel). Clock: \(clockLabel)."
             tooltipDisclosure = detail
         } else {

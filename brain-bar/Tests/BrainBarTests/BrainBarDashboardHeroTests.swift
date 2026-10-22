@@ -46,7 +46,8 @@ final class BrainBarDashboardHeroTests: XCTestCase {
             queue: baseline.queue,
             watcherFlowState: state,
             watcherStatus: status ?? baseline.watcherStatus,
-            watcherStatusReason: (status ?? baseline.watcherStatus).reasonText(now: BrainBarDashboardFixture.fetchedAt)
+            watcherStatusReason: (status ?? baseline.watcherStatus).reasonText(now: BrainBarDashboardFixture.fetchedAt),
+            hasWatcherEvidence: status != nil || baseline.hasWatcherEvidence
         )
     }
 

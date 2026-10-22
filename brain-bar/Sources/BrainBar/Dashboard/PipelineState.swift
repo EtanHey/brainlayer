@@ -368,6 +368,8 @@ struct DashboardFlowLane: Sendable, Equatable {
     /// lane's pill follows `WatcherHealthStatus` (#1014 R1 B1) while its chart still follows the
     /// process-and-flow evidence; every other lane has one status for both.
     var flowEvidence: DashboardFlowLaneStatus? = nil
+    /// A supplied health read or process probe, including missing/failed observations.
+    var hasWatcherEvidence = false
 
     /// The status the chart uses to decide whether its evidence is available.
     var evidenceStatus: DashboardFlowLaneStatus { flowEvidence ?? status }
@@ -375,6 +377,7 @@ struct DashboardFlowLane: Sendable, Equatable {
     /// Missing flow counts do not erase independent watcher-health evidence.
     var evidencePlaceholder: String? {
         guard evidenceStatus == .unavailable else { return nil }
+        guard hasWatcherEvidence else { return "Evidence unavailable" }
         return switch status {
         case .running: "Updating…"
         case .stopped: "Watcher stopped"
@@ -414,6 +417,7 @@ struct DashboardFlowSummary: Sendable, Equatable {
     let watcherStatus: WatcherHealthStatus
     /// `watcherStatus.reasonText(now:)` at derive time, so every surface shows the same line.
     let watcherStatusReason: String?
+    let hasWatcherEvidence: Bool
 
     var isUnavailable: Bool {
         ingress.status == .unavailable || queue.status == .unavailable
@@ -565,7 +569,8 @@ struct DashboardFlowSummary: Sendable, Equatable {
             ),
             watcherFlowState: watcherFlowState,
             watcherStatus: watcherStatus,
-            watcherStatusReason: watcherStatus.reasonText(now: now)
+            watcherStatusReason: watcherStatus.reasonText(now: now),
+            hasWatcherEvidence: stats.watcherHealth != nil || stats.watcherProcessProbeResult != nil
         )
     }
 
@@ -778,7 +783,8 @@ extension DashboardFlowSummary {
                 tertiaryValues: [],
                 tertiarySeriesLabel: nil,
                 tertiaryAccentColor: nil,
-                flowEvidence: jsonlWatcherStatus(flowState: watcherFlowState)
+                flowEvidence: jsonlWatcherStatus(flowState: watcherFlowState),
+                hasWatcherEvidence: hasWatcherEvidence
             )
         }
     }

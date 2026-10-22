@@ -18,7 +18,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
 
     private func stats(
         replayDebt: Int,
-        process: WatcherProcessProbeResult = .running(pid: 4242),
+        process: WatcherProcessProbeResult? = .running(pid: 4242),
         health: WatcherHealthFileRead? = BrainBarDashboardFixture.healthyWatcherHealth,
         recentWatcherChunks: Int = 0,
         flowReadable: Bool = true,
@@ -94,8 +94,10 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     }
 
     func testUnreadableFlowKeepsUnknownMissingAndStaleHealthAmber() {
-        let cases: [(WatcherProcessProbeResult, WatcherHealthFileRead, String)] = [
+        let cases: [(WatcherProcessProbeResult?, WatcherHealthFileRead, String)] = [
             (.running(pid: 42), .missing(path: "/fixture/watcher-health.json"), "missing"),
+            (nil, .missing(path: "/fixture/watcher-health.json"), "missing"),
+            (nil, .unreadable(path: "/fixture/watcher-health.json", reason: "permission denied"), "permission denied"),
             (.failure("launchctl timed out"), .readable(WatcherHealthFile(
                 updatedAt: now.addingTimeInterval(-900), pollCount: 72
             )), "15m ago"),
@@ -147,7 +149,16 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
             host.layoutSubtreeIfNeeded()
-            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            // Use a fixed 3x raster: Vision read the 11pt "Updating…" label as "Undatind."
+            // on CI. Preserve the visible-text assertion across display scales.
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(host.bounds.width * 3),
+                pixelsHigh: Int(host.bounds.height * 3),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            bitmap.size = host.bounds.size
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
