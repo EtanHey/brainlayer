@@ -1268,7 +1268,8 @@ final class MCPRouter: @unchecked Sendable {
             importance: importance,
             source: source,
             project: project,
-            conversationID: conversationID
+            conversationID: conversationID,
+            reason: reason
         )
         return queuedBrainStoreOutput(
             queueID: queued.queueID,

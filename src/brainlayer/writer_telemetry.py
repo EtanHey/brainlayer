@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import math
@@ -11,7 +12,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,43 @@ def _rotate(path: Path, backups: int) -> None:
         path.replace(path.with_name(f"{path.name}.1"))
 
 
+def _rollup(path: Path, event: dict[str, Any]) -> None:
+    """Eight UTC dates, <=64 groups/date, <=32 histogram buckets/metric.
+
+    Histograms use power-of-two upper bounds in ms (last bucket overflows).
+    The caller holds the sink's cross-process lock; no raw SQL/identities survive.
+    """
+    if event.get("event") != "txn_finished" or not event.get("finished_at"):
+        return
+    day = datetime.fromisoformat(event["finished_at"]).astimezone(UTC).date()
+    prefix = f"{path.stem}-summary-"
+    target = path.with_name(f"{prefix}{day}.json")
+    summary = json.loads(target.read_text()) if target.exists() else {"schema_version": 1, "groups": {}}
+    groups = summary["groups"]
+    key = "|".join(str(event.get(field) or "unknown")[:64] for field in ("producer", "lane", "outcome"))
+    if key not in groups and len(groups) >= 63:
+        key = "overflow"
+    group = groups.setdefault(key, {"count": 0})
+    group["count"] += 1
+    for field in ("duration_ms", "queue_wait_ms", "lock_wait_ms", "lock_held_ms", "queue_to_commit_ms"):
+        value = event.get(field)
+        if not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
+            continue
+        metric = group.setdefault(field, {"count": 0, "sum": 0, "max": 0, "histogram": {}})
+        metric["count"] += 1
+        metric["sum"] += value
+        metric["max"] = max(metric["max"], value)
+        bucket = str(min(31, math.ceil(math.log2(max(1, value)))))
+        metric["histogram"][bucket] = metric["histogram"].get(bucket, 0) + 1
+    if not _atomic_write_json(target, summary):
+        raise OSError("writer summary write failed")
+    files = sorted(path.parent.glob(f"{prefix}????-??-??.json"))
+    newest = datetime.fromisoformat(files[-1].stem.removeprefix(prefix)).date()
+    for file in files:
+        if datetime.fromisoformat(file.stem.removeprefix(prefix)).date() < newest - timedelta(days=7):
+            file.unlink()
+
+
 def append_event(event: dict[str, Any]) -> bool:
     """Append one JSON event, returning False rather than affecting a writer."""
     if not telemetry_enabled():
@@ -114,10 +152,15 @@ def append_event(event: dict[str, Any]) -> bool:
         backups = _int_env("BRAINLAYER_WRITER_TELEMETRY_BACKUPS", _DEFAULT_BACKUPS)
         with _SINK_LOCK:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size + len(encoded) > max_bytes:
-                _rotate(path, backups)
-            with path.open("ab") as handle:
-                handle.write(encoded)
+            with path.with_name(f".{path.name}.lock").open("ab") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                if len(encoded) > max_bytes:
+                    return False
+                if path.exists() and path.stat().st_size + len(encoded) > max_bytes:
+                    _rotate(path, backups)
+                with path.open("ab") as handle:
+                    handle.write(encoded)
+                _rollup(path, payload)
         return True
     except Exception:
         return False
@@ -398,6 +441,10 @@ class _WriterSpan:
         self._entered = False
         self._finished = False
         self._trace_installed = False
+        self._lock_acquired: float | None = None
+        self._lock_acquired_at: str | None = None
+        self._lock_wait_ms: float | None = None
+        self._lock_held_ms: float | None = None
 
     def _total_changes(self) -> int:
         try:
@@ -447,6 +494,7 @@ class _WriterSpan:
                     "normalized_sql": fingerprint.normalized[:500],
                     "started_at": _utc_now(),
                     "started_monotonic": _MONOTONIC(),
+                    "autocommit": self.conn.get_autocommit(),
                     "trigger": False,
                 }
                 with self._lock:
@@ -462,6 +510,18 @@ class _WriterSpan:
             with self._lock:
                 statement_id = event.get("id")
                 statement_start = self._statement_starts.get(statement_id, {}) if isinstance(statement_id, int) else {}
+                now = _MONOTONIC()
+                boundary = fingerprint.normalized.rstrip(";").upper().removesuffix(" TRANSACTION")
+                if boundary in {"BEGIN IMMEDIATE", "BEGIN EXCLUSIVE"} and self._lock_acquired is None:
+                    start = statement_start.get("started_monotonic", now)
+                    self._lock_wait_ms = (self._lock_wait_ms or 0.0) + max(0.0, (now - start) * 1000)
+                    if statement_start.get("autocommit") and not self.conn.get_autocommit():
+                        self._lock_acquired = now
+                        self._lock_acquired_at = _utc_now()
+                if boundary in {"COMMIT", "END", "ROLLBACK"} and self.conn.get_autocommit():
+                    if self._lock_acquired is not None:
+                        self._lock_held_ms = (self._lock_held_ms or 0.0) + (now - self._lock_acquired) * 1000
+                        self._lock_acquired = None
                 aggregate = self._statements.setdefault(
                     fingerprint.digest,
                     {
@@ -575,6 +635,9 @@ class _WriterSpan:
             **self._base_event("txn_finished"),
             "finished_at": _utc_now(),
             "duration_ms": max(0.0, (_MONOTONIC() - self.started_monotonic) * 1000.0),
+            "lock_wait_ms": self._lock_wait_ms,
+            "lock_held_ms": self._lock_held_ms if self._lock_acquired is None else None,
+            "lock_acquired_at": self._lock_acquired_at,
             "outcome": self._outcome or "completed",
             "error": self._error,
             "rows_touched": self._rows_touched if self._rows_touched is not None else changed_rows,

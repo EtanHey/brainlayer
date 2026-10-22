@@ -772,6 +772,7 @@ final class BrainDatabase: @unchecked Sendable {
         let project: String?
         let queueID: String?
         let queuedAt: String?
+        let telemetry: DeferredStoreTelemetry.Origin?
         let createdAt: String?
         let chunkID: String?
         let conversationID: String?
@@ -788,6 +789,7 @@ final class BrainDatabase: @unchecked Sendable {
             case project
             case queueID = "queue_id"
             case queuedAt = "queued_at"
+            case telemetry
             case createdAt = "created_at"
             case chunkID = "chunk_id"
             case conversationID = "conversation_id"
@@ -803,6 +805,7 @@ final class BrainDatabase: @unchecked Sendable {
             project: String? = nil,
             queueID: String? = nil,
             queuedAt: String? = nil,
+            telemetry: DeferredStoreTelemetry.Origin? = nil,
             createdAt: String? = nil,
             chunkID: String? = nil,
             conversationID: String? = nil,
@@ -816,6 +819,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.project = project
             self.queueID = queueID
             self.queuedAt = queuedAt
+            self.telemetry = telemetry
             self.createdAt = createdAt
             self.chunkID = chunkID
             self.conversationID = conversationID
@@ -832,6 +836,7 @@ final class BrainDatabase: @unchecked Sendable {
             project = try container.decodeIfPresent(String.self, forKey: .project)
             queueID = try container.decodeIfPresent(String.self, forKey: .queueID)
             queuedAt = try container.decodeIfPresent(String.self, forKey: .queuedAt)
+            telemetry = try container.decodeIfPresent(DeferredStoreTelemetry.Origin.self, forKey: .telemetry)
             createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
             chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
             conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
@@ -854,6 +859,7 @@ final class BrainDatabase: @unchecked Sendable {
                 project: project,
                 queueID: queueID,
                 queuedAt: queuedAt,
+                telemetry: telemetry,
                 createdAt: createdAt,
                 chunkID: chunkID,
                 conversationID: conversationID,
@@ -1722,7 +1728,8 @@ final class BrainDatabase: @unchecked Sendable {
         project: String? = nil,
         createdAt: String? = nil,
         chunkID: String? = nil,
-        conversationID: String? = nil
+        conversationID: String? = nil,
+        reason: String = "DB_BUSY"
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         try Self.queuePendingStore(
             dbPath: path,
@@ -1733,7 +1740,8 @@ final class BrainDatabase: @unchecked Sendable {
             project: project,
             createdAt: createdAt,
             chunkID: chunkID,
-            conversationID: conversationID
+            conversationID: conversationID,
+            reason: reason
         )
     }
 
@@ -1755,7 +1763,8 @@ final class BrainDatabase: @unchecked Sendable {
         project: String? = nil,
         createdAt: String? = nil,
         chunkID: String? = nil,
-        conversationID: String? = nil
+        conversationID: String? = nil,
+        reason: String = "DB_BUSY"
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         Self.pendingStoreFileLock.lock()
         defer { Self.pendingStoreFileLock.unlock() }
@@ -1779,6 +1788,7 @@ final class BrainDatabase: @unchecked Sendable {
             project: project,
             queueID: queueID,
             queuedAt: queuedAt,
+            telemetry: DeferredStoreTelemetry.Origin(epoch: Date().timeIntervalSince1970, reason: reason),
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID
@@ -1788,6 +1798,8 @@ final class BrainDatabase: @unchecked Sendable {
         if let existing = try appendPendingStoreLine(line, item: item, to: path) {
             return existing
         }
+        DeferredStoreTelemetry.record("queued", dbPath: dbPath, queueID: queueID, chunkID: chunkID,
+                                     origin: item.telemetry, queuedAt: queuedAt)
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
@@ -1842,6 +1854,8 @@ final class BrainDatabase: @unchecked Sendable {
                             continue
                         }
                     } catch {
+                        DeferredStoreTelemetry.record("replay_failed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
+                                                     origin: item.telemetry, queuedAt: item.queuedAt)
                         NSLog("[BrainBar] Failed pending store dedupe lookup for %@: %@", queueID, String(describing: error))
                         remaining.append(replayLine)
                         continue
@@ -1863,6 +1877,8 @@ final class BrainDatabase: @unchecked Sendable {
                             busyTimeoutMillis: busyTimeoutMillis,
                             metadata: item.scrubMetadata
                         )
+                        DeferredStoreTelemetry.record("committed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
+                                                     origin: item.telemetry, queuedAt: item.queuedAt)
                         flushed.append(
                             FlushedPendingStore(
                                 storedChunk: stored,
@@ -1872,6 +1888,8 @@ final class BrainDatabase: @unchecked Sendable {
                             )
                         )
                     } catch {
+                        DeferredStoreTelemetry.record("replay_failed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
+                                                     origin: item.telemetry, queuedAt: item.queuedAt)
                         NSLog("[BrainBar] Failed to flush pending store item: %@", String(describing: error))
                         remaining.append(replayLine)
                     }
@@ -4774,6 +4792,7 @@ final class BrainDatabase: @unchecked Sendable {
             project: item.project,
             queueID: queueID,
             queuedAt: item.queuedAt,
+            telemetry: item.telemetry,
             createdAt: item.createdAt ?? item.queuedAt,
             chunkID: chunkID,
             conversationID: item.conversationID,
