@@ -211,14 +211,15 @@ def test_failed_begin_never_claims_lock_held(tmp_path, monkeypatch):
     assert event["lock_wait_ms"] >= 0
 
 
-def test_ingest_stage_timings_separate_queue_encode_begin_apply_commit_and_checkpoint(tmp_path, monkeypatch):
+@pytest.mark.parametrize("encoding", [False, True])
+def test_ingest_stage_timings_separate_queue_encode_begin_apply_commit_and_checkpoint(tmp_path, monkeypatch, encoding):
     import brainlayer.drain as drain
     import brainlayer.writer_telemetry as telemetry
 
     log_path = _configure(monkeypatch, tmp_path)
     db_path, queue_dir = tmp_path / "stages.db", tmp_path / "queue"
     _seed_store(db_path)
-    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "1" if encoding else "0")
     queued = enqueue_store(content="stage measurement fixture", queue_dir=queue_dir)
     event = json.loads(queued.read_text())
     event["queued_at"] = 1000.0
@@ -229,6 +230,14 @@ def test_ingest_stage_timings_separate_queue_encode_begin_apply_commit_and_check
     monkeypatch.setattr(telemetry, "_MONOTONIC", lambda: clock[0])
     monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1010.0 + clock[0], raising=False)
     original_open, original_apply = drain._open_connection, drain._apply_event
+
+    def open_connection(path):
+        clock[0] += 0.01
+        return TimedConnection(original_open(path))
+
+    def precompute(*args):
+        clock[0] += 0.015 if encoding else 0
+        return {}
 
     class TimedConnection:
         def __init__(self, connection):
@@ -254,7 +263,8 @@ def test_ingest_stage_timings_separate_queue_encode_begin_apply_commit_and_check
         clock[0] += 0.05
         return 0
 
-    monkeypatch.setattr(drain, "_open_connection", lambda path: TimedConnection(original_open(path)))
+    monkeypatch.setattr(drain, "_open_connection", open_connection)
+    monkeypatch.setattr(drain, "_precompute_event_embeddings", precompute)
     monkeypatch.setattr(drain, "_apply_event", apply)
     monkeypatch.setattr(drain, "_post_commit_checkpoint", checkpoint)
     results, errors = [], []
@@ -278,13 +288,14 @@ def test_ingest_stage_timings_separate_queue_encode_begin_apply_commit_and_check
     result = [
         json.loads(line) for line in log_path.read_text().splitlines() if json.loads(line)["event"] == "ingest_finished"
     ][-1]
-    assert result["encode_ms"] == 0
+    assert result["encode_ms"] == pytest.approx(15 if encoding else 0)
+    assert result["open_ms"] == pytest.approx(10)
     assert result["begin_ms"] == pytest.approx(20)
     assert result["apply_ms"] == pytest.approx(30)
     assert result["commit_ms"] == pytest.approx(40)
     assert result["checkpoint_ms"] == pytest.approx(50)
     assert result["queue_wait_ms"] == pytest.approx(10000)
-    assert result["queue_to_commit_ms"] == pytest.approx(10090)
+    assert result["queue_to_commit_ms"] == pytest.approx(10115 if encoding else 10100)
 
 
 def test_ingest_watermarks_follow_line_queue_fts_and_vector_commit(tmp_path, monkeypatch):
