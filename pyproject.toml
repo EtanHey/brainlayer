@@ -124,6 +124,7 @@ norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules"
 # tests/conftest.py routes default and explicit basetemps beneath <worktree>/.build.noindex/pytest/ before fixtures start.
 tmp_path_retention_policy = "failed"
 markers = [
+    "recovery_oracle: disposable seeded queue, SQLite, FTS and vector recovery acceptance gate",
     "crash_sweep: exhaustive migration/revert SIGKILL cuts (separate required CI gate; retained by local pre-push)",
     "retired_enrichment: retirement tests that forbid cloud-client construction and inet sends",
     "engine: pure-library engine tests (excludes CLI, dashboard, BrainBar, launchd, and root orchestration surfaces)",
