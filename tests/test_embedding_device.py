@@ -3,6 +3,63 @@ from types import ModuleType, SimpleNamespace
 from brainlayer import embeddings
 
 
+def test_requested_batch_size_reaches_encoder_without_reordering():
+    calls = []
+
+    class Vector:
+        def __init__(self, value):
+            self.value = value
+
+        def tolist(self):
+            return [self.value]
+
+    class Encoder:
+        def encode(self, texts, **kwargs):
+            calls.append((list(texts), kwargs["batch_size"]))
+            return [Vector(int(text)) for text in texts]
+
+    model = embeddings.EmbeddingModel(device="cpu")
+    model._model = Encoder()
+    chunks = [SimpleNamespace(content=str(i)) for i in range(35)]
+    result = model.embed_chunks(chunks, batch_size=16)
+    assert calls == [([str(i) for i in range(start, min(start + 16, 35))], 16) for start in (0, 16, 32)]
+    assert [item.chunk for item in result] == chunks
+    assert [item.embedding for item in result] == [[i] for i in range(35)]
+
+
+def test_embedding_timings_separate_model_load_from_each_encode(monkeypatch):
+    clock, timings, phases = [0.0], {}, []
+
+    class Vector:
+        def tolist(self):
+            return [0.1]
+
+    class Encoder:
+        def encode(self, texts, **kwargs):
+            clock[0] += 2
+            return [Vector() for _ in texts]
+
+    model = embeddings.EmbeddingModel(device="cpu")
+
+    def load():
+        clock[0] += 3
+        return Encoder()
+
+    def record(name, milliseconds):
+        timings[name] = timings.get(name, 0) + milliseconds
+
+    monkeypatch.setattr(model, "_load_model", load)
+    monkeypatch.setattr("brainlayer.embeddings.time.perf_counter", lambda: clock[0], raising=False)
+    model.embed_chunks(
+        [SimpleNamespace(content=str(i)) for i in range(3)],
+        batch_size=2,
+        on_timing=record,
+        on_phase=phases.append,
+    )
+    assert timings == {"model_load_ms": 3000, "encode_ms": 4000}
+    assert phases == ["model_load", "encode", "encode"]
+
+
 def test_embedding_model_forwards_explicit_device_without_mps_probe(monkeypatch):
     # This test constructs a FAKE SentenceTransformer, so the suite-hygiene refusal that
     # tests/conftest.py arms for every unmarked test does not apply -- and lifting it explicitly,

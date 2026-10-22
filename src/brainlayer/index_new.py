@@ -42,6 +42,8 @@ def index_chunks_to_sqlite(
     on_skipped_empty: Callable[[int], None] | None = None,
     on_rejected: Callable[[int], None] | None = None,
     on_busy: Callable[[BaseException], None] | None = None,
+    on_timing: Callable[[str, float], None] | None = None,
+    on_phase: Callable[[str], None] | None = None,
 ) -> int:
     """Index chunks to sqlite-vec database.
 
@@ -116,6 +118,7 @@ def index_chunks_to_sqlite(
         embedded_chunks = embed_chunks(
             filtered_chunks,
             on_progress=embedding_progress if deadline_monotonic is not None else on_progress,
+            **({"on_timing": on_timing, "on_phase": on_phase} if on_timing or on_phase else {}),
         )
     else:
         embedded_chunks = precomputed_embeddings
@@ -207,9 +210,16 @@ def index_chunks_to_sqlite(
         offset = committed = 0
         while True:
             try:
-                return committed + writer.upsert_chunks(
-                    chunk_data[offset:], embeddings[offset:], deadline_monotonic=deadline_monotonic
-                )
+                if on_phase:
+                    on_phase("write")
+                started = time.perf_counter()
+                try:
+                    return committed + writer.upsert_chunks(
+                        chunk_data[offset:], embeddings[offset:], deadline_monotonic=deadline_monotonic
+                    )
+                finally:
+                    if on_timing:
+                        on_timing("write_ms", (time.perf_counter() - started) * 1000)
             except IndexDeadlineExceeded as exc:
                 exc.processed_count += committed
                 # Complete ordered embeddings above + complete store admission below
@@ -228,6 +238,8 @@ def index_chunks_to_sqlite(
                 # durable count and the input position the next attempt resumes at.
                 exc.committed_count = committed
                 exc.next_position = chunk_data[offset]["position"]
+                if on_phase:
+                    on_phase("writer_admission")
                 on_busy(exc)
 
     if store is not None:

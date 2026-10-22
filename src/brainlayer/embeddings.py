@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, List, Optional
 
@@ -85,12 +86,22 @@ class EmbeddingModel:
         chunks: List[Chunk],
         batch_size: int = 32,
         on_progress: Optional[Callable[[int, int], None]] = None,
+        *,
+        on_timing: Callable[[str, float], None] | None = None,
+        on_phase: Callable[[str], None] | None = None,
     ) -> List[EmbeddedChunk]:
         """Generate embeddings for chunks."""
         if not chunks:
             return []
 
-        model = self._load_model()
+        if on_phase:
+            on_phase("model_load")
+        started = time.perf_counter()
+        try:
+            model = self._load_model()
+        finally:
+            if on_timing:
+                on_timing("model_load_ms", (time.perf_counter() - started) * 1000)
         results = []
         total = len(chunks)
 
@@ -105,7 +116,16 @@ class EmbeddingModel:
             batch_chunks = chunks[i : i + batch_size]
 
             try:
-                embeddings = model.encode(batch_texts, convert_to_numpy=True, show_progress_bar=False)
+                if on_phase:
+                    on_phase("encode")
+                started = time.perf_counter()
+                try:
+                    embeddings = model.encode(
+                        batch_texts, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=False
+                    )
+                finally:
+                    if on_timing:
+                        on_timing("encode_ms", (time.perf_counter() - started) * 1000)
                 if len(embeddings) != len(batch_chunks):
                     raise ValueError(f"encoder returned {len(embeddings)} vectors for {len(batch_chunks)} inputs")
 
@@ -174,10 +194,13 @@ def embed_chunks(
     model_name: str = DEFAULT_MODEL,
     batch_size: int = 32,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    *,
+    on_timing: Callable[[str, float], None] | None = None,
+    on_phase: Callable[[str], None] | None = None,
 ) -> List[EmbeddedChunk]:
     """Generate embeddings for chunks using global model."""
     model = get_embedding_model(model_name)
-    return model.embed_chunks(chunks, batch_size, on_progress)
+    return model.embed_chunks(chunks, batch_size, on_progress, on_timing=on_timing, on_phase=on_phase)
 
 
 def embed_query(query: str, model_name: str = DEFAULT_MODEL) -> List[float]:

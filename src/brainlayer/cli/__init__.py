@@ -14,7 +14,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Callable, Optional
 
 import typer
 from rich import print as rprint
@@ -491,7 +491,7 @@ class _CalendarIndexCheckpoint:
     def backlog_keys():
         return ("files_remaining", "chunks_remaining", "uncounted_files")
 
-    def finish(self, *, deferred=False):
+    def finish(self, *, deferred=False, timings_ms=None):
         from ..drive_credentials import _atomic_write
 
         backlog = self.backlog()
@@ -533,6 +533,7 @@ class _CalendarIndexCheckpoint:
             resource_faults=self.resource_faults,
             failures=self.failures,
             catalog=self.catalog,
+            timings_ms=timings_ms or {},
         )
         _atomic_write(self.backlog_path, state)
         rprint(
@@ -4003,6 +4004,7 @@ def _exit_on_index_deadline(
     current_file: Path | None,
     unwind_error: str | None = None,
     checkpoint: _CalendarIndexCheckpoint | None = None,
+    finalize: Callable[[], None] | None = None,
 ) -> typer.Exit:
     """Emit the cap alarm once and return the Exit the caller should raise.
 
@@ -4012,6 +4014,8 @@ def _exit_on_index_deadline(
     """
     from ..alarm import build_alarm, emit_alarm
 
+    if finalize is not None:
+        finalize()
     escalated = watchdog is not None and getattr(watchdog, "escalation_attempted", False)
     if (
         checkpoint is not None
@@ -4073,6 +4077,54 @@ def index_fast(
     rejected_chunks = 0
     pass_deferred = False
     admission = None
+    finalized = False
+    custody_deadline = None
+    timings_ms = dict(model_load_ms=0.0, encode_ms=0.0, write_ms=0.0, checkpoint_ms=0.0)
+
+    def record_timing(name: str, milliseconds: float) -> None:
+        timings_ms[name] = timings_ms.get(name, 0.0) + milliseconds
+
+    def save_checkpoint(*args, **kwargs) -> None:
+        watchdog.set_phase("checkpoint")
+        started = time.perf_counter()
+        try:
+            checkpoint.save(*args, **kwargs)
+        finally:
+            record_timing("checkpoint_ms", (time.perf_counter() - started) * 1000)
+        watchdog.note_progress()
+
+    def finalize_checkpoint() -> None:
+        nonlocal finalized
+        if checkpoint is None or finalized:
+            return
+        # A failed publication is never retried as a healthy completion by finally.
+        finalized = True
+        watchdog.set_phase("publish_backlog")
+        started = time.perf_counter()
+        try:
+            failed = checkpoint.finish(deferred=pass_deferred, timings_ms=timings_ms)
+        except Exception as exc:
+            rprint(f"[red]INDEX_FINALIZATION_FAILED[/] {type(exc).__name__}: {exc}")
+            raise typer.Exit(1) from exc
+        rprint(
+            "INDEX_FINALIZED "
+            + " ".join(f"{key}={value:.3f}" for key, value in timings_ms.items())
+            + f" publication_ms={(time.perf_counter() - started) * 1000:.3f}"
+        )
+        if time.monotonic() >= custody_deadline or watchdog.escalation_attempted:
+            from ..alarm import build_alarm, emit_alarm
+
+            if not watchdog.escalation_emitted:
+                emit_alarm(
+                    build_alarm(
+                        "INDEX_RUNTIME_EXCEEDED",
+                        "brainlayer index finalization exceeded calendar custody",
+                        watchdog.context(),
+                    )
+                )
+            raise typer.Exit(1)
+        if failed:
+            raise typer.Exit(1)
 
     def note_skipped_empty(count: int) -> None:
         nonlocal skipped_empty_chunks
@@ -4091,7 +4143,7 @@ def index_fast(
         import apsw
 
         from ..index_admission import AdmissionBackoff, IndexAdmissionExhausted
-        from ..index_budget import CALENDAR_INDEX_UNWIND_S
+        from ..index_budget import CALENDAR_INDEX_UNWIND_S, calendar_index_work_budget_s
         from ..index_new import index_chunks_to_sqlite
         from ..index_watchdog import IndexWatchdog
         from ..pipeline.chunk import chunk_content
@@ -4112,7 +4164,15 @@ def index_fast(
             if max_runtime_s <= 0:
                 rprint("[yellow]INDEX_DEFERRED maintenance_window=04:00-06:00[/]")
                 raise typer.Exit(75)
+            custody_deadline = start_monotonic + max_runtime_s + CALENDAR_INDEX_UNWIND_S
+            max_runtime_s = calendar_index_work_budget_s(max_runtime_s)
         deadline_monotonic = start_monotonic + max_runtime_s
+        if calendar:
+            rprint(
+                f"INDEX_BUDGET work_s={max_runtime_s:.3f} "
+                f"custody_s={custody_deadline - start_monotonic:.3f} "
+                f"finalization_reserve_s={custody_deadline - deadline_monotonic:.3f}"
+            )
 
         # Find JSONL files
         total_chunks = 0
@@ -4122,27 +4182,26 @@ def index_fast(
         # Armed BEFORE discovery, not after: a hung directory walk is a silent phase like any
         # other, and charging it against the cap without watching it only fixed the arithmetic.
         with ExitStack() as stack:
-            watchdog = stack.enter_context(
-                IndexWatchdog(
-                    # The CLI's clock and the CLI's start, so there is ONE deadline shared with
-                    # the CLI rather than a fresh budget granted at arming time.
-                    started_at=start_monotonic,
-                    max_runtime_s=max_runtime_s,
-                    monotonic=time.monotonic,
-                    counters=lambda: {
-                        "committed_chunks": total_chunks,
-                        "files_completed": files_completed,
-                        "source_file": str(current_file) if current_file else None,
-                    },
-                    phase="discover",
-                    yield_grace_s=CALENDAR_INDEX_UNWIND_S if calendar else 0,
-                    # A calendar deadline is a planned yield. The main thread decides
-                    # checkpointed vs failed only AFTER the writer has unwound.
-                    emit=(lambda alarm: rprint(f"INDEX_PASS_CAP_REACHED phase={alarm.context['phase']}"))
-                    if calendar
-                    else None,
-                )
-            )
+            # Owned by the outer finally, so close and durable publication stay watched.
+            watchdog = IndexWatchdog(
+                # The CLI's clock and the CLI's start, so there is ONE deadline shared with
+                # the CLI rather than a fresh budget granted at arming time.
+                started_at=start_monotonic,
+                max_runtime_s=max_runtime_s,
+                monotonic=time.monotonic,
+                counters=lambda: {
+                    "committed_chunks": total_chunks,
+                    "files_completed": files_completed,
+                    "source_file": str(current_file) if current_file else None,
+                },
+                phase="discover",
+                yield_grace_s=custody_deadline - deadline_monotonic if calendar else 0,
+                # A calendar deadline is a planned yield. The main thread decides
+                # checkpointed vs failed only AFTER the writer has unwound.
+                emit=(lambda alarm: rprint(f"INDEX_PASS_CAP_REACHED phase={alarm.context['phase']}"))
+                if calendar
+                else None,
+            ).start()
 
             if project:
                 project_dir = source / project
@@ -4217,7 +4276,10 @@ def index_fast(
             def open_store():
                 return stack.enter_context(open_writer_store(get_db_path(), on_connection=_attach_interrupt(watchdog)))
 
+            # Detach only AFTER the writer closes; never interrupt a closed connection.
+            stack.callback(watchdog.set_interrupt, None)
             runtime_store = admission.run(open_store) if admission is not None else open_store()
+            stack.callback(watchdog.set_phase, "close_store")
             if calendar:
                 # The sidecar may survive a host crash. Commit its rows durably
                 # BEFORE publishing a skip offset: EXTRA equals FULL in WAL and
@@ -4306,6 +4368,8 @@ def index_fast(
                                         on_skipped_empty=note_skipped_empty,
                                         on_rejected=note_rejected,
                                         on_busy=admission.wait if admission is not None else None,
+                                        on_timing=record_timing,
+                                        on_phase=watchdog.set_phase,
                                     )
                                     if admission is not None:
                                         admission.admitted()
@@ -4316,18 +4380,18 @@ def index_fast(
                                     durable = getattr(cause, "committed_count", 0)
                                     if durable:
                                         total_chunks += durable
-                                        checkpoint.save(jsonl_file, signature, cause.next_position)
+                                        save_checkpoint(jsonl_file, signature, cause.next_position)
                                     raise
                                 except IndexDeadlineExceeded as exc:
                                     if exc.completed_input_count == len(batch):
-                                        checkpoint.save(
+                                        save_checkpoint(
                                             jsonl_file,
                                             signature,
                                             start + len(batch),
                                             done=start + len(batch) == len(all_chunks),
                                         )
                                     raise
-                                checkpoint.save(
+                                save_checkpoint(
                                     jsonl_file,
                                     signature,
                                     start + len(batch),
@@ -4348,7 +4412,7 @@ def index_fast(
                             total_chunks += indexed
                         watchdog.raise_if_expired(processed_count=0)
                     if checkpoint:
-                        checkpoint.save(jsonl_file, signature, len(all_chunks), done=True)
+                        save_checkpoint(jsonl_file, signature, len(all_chunks), done=True)
                     files_completed = i + 1
                     watchdog.note_progress()
                     watchdog.raise_if_expired()
@@ -4379,6 +4443,7 @@ def index_fast(
                     description=f"[cyan]{jsonl_file.name[:30]}[/] • {total_chunks:,} chunks • {rate_per_min:.1f} f/m • {chunks_per_min:.0f} c/m",
                 )
 
+        finalize_checkpoint()
         elapsed_total = time.time() - start_time
         rprint(
             f"\n[bold green]✓[/] Indexed [bold]{total_chunks:,}[/] chunks from [bold]{len(jsonl_files):,}[/] files in [bold]{elapsed_total / 60:.1f}[/] minutes"
@@ -4394,6 +4459,7 @@ def index_fast(
             files_completed=files_completed,
             current_file=current_file,
             checkpoint=checkpoint,
+            finalize=finalize_checkpoint,
         ) from exc
     except typer.Exit:
         raise
@@ -4425,6 +4491,7 @@ def index_fast(
                     files_completed=files_completed,
                     current_file=current_file,
                     checkpoint=checkpoint,
+                    finalize=finalize_checkpoint,
                 ) from e
             pass_deferred = True
             rprint(
@@ -4453,13 +4520,17 @@ def index_fast(
                 current_file=current_file,
                 unwind_error=unwind_error,
                 checkpoint=checkpoint,
+                finalize=finalize_checkpoint,
             ) from e
         rprint(f"[bold red]Error:[/] {e}")
         raise typer.Exit(1)
     finally:
-        rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks} rejected_chunks={rejected_chunks}")
-        if checkpoint is not None and checkpoint.finish(deferred=pass_deferred):
-            raise typer.Exit(1)
+        try:
+            rprint(f"Index admission: skipped_empty_chunks={skipped_empty_chunks} rejected_chunks={rejected_chunks}")
+            finalize_checkpoint()
+        finally:
+            if watchdog is not None:
+                watchdog.stop()
 
 
 @app.command("ingest-t3")
