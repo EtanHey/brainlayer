@@ -139,6 +139,30 @@ final class BrainBarServer: @unchecked Sendable {
     var onDeferredBackupResponseDropped: (@Sendable (_ descriptorWasReused: Bool) -> Void)?
     var onClientAccepted: (@Sendable (Int32) -> Void)?
     var onClientDescriptorClosed: (@Sendable (Int32) -> Void)?
+#if DEBUG
+    private let fixtureWork = DispatchGroup()
+    private var fixtureStopping = false
+    var beforeDatabaseOpenForTesting: (@Sendable () -> Void)?
+    var onFixtureDrainStartedForTesting: (@Sendable () -> Void)?
+
+    func waitForFixtureWorkForTesting() { fixtureWork.wait() }
+
+    /// Fixture-only join: no SQLite handle or owned path may outlive teardown.
+    func stopAndDrainForTesting() {
+        queue.sync { fixtureStopping = true }
+        backupToolQueue.sync {}
+        queue.sync {
+            router?.finishOwnedWorkForTesting()
+            cleanup()
+        }
+        onFixtureDrainStartedForTesting?()
+        fixtureWork.wait()
+        queue.sync {
+            router?.finishOwnedWorkForTesting()
+            router = nil
+        }
+    }
+#endif
     /// Maximum EAGAIN retries before disconnecting a stalled client.
     /// Each retry sleeps 1ms; 50 retries keeps false-positive disconnects
     /// below the UI budget while still bounding serial-queue stalls.
@@ -398,10 +422,17 @@ final class BrainBarServer: @unchecked Sendable {
         listenFD = fd
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+#if DEBUG
+        let fixtureWork = self.fixtureWork
+        fixtureWork.enter()
+#endif
         source.setEventHandler { [weak self] in
             self?.acceptClient()
         }
         source.setCancelHandler { [weak self] in
+#if DEBUG
+            defer { fixtureWork.leave() }
+#endif
             guard let self else { return }
             close(fd)
             listenFD = -1
@@ -440,6 +471,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func attemptDatabaseOpen() {
+#if DEBUG
+        guard !fixtureStopping else { return }
+#endif
         guard database == nil, !databaseOpenInProgress else { return }
 
         if let providedDatabase {
@@ -450,7 +484,14 @@ final class BrainBarServer: @unchecked Sendable {
         databaseOpenInProgress = true
         let dbPath = self.dbPath
         let busyTimeoutMillis = databaseRecoveryPolicy.busyTimeoutMillis
+#if DEBUG
+        let fixtureWork = self.fixtureWork
+        fixtureWork.enter()
+#endif
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+#if DEBUG
+            self?.beforeDatabaseOpenForTesting?()
+#endif
             let db = BrainDatabase(
                 path: dbPath,
                 openConfiguration: .init(
@@ -468,6 +509,9 @@ final class BrainBarServer: @unchecked Sendable {
                 )
                 : nil
             self?.queue.async { [weak self] in
+#if DEBUG
+                defer { fixtureWork.leave() }
+#endif
                 self?.databaseOpenInProgress = false
                 self?.finishDatabaseOpen(db, readDatabase: readDB)
             }
@@ -536,6 +580,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func acceptClient() {
+#if DEBUG
+        guard !fixtureStopping else { return }
+#endif
         let clientFD = accept(listenFD, nil, nil)
         guard clientFD >= 0 else {
             if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { transportHealth?.record(.acceptErrors) }
@@ -552,10 +599,17 @@ final class BrainBarServer: @unchecked Sendable {
         }
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: queue)
+#if DEBUG
+        let fixtureWork = self.fixtureWork
+        fixtureWork.enter()
+#endif
         readSource.setEventHandler { [weak self] in
             self?.readFromClient(fd: clientFD)
         }
         readSource.setCancelHandler { [weak self] in
+#if DEBUG
+            defer { fixtureWork.leave() }
+#endif
             close(clientFD)
             self?.onClientDescriptorClosed?(clientFD)
         }
@@ -574,6 +628,9 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func readFromClient(fd: Int32) {
+#if DEBUG
+        guard !fixtureStopping else { return }
+#endif
         var buf = [UInt8](repeating: 0, count: 65536)
         let n = read(fd, &buf, buf.count)
 

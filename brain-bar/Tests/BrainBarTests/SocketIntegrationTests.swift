@@ -115,11 +115,7 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     override func tearDown() {
-        server.stop()
-        db.close()
-        try? FileManager.default.removeItem(atPath: tempDBPath)
-        try? FileManager.default.removeItem(atPath: tempDBPath + "-wal")
-        try? FileManager.default.removeItem(atPath: tempDBPath + "-shm")
+        finishBrainBarSocketFixture(server, database: db, path: tempDBPath)
         if let originalMCPProfile {
             setenv("BRAINLAYER_MCP_PROFILE", originalMCPProfile, 1)
         } else {
@@ -129,6 +125,45 @@ final class SocketIntegrationTests: XCTestCase {
     }
 
     // MARK: - Connection
+
+    func testFixtureCleanupWaitsForOwnedRequestCompletion() throws {
+        server.stop()
+        db.close()
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let cleanupStage = DispatchSemaphore(value: 0)
+        let cleanupDone = DispatchSemaphore(value: 0)
+        let openingServer = BrainBarServer(socketPath: testSocketPath, dbPath: tempDBPath,
+                                          enableHybridSearchHelper: false)
+        openingServer.beforeDatabaseOpenForTesting = { entered.signal(); release.wait() }
+        openingServer.onFixtureDrainStartedForTesting = { cleanupStage.signal() }
+        server = openingServer
+        server.start()
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        let lifecycle = ClientLifecycleCapture()
+        server.onClientAccepted = { lifecycle.recordAccepted($0) }
+        server.onClientDescriptorClosed = { lifecycle.recordClosed($0) }
+        let client = try connectClient()
+        defer { close(client) }
+        let accepted = try XCTUnwrap(lifecycle.waitForAccepted(at: 0))
+        let database = db!
+        let path = tempDBPath!
+        DispatchQueue.global().async {
+            finishBrainBarSocketFixture(openingServer, database: database, path: path)
+            cleanupDone.signal()
+            cleanupStage.signal() // Old teardown finishes before the held opener is released.
+        }
+        XCTAssertEqual(cleanupStage.wait(timeout: .now() + 5), .success)
+        release.signal()
+        XCTAssertEqual(cleanupDone.wait(timeout: .now() + 5), .success)
+        openingServer.waitForFixtureWorkForTesting()
+        XCTAssertTrue(lifecycle.waitForClosed(accepted, timeout: 0))
+        for suffix in ["", "-wal", "-shm"] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path + suffix),
+                           "Owned work must finish before fixture removal: \(suffix)")
+        }
+    }
 
     func testConnectsToSocket() throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
