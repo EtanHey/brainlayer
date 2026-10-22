@@ -8,6 +8,7 @@ import ctypes
 import fcntl
 import json
 import logging
+import math
 import os
 import select
 import signal
@@ -294,8 +295,17 @@ def guard_lease(guard, fd=None):
 
 
 def launch_guard(
-    custody: Custody, timeout: float, grace: float, shutdown_timeout: float = 20, *, extra_fds=(), lease_control=False
+    custody: Custody,
+    timeout: float,
+    grace: float,
+    shutdown_timeout: float = 20,
+    *,
+    extra_fds=(),
+    lease_control=False,
+    startup_timeout: float = 30,
 ) -> subprocess.Popen:
+    if not math.isfinite(startup_timeout) or startup_timeout <= 0:
+        raise ValueError("guard startup timeout must be finite and positive")
     read, write = os.pipe()
     channel, receiver = socket.socketpair() if lease_control else (None, None)
     try:
@@ -321,10 +331,12 @@ def launch_guard(
         )
         os.close(write)
         write = None
-        if not select.select([read], [], [], 5)[0] or os.read(read, 1) != b"R":
+        ready = os.read(read, 1) if select.select([read], [], [], startup_timeout)[0] else None
+        if ready != b"R":
             guard.kill()
             guard.wait()
-            raise RuntimeError("guard startup failed")
+            reason = "timeout" if ready is None else "EOF" if not ready else f"unexpected byte {ready!r}"
+            raise RuntimeError(f"guard startup failed: {reason}; parent={os.getpid()} guard={guard.pid}")
         os.set_blocking(guard.stdin.fileno(), False)
         if channel:
             channel.settimeout(2)

@@ -179,3 +179,38 @@ reap_groups({child.pid},.01,**({'timeout':.1} if 'timeout' in inspect.signature(
         parent.wait()
         if group:
             os.killpg(group, signal.SIGKILL)
+
+
+@pytest.mark.parametrize("delay,budget,ready", [(5.2, None, True), (0.3, 0.1, False)])
+def test_guard_startup_delayed_readiness_is_bounded(tmp_path, monkeypatch, delay, budget, ready):
+    import time
+
+    original = subprocess.Popen
+    guards = []
+
+    def delayed(argv, **kwargs):
+        command = list(argv)
+        command[2] = f"import time; time.sleep({delay}); " + command[2]
+        process = original(command, **kwargs)
+        guards.append(process)
+        return process
+
+    monkeypatch.setattr(guard.subprocess, "Popen", delayed)
+    options = {} if budget is None else {"startup_timeout": budget}
+    with Custody(tmp_path) as custody:
+        began = time.monotonic()
+        try:
+            if ready:
+                child = guard.launch_guard(custody, 30, 0.1, **options)
+                child.stdin.close()
+                assert child.wait(timeout=2) == 0
+                assert time.monotonic() - began >= delay
+            else:
+                with pytest.raises(RuntimeError, match="guard startup failed.*timeout"):
+                    guard.launch_guard(custody, 30, 0.1, **options)
+                assert time.monotonic() - began < 2
+        finally:
+            for child in guards:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=2)
