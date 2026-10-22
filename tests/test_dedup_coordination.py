@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -59,7 +60,7 @@ def cleanup_coord_file(session_id):
             pass
 
 
-def test_concurrent_run_worker(session_id):
+def test_concurrent_run_worker(session_id, pytestconfig, monkeypatch):
     """Exercise one side of the cross-pytest-run coordination collision."""
     run_id = os.environ.get("BRAINLAYER_CONCURRENCY_RUN_ID")
     barrier_dir = os.environ.get("BRAINLAYER_CONCURRENCY_BARRIER_DIR")
@@ -78,6 +79,36 @@ def test_concurrent_run_worker(session_id):
     assert len(os.listdir(barrier_dir)) == 2, "both pytest workers must reach the barrier"
     assert get_injected_ids(session_id) == {chunk_id}
 
+    # pytest's numbered-directory retention cleans the shared pytest-of-USER parent.
+    # Hold both cleaners after their dead-link check, before unlink, so sharing that
+    # parent deterministically raises FileNotFoundError in one process.
+    from _pytest.pathlib import cleanup_dead_symlinks
+
+    factory = pytestconfig._tmp_path_factory
+    base = factory.getbasetemp()
+    retention_root = base if factory._given_basetemp is not None else base.parent
+    dead_link = retention_root / "surge-dead-current"
+    try:
+        dead_link.symlink_to(retention_root / "surge-missing-target")
+    except FileExistsError:
+        pass
+    cleaners = Path(barrier_dir).parent / "cleaners"
+    cleaners.mkdir(exist_ok=True)
+    unlink = Path.unlink
+
+    def synchronized_unlink(path, *args, **kwargs):
+        if path == dead_link:
+            (cleaners / run_id).write_text(str(retention_root))
+            deadline = time.monotonic() + 10
+            while len(list(cleaners.iterdir())) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert len(list(cleaners.iterdir())) == 2, "both cleaners must reach unlink"
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(dead_link), "unlink", synchronized_unlink)
+    cleanup_dead_symlinks(retention_root)
+    assert not dead_link.is_symlink()
+
 
 def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
     """Two independent pytest processes must not read each other's hook state."""
@@ -93,7 +124,17 @@ def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
             env["BRAINLAYER_CONCURRENCY_BARRIER_DIR"] = str(barrier_dir)
             process = subprocess.Popen(
                 # Select only the worker so child runs cannot recursively spawn children.
-                [sys.executable, "-m", "pytest", "-q", test_path, "-k", "concurrent_run_worker"],
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "--basetemp",
+                    str(tmp_path / run_id),
+                    "-q",
+                    test_path,
+                    "-k",
+                    "concurrent_run_worker",
+                ],
                 cwd=os.path.dirname(os.path.dirname(test_path)),
                 env=env,
                 stdout=subprocess.PIPE,
@@ -109,6 +150,8 @@ def test_concurrent_pytest_runs_do_not_share_coordination_state(tmp_path):
                 process.communicate()
     failures = [output for process, (output, _) in zip(processes, results) if process.returncode != 0]
     assert not failures, "\n".join(failures)
+    roots = [(tmp_path / "cleaners" / run_id).read_text() for run_id in ("run-a", "run-b")]
+    assert len(set(roots)) == 2, "nested pytest cleaners must own different retention roots"
 
 
 # ── Coordination File Read/Write ─────────────────────────────────────────────

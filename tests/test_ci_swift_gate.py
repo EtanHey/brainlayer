@@ -218,4 +218,7 @@ def test_swift_required_gate_has_a_bounded_job_timeout():
 
     _job_id, job = swift_job
 
-    assert job.get("timeout-minutes") == 10
+    # PR #1462: 15 full-suite successes measured p95=10m; add 5m runner/post-test headroom.
+    value = job.get("timeout-minutes")
+    assert value == 15
+    assert 10 <= value <= 20, "Swift job must retain a finite hang-protection budget"
