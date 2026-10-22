@@ -9,6 +9,7 @@ import signal
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 
 from . import maintenance_control
@@ -244,7 +245,7 @@ async def _execute_step(
         if child is not None:
             deadline = time.monotonic() + shutdown_timeout
             try:
-                os.write(guard.stdin.fileno(), b"Q\n" if stop.is_set() else b"H\n")
+                os.write(guard.stdin.fileno(), b"H\n")  # Guard shutdown follows the finish worker.
             except BrokenPipeError:
                 stop.set()
             await stop_group(child, 0.2, lambda: (deadline, shutdown_timeout / 2))
@@ -267,6 +268,7 @@ def finish(directory, state, step, code, date, defer_after, missed=False, stoppe
     detail = {key: value for key, value in dict(reason=reason, replaces=replaces).items() if value is not None}
     record(directory, event="finished", step=step.name, status=status, returncode=code, **detail)
     key = KEYS.get(step.name)
+    notice = None
     if key and not stopped:
         if code == 75:
             prior = state["deferrals"].get(key, {})
@@ -274,11 +276,32 @@ def finish(directory, state, step, code, date, defer_after, missed=False, stoppe
             count = prior.get("count", 0) + 1 if gap == 1 else max(1, prior.get("count", 0)) if gap == 0 else 1
             state["deferrals"][key] = dict(date=date.isoformat(), count=count)
             if missed or count >= defer_after:
-                report(key, f"BrainLayer {step.name}: quiet window missed" if missed else f"Deferred {count} nights")
+                notice = (key, f"BrainLayer {step.name}: quiet window missed" if missed else f"Deferred {count} nights")
         else:
             state["deferrals"].pop(key, None)
-            report(key, None if code == 0 else f"BrainLayer {step.name} exited {code}; see its log")
+            notice = (key, None if code == 0 else f"BrainLayer {step.name} exited {code}; see its log")
     _atomic_write(directory / "state.json", state)
+    if notice is not None:
+        try:
+            report(*notice)
+        except OSError as exc:
+            # An alert-file failure does not undo a completed step or imply lost custody.
+            record(directory, event="alert-error", step=step.name, error=type(exc).__name__)
+    return status
+
+
+async def _finish_step(*args, **kwargs):
+    # Shield the executor future itself so repeated cancellation cannot abandon state writes.
+    worker = asyncio.get_running_loop().run_in_executor(None, partial(finish, *args, **kwargs))
+    cancelled = None
+    while True:
+        try:
+            status = await asyncio.shield(worker)
+            break
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    if cancelled is not None:
+        raise cancelled
     return status
 
 
@@ -326,8 +349,9 @@ async def run_calendar(
     except BlockingIOError:
         record(directory, event="already-running", scheduled_date=date.isoformat())
         return 0
-    stop, handlers, results = asyncio.Event(), {}, {}
+    stop, heartbeat_stop, handlers, results = asyncio.Event(), asyncio.Event(), {}, {}
     guard, heartbeat = None, None
+    active_step, runner_failed = None, 0
     loop = asyncio.get_running_loop()
     try:
         custody.recover(min(1, shutdown_timeout / 2))  # Reap stale writers before reacquiring their lease.
@@ -345,7 +369,7 @@ async def run_calendar(
         client = maintenance_control.control_client()
         logs.mkdir(parents=True, exist_ok=True)
         guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
-        heartbeat = asyncio.create_task(pulse(guard, stop, min(0.1, guard_timeout / 4)))
+        heartbeat = asyncio.create_task(pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4)))
         record(directory, event="runner", guard=guard.pid, scheduled_date=date.isoformat())
         if install_signals:
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -358,84 +382,84 @@ async def run_calendar(
         )
         env.pop("BRAINLAYER_BACKUP_SUPERVISED_CHILD", None)
         for step in steps:
+            active_step = step.name
             if stop.is_set():
                 record(directory, event="finished", step=step.name, status="skipped", returncode=None)
                 continue
-            code, missed, reason = 1, False, None
+            code, missed, reason, step_failed = 1, False, None, False
             try:
+                bounded = step
                 if step.name == "index":
                     bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
-                    if bounded is None:
-                        results[step.name] = finish(
-                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
-                        )
-                        continue
-                    step = bounded
-                if step.name == "backup-snapshot":
+                elif step.name == "backup-snapshot":
                     bounded = _bounded_snapshot_step(step, now_fn(), shutdown_timeout)
-                    if bounded is None:
-                        results[step.name] = finish(
-                            directory, state, step, 75, date, defer_after, reason="maintenance-window"
-                        )
-                        continue
-                    step = bounded
-                disabled = client._disabled(client.request(), include_paused=False)
-                if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
-                    code, reason = 75, "disabled"
-                elif not await _window(directory, step, now_fn, sleep_fn, stop):
-                    code, missed = (143, False) if stop.is_set() else (75, True)
-                    if missed:
-                        reason = "index-overran-window" if index_overran_window else "quiet-window-missed"
-                elif step.name in HELD_STEPS and maintenance_control.hold_budget(now_fn()) <= 0:
-                    code, reason = 75, "maintenance-window"  # Outside the window, or no bounded hold fits.
+                if bounded is None:
+                    code, reason = 75, "maintenance-window"
                 else:
-                    child_env = (
-                        env
-                        | step.env
-                        | dict(
-                            BRAINLAYER_LAUNCHD_SERVICE=_service_name(step),
-                            XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
+                    step = bounded
+                    disabled = client._disabled(client.request(), include_paused=False)
+                    if f"com.brainlayer.{_service_name(step)}" in disabled or "com.brainlayer.maintenance" in disabled:
+                        code, reason = 75, "disabled"
+                    elif not await _window(directory, step, now_fn, sleep_fn, stop):
+                        code, missed = (143, False) if stop.is_set() else (75, True)
+                        if missed:
+                            reason = "index-overran-window" if index_overran_window else "quiet-window-missed"
+                    elif step.name in HELD_STEPS and maintenance_control.hold_budget(now_fn()) <= 0:
+                        code, reason = 75, "maintenance-window"  # Outside the window, or no bounded hold fits.
+                    else:
+                        child_env = (
+                            env
+                            | step.env
+                            | dict(
+                                BRAINLAYER_LAUNCHD_SERVICE=_service_name(step),
+                                XPC_SERVICE_NAME=f"com.brainlayer.{_service_name(step)}",
+                            )
                         )
-                    )
-                    try:
-                        async with step_hold(client, guard, child_env, step, now_fn) as held_env:
-                            if stop.is_set():
-                                code = 143
-                            else:
-                                started = now_fn()
-                                index_log = logs / "index.out.log"
-                                index_offset = (
-                                    index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
-                                )
-                                code = await _execute_step(
-                                    step,
-                                    held_env,
-                                    directory=directory,
-                                    logs=logs,
-                                    custody=custody,
-                                    guard=guard,
-                                    stop=stop,
-                                    guard_timeout=guard_timeout,
-                                    shutdown_timeout=shutdown_timeout,
-                                    deadline=float(held_env["BRAINLAYER_MAINTENANCE_HOLD_DEADLINE"])
-                                    if "BRAINLAYER_MAINTENANCE_HOLD_DEADLINE" in held_env
-                                    else None,
-                                )
-                                ended = now_fn()
-                                if step.name == "index":
-                                    if code == 75:
-                                        reason = _index_deferral_reason(index_log, index_offset)
-                                    # Only attribute the miss to indexing when its measured interval
-                                    # crossed this day's window end. Backup delays get a generic reason.
-                                    window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
-                                    index_overran_window = started < window_end <= ended
-                    except maintenance_control.HoldWindowClosed:
-                        # The window closed between the check and the grant: defer, keep the plan going.
-                        code, reason = 75, "maintenance-window"
+                        try:
+                            async with step_hold(client, guard, child_env, step, now_fn) as held_env:
+                                if stop.is_set():
+                                    code = 143
+                                else:
+                                    started = now_fn()
+                                    index_log = logs / "index.out.log"
+                                    index_offset = (
+                                        index_log.stat().st_size if step.name == "index" and index_log.exists() else 0
+                                    )
+                                    code = await _execute_step(
+                                        step,
+                                        held_env,
+                                        directory=directory,
+                                        logs=logs,
+                                        custody=custody,
+                                        guard=guard,
+                                        stop=stop,
+                                        guard_timeout=guard_timeout,
+                                        shutdown_timeout=shutdown_timeout,
+                                        deadline=float(held_env["BRAINLAYER_MAINTENANCE_HOLD_DEADLINE"])
+                                        if "BRAINLAYER_MAINTENANCE_HOLD_DEADLINE" in held_env
+                                        else None,
+                                    )
+                                    ended = now_fn()
+                                    if step.name == "index":
+                                        if code == 75:
+                                            reason = _index_deferral_reason(index_log, index_offset)
+                                        # Only attribute the miss to indexing when its measured interval
+                                        # crossed this day's window end. Backup delays get a generic reason.
+                                        window_end = started.replace(hour=6, minute=0, second=0, microsecond=0)
+                                        index_overran_window = started < window_end <= ended
+                        except maintenance_control.HoldWindowClosed:
+                            # The window closed between the check and the grant: defer, keep the plan going.
+                            code, reason = 75, "maintenance-window"
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
+                code = 1
+                step_failed = True
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
-            results[step.name] = finish(
+            # Receipt fsync, alert locking and osascript must not starve the guard heartbeat.
+            stopped = stop.is_set() and not step_failed
+            if code not in (0, 75) and not stopped:
+                results[step.name] = "failed"  # Retain the child failure even if completion is cancelled.
+            results[step.name] = await _finish_step(
                 directory,
                 state,
                 step,
@@ -443,33 +467,55 @@ async def run_calendar(
                 date,
                 defer_after,
                 missed,
-                stop.is_set(),
+                stopped,
                 reason=reason,
                 replaces="maintenance-nightly" if weekly_substitution and step.name == "maintenance-weekly" else None,
             )
+        active_step = None
         if all(results.get(n) == "ok" for n in ("maintenance-weekly", "decay", "repair-fts")):
             state["last_weekly"] = (date - dt.timedelta(days=(date.weekday() + 1) % 7)).isoformat()
             _atomic_write(directory / "state.json", state)
         failed = sum(v == "failed" for v in results.values())
-        record(directory, event="summary", failed=failed, deferred=sum(v == "deferred" for v in results.values()))
         return int(failed > 0 or stop.is_set())
+    except Exception as exc:
+        if active_step is not None:
+            results[active_step] = "failed"
+        else:
+            runner_failed = 1
+        record(directory, event="runner-error", step=active_step, error=type(exc).__name__)
+        raise
     finally:
-        stop.set()
-        if heartbeat:
-            await asyncio.gather(heartbeat, return_exceptions=True)
         try:
-            if guard:
-                guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
-            if guard and guard.poll() is None:
-                os.write(guard.stdin.fileno(), b"Q\n")
-                guard.stdin.close()
-                deadline = time.monotonic() + shutdown_timeout
-                while guard.poll() is None and time.monotonic() < deadline:
-                    await asyncio.sleep(0.02)
-                if guard.poll() is None:
-                    raise RuntimeError("calendar guard retains unresolved custody")
+            stop.set()
+            heartbeat_stop.set()  # All finish workers have exited; bounded guard shutdown can begin.
+            if heartbeat:
+                await asyncio.gather(heartbeat, return_exceptions=True)
+            try:
+                if guard:
+                    guard.lease_channel.close()  # Parent EOF is independent of pipes inherited by children.
+                if guard and guard.poll() is None:
+                    os.write(guard.stdin.fileno(), b"Q\n")
+                    guard.stdin.close()
+                    deadline = time.monotonic() + shutdown_timeout
+                    while guard.poll() is None and time.monotonic() < deadline:
+                        await asyncio.sleep(0.02)
+                    if guard.poll() is None:
+                        raise RuntimeError("calendar guard retains unresolved custody")
+            finally:
+                for sig, previous in handlers.items():
+                    loop.remove_signal_handler(sig)
+                    signal.signal(sig, previous)
+        except Exception as exc:
+            runner_failed += 1
+            record(directory, event="runner-error", phase="cleanup", error=type(exc).__name__)
+            raise
         finally:
-            for sig, previous in handlers.items():
-                loop.remove_signal_handler(sig)
-                signal.signal(sig, previous)
-            custody.__exit__(None, None, None)
+            try:
+                record(
+                    directory,
+                    event="summary",
+                    failed=sum(v == "failed" for v in results.values()) + runner_failed,
+                    deferred=sum(v == "deferred" for v in results.values()),
+                )
+            finally:
+                custody.__exit__(None, None, None)
