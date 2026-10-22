@@ -130,7 +130,7 @@ def test_transport_alert_reaches_the_health_badge(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAINLAYER_JOB_ALERT_PATH", str(alert))
     report_transport_alert(read(path, db), env={"BRAINLAYER_DB": str(db), "BRAINLAYER_JOB_ALERT_PATH": str(alert)})
     badge = tmp_path / "badge-state.json"
-    _run_minimal_health_check(tmp_path, badge, job_opt_path=tmp_path)
+    _run_minimal_health_check(tmp_path, badge, job_opt_path=tmp_path, job_alert_path=alert)
     value = json.loads(badge.read_text())["alerts"]
     assert value["badge_on"] is True
     issue = next(i for i in value["active"] if i["code"] == "job_alert_mcp-transport")
