@@ -3760,6 +3760,16 @@
         "target": "subprocess.CalledProcessError"
       }
     },
+    "a97548889728cc55a200d9ee298d04394c1c761b6ab9d7acef288afab8ac99cf": {
+      "non_cloud_purpose": "Local bounded read-only missing-embedding sampler: SQLite mode=ro and query_only, one snapshot per tick with page/instruction/time budgets; no model or network operation.",
+      "site": {
+        "call_sha256": "3fbb77487a9ccb9a26c61a4670ecf0f9095e05c17a0b25d32ba49dd1fde20208",
+        "kind": "generic_send",
+        "owner": "<module>.sample_missing_embeddings",
+        "path": "src/brainlayer/health_check.py",
+        "target": "sqlite3.connect"
+      }
+    },
     "aaec04afd5254f328e629432cdeb7e069ed9e6b8ed5a31bb42ff206c4dd08e0f": {
       "non_cloud_purpose": "Retained module dependency binding: src/brainlayer/setup.py <module>",
       "site": {
