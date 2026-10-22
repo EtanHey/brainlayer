@@ -9,6 +9,7 @@ import signal
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 
 from . import maintenance_control
@@ -282,6 +283,21 @@ def finish(directory, state, step, code, date, defer_after, missed=False, stoppe
     return status
 
 
+async def _finish_step(*args, **kwargs):
+    # Shield the executor future itself so repeated cancellation cannot abandon state writes.
+    worker = asyncio.get_running_loop().run_in_executor(None, partial(finish, *args, **kwargs))
+    cancelled = None
+    while True:
+        try:
+            status = await asyncio.shield(worker)
+            break
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    if cancelled is not None:
+        raise cancelled
+    return status
+
+
 HELD_STEPS = frozenset({"maintenance-nightly", "maintenance-weekly", "repair-fts"})
 
 
@@ -366,7 +382,7 @@ async def run_calendar(
                 if step.name == "index":
                     bounded = _bounded_index_step(step, now_fn(), shutdown_timeout)
                     if bounded is None:
-                        results[step.name] = finish(
+                        results[step.name] = await _finish_step(
                             directory, state, step, 75, date, defer_after, reason="maintenance-window"
                         )
                         continue
@@ -374,7 +390,7 @@ async def run_calendar(
                 if step.name == "backup-snapshot":
                     bounded = _bounded_snapshot_step(step, now_fn(), shutdown_timeout)
                     if bounded is None:
-                        results[step.name] = finish(
+                        results[step.name] = await _finish_step(
                             directory, state, step, 75, date, defer_after, reason="maintenance-window"
                         )
                         continue
@@ -435,7 +451,8 @@ async def run_calendar(
             except (OSError, RuntimeError, ValueError) as exc:
                 record(directory, event="step-error", step=step.name, error=type(exc).__name__)
                 stop.set()  # Custody/protocol failures abort; ordinary child failures remain isolated.
-            results[step.name] = finish(
+            # Receipt fsync, alert locking and osascript must not starve the guard heartbeat.
+            results[step.name] = await _finish_step(
                 directory,
                 state,
                 step,

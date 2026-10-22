@@ -2,13 +2,142 @@ import asyncio
 import datetime as dt
 import json
 import os
+import subprocess
 import sys
+import threading
+from types import SimpleNamespace
 
 import pytest
 
 from brainlayer import job_alerts
 from brainlayer.maintenance_calendar import calendar_steps, run_calendar
 from tests.test_maintenance_control import control, native  # noqa: F401
+
+
+@pytest.mark.parametrize("first,at,code", [("index", 3, 124), ("index", 4, 75), ("backup-snapshot", 6, 75)])
+def test_slow_failure_notification_keeps_heartbeat_and_finishes_calendar(tmp_path, monkeypatch, first, at, code):
+    from brainlayer import maintenance_calendar as calendar
+
+    entered, release = threading.Event(), threading.Event()
+    blocked, executed, notifications = [], [], []
+    alerts = tmp_path / "alerts.json"
+    env_file = tmp_path / "fixture.env"
+    env_file.write_text("BRAINLAYER_BACKUP_SNAPSHOT_TIMEOUT_SECONDS=60\n")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(env_file))
+
+    def notify(message):
+        notifications.append(message)
+        raise subprocess.TimeoutExpired("fixture-notification", 8)
+
+    def report(key, reason):
+        entered.set()
+        if not release.wait(5):
+            blocked.append(key)
+        return job_alerts.report(key, reason, path=alerts, notify=notify)
+
+    async def execute(step, env, **kwargs):
+        executed.append(step.name)
+        return 124 if step.name == "index" else 0
+
+    monkeypatch.setattr(calendar, "report", report)
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+    original_write = os.write
+
+    def observe_heartbeat(fd, data):
+        written = original_write(fd, data)
+        if data == b"H\n" and entered.is_set():
+            release.set()
+        return written
+
+    monkeypatch.setattr(os, "write", observe_heartbeat)
+    steps = [calendar.Step(name, ("/unused",), 60) for name in (first, "jsonl-backup", "backup-daily")]
+    directory = tmp_path / "calendar"
+    result = asyncio.run(
+        run_calendar(
+            steps,
+            directory,
+            tmp_path / "logs",
+            now_fn=lambda: dt.datetime(2026, 10, 22, at, 46),
+            defer_after=1,
+        )
+    )
+    assert not blocked, "failure reporting blocked the event loop that sends guard heartbeats"
+    assert executed == (["index"] if at == 3 else []) + ["jsonl-backup", "backup-daily"]
+    assert notifications
+    assert result == int(code == 124)
+    rows = [json.loads(line) for line in (directory / "runs.jsonl").read_text().splitlines()]
+    assert [(row["step"], row["returncode"]) for row in rows if row["event"] == "finished"] == [
+        (first, code),
+        ("jsonl-backup", 0),
+        ("backup-daily", 0),
+    ]
+    assert rows[-1]["event"] == "summary"
+    assert rows[-1]["failed"] == int(code == 124)
+    assert rows[-1]["deferred"] == int(code == 75)
+    assert json.loads((directory / "state.json").read_text())["deferrals"] == (
+        {calendar.KEYS[first]: {"date": "2026-10-22", "count": 1}} if code == 75 else {}
+    )
+
+
+def test_cancelled_calendar_retains_custody_until_finish_worker_exits(tmp_path, monkeypatch):
+    from brainlayer import maintenance_calendar as calendar
+
+    entered, release = threading.Event(), threading.Event()
+    directory = tmp_path / "calendar"
+    env_file = tmp_path / "fixture.env"
+    env_file.write_text("")
+    monkeypatch.setenv("BRAINLAYER_ENV_FILE", str(env_file))
+
+    def report(*args):
+        entered.set()
+        assert release.wait(5), "test did not release the finish worker"
+
+    async def execute(*args, **kwargs):
+        return 124
+
+    monkeypatch.setattr(calendar, "report", report)
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    monkeypatch.setattr(
+        calendar.maintenance_control,
+        "control_client",
+        lambda: SimpleNamespace(path=tmp_path / "unused.sock", request=lambda: {}, _disabled=lambda *_a, **_k: set()),
+    )
+
+    async def exercise():
+        task = asyncio.create_task(
+            run_calendar(
+                [calendar.Step("index", ("/unused",), 60)],
+                directory,
+                tmp_path / "logs",
+                now_fn=lambda: dt.datetime(2026, 10, 22, 3, 46),
+            )
+        )
+        try:
+            async with asyncio.timeout(3):
+                while not entered.is_set():
+                    await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.wait({task}, timeout=0.5)
+            task.cancel()
+            await asyncio.sleep(0)
+            # A later calendar must not obtain custody while this worker can still write state.
+            assert not task.done()
+            with pytest.raises(BlockingIOError), calendar.Custody(directory):
+                pass
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(exercise())
+    assert json.loads((directory / "state.json").read_text()) == {"deferrals": {}}
+    with calendar.Custody(directory):
+        pass
 
 
 @pytest.mark.parametrize("last_weekly", [None, dt.date(2026, 10, 11)])
