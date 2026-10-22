@@ -39,6 +39,7 @@ from .queue_io import enqueue_watcher_chunk
 from .t3_provenance import t3_app_codex_session_ids
 from .t3_sources import resolve_t3_sources
 from .vector_store import VectorStore
+from .writer_telemetry import IngestMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -360,13 +361,14 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         import time as _time
 
         flush_start = _time.monotonic()
+        metrics = IngestMetrics("watcher", "realtime", entries)
         t3_selection = os.environ.get("BRAINLAYER_T3_STATE_DB")
         t3_state_db = Path(t3_selection).expanduser() if t3_selection else None
         t3_linkage_resolved = True
         try:
             linked_t3_session_ids = (
-                t3_app_codex_session_ids(t3_state_db)
-                if any(path.exists() for path, _ in resolve_t3_sources(t3_state_db))
+                metrics.run("provenance", t3_app_codex_session_ids, t3_state_db)
+                if any(path.exists() for path, _ in metrics.run("provenance", resolve_t3_sources, t3_state_db))
                 or os.environ.get("BRAINLAYER_T3_PROJECTION_VERSION", "1") != "1"
                 else set()
             )
@@ -405,7 +407,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
             provenance_class: str,
             source_class: str | None,
         ) -> None:
-            enqueue_watcher_chunk(
+            metrics.run(
+                "publish",
+                enqueue_watcher_chunk,
                 chunk_id=chunk_id,
                 content=clean_content,
                 metadata=metadata,
@@ -460,7 +464,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                     source_file not in unresolved_source_versions
                     or unresolved_source_versions[source_file] != source_version
                 ):
-                    project = _extract_project_from_session_file(source_file)
+                    project = metrics.run("provenance", _extract_project_from_session_file, source_file)
                     if project is not None:
                         source_projects[source_file] = project
                         if source_identity is not None:
@@ -468,7 +472,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                         unresolved_source_versions.pop(source_file, None)
                     else:
                         unresolved_source_versions[source_file] = source_version
-            claude_conversation_id = _extract_claude_conversation_id(source_file)
+            claude_conversation_id = metrics.run("provenance", _extract_claude_conversation_id, source_file)
 
             # Layer 1: Pre-classify filter
             skip_reason = should_skip_entry(entry, source_file=source_file)
@@ -479,7 +483,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
             # Layer 2: Pipeline classify
             try:
-                classified = classify_content(entry)
+                classified = metrics.run("classify", classify_content, entry)
             except Exception:
                 logger.exception("Classification failed for watcher entry from %s", source_file)
                 skipped += 1
@@ -493,7 +497,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
             # Layer 3: Pipeline chunk
             try:
-                chunks = chunk_content(classified)
+                chunks = metrics.run("chunk", chunk_content, classified)
             except Exception:
                 logger.exception("Chunking failed for watcher entry from %s", source_file)
                 skipped += 1
@@ -504,7 +508,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
             for chunk in chunks:
                 clean_content = _strip_system_reminders(chunk.content)
-                secret_scrub_result = scrub_secrets(clean_content)
+                secret_scrub_result = metrics.run("scrub", scrub_secrets, clean_content)
                 clean_content = secret_scrub_result.text
                 content_hash = normalized_exact_hash(clean_content)[:16]
                 file_stem = Path(source_file).stem
@@ -522,6 +526,9 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
 
                 conversation_id = chunk.metadata.get("session_id") or file_stem
                 metadata = dict(chunk.metadata)
+                observed = entry.get("_ingest_observed_at")
+                if isinstance(observed, (int, float)):
+                    metadata["ingest_observed_at"] = observed
                 if secret_scrub_result.redactions:
                     metadata["secret_scrub_redactions"] = sorted(
                         {redaction.provider for redaction in secret_scrub_result.redactions}
@@ -593,7 +600,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                         transaction_started = False
                         try:
                             ingested_at = int(time.time())
-                            cursor.execute("BEGIN IMMEDIATE")
+                            metrics.run("begin", cursor.execute, "BEGIN IMMEDIATE")
                             transaction_started = True
                             ensure_direct_liveness_schema()
                             duplicate, dedupe_fields = find_duplicate(
@@ -620,7 +627,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                     hamming_distance_value=duplicate.hamming_distance,
                                 )
                                 record_direct_liveness(duplicate.canonical_chunk_id, ingested_at)
-                                cursor.execute("COMMIT")
+                                metrics.run("commit", cursor.execute, "COMMIT")
+                                metrics.committed([{"metadata": metadata}])
                                 mark_direct_liveness_schema_ready()
                                 transaction_started = False
                                 inserted += 1
@@ -638,7 +646,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                                 },
                             ):
                                 record_direct_liveness(chunk_id, ingested_at)
-                                cursor.execute("COMMIT")
+                                metrics.run("commit", cursor.execute, "COMMIT")
+                                metrics.committed([{"metadata": metadata}])
                                 mark_direct_liveness_schema_ready()
                                 transaction_started = False
                                 inserted += 1
@@ -681,7 +690,8 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
                             changed = store.conn.changes() > 0
                             if changed:
                                 record_direct_liveness(chunk_id, ingested_at)
-                            cursor.execute("COMMIT")
+                            metrics.run("commit", cursor.execute, "COMMIT")
+                            metrics.committed([{"metadata": metadata}])
                             mark_direct_liveness_schema_ready()
                             transaction_started = False
                             if changed:
@@ -756,6 +766,7 @@ def create_flush_callback(db_path: Path | None = None, *, arbitrated: bool | Non
         except Exception:
             pass
 
+        metrics.finish("queued" if arbitrated else "completed")
         return FlushWatermarks(
             confirmed_offsets,
             inserted=inserted,

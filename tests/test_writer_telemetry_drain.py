@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import apsw
+import pytest
 
 from brainlayer.drain import burn_drain_once, drain_once
 from brainlayer.queue_io import enqueue_store
@@ -102,15 +103,15 @@ def _seed_store(db_path: Path) -> None:
     store.close()
 
 
-def test_live_drain_records_queue_wait_lane_and_source_from_spool_mtime(tmp_path, monkeypatch):
+def test_live_drain_records_queue_wait_lane_and_source_from_original_enqueue(tmp_path, monkeypatch):
     log_path = _configure(monkeypatch, tmp_path)
     db_path = tmp_path / "brainlayer.db"
     queue_dir = tmp_path / "queue"
     _seed_store(db_path)
     log_path.unlink(missing_ok=True)
     queued = enqueue_store(content="Unique queued telemetry memory", source="mcp", queue_dir=queue_dir)
-    old = time.time() - 2.0
-    os.utime(queued, (old, old))
+    event = {**json.loads(queued.read_text()), "queued_at": time.time() - 2.0}
+    queued.write_text(json.dumps(event) + "\n")
 
     assert drain_once(db_path=db_path, queue_dir=queue_dir, batch_size=1, log_path=tmp_path / "drain.log") == 1
 
@@ -208,3 +209,132 @@ def test_failed_begin_never_claims_lock_held(tmp_path, monkeypatch):
     assert event["lock_held_ms"] is None
     assert event["lock_acquired_at"] is None
     assert event["lock_wait_ms"] >= 0
+
+
+def test_ingest_stage_timings_separate_queue_encode_begin_apply_commit_and_checkpoint(tmp_path, monkeypatch):
+    import brainlayer.drain as drain
+    import brainlayer.writer_telemetry as telemetry
+
+    log_path = _configure(monkeypatch, tmp_path)
+    db_path, queue_dir = tmp_path / "stages.db", tmp_path / "queue"
+    _seed_store(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    queued = enqueue_store(content="stage measurement fixture", queue_dir=queue_dir)
+    event = json.loads(queued.read_text())
+    event["queued_at"] = 1000.0
+    drain._preserve_remaining_events(queued, [event])
+    os.utime(queued, (1100, 1100))
+    assert json.loads(queued.read_text())["queued_at"] == 1000
+    clock = [0.0]
+    monkeypatch.setattr(telemetry, "_MONOTONIC", lambda: clock[0])
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1010.0 + clock[0], raising=False)
+    original_open, original_apply = drain._open_connection, drain._apply_event
+
+    class TimedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def execute(self, sql, *args):
+            clock[0] += {"BEGIN IMMEDIATE": 0.02, "COMMIT": 0.04}.get(sql, 0)
+            return self.connection.execute(sql, *args)
+
+    def apply(*args):
+        clock[0] += 0.03
+        return original_apply(*args)
+
+    checkpoint_entered, release_checkpoint = threading.Event(), threading.Event()
+
+    def checkpoint(*args):
+        assert any(json.loads(line)["event"] == "ingest_committed" for line in log_path.read_text().splitlines())
+        checkpoint_entered.set()
+        assert release_checkpoint.wait(3)
+        clock[0] += 0.05
+        return 0
+
+    monkeypatch.setattr(drain, "_open_connection", lambda path: TimedConnection(original_open(path)))
+    monkeypatch.setattr(drain, "_apply_event", apply)
+    monkeypatch.setattr(drain, "_post_commit_checkpoint", checkpoint)
+    results, errors = [], []
+
+    def run():
+        try:
+            results.append(drain.drain_once(db_path=db_path, queue_dir=queue_dir, log_path=tmp_path / "drain.log"))
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert checkpoint_entered.wait(3), errors
+        assert not results
+    finally:
+        release_checkpoint.set()
+        worker.join(3)
+    assert not errors
+    assert results == [1]
+    result = [
+        json.loads(line) for line in log_path.read_text().splitlines() if json.loads(line)["event"] == "ingest_finished"
+    ][-1]
+    assert result["encode_ms"] == 0
+    assert result["begin_ms"] == pytest.approx(20)
+    assert result["apply_ms"] == pytest.approx(30)
+    assert result["commit_ms"] == pytest.approx(40)
+    assert result["checkpoint_ms"] == pytest.approx(50)
+    assert result["queue_wait_ms"] == pytest.approx(10000)
+    assert result["queue_to_commit_ms"] == pytest.approx(10090)
+
+
+def test_ingest_watermarks_follow_line_queue_fts_and_vector_commit(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import brainlayer.queue_io as queue_io
+    import brainlayer.watcher as watcher
+    import brainlayer.writer_telemetry as telemetry
+    from brainlayer.drain import _preserve_remaining_events
+    from brainlayer.watcher_bridge import create_flush_callback
+
+    log_path = _configure(monkeypatch, tmp_path)
+    db_path, queue = tmp_path / "watermarks.db", tmp_path / "queue"
+    _seed_store(db_path)
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    monkeypatch.setattr(watcher, "time", SimpleNamespace(time=lambda: 1000.0, monotonic=time.monotonic))
+    monkeypatch.setattr(queue_io, "time", SimpleNamespace(time=lambda: 1002.0))
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1005.0)
+    source = tmp_path / "session.jsonl"
+    content = (
+        "watermarkfixture documents the measured stages from a new conversation line to committed searchable memory."
+    )
+    source.write_text(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": content}}) + "\n")
+    entries = watcher.JSONLTailer(str(source)).read_new_lines()
+    entries[0]["_source_file"] = str(source)
+    assert create_flush_callback(db_path, arbitrated=True)(entries) == 1
+    spool = next(queue.glob("*.jsonl"))
+    event = json.loads(spool.read_text())
+    _preserve_remaining_events(spool, [event])
+    os.utime(spool, (1100, 1100))
+    assert json.loads(spool.read_text())["queued_at"] == 1002
+    assert drain_once(db_path=db_path, queue_dir=queue, log_path=tmp_path / "drain.log") == 1
+    conn = apsw.Connection(str(db_path))
+    (chunk_id,) = conn.execute("SELECT id FROM chunks WHERE content = ?", (content,)).fetchone()
+    assert conn.execute("SELECT content FROM chunks_fts WHERE chunks_fts MATCH 'watermarkfixture'").fetchone() == (
+        content,
+    )
+    conn.close()
+    hotlane = importlib.import_module("scripts.hotlane_brainbar_daemon")
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1008.0)
+    assert hotlane._write_embedded_vectors(db_path, [hotlane.EmbeddedVector(chunk_id, content, [0.25] * 1024)]) == 1
+    events = [
+        json.loads(line)
+        for line in log_path.read_text().splitlines()
+        if json.loads(line)["event"] == "ingest_committed"
+    ]
+    assert [(event["producer"], event["observed_to_commit_ms"]) for event in events] == [
+        ("drain", 5000),
+        ("hotlane", 8000),
+    ]
+    assert events[-1]["queue_to_commit_ms"] == 6000
+    assert not any(value in json.dumps(events) for value in (content, str(source)))

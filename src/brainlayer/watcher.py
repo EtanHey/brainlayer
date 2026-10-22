@@ -1000,6 +1000,7 @@ class JSONLTailer:
             consumed_bytes = nl_idx + 1
             if isinstance(parsed, dict):
                 parsed["_line_end_offset"] = line_end_offset
+                parsed["_ingest_observed_at"] = time.time()
                 lines.append(parsed)
 
         if consumed_bytes:
@@ -1485,6 +1486,7 @@ class JSONLWatcher:
                 continue
             entry["_source_file"] = filepath
             entry["_provider"] = provider
+            entry["_ingest_observed_at"] = line.get("_ingest_observed_at", time.time())
             if isinstance(line.get("_line_end_offset"), int):
                 entry["_line_end_offset"] = line["_line_end_offset"]
             normalized.append(entry)
