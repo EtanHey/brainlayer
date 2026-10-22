@@ -39,6 +39,15 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.69] - 2026-10-22
+
+### Fixed
+- BrainBar's job-log links open the actual log for every calendar step, including index, backup snapshot, P0 counter, WAL checkpoint, decay and FTS repair. The log directory follows the calendar's `--logs-dir` from its LaunchAgent or supervisor configuration, with the usual logs directory as the fallback. A step that has not written its log yet says so (#1437).
+- The Watcher chart shows "Updating…" when database activity makes flow counts temporarily unavailable but watcher health is still known. Stale or missing health stays amber or red with a matching status message; "Evidence unavailable" is reserved for an absence of watcher evidence (#1437).
+
+### Upgrade notes
+- Full release: the formula and the BrainBar app (cask) both move to 1.5.69.
+
 ## [1.5.68] - 2026-10-21
 
 ### Fixed
