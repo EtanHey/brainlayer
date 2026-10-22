@@ -635,6 +635,7 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         )
         observation.pid = runtime.pid
         observation.ownerNote = "Supervisor component \(name)" + (runtime.pid.map { " · PID \($0)" } ?? "")
+        if case .failed = state { observation.ownerNoteTone = .warning }
         return observation
     }
 
@@ -647,6 +648,21 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         guard next != nil else { return .stateOnly(.probeError("Maintenance calendar schedule unavailable")) }
         let name = job.launchdLabel.replacingOccurrences(of: "com.brainlayer.", with: "")
         let run = history.runs[name]
+        // Coverage belongs to the replacing runner's scheduled night. A later runner without a
+        // nightly result must fall back to the nightly's own history, even if the weekly was ok.
+        // Only journal order proves replacement; missing order must preserve the real result.
+        if job == .maintenanceNightly, let weekly = history.runs["maintenance-weekly"],
+           let scheduledDate = history.latestScheduledDate, !scheduledDate.isEmpty,
+           weekly.scheduledDate == scheduledDate,
+           weekly.replaces == "maintenance-nightly", weekly.status == "ok", weekly.code == 0,
+           weekly.startedAt != nil, let weeklyOrdinal = weekly.journalOrdinal,
+           run.map({ nightly in nightly.journalOrdinal.map { $0 < weeklyOrdinal } ?? false }) ?? true {
+            var covered = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: nil, lastExitCode: nil,
+                                                          lastRunAt: nil, nextRunAt: next, isContinuous: false)
+            covered.calendarCoveredByWeeklyAt = weekly.at
+            covered.ownerNote = "Nightly covered by weekly"
+            return covered
+        }
         let state: BrainLayerLaunchdLoadState
         if let run, run.status == "failed" || run.status == "stopped" || (run.code != 0 && run.code != 75) {
             state = .failed("\(job.title): calendar result \(run.status), exit \(run.code)")
@@ -678,12 +694,14 @@ struct BrainLayerLaunchdStatusProvider: BrainLayerLaunchdStatusSampling {
         }
         observation.ownerNote = "com.brainlayer.maintenance · " + (run.map { "last result: \($0.status)" }
             ?? "Scheduled, not yet run under the supervisor")
+        // A weekly that ran ok in the nightly's place keeps its own "last result: ok"; the nightly
+        // row says it was covered. A weekly that did not finish ok still says the nightly was skipped.
         if job == .maintenanceWeekly, let run, run.replaces == "maintenance-nightly",
+           !(run.code == 0 && run.status == "ok" && run.startedAt != nil),
            history.runs["maintenance-nightly"].map({ $0.at < run.at }) ?? true {
-            observation.ownerNote = run.code == 0 && run.status == "ok" && run.startedAt != nil
-                ? "Nightly skipped: weekly ran instead"
-                : "Nightly skipped: weekly scheduled instead"
+            observation.ownerNote = "Nightly skipped: weekly scheduled instead"
         }
+        if case .failed = state { observation.ownerNoteTone = .warning }
         return observation
     }
 

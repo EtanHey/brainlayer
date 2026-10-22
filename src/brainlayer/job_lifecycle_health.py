@@ -141,11 +141,28 @@ def _failure(
     return None, last_exit
 
 
+NIGHTLY_LABELS = frozenset({"com.brainlayer.maintenance"})
+
+
+def _escalation(label: str, episode: dict[str, Any]) -> str:
+    exit_code = episode.get("last_exit_code", "unknown")
+    count = episode.get("consecutive")
+    if episode.get("interval") and type(count) is int:
+        if label in NIGHTLY_LABELS:
+            # Once a night is not a crashloop; the daemon-oriented reason would repeat the exit.
+            return f"{label}: failed {count} nights in a row; last exit {exit_code}"
+        failures = f"{count} failed runs"
+    else:
+        # Pre-fix persisted interval episodes carry no count; failed_heals implies the threshold.
+        failures = f"{MAX_HEAL_ATTEMPTS} " + (
+            "failed runs" if episode.get("interval") else "heal attempts failed to restore a healthy job"
+        )
+    return f"{label}: {episode.get('reason', 'job unavailable')}; last exit code {exit_code}; {failures}"
+
+
 def _escalations(state: dict[str, dict[str, Any]]) -> list[str]:
     return [
-        f"{label}: {episode.get('reason', 'job unavailable')}; last exit code "
-        f"{episode.get('last_exit_code', 'unknown')}; {MAX_HEAL_ATTEMPTS} "
-        f"{'failed runs' if episode.get('interval') else 'heal attempts failed to restore a healthy job'}"
+        _escalation(label, episode)
         for label, episode in state.items()
         if isinstance(episode, dict) and episode.get("failed_heals")
     ]
@@ -213,7 +230,6 @@ def scan_job_lifecycle(
         interval = "StartInterval" in plist or "StartCalendarInterval" in plist
         prior = previous_state.get(label, {})
         prior_runs = prior.get("runs")
-        advanced = prior_runs is not None and runs > prior_runs
         reason, last_exit = _failure(
             _output(printed),
             current_keg,
@@ -223,14 +239,22 @@ def scan_job_lifecycle(
             if label == "com.brainlayer.daemon"
             else None,
         )
+        if interval and _pid(_output(printed)) is not None:
+            # The live invocation has no exit yet; last_exit belongs to runs - 1.
+            # Consume that completion only once, independently of the live PID's keg.
+            if prior_runs is None:
+                state[label] = {**prior, "runs": max(0, runs - 1)}
+                continue
+            if runs <= prior_runs + 1:
+                continue
+            runs -= 1
+            reason = None
+        advanced = prior_runs is not None and runs > prior_runs
         if reason and reason.startswith("keg mapping unavailable"):
             if interval:
                 continue  # A running interval script may not have loaded a keg library yet.
             # Preserve this uncertain episode without healing it; known jobs still progress.
             scan_errors.append(f"{label}: {reason}")
-            continue
-        if interval and reason and reason.startswith("stale keg"):
-            # Defer counting until launchd reports a completed, advanced run.
             continue
         if reason is None and advanced and last_exit not in (None, 0):
             reason = f"crashloop, last exit code {last_exit}"

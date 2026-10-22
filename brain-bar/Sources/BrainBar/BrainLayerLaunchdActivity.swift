@@ -1,5 +1,12 @@
 import Foundation
 
+/// How a job or group note is drawn: `info` is neutral text, `warning` the amber ⚠ (2026-10-21).
+/// Explicit, never inferred from the note's words.
+enum BrainLayerLaunchdNoteTone: Equatable, Sendable {
+    case info
+    case warning
+}
+
 struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     let loadState: BrainLayerLaunchdLoadState
     let runs: Int?
@@ -10,6 +17,10 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
     var pid: Int32? = nil
     var ownership: BrainBarJobOwnership = .legacy
     var ownerNote: String? = nil
+    /// Owner notes are informational ("last result: ok", "PID …"); only a failed result is a warning.
+    var ownerNoteTone: BrainLayerLaunchdNoteTone = .info
+    /// The nightly did not run because the weekly ran in its place and finished ok, at this time.
+    var calendarCoveredByWeeklyAt: Date? = nil
     var calendarStartedAt: Date? = nil
     var calendarDisabled = false
     var calendarDeferralRecord: BrainLayerMaintenanceEvidence.RunRecord? = nil
@@ -37,6 +48,12 @@ struct BrainLayerLaunchdJobObservation: Equatable, Sendable {
         case .paused: return .init(text: "Maintenance calendar paused", tone: .neutral)
         case .unknown, .unloaded: return .init(text: "Maintenance calendar status unavailable", tone: .neutral)
         }
+    }
+
+    /// The last-run cell on Jobs and Backups: a covered nightly names the weekly that covered it.
+    func lastRunText(formatDate: (Date) -> String, never: String) -> String {
+        if let calendarCoveredByWeeklyAt { return "Covered by weekly · " + formatDate(calendarCoveredByWeeklyAt) }
+        return lastRunAt.map(formatDate) ?? never
     }
 
     var calendarDeferralVerdict: BrainLayerMaintenanceExit.Verdict {
@@ -154,7 +171,7 @@ enum BrainLayerMaintenanceExit {
         case nil: return .unexplained("its stdout log was not read")
         case let .unavailable(why): return .unexplained(why)
         case .notAnAbort: return .unexplained("the newest stdout record is not an abort")
-        case let .aborted(reason, _):
+        case .aborted:
             guard let reason = thisRunsReason(record, lastRunAt: lastRunAt) else {
                 return .unexplained("the newest stdout record is not from this run")
             }
@@ -215,6 +232,8 @@ struct BrainLayerLaunchdGroupStatus: Equatable, Sendable {
     let nextRunText: String
     /// Desired Ingest configuration or maintenance warnings; never changes runtime `health`.
     var note: String?
+    /// Defaults to `warning`, so a note nobody classified is never silently drawn neutral.
+    var noteTone: BrainLayerLaunchdNoteTone = .warning
 }
 
 enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
@@ -343,7 +362,8 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         }.first
         let unknownReason = ownerUnknown ?? watcherUnknown ?? deferralUnknown
         let awaitingRun = jobs.contains { job in
-            guard settings[job]?.enabled != false, let observation = observations[job] else { return false }
+            guard settings[job]?.enabled != false, let observation = observations[job],
+                  observation.calendarCoveredByWeeklyAt == nil else { return false }
             return observation.loadState == .loaded && observation.runs == 0 && observation.lastExitCode == nil
         }
         let configuredOff = jobs.filter { settings[$0]?.enabled == false }
@@ -363,13 +383,24 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
         let ownerNotes = jobs.compactMap { observations[$0]?.ownerNote }.reduce(into: [String]()) {
             if !$0.contains($1) { $0.append($1) }
         }
+        let ownerNoteTone: BrainLayerLaunchdNoteTone = jobs.contains {
+            observations[$0]?.ownerNote != nil && observations[$0]?.ownerNoteTone == .warning
+        } ? .warning : .info
         let configurationNote = configuredOff.isEmpty ? nil
             : "Configured OFF: \(configuredOff.map(\.humanGroupLabel).joined(separator: ", "))."
+        // Configuration and run warnings are warnings; owner notes carry their own tone.
+        let note: String?
+        let noteTone: BrainLayerLaunchdNoteTone
+        if let configurationNote { (note, noteTone) = (configurationNote, .warning) }
+        else if !warningNotes.isEmpty { (note, noteTone) = (warningNotes.joined(separator: " · "), .warning) }
+        else if !ownerNotes.isEmpty { (note, noteTone) = (ownerNotes.joined(separator: " · "), ownerNoteTone) }
+        else { (note, noteTone) = (nil, .info) }
         return BrainLayerLaunchdGroupStatus(
             health: health,
             attentionReason: reason ?? calendarAttention ?? unknownReason ?? (skips.isEmpty ? nil : skips.joined(separator: " ")),
             lastRunText: jobs.map { job in
-                "\(job.humanGroupLabel) \(observations[job]?.lastRunAt.map(formatDate) ?? (observations[job]?.ownership == .supervisor ? "Not yet run under the supervisor" : "No run recorded"))"
+                let never = observations[job]?.ownership == .supervisor ? "Not yet run under the supervisor" : "No run recorded"
+                return "\(job.humanGroupLabel) \(observations[job]?.lastRunText(formatDate: formatDate, never: never) ?? never)"
             }.joined(separator: " · "),
             nextRunText: jobs.map { job in
                 let observation = observations[job]
@@ -378,7 +409,8 @@ enum BrainLayerLaunchdJobGroup: String, CaseIterable, Identifiable, Sendable {
                     : observation?.nextRunAt.map(formatDate) ?? "Unavailable"
                 return "\(job.humanGroupLabel) \(value)"
             }.joined(separator: " · "),
-            note: configurationNote ?? (warningNotes.isEmpty ? (ownerNotes.isEmpty ? nil : ownerNotes.joined(separator: " · ")) : warningNotes.joined(separator: " · "))
+            note: note,
+            noteTone: noteTone
         )
     }
 }

@@ -422,3 +422,183 @@ def test_global_scan_refusals_still_prevent_healing(tmp_path: Path, refusal: str
     assert not any(
         args[:2] == ["launchctl", "print"] or args[:2] == ["launchctl", "kickstart"] for args in fake.commands
     )
+
+
+@pytest.fixture
+def nightly_maintenance(tmp_path: Path):
+    old, current, opt = _setup(tmp_path, ("maintenance", {"StartCalendarInterval": {"Hour": 3, "Minute": 15}}))
+    fake = FakeCommands(current, old)
+    fake.runs["maintenance"] = 1
+    fake.exit["maintenance"] = 0
+    fake.pid["maintenance"] = None
+    baseline = _tick(tmp_path, opt, fake, {}, 0)
+    assert baseline.scan_error is None and baseline.escalations == []
+    return opt, fake, baseline
+
+
+def _failed_maintenance_nights(tmp_path: Path, nightly_maintenance, nights: int):
+    opt, fake, tick = nightly_maintenance
+    fake.exit["maintenance"] = 1
+    for night in range(1, nights + 1):
+        fake.runs["maintenance"] += 1
+        tick = _tick(tmp_path, opt, fake, tick.state, night * 86400)
+        assert tick.scan_error is None and tick.actions == []
+    return tick
+
+
+@pytest.mark.parametrize("nights", [3, 4])
+def test_nightly_maintenance_failure_message_uses_nights(tmp_path: Path, nightly_maintenance, nights: int):
+    tick = _failed_maintenance_nights(tmp_path, nightly_maintenance, nights)
+    assert tick.escalations == [f"com.brainlayer.maintenance: failed {nights} nights in a row; last exit 1"]
+
+
+def test_nightly_maintenance_failure_message_has_one_exit_detail(tmp_path: Path, nightly_maintenance):
+    tick = _failed_maintenance_nights(tmp_path, nightly_maintenance, 4)
+    assert len(tick.escalations) == 1
+    assert tick.escalations[0].count("last exit") == 1
+
+
+@pytest.mark.parametrize("nights", [4, 7])
+def test_nightly_maintenance_failure_message_reports_actual_count(tmp_path: Path, nightly_maintenance, nights: int):
+    tick = _failed_maintenance_nights(tmp_path, nightly_maintenance, nights)
+    assert tick.state["com.brainlayer.maintenance"]["consecutive"] == nights
+    assert f"failed {nights} nights in a row" in tick.escalations[0]
+
+
+@pytest.mark.parametrize("completed_failures", [2, 4])
+def test_nightly_maintenance_in_progress_run_is_not_a_failure(
+    tmp_path: Path, nightly_maintenance, completed_failures: int
+):
+    opt, fake, _ = nightly_maintenance
+    prior = _failed_maintenance_nights(tmp_path, nightly_maintenance, completed_failures)
+    fake.runs["maintenance"] += 1
+    fake.pid["maintenance"] = 44
+    fake.keg[44] = fake.current
+    now = (completed_failures + 1) * 86400
+    state = prior.state
+    for offset in (0, 300):
+        running = _tick(tmp_path, opt, fake, state, now + offset)
+        assert running.scan_error is None and running.actions == []
+        assert running.state["com.brainlayer.maintenance"]["consecutive"] == completed_failures
+        assert running.escalations == prior.escalations
+        state = running.state
+    fake.pid["maintenance"] = None
+    completed = _tick(tmp_path, opt, fake, state, now + 600)
+    assert completed.state["com.brainlayer.maintenance"]["consecutive"] == completed_failures + 1
+    assert len(completed.escalations) == 1
+    repeated = _tick(tmp_path, opt, fake, completed.state, now + 900)
+    assert repeated.state["com.brainlayer.maintenance"]["consecutive"] == completed_failures + 1
+    assert repeated.escalations == completed.escalations
+
+
+def test_nightly_maintenance_alerts_after_three_completed_failures(tmp_path: Path, nightly_maintenance):
+    opt, fake, tick = nightly_maintenance
+    fake.exit["maintenance"] = 1
+    for failures in range(1, 5):
+        fake.runs["maintenance"] += 1
+        tick = _tick(tmp_path, opt, fake, tick.state, failures * 86400)
+        episode = tick.state["com.brainlayer.maintenance"]
+        assert episode["consecutive"] == failures
+        assert episode["failed_heals"] is (failures >= 3)
+        assert len(tick.escalations) == int(failures >= 3)
+        assert tick.actions == [] and episode["attempts"] == 0
+        # Health-check samples between nightly runs must not advance the threshold.
+        repeated = _tick(tmp_path, opt, fake, tick.state, failures * 86400 + 300)
+        assert repeated.state == tick.state and repeated.escalations == tick.escalations
+    assert not any(args[:2] == ["launchctl", "kickstart"] for args in fake.commands)
+
+
+def test_nightly_maintenance_first_success_clears_and_restarts_threshold(tmp_path: Path, nightly_maintenance):
+    opt, fake, _ = nightly_maintenance
+    failed = _failed_maintenance_nights(tmp_path, nightly_maintenance, 4)
+    assert len(failed.escalations) == 1
+    fake.runs["maintenance"] += 1
+    fake.exit["maintenance"] = 0
+    cleared = _tick(tmp_path, opt, fake, failed.state, 5 * 86400)
+    episode = cleared.state["com.brainlayer.maintenance"]
+    assert cleared.escalations == [] and cleared.actions == []
+    assert episode["consecutive"] == 0 and episode["failed_heals"] is False
+    fake.exit["maintenance"] = 1
+    state = cleared.state
+    for failures in range(1, 4):
+        fake.runs["maintenance"] += 1
+        tick = _tick(tmp_path, opt, fake, state, (5 + failures) * 86400)
+        assert tick.state["com.brainlayer.maintenance"]["consecutive"] == failures
+        assert len(tick.escalations) == int(failures == 3)
+        assert tick.actions == []
+        state = tick.state
+
+
+@pytest.fixture(params=["log-cap", "maintenance"])
+def scheduled_success(tmp_path: Path, request):
+    tmp_path = tmp_path.resolve()
+    name = request.param
+    options = {"StartCalendarInterval": {"Hour": 3}} if name == "maintenance" else {"StartInterval": 300}
+    old, current, opt = _setup(tmp_path, (name, options))
+    fake = FakeCommands(current, old)
+    fake.runs[name], fake.exit[name], fake.pid[name] = 1, 0, None
+    tick = _tick(tmp_path, opt, fake, {}, 0, heal=False)
+    assert tick.scan_error is None and tick.escalations == []
+    return tmp_path, opt, fake, name, tick
+
+
+def test_scheduled_completed_failures_between_live_samples_then_idle(scheduled_success):
+    tmp_path, opt, fake, name, tick = scheduled_success
+    label = f"com.brainlayer.{name}"
+    fake.exit[name] = 1
+    for runs, failures in ((3, 1), (4, 2), (5, 3)):
+        fake.runs[name], fake.pid[name] = runs, 40 + runs
+        fake.keg[40 + runs] = fake.current
+        tick = _tick(tmp_path, opt, fake, tick.state, runs * 300, heal=False)
+        assert tick.scan_error is None and tick.actions == []
+        assert tick.state[label]["runs"] == runs - 1
+        assert tick.state[label]["consecutive"] == failures
+        assert len(tick.escalations) == int(failures >= 3)
+        repeated = _tick(tmp_path, opt, fake, tick.state, runs * 300 + 1, heal=False)
+        assert repeated.state == tick.state and repeated.escalations == tick.escalations
+    fake.pid[name] = None
+    idle = _tick(tmp_path, opt, fake, tick.state, 1800, heal=False)
+    assert idle.state[label]["runs"] == 5
+    assert idle.state[label]["consecutive"] == 4
+    assert len(idle.escalations) == 1 and idle.actions == []
+    repeated = _tick(tmp_path, opt, fake, idle.state, 2100, heal=False)
+    assert repeated.state == idle.state and repeated.escalations == idle.escalations
+
+
+@pytest.mark.parametrize("mapping", ["current", "old", "unmapped"])
+def test_scheduled_successors_consume_completed_exits_once_and_recover(scheduled_success, mapping):
+    tmp_path, opt, fake, name, tick = scheduled_success
+    label = f"com.brainlayer.{name}"
+    for runs, last_exit, failures in ((2, 0, 0), (3, 1, 1), (4, 1, 2), (5, 1, 3), (6, 0, 0)):
+        fake.runs[name], fake.exit[name], fake.pid[name] = runs, last_exit, 40 + runs
+        if mapping != "unmapped":
+            fake.keg[40 + runs] = fake.current if mapping == "current" else fake.current.parent / "1.5.35"
+        else:
+            fake.ps_command = "/fixture/framework/python -m brainlayer job"
+        tick = _tick(tmp_path, opt, fake, tick.state, runs * 300, heal=False)
+        assert tick.scan_error is None and tick.actions == []
+        assert tick.state[label]["runs"] == runs - 1
+        assert tick.state[label]["consecutive"] == failures
+        assert len(tick.escalations) == int(failures >= 3)
+        repeated = _tick(tmp_path, opt, fake, tick.state, runs * 300 + 1, heal=False)
+        assert repeated.state == tick.state and repeated.escalations == tick.escalations
+
+
+@pytest.mark.parametrize("prior_alert", [False, True])
+def test_scheduled_first_live_sample_seeds_watermark_without_clearing_alert(scheduled_success, prior_alert):
+    tmp_path, opt, fake, name, _ = scheduled_success
+    label = f"com.brainlayer.{name}"
+    prior = {"interval": True, "consecutive": 3, "failed_heals": True, "last_exit_code": 1} if prior_alert else {}
+    fake.runs[name], fake.exit[name], fake.pid[name] = 2, 1, 44
+    fake.keg[44] = fake.current
+    first = _tick(tmp_path, opt, fake, {label: prior} if prior_alert else {}, 0, heal=False)
+    assert first.state[label] == {**prior, "runs": 1}
+    assert len(first.escalations) == int(prior_alert)
+    repeated = _tick(tmp_path, opt, fake, first.state, 1, heal=False)
+    assert repeated.state == first.state and repeated.escalations == first.escalations
+    fake.runs[name] = 3
+    next_run = _tick(tmp_path, opt, fake, first.state, 300, heal=False)
+    assert next_run.state[label]["runs"] == 2
+    assert next_run.state[label]["consecutive"] == (4 if prior_alert else 1)
+    assert len(next_run.escalations) == int(prior_alert)
+    assert first.actions == repeated.actions == next_run.actions == []

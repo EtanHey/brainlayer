@@ -557,8 +557,10 @@ enum ObservabilityPresentation {
                 text: "Latest DB snapshot (\(value.verified ? "verified" : "NOT verified")): \(localDate(value.lastAt)) → \(value.destination)",
                 tone: value.verified ? .green : .red)
         } ?? .init(text: "No verified DB snapshot on record", tone: .red)
-        // New v2 evidence gets an independent offsite age check. Legacy documents retain their contract.
-        let staleOffsite = (backups.localSnapshot != nil || backups.transcriptAttempt != nil) &&
+        // New v2 evidence gets an independent offsite age check. Legacy documents retain their
+        // contract, except when the producer itself says the backups are stale (#1420): then an
+        // out-of-window DB copy is the stale copy, and the DB dot and check cannot stay green.
+        let staleOffsite = (backups.localSnapshot != nil || backups.transcriptAttempt != nil || backups.freshness == "stale") &&
             backups.dbSnapshot.map { $0.verified && !backups.isRecent($0.lastAt, now: now) } == true
         let offsiteAge = backups.dbSnapshot.map { relative($0.lastAt, now: now, locale: locale) } ?? "unknown"
         let pendingState = backups.localSnapshot.map { ["pending", "in_progress"].contains($0.uploadState) } == true
@@ -658,6 +660,10 @@ enum ObservabilityPresentation {
                 let reason = DriveAuthJSON.sanitized(String(value.dropFirst(jobAlertPrefix.count)))
                 return .init(text: reason ?? "Backup alert with no reason given", tone: .red)
             }
+            // The DB copy's own verdict (#1420) is a sentence, not "an error the backup reported".
+            if let sentence = dbSnapshotSentence(value, thresholdHours: backups.thresholdHours) {
+                return .init(text: sentence, tone: .red)
+            }
             let kind = value.hasPrefix("jsonl_backup_attempt_") ? "Transcript" : "DB"
             return .init(text: "\(kind) backup error: \(errorText(value))", tone: .red)
         }
@@ -702,6 +708,20 @@ enum ObservabilityPresentation {
     }
 
     private static let jobAlertPrefix = "job_alert:"
+
+    /// `observability_backup._db_snapshot_freshness` codes, in plain words; nil for any other value.
+    static func dbSnapshotSentence(_ errorType: String, thresholdHours: Double?) -> String? {
+        let code = errorType.split(separator: ":", maxSplits: 1).first.map(String.init) ?? errorType
+        switch code {
+        case "db_snapshot_stale":
+            let window = thresholdHours.map { "\(Int($0)) hours" } ?? "its freshness window"
+            return "The database copy in Google Drive is older than \(window)"
+        case "db_snapshot_missing": return "No verified database copy in Google Drive"
+        case "db_snapshot_unverified": return "The newest database copy in Google Drive failed verification"
+        case "db_snapshot_clock_skew": return "The newest database copy is dated in the future; check this Mac's clock"
+        default: return nil
+        }
+    }
 
     private static func errorText(_ value: String) -> String {
         switch value {

@@ -96,7 +96,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).freshness.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).snapshot.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups, now: live.generatedAt).snapshot.tone, .green)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).freshness.tone, .red)
     }
 
@@ -114,7 +114,7 @@ final class ObservabilitySnapshotTests: XCTestCase {
 
     func testBackupStatusSaysWhenWhereAndWhy() throws {
         let live = try liveShapedDocument()
-        let status = ObservabilityPresentation.backupStatus(for: live.backups)
+        let status = ObservabilityPresentation.backupStatus(for: live.backups, now: live.generatedAt)
 
         XCTAssertEqual(status.upload.text, "No verified transcript upload on record")
         XCTAssertTrue(status.snapshot.text.contains("Latest DB snapshot (verified):"))

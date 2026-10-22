@@ -92,9 +92,13 @@ struct BrainBarCalendarHistory: Sendable {
         var startedAt: Date? = nil
         var reason: String? = nil
         var replaces: String? = nil
+        var scheduledDate: String? = nil
+        // Position in this journal snapshot; wall-clock timestamps can move backwards.
+        var journalOrdinal: Int? = nil
     }
     var runs: [String: Run] = [:]
     var error: String? = nil
+    var latestScheduledDate: String? = nil
     static let empty = Self()
 
     static func read(directory: URL = BrainBarJobOwnership.directory.appendingPathComponent("calendar")) -> Self {
@@ -104,14 +108,17 @@ struct BrainBarCalendarHistory: Sendable {
             ) else { return .empty }
             var result = Self()
             var starts: [String: Date] = [:]
-            for line in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline) {
+            for (ordinal, line) in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).enumerated() {
                 guard let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 else { throw CocoaError(.fileReadCorruptFile) }
                 if row["event"] as? String == "spawn", let step = row["step"] as? String,
                    let ts = row["ts"] as? Double, ts.isFinite {
                     starts[step] = Date(timeIntervalSince1970: ts)
                 }
-                if row["event"] as? String == "runner" { starts.removeAll() }
+                if row["event"] as? String == "runner" {
+                    starts.removeAll()
+                    result.latestScheduledDate = row["scheduled_date"] as? String
+                }
                 guard row["event"] as? String == "finished" else { continue }
                 guard let step = row["step"] as? String, let ts = row["ts"] as? Double, ts.isFinite,
                       let status = row["status"] as? String else { throw CocoaError(.fileReadCorruptFile) }
@@ -123,7 +130,8 @@ struct BrainBarCalendarHistory: Sendable {
                       ["ok", "failed", "deferred", "stopped"].contains(status)
                 else { throw CocoaError(.fileReadCorruptFile) }
                 result.runs[step] = Run(at: Date(timeIntervalSince1970: ts), code: code, status: status,
-                    startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String)
+                    startedAt: startedAt, reason: row["reason"] as? String, replaces: row["replaces"] as? String,
+                    scheduledDate: result.latestScheduledDate, journalOrdinal: ordinal)
             }
             return result
         } catch { return Self(error: "Maintenance calendar history is unreadable") }
