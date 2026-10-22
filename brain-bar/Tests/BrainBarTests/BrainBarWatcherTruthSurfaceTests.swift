@@ -11,6 +11,12 @@ import XCTest
 final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
     private let now = BrainBarDashboardFixture.fetchedAt
 
+    private var renderDirectory: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build.noindex/brainbar-render", isDirectory: true)
+    }
+
     private func healthyBackups() -> ObservabilityBackupStatus {
         let green = ObservabilityStatusLine(text: "verified", tone: .green)
         return .init(upload: green, snapshot: green, job: green, freshness: green, retention: green, archives: green, error: nil)
@@ -130,14 +136,58 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
+        let directory = renderDirectory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try png.write(to: directory.appendingPathComponent("watcher-flow-updating.png"))
         XCTAssertGreaterThan(png.count, 5_000)
     }
 
-    func testPreviewHidesUnreadableWatcherCountsAndKeepsUpdatingDisclosure() throws {
+    func testPreviewHidesUnreadableWatcherCountsAndKeepsUpdatingDisclosure() {
+        for readable in [false, true] {
+            let sample = stats(replayDebt: 0, flowReadable: readable, watcherBuckets: [9876, 9876, 9876, 9876])
+            // Match BrainBarPipelinePanelPreviewView.flowSummary and seriesCard: the raw
+            // buckets remain populated even when the query's evidence is unreadable.
+            let lane = DashboardFlowSummary.derive(daemon: nil, stats: sample, now: now).lane(for: .jsonlWatcher)
+            let presentation = BrainBarIngestSeriesPresentation(lane: lane)
+            let disclosure = BrainBarDashboardChartDisclosure(series: .jsonlWatcher, lane: lane, timeframe: .live)
+            let presentedText = [
+                presentation.metricText, presentation.rateText, presentation.volumeText,
+                presentation.latestBucketCaptionText, disclosure.subtitle, disclosure.visibleDetail,
+                disclosure.statusLabel, disclosure.tooltipDisclosure, disclosure.accessibilitySummary,
+            ].compactMap { $0 }.joined(separator: "\n")
+
+            XCTAssertEqual(presentation.showsSparkline, readable)
+            for token in ["39,504", "1316.8/min", "latest:"] {
+                XCTAssertEqual(presentedText.contains(token), readable, "\(token): \(presentedText)")
+            }
+            if readable {
+                XCTAssertEqual(presentation.metricText, "39,504 · peak 9.9k")
+                XCTAssertEqual(presentation.rateText, "1316.8/min")
+                XCTAssertEqual(presentation.volumeText, "39,504 in 30m")
+                XCTAssertEqual(presentation.latestBucketCaptionText, "latest: 9.9k")
+                XCTAssertEqual(disclosure.accessibilitySummary,
+                    "Watcher-ingested chunks. Window: Last 1h. Count: 39,504. Unit: unique chunk IDs first seen in this window. Clock: ingest time.")
+                XCTAssertEqual(disclosure.tooltipDisclosure,
+                    "Window: Last 1h · Count: hovered value below · Unit: unique chunk IDs first seen in this window · Clock: ingest time")
+                XCTAssertFalse(presentedText.contains("Updating…"))
+            } else {
+                XCTAssertEqual(presentation.metricText, "Updating…")
+                XCTAssertEqual(presentation.rateText, "—")
+                XCTAssertNil(presentation.volumeText)
+                XCTAssertNil(presentation.latestBucketCaptionText)
+                XCTAssertEqual(disclosure.tooltipDisclosure, "Updating…")
+                XCTAssertEqual(disclosure.accessibilitySummary,
+                    "Watcher-ingested chunks. Updating…. Window: Last 1h. Unit: unique chunk IDs first seen in this window. Clock: ingest time.")
+                XCTAssertFalse(disclosure.accessibilitySummary.contains("Count:"))
+            }
+        }
+    }
+
+    func testRenderPreviewWatcherCountsForOptionalLocalEvidence() throws {
+        guard ProcessInfo.processInfo.environment["BRAINBAR_RENDER_EVIDENCE"] == "1",
+              ProcessInfo.processInfo.environment["CI"] == nil else {
+            throw XCTSkip("Set BRAINBAR_RENDER_EVIDENCE=1 locally for preview PNGs and diagnostic OCR.")
+        }
         for readable in [false, true] {
             let sample = stats(replayDebt: 0, flowReadable: readable, watcherBuckets: [9876, 9876, 9876, 9876])
             let view = BrainBarPipelinePanelPreview.make(
@@ -149,8 +199,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
             host.layoutSubtreeIfNeeded()
-            // Use a fixed 3x raster: Vision read the 11pt "Updating…" label as "Undatind."
-            // on CI. Preserve the visible-text assertion across display scales.
+            // OCR is diagnostic only: Vision can misread the correctly rendered 11pt label.
             let bitmap = try XCTUnwrap(NSBitmapImageRep(
                 bitmapDataPlanes: nil,
                 pixelsWide: Int(host.bounds.width * 3),
@@ -160,8 +209,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             ))
             bitmap.size = host.bounds.size
             host.cacheDisplay(in: host.bounds, to: bitmap)
-            let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-                .deletingLastPathComponent().appendingPathComponent("docs.local/brainbar-render")
+            let directory = renderDirectory
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
                 .write(to: directory.appendingPathComponent(readable ? "watcher-preview-readable.png" : "watcher-preview-updating.png"))
@@ -169,12 +217,7 @@ final class BrainBarWatcherTruthSurfaceTests: XCTestCase {
             request.recognitionLevel = .accurate
             try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage)).perform([request])
             let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
-            XCTAssertEqual(text.contains("39,504"), readable, text)
-            if !readable {
-                XCTAssertTrue(text.contains("Updating"), text)
-                XCTAssertFalse(text.contains("1316.8/min"), text)
-                XCTAssertFalse(text.contains("latest:"), text)
-            }
+            print("Watcher preview diagnostic OCR (readable=\(readable)):\n\(text)")
         }
     }
 

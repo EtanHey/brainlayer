@@ -3045,7 +3045,11 @@ private struct BrainBarPipelineSeriesCard: View {
     let fetchedAt: Date
     let timeframe: PipelineTimeframe
 
-    private var isUnavailable: Bool { lane.evidenceStatus == .unavailable }
+    private var seriesPresentation: BrainBarIngestSeriesPresentation {
+        BrainBarIngestSeriesPresentation(lane: lane)
+    }
+
+    private var isUnavailable: Bool { !seriesPresentation.showsSparkline }
 
     private var presentation: SparklineChartPresentation {
         let disclosure = chartDisclosure
@@ -3073,12 +3077,6 @@ private struct BrainBarPipelineSeriesCard: View {
         DashboardMetricFormatter.windowLabel(minutes: timeframe.windowMinutes)
     }
 
-    private var latestBucketCaptionText: String? {
-        let latest = lane.values.last ?? 0
-        guard latest > 0 else { return nil }
-        return "latest: \(DashboardMetricFormatter.axisTickString(latest))"
-    }
-
     private var accent: Color { Color.brainBar(nsColor: lane.accentColor) }
 
     private var chartDisclosure: BrainBarDashboardChartDisclosure {
@@ -3094,7 +3092,7 @@ private struct BrainBarPipelineSeriesCard: View {
                     if lane.status != .running {
                         Circle().fill(lane.status.stateTheme.theme.swiftUIColor).frame(width: 5, height: 5)
                     }
-                    Text(lane.evidencePlaceholder ?? "Evidence unavailable")
+                    Text(lane.hasWatcherEvidence ? seriesPresentation.metricText : "Evidence unavailable")
                 }
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.brainBarTextSecondary)
@@ -3141,8 +3139,8 @@ private struct BrainBarPipelineSeriesCard: View {
             // ONE caption line: volume for the selected window, plus the window
             // label so the shared selector visibly relabels every card.
             HStack(spacing: 8) {
-                if !isUnavailable {
-                    Text(lane.volumeText)
+                if let volumeText = seriesPresentation.volumeText {
+                    Text(volumeText)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.brainBarTextSecondary.opacity(0.70))
                         .lineLimit(1)
@@ -3150,7 +3148,7 @@ private struct BrainBarPipelineSeriesCard: View {
                     Text("·")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.brainBarTextSecondary.opacity(0.45))
-                    if let latestBucketCaptionText {
+                    if let latestBucketCaptionText = seriesPresentation.latestBucketCaptionText {
                         Text(latestBucketCaptionText)
                             .font(.system(size: 11, weight: .semibold))
                             .monospacedDigit()
@@ -3181,7 +3179,7 @@ private struct BrainBarPipelineSeriesCard: View {
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.80)
                     .foregroundStyle(Color.brainBarTextSecondary.opacity(0.60))
-                Text(isUnavailable ? "—" : lane.rateText)
+                Text(seriesPresentation.rateText)
                     .font(.system(size: compact ? 22 : 26, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(Color.brainBarTextPrimary)
@@ -3213,16 +3211,26 @@ private struct BrainBarPipelineSeriesCard: View {
 struct BrainBarIngestSeriesPresentation: Equatable {
     let metricText: String
     let showsSparkline: Bool
+    let rateText: String
+    let volumeText: String?
+    let latestBucketCaptionText: String?
 
     init(lane: DashboardFlowLane, locale: Locale = .current) {
         guard lane.evidenceStatus != .unavailable else {
             metricText = lane.hasWatcherEvidence ? (lane.evidencePlaceholder ?? "Unavailable") : "Unavailable"
             showsSparkline = false
+            rateText = "—"
+            volumeText = nil
+            latestBucketCaptionText = nil
             return
         }
 
         metricText = "\(DashboardMetricFormatter.integerString(lane.values.reduce(0, +), locale: locale)) · peak \(DashboardMetricFormatter.axisTickString(lane.values.max() ?? 0, locale: locale))"
         showsSparkline = true
+        rateText = lane.rateText
+        volumeText = lane.volumeText
+        let latest = lane.values.last ?? 0
+        latestBucketCaptionText = latest > 0 ? "latest: \(DashboardMetricFormatter.axisTickString(latest, locale: locale))" : nil
     }
 }
 
