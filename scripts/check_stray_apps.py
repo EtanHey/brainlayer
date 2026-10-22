@@ -2,7 +2,7 @@
 
 Only .build.noindex is disposable build output. docs.local (including old archives and
 .noindex subdirectories) has no app exemption. Binary files over 1 MiB are identified
-by archive suffix, NUL bytes or non-UTF-8 data in their first 8 KiB. Never follow links.
+by archive suffix, NUL bytes or non-UTF-8 data anywhere in the file. Never follow links.
 """
 
 import codecs
@@ -21,12 +21,14 @@ def large_binary(path: Path) -> bool:
         return False
     if path.suffix.lower() in BINARY_SUFFIXES:
         return True
-    with path.open("rb") as stream:
-        header = stream.read(8192)
-    if b"\x00" in header:
-        return True
+    decoder = codecs.getincrementaldecoder("utf-8")()
     try:
-        codecs.getincrementaldecoder("utf-8")().decode(header, final=False)
+        with path.open("rb") as stream:
+            while block := stream.read(8192):
+                if b"\x00" in block:
+                    return True
+                decoder.decode(block, final=False)
+            decoder.decode(b"", final=True)
     except UnicodeDecodeError:
         return True
     return False

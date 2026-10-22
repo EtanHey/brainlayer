@@ -1,5 +1,7 @@
 """Spotlight hygiene checks run against owned trees, never the whole disk."""
 
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -74,6 +76,75 @@ def test_binary_threshold_and_scan_boundary(tmp_path):
     (repo / "external").symlink_to(outside, target_is_directory=True)
     result = subprocess.run([sys.executable, str(CHECK), str(repo)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("tail", [b"\x00", b"\xff", b"\xe2\x82"])
+def test_scan_rejects_binary_data_after_a_large_text_prefix(tmp_path, tail):
+    docs = tmp_path / "docs.local"
+    docs.mkdir()
+    binary = docs / "receipt.log"
+    binary.write_bytes(b"x" * (1024 * 1024 + 1) + tail)
+    result = subprocess.run([sys.executable, str(CHECK), str(tmp_path)], capture_output=True, text=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert str(binary) in result.stdout
+
+
+def test_scan_accepts_utf8_split_across_read_boundaries(tmp_path):
+    docs = tmp_path / "docs.local"
+    docs.mkdir()
+    (docs / "receipt.log").write_bytes(b"x" * 8191 + "\u20ac".encode() + b"x" * (1024 * 1024))
+    result = subprocess.run([sys.executable, str(CHECK), str(tmp_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("link", [".build.noindex", ".build.noindex/pytest", ".build.noindex/pytest/explicit"])
+def test_pytest_rejects_symlinked_temp_output_before_writing(tmp_path, link):
+    repo = tmp_path / "repo"
+    tests = repo / "tests"
+    tests.mkdir(parents=True)
+    shutil.copy2(ROOT / "tests/conftest.py", tests / "conftest.py")
+    scripts = repo / "scripts"
+    scripts.mkdir()
+    shutil.copy2(CHECK, scripts / CHECK.name)
+    (tests / "test_probe.py").write_text("def test_probe(tmp_path):\n    pass\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    output = repo / link
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.symlink_to(outside, target_is_directory=True)
+    command = [sys.executable, "-m", "pytest", "-q", "tests/test_probe.py"]
+    if link.endswith("explicit"):
+        command += ["--basetemp", str(output)]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(repo), str(ROOT / "src")))}
+    result = subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "pytest output must stay inside" in result.stdout + result.stderr
+    assert list(outside.iterdir()) == []
+
+
+def test_default_collection_excludes_build_output(tmp_path):
+    import tomllib
+
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+    assert "tests" in config.get("testpaths", [])
+    assert ".build.noindex" in config.get("norecursedirs", [])
+    (tmp_path / "pyproject.toml").write_text((ROOT / "pyproject.toml").read_text())
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_probe.py").write_text("def test_probe():\n    pass\n")
+    for build in (tmp_path / ".build.noindex", tests / ".build.noindex"):
+        build.mkdir()
+        (build / "conftest.py").write_text("raise RuntimeError('build conftest must never load')\n")
+        (build / "test_poison.py").write_text("raise RuntimeError('build test must never load')\n")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 test collected" in result.stdout
 
 
 @pytest.mark.parametrize("explicit", [None, "custom-temp", "custom.noindex"])

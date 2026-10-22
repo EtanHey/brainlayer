@@ -42,6 +42,10 @@ def _linked_repo(tmp_path: Path, *, origin_main: bool = True, detached: bool = F
     tests_dir = linked / "tests"
     tests_dir.mkdir()
     shutil.copy2(REPO_ROOT / "tests" / "conftest.py", tests_dir / "conftest.py")
+    # The copied conftest enforces artifact hygiene through this checkout-local helper.
+    scripts_dir = linked / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy2(REPO_ROOT / "scripts" / "check_stray_apps.py", scripts_dir / "check_stray_apps.py")
     return repo, linked, Path(_git(linked, "rev-parse", "--absolute-git-dir"))
 
 

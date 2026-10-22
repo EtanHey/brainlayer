@@ -181,15 +181,23 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config):
     """Register custom pytest marks, and arm the DB-open guards before anything is collected."""
-    temp_root = Path(__file__).resolve().parents[1] / ".build.noindex" / "pytest"
-    temp_root.mkdir(parents=True, exist_ok=True)
+    build_root = Path(__file__).resolve().parents[1] / ".build.noindex"
+    temp_root = build_root / "pytest"
+    if build_root.resolve() != build_root or not temp_root.resolve().is_relative_to(build_root):
+        raise pytest.UsageError(f"pytest output must stay inside {build_root}: {temp_root.resolve()}")
     if config.option.basetemp:
-        base = Path(config.option.basetemp).resolve()
+        requested = Path(config.option.basetemp).absolute()
+        base = requested.resolve()
+        if requested.is_relative_to(build_root) and not base.is_relative_to(build_root):
+            raise pytest.UsageError(f"pytest output must stay inside {build_root}: {requested} -> {base}")
         if base == temp_root or not base.is_relative_to(temp_root):
             # Keep independent explicit basetemps independent without writing outside this tree.
             key = hashlib.sha256(str(base).encode()).hexdigest()[:12]
             base = temp_root / f"{base.name}-{key}"
+        if not base.resolve().is_relative_to(build_root):
+            raise pytest.UsageError(f"pytest output must stay inside {build_root}: {base.resolve()}")
         config.option.basetemp = str(base)
+    temp_root.mkdir(parents=True, exist_ok=True)
     os.environ["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
     _install_db_open_guards()
     helper = Path(__file__).resolve().parent / "socket_hygiene" / "sitecustomize.py"
