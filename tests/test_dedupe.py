@@ -44,15 +44,16 @@ def _chunk(
 
 
 @pytest.fixture
-def indexed_merge_store(tmp_path):
+def indexed_merge_store(tmp_path, request):
     """Use production FTS triggers, with a later row so a rebuild changes rowids."""
     store = VectorStore(tmp_path / "indexed-merges.db")
+    stored_tags = getattr(request, "param", '["amber", "zebra"]')
     for content_class in ("knowledge", "operational"):
         for chunk_id, content in (("canonical", "Quartz retrieval original"), ("later", "Unrelated orchard")):
             store.conn.execute(
                 """INSERT INTO chunks(id, content, metadata, source_file, tags, content_class, created_at, seen_count)
                    VALUES (?, ?, '{}', 'test.jsonl', ?, ?, ?, 1)""",
-                (f"{content_class}-{chunk_id}", content, '["zebra", "amber"]', content_class, "2026-10-22T01:00:00Z"),
+                (f"{content_class}-{chunk_id}", content, stored_tags, content_class, "2026-10-22T01:00:00Z"),
             )
     try:
         yield store
@@ -66,7 +67,7 @@ def _merge_indexed_chunk(conn, content_class, merge_kind, *, content="Quartz ret
     chunk_id = f"{content_class}-canonical"
     incoming = {
         "content": content,
-        "tags": ["amber", "zebra"] if tags is None else tags,
+        "tags": ["zebra", "amber"] if tags is None else tags,
         "created_at": "2026-10-22T02:00:00Z",
         "importance": 9,
         "half_life_days": 90,
@@ -109,6 +110,10 @@ def _fts_matches(conn, table, query):
 @pytest.mark.parametrize("merge_kind", ["duplicate", "content", "seen"])
 def test_exact_duplicate_merge_preserves_fts_rowids_and_retrieval(indexed_merge_store, content_class, merge_kind):
     conn = indexed_merge_store.conn
+    conn.execute("CREATE TEMP TABLE merge_tag_writes (chunk_id TEXT)")
+    conn.execute("""CREATE TEMP TRIGGER record_merge_tag_write AFTER UPDATE OF tags ON chunks BEGIN
+        INSERT INTO merge_tag_writes VALUES (new.id);
+    END""")
     before = _fts_snapshot(conn)
     table = "chunks_fts" if content_class == "knowledge" else "chunks_fts_operational"
     matches = _fts_matches(conn, table, "quartz")
@@ -117,6 +122,7 @@ def test_exact_duplicate_merge_preserves_fts_rowids_and_retrieval(indexed_merge_
     _merge_indexed_chunk(conn, content_class, merge_kind)
 
     assert _fts_snapshot(conn) == before
+    assert conn.execute("SELECT * FROM merge_tag_writes").fetchall() == []
     assert _fts_matches(conn, table, "quartz") == matches
     assert conn.execute(
         "SELECT seen_count, last_seen_at, importance, half_life_days FROM chunks WHERE id = ?",
@@ -129,6 +135,32 @@ def test_exact_duplicate_merge_preserves_fts_rowids_and_retrieval(indexed_merge_
     assert conn.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias").fetchall() == (
         [(expected_dropped, f"{content_class}-canonical")] if merge_kind == "duplicate" else []
     )
+
+
+@pytest.mark.parametrize("indexed_merge_store", ["zebra, amber", '["zebra","amber"]'], indirect=True)
+@pytest.mark.parametrize("content_class", ["knowledge", "operational"])
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"])
+def test_duplicate_merge_normalizes_legacy_tags_and_refreshes_tag_search(
+    indexed_merge_store, content_class, merge_kind
+):
+    conn = indexed_merge_store.conn
+    chunk_id = f"{content_class}-canonical"
+    before_tags = conn.execute("SELECT tags FROM chunks WHERE id = ?", (chunk_id,)).fetchone()[0]
+    if before_tags == "zebra, amber":
+        assert conn.execute("SELECT tag FROM chunk_tags WHERE chunk_id = ?", (chunk_id,)).fetchall() == []
+
+    assert _merge_indexed_chunk(conn, content_class, merge_kind) is False
+
+    assert conn.execute("SELECT tags FROM chunks WHERE id = ?", (chunk_id,)).fetchone() == ('["amber", "zebra"]',)
+    assert conn.execute("SELECT tag FROM chunk_tags WHERE chunk_id = ? ORDER BY tag", (chunk_id,)).fetchall() == [
+        ("amber",),
+        ("zebra",),
+    ]
+    assert conn.execute(
+        """SELECT chunks.id FROM chunks JOIN chunk_tags ON chunk_tags.chunk_id = chunks.id
+           WHERE chunk_tags.tag = 'amber' AND chunks.id = ?""",
+        (chunk_id,),
+    ).fetchall() == [(chunk_id,)]
 
 
 @pytest.mark.parametrize("content_class", ["knowledge", "operational"])

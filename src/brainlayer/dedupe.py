@@ -440,7 +440,9 @@ def _changed_merge_fields(
             simhash_band_3=fields.bands[3],
         )
     merged_tags_json = json.dumps(merged_tags) if merged_tags else None
-    if not _tags_json_equivalent(existing_tags, merged_tags_json):
+    # Legacy CSV must be rewritten: only valid JSON populates chunk_tags.
+    # Exact representation equality also preserves canonical ordering/formatting.
+    if existing_tags != merged_tags_json:
         updates["tags"] = merged_tags_json
     return updates
 
