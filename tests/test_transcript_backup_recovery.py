@@ -90,6 +90,60 @@ def test_recovery_respects_existing_calendar_custody(runner, monkeypatch):
     assert runner.rows()[-1]["event"] == "already-running"
 
 
+def test_aborted_calendar_recovers_and_failed_backup_retries(runner, monkeypatch):
+    runner.directory.mkdir()
+    calendar.record(runner.directory, event="runner", scheduled_date="2026-10-22")
+    calendar.record(runner.directory, event="finished", step="index", status="failed", returncode=124)
+    # There is deliberately no nightly summary or transcript result after the index failure.
+    receipt = runner.directory.parent / "transcript.log"
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(receipt))
+    executed, notices = [], []
+
+    async def execute(step, env, **kwargs):
+        executed.append(step.name)
+        ok = len(executed) > 1
+        receipt.write_text(json.dumps(dict(
+            attempted_at=NOW.isoformat(), status="uploaded" if ok else "failed",
+            uploaded=ok, verified=ok,
+        )) + "\n")
+        return 0 if ok else 1
+
+    monkeypatch.setattr(calendar, "_execute_step", execute)
+    monkeypatch.setattr(calendar, "report", lambda key, reason: notices.append((key, reason)))
+    plan = calendar.calendar_steps(sys.executable, "/unused", runner.logs, NOW.date())
+    results = [asyncio.run(calendar.run_calendar(
+        plan, runner.directory, runner.logs, now_fn=lambda: NOW, transcript_recovery=True,
+    )) for _ in range(3)]
+    assert results == [1, 0, 0]
+    assert executed == ["jsonl-backup", "jsonl-backup"]
+    assert notices[0][0] == "jsonl-backup" and notices[0][1] is not None
+    assert notices[1] == ("jsonl-backup", None)
+    assert [(row["step"], row["returncode"]) for row in runner.rows() if row["event"] == "finished"] == [
+        ("index", 124), ("jsonl-backup", 1), ("jsonl-backup", 0),
+    ]
+
+
+def test_recovery_honors_transcript_disable(runner, monkeypatch):
+    monkeypatch.setenv("BRAINLAYER_JSONL_BACKUP_LOG_PATH", str(runner.directory.parent / "missing.log"))
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(calendar.maintenance_control, "control_client", lambda: SimpleNamespace(
+        path=runner.directory.parent / "unused.sock", request=lambda: {},
+        _disabled=lambda *_a, **_k: {"com.brainlayer.jsonl-backup"},
+    ))
+
+    async def forbidden(*_a, **_k):
+        pytest.fail("recovery revived a disabled transcript backup")
+
+    monkeypatch.setattr(calendar, "_execute_step", forbidden)
+    plan = calendar.calendar_steps(sys.executable, "/unused", runner.logs, NOW.date())
+    assert asyncio.run(calendar.run_calendar(
+        plan, runner.directory, runner.logs, now_fn=lambda: NOW, transcript_recovery=True,
+    )) == 0
+    row = next(row for row in runner.rows() if row["event"] == "finished")
+    assert row["status"] == "deferred" and row["reason"] == "disabled"
+
+
 def test_supervisor_admits_periodic_recovery_without_nightly_calendar(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     source = Component(("/unused",), env={"BRAINLAYER_ENV_FILE": str(tmp_path / "fixture.env")},
