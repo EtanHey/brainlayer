@@ -83,6 +83,32 @@ def _git_probe(*args: str, cwd: Path | None = None) -> subprocess.CompletedProce
     )
 
 
+@pytest.fixture
+def outside_repo_dir():
+    """Small no-checkout fixtures need real isolation from Git AND Python ancestor walkers.
+
+    tmp_path lives inside this checkout's .build.noindex. A Git ceiling cannot protect consumers
+    that scrub GIT_* or walk .git ancestors themselves. Keep this exception short-lived, including
+    when a test or the precondition fails; bulky test output still belongs under tmp_path.
+    """
+    with tempfile.TemporaryDirectory(prefix="brainlayer-outside-repo-") as directory:
+        root = Path(directory).resolve()
+        for ancestor in (root, *root.parents):
+            marker = ancestor / ".git"
+            assert not (marker.exists() or marker.is_symlink()), f"outside_repo_dir has a Git ancestor: {ancestor}"
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        probe = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert probe.returncode != 0, f"outside_repo_dir discovered a Git checkout: {probe.stdout.strip()}"
+        yield root
+
+
 def _shared_git_snapshot(common_dir: Path) -> dict[str, str]:
     commands = {
         "core.bare": ("config", "--local", "--get", "core.bare"),
