@@ -987,6 +987,8 @@ def test_watcher_stage_timings_use_fake_clock(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "classify_content", timed(classify, 0.02))
     monkeypatch.setattr(bridge, "chunk_content", timed(chunk, 0.03))
     monkeypatch.setattr(bridge, "enqueue_watcher_chunk", timed(publish, 0.04))
+    monkeypatch.setattr(bridge, "resolve_t3_sources", timed(lambda _path: [], 0.01))
+    monkeypatch.setattr(bridge, "scrub_secrets", timed(bridge.scrub_secrets, 0.05))
     entry = _make_jsonl_entry(text=_LONG_TEXT, entry_type="assistant")
     entry["_source_file"] = str(tmp_path / "session.jsonl")
     assert create_flush_callback(tmp_path / "unused.db", arbitrated=True)([entry]) == 1
@@ -996,5 +998,7 @@ def test_watcher_stage_timings_use_fake_clock(tmp_path, monkeypatch):
     assert result["classify_ms"] == pytest.approx(20)
     assert result["chunk_ms"] == pytest.approx(30)
     assert result["publish_ms"] == pytest.approx(40)
+    assert result["provenance_ms"] == pytest.approx(10)
+    assert result["scrub_ms"] == pytest.approx(50)
     assert result["encode_ms"] == 0
     assert result.get("committed_at") is None  # publishing work is not a DB commit
