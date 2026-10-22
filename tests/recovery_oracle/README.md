@@ -49,3 +49,31 @@ other chunk. `store.py:248-267` does not invalidate an existing vector when a me
 uses embed_fn=None; `embed_hot_chunk` selects only absent vectors. This acceptance
 failure must be fixed in a separate hardening PR, not xfailed or weakened here.
 These are synthetic main-code measurements, not resident performance numbers.
+
+## Fault expansion and bounded catch-up (PR 2)
+
+Child cuts use SIGKILL on Popen handles owned by this test, after a file barrier:
+index call's second transaction (first chunk committed), encoder before writing,
+and drain immediately after commit but before queue unlink. Reopen the DB and
+replay real work; retrying index inputs must leave exactly one row per identity.
+Provider exceptions preserve FTS rows with absent vectors until hotlane repairs.
+Catch-up measures exact fixture debt and requires queue=0 and missing vectors=0
+within 5 s. Skipping replay or hotlane must fail that deadline oracle.
+
+Latest complete main-code run: **17 passed, 1 failed in 6.41 s**, load 4.461;
+the sole failure remains MERGED stale-vector retrieval. Eight negative controls
+passed. No production source was changed. All fault scenarios below pass a/b/c/d:
+
+| Fault | Acks | Ack p95 ms | Drain held max ms | Catch-up ms | Final queue / missing |
+|---|---:|---:|---:|---:|---:|
+| Lock | 8 | 38.762 | 10.420 | 65.488 | 0 / 0 |
+| Interrupted index | 6 | 4.042 | 4.198 | 57.175 | 0 / 0 |
+| Encoder raises | 6 | 1.322 | 3.356 | 77.633 | 0 / 0 |
+| Encoder stalls, killed | 6 | 1.267 | 13.655 | 73.303 | 0 / 0 |
+| Drain restart | 6 | 1.254 | 15.486 | 64.517 | 0 / 0 |
+
+Run with `-s` for `recovery_oracle_receipt` JSON. The earlier direct suites plus
+PR 1 measured 152 passed / 1 failed in 8.53 s. Resident recon baseline remains
+separate: drain held up to 180.584 s, queue age 116.35 min, 2,902 missing vectors,
+index rc124, deferred-row creation-to-ingest up to 228 s; total DEFERRED loss and
+receipt-latency denominators were unmeasurable. These test results do not replace it.

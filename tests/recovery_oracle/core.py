@@ -181,10 +181,10 @@ class Universe:
                 assert vector["ids"][0] == [cid], f"vector invisible: {cid}"
                 assert vector["distances"][0][0] < 1e-5, f"stale vector: {cid}"
 
-    def assert_acknowledged(self):
+    def assert_acknowledged(self, extra_ids=()):
         self.assert_roundtrip()
         with VectorStore(self.db, readonly=True) as reader:
-            ids = {self.canonical(reader, r["chunk_id"]) for r in self.receipts}
+            ids = {self.canonical(reader, r["chunk_id"]) for r in self.receipts} | set(extra_ids)
             assert reader.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == len(ids), "duplicate rows"
             assert not list(reader.conn.execute("SELECT content FROM chunks GROUP BY content HAVING count(*)>1"))
 

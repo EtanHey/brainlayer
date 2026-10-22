@@ -32,11 +32,12 @@ def test_lock_recovery(world):
         holder.execute("ROLLBACK")
         holder.close()
     assert any(r["status"] == "DEFERRED" for r in world.receipts)
-    world.drain()
-    world.hotlane()
+    from .faults import catch_up
+
+    convergence = catch_up(world, timeout=5)
     world.assert_roundtrip()
     world.assert_acknowledged()
-    metrics = world.assert_latency()
+    metrics = {**world.assert_latency(), **convergence}
     print("recovery_oracle_receipt=" + json.dumps({"fault": "lock", "seed": world.seed, **metrics}, sort_keys=True))
 
 
