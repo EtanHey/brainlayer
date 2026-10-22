@@ -2089,3 +2089,50 @@ def test_idx_cohort_mapping_escalates_when_a_companion_is_missing(tmp_path: Path
     assert "falling back to full pytest unit suite" in result.stdout
     assert f"unmapped: src/brainlayer/{module}.py" in result.stdout
     assert f"{test_root}/ -v" in pytest_log.read_text()
+
+
+@pytest.mark.parametrize("workflow", ["brainbar-release.yml", "ci.yml", "unowned.yaml"])
+def test_workflow_changes_run_referencing_guards_or_escalate(tmp_path, workflow):
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    references = {
+        "test_brainbar_release_workflow.py": "brainbar-release.yml",
+        "test_release_version_sync.py": "brainbar-release.yml",
+        "test_ci_swift_gate.py": "ci.yml",
+        "test_fleet_watchdog.py": "ci.yml",
+        "test_ci_crash_sweeps.py": "generic CI contract",
+    }
+    for name, reference in references.items():
+        (test_root / name).write_text(reference + "\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = f".github/workflows/{workflow}"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    unit = pytest_log.read_text().splitlines()[0]
+    expected = {
+        name
+        for name, reference in references.items()
+        if reference == workflow or (workflow == "ci.yml" and name.startswith("test_ci_"))
+    }
+    if expected:
+        assert all(str(test_root / name) in unit for name in expected)
+        assert all(str(test_root / name) not in unit for name in references.keys() - expected)
+        assert f"{test_root}/ -v" not in unit
+    else:
+        assert f"unmapped: .github/workflows/{workflow}" in result.stdout
+        assert f"{test_root}/ -v" in unit
+
+
+@pytest.mark.parametrize("missing", ["test_ci_swift_gate.py", "test_ci_crash_sweeps.py"])
+def test_ci_workflow_missing_named_contract_escalates(tmp_path, missing):
+    test_root = tmp_path / "tests"
+    test_root.mkdir()
+    for name in ["test_ci_swift_gate.py", "test_ci_crash_sweeps.py", "test_fleet_watchdog.py"]:
+        if name != missing:
+            (test_root / name).write_text("ci.yml\n")
+    env, pytest_log = _cli_root_env(tmp_path, test_root)
+    env["BRAINLAYER_CHANGED_FILES"] = ".github/workflows/ci.yml"
+    result = _run_cli_root_script(env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "unmapped: .github/workflows/ci.yml" in result.stdout
+    assert f"{test_root}/ -v" in pytest_log.read_text().splitlines()[0]

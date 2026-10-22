@@ -249,18 +249,30 @@ def test_lock_failure_has_complete_receipt(tmp_path):
 def test_manual_lock_wait_uses_its_activation_deadline(installed, monkeypatch, release):
     agents, calls, _ = installed
     now, attempts, budgets = [0.0], [], []
-    monkeypatch.setattr(activation.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(activation.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    host_time, host_fcntl = activation.time, activation.fcntl
+    host_functions = (host_time.monotonic, host_time.sleep, host_fcntl.flock)
+    # Other threads' stdlib sleeps/locks must not advance or consume this fixture.
+    monkeypatch.setattr(
+        activation,
+        "time",
+        SimpleNamespace(monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds)),
+    )
 
     def flock(*args):
         attempts.append(now[0])
         if not release or len(attempts) == 1:
             raise BlockingIOError("held by supervisor")
 
-    monkeypatch.setattr(activation.fcntl, "flock", flock)
+    monkeypatch.setattr(
+        activation,
+        "fcntl",
+        SimpleNamespace(flock=flock, LOCK_EX=host_fcntl.LOCK_EX, LOCK_NB=host_fcntl.LOCK_NB),
+    )
     monkeypatch.setattr(activation, "_activate", lambda *a, **kw: budgets.append(kw["timeout_seconds"]) or {"ok": True})
     result = activation.activate(agents, timeout_seconds=0.25)
-    assert len(attempts) > 1 and not calls
+    assert len(attempts) > 1 and not calls, result
+    assert attempts == pytest.approx([0.0, 0.1] if release else [0.0, 0.1, 0.2])
+    assert (host_time.monotonic, host_time.sleep, host_fcntl.flock) == host_functions
     if release:
         assert result["ok"] and 0 < budgets[0] < 0.25
     else:
