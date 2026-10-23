@@ -114,18 +114,40 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     day = datetime.fromisoformat(event["finished_at"]).astimezone(UTC).date()
     prefix = f"{path.stem}-summary-"
     target = path.with_name(f"{prefix}{day}.json")
-    summary = json.loads(target.read_text()) if target.exists() else {"schema_version": 1, "groups": {}}
+    try:
+        summary = json.loads(target.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        summary = None
+    if isinstance(summary, dict) and summary.get("schema_version", 1) != 1:
+        return
+    if not isinstance(summary, dict) or not isinstance(summary.get("groups"), dict):
+        summary = {"schema_version": 1, "groups": {}}
+    summary.setdefault("schema_version", 1)
     groups = summary["groups"]
     key = "|".join(str(event.get(field) or "unknown")[:64] for field in ("producer", "lane", "outcome"))
     if key not in groups and len(groups) >= 63:
         key = "overflow"
-    group = groups.setdefault(key, {"count": 0})
+    group = groups.get(key)
+    if not isinstance(group, dict) or type(group.get("count")) is not int or group["count"] < 0:
+        group = groups[key] = {"count": 0}
     group["count"] += 1
     for field in ("duration_ms", "queue_wait_ms", "lock_wait_ms", "lock_held_ms", "queue_to_commit_ms"):
         value = event.get(field)
         if not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
             continue
-        metric = group.setdefault(field, {"count": 0, "sum": 0, "max": 0, "histogram": {}})
+        metric = group.get(field)
+        if not (
+            isinstance(metric, dict)
+            and type(metric.get("count")) is int
+            and metric["count"] >= 0
+            and all(
+                type(metric.get(k)) in (int, float) and math.isfinite(metric[k]) and metric[k] >= 0
+                for k in ("sum", "max")
+            )
+            and isinstance(metric.get("histogram"), dict)
+            and all(isinstance(k, str) and type(v) is int and v >= 0 for k, v in metric["histogram"].items())
+        ):
+            metric = group[field] = {"count": 0, "sum": 0, "max": 0, "histogram": {}}
         metric["count"] += 1
         metric["sum"] += value
         metric["max"] = max(metric["max"], value)
@@ -133,15 +155,21 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
         metric["histogram"][bucket] = metric["histogram"].get(bucket, 0) + 1
     if not _atomic_write_json(target, summary):
         raise OSError("writer summary write failed")
-    files = sorted(path.parent.glob(f"{prefix}????-??-??.json"))
-    newest = datetime.fromisoformat(files[-1].stem.removeprefix(prefix)).date()
-    for file in files:
-        if datetime.fromisoformat(file.stem.removeprefix(prefix)).date() < newest - timedelta(days=7):
-            file.unlink()
+    dated = {}
+    for file in path.parent.glob(f"{prefix}????-??-??.json"):
+        try:
+            dated[file] = datetime.fromisoformat(file.stem.removeprefix(prefix)).date()
+        except ValueError:
+            continue
+    if dated:
+        cutoff = max(dated.values()) - timedelta(days=7)
+        for file, file_day in dated.items():
+            if file_day < cutoff:
+                file.unlink(missing_ok=True)
 
 
 def append_event(event: dict[str, Any]) -> bool:
-    """Append one JSON event; drop on sink-lock contention or failure."""
+    """Report raw append success; derived summary I/O is best-effort."""
     if not telemetry_enabled():
         return False
     try:
@@ -162,7 +190,10 @@ def append_event(event: dict[str, Any]) -> bool:
                     _rotate(path, backups)
                 with path.open("ab") as handle:
                     handle.write(encoded)
-                _rollup(path, payload)
+                try:
+                    _rollup(path, payload)
+                except OSError:
+                    pass  # Derived summary I/O cannot negate a successful raw append.
         finally:
             _SINK_LOCK.release()
         return True

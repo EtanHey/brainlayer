@@ -56,7 +56,7 @@ enum DeferredStoreTelemetry {
         let fd = open(path.path + ".lock", O_CREAT | O_RDWR, 0o600)
         guard fd >= 0 else { throw CocoaError(.fileWriteUnknown) }
         defer { Darwin.close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw CocoaError(.fileWriteUnknown) }
         defer { flock(fd, LOCK_UN) }
         let encoder = JSONEncoder()
         var data = try encoder.encode(item)
