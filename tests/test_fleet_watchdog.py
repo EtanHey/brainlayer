@@ -707,8 +707,12 @@ class InstallerHarness:
         )
 
 
-def test_installer_renders_the_plist_with_no_authoring_host_paths(tmp_path: Path) -> None:
-    harness = InstallerHarness(tmp_path)
+# The target HOME may legitimately contain the historical authoring host's username.
+@pytest.mark.parametrize("install_parent", ("target-host", "Users/happycampr"))
+def test_installer_renders_the_plist_with_no_authoring_host_paths(tmp_path: Path, install_parent: str) -> None:
+    install_root = tmp_path / install_parent
+    install_root.mkdir(parents=True)
+    harness = InstallerHarness(install_root)
 
     result = harness.run("fleet-watchdog")
 
@@ -716,10 +720,13 @@ def test_installer_renders_the_plist_with_no_authoring_host_paths(tmp_path: Path
     rendered = plistlib.loads(harness.plist_dst.read_bytes())
     assert rendered["Label"] == LABEL
     assert rendered["ProgramArguments"] == ["/bin/sh", str(harness.script_dst)]
+    assert rendered["StandardOutPath"] == str(
+        harness.home / "Library" / "Logs" / "brainlayer" / "fleet-watchdog.out.log"
+    )
     assert rendered["StandardErrorPath"] == str(
         harness.home / "Library" / "Logs" / "brainlayer" / "fleet-watchdog.err.log"
     )
-    assert "/Users/happycampr" not in harness.plist_dst.read_text(encoding="utf-8")
+    assert rendered["EnvironmentVariables"]["HOME"] == str(harness.home)
     assert harness.script_dst.exists()
     assert f"bootstrap gui/{os.getuid()} {harness.plist_dst}" in result.commands
     # The installer must say out loud that bootout does not hold.
