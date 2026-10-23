@@ -1170,7 +1170,8 @@ def _remove_owned_raw(raw: Path, owned: tuple[int, int]) -> None:
         os.rename(raw, aside)
     except FileNotFoundError:
         return
-    if _file_identity(aside) == owned:
+    captured = os.lstat(aside)
+    if (captured.st_dev, captured.st_ino) == owned:
         aside.unlink()
         print(f"Backup removed unverified raw from non-canonical staging: {raw}", flush=True)
         return
@@ -1605,7 +1606,26 @@ def request_brainbar_vacuum_into(
     resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
     last_error: Exception | None = None
     unconfirmed_attempt_paths: list[Path] = []
+    completed_attempts: dict[Path, tuple[tuple[int, int], tuple[int, int]]] = {}
     for attempt in range(1, max_attempts + 1):
+        for prior_path in unconfirmed_attempt_paths:
+            if prior_path in completed_attempts:
+                continue
+            marker = _backup_attempt_completion_marker(prior_path)
+            # Record completion and both identities BEFORE another request can replace a name.
+            # Missing markers leave the earlier writer unresolved, regardless of B's response.
+            if prior_path.is_symlink() or marker.is_symlink() or not marker.is_file():
+                continue
+            try:
+                raw_info, marker_info = prior_path.lstat(), marker.lstat()
+            except FileNotFoundError:
+                continue
+            if not all(stat.S_ISREG(info.st_mode) for info in (raw_info, marker_info)):
+                continue
+            completed_attempts[prior_path] = (
+                (raw_info.st_dev, raw_info.st_ino),
+                (marker_info.st_dev, marker_info.st_ino),
+            )
         if attempt > 1 and retry_capacity_check is not None:
             # Re-measure before every retry: an unresolved request may still grow to full size
             # beside the next one, even if its target has not appeared yet.
@@ -1696,7 +1716,13 @@ def request_brainbar_vacuum_into(
                 prior_path.unlink(missing_ok=True)
                 _backup_attempt_completion_marker(prior_path).unlink(missing_ok=True)
             return promoted
-        except (BackupTimeoutError, BrainBarDatabaseIdentityError, BackupTargetConflictError):
+        except BrainBarDatabaseIdentityError:
+            for prior_path, (owned_raw, owned_marker) in completed_attempts.items():
+                _remove_owned_raw(prior_path, owned_raw)
+                if not prior_path.exists() and not prior_path.is_symlink():
+                    _remove_owned_raw(_backup_attempt_completion_marker(prior_path), owned_marker)
+            raise
+        except (BackupTimeoutError, BackupTargetConflictError):
             raise
         except BrainBarSnapshotBusyError as exc:
             if unconfirmed_attempt_paths:
