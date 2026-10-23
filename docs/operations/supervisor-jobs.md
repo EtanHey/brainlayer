@@ -42,6 +42,24 @@ asleep. Timeout failure history resets only after a successful/deferred interval
 Disabled/paused intervals have no next-run deadline; cleanup refusal retains custody,
 records an error and retries without stopping the supervisor or spawning duplicates.
 
+Child startup (including log opens, process creation and durable custody registration)
+and custody removal run in executor workers, with one shared journal writer. Status
+does not advertise a gated startup PID as ready. Pause and shutdown wait for an
+in-flight startup before acknowledging group quiescence. Cancelling a worker's waiter
+does not release the journal lock while its write is still running.
+
+Heartbeats remain on the event loop with the existing 30-second guard timeout. Slow
+I/O can finish without starving loop progress. Each executor operation has a
+120-second budget; while an operation is overdue the supervisor withholds heartbeats,
+so a permanently stuck worker also triggers the guard. A wedged event loop cannot
+send heartbeats at all. The guard retains group custody and the existing bounded
+quiescence/EOF cleanup protocol in both cases.
+
+Guard readiness allows 30 seconds after process creation for interpreter/import
+startup, independently of the heartbeat timeout. Timeout, EOF and an unexpected
+readiness byte report distinct startup errors with parent and guard PIDs. Expected
+control-client disconnects during reply/close are ignored without replaying mutations.
+
 ## CLI consumers
 
 `brainlayer daemon --manifest /absolute/jobs.json` starts the daemon. The command
@@ -50,6 +68,17 @@ sibling keg CLI and packaged wrappers. Override `--lib-dir`/`--state-dir`/`--log
 `jobs component NAME status|restart|env|logs` uses legacy plists until archival, then owner-only control;
 `--socket`/`--manifest` select fixtures. Restart honors OFF/disable/pause; env/log actions return paths only.
 JSON traces the legacy label, evidence source and definition; live keg verification remains separate.
+
+The macOS daemon adds an hourly `transcript-backup-recovery` component when its
+manifest contains the configured observability environment. It runs
+`maintenance-calendar --recover-transcripts` with the same calendar custody directory.
+Under that lock, a verified upload or verified no-op receipt less than 24 hours old
+skips recovery. Missing, invalid, future, failed and local-only receipts do not.
+Otherwise only `jsonl-backup` runs; indexing, maintenance and database backup are
+excluded. Existing disable/pause gates still apply. Failed uploads retain failure
+receipts and retry on a later interval; recovery does not replace nightly coverage
+in the calendar journal. Reinstall/restart the consolidated daemon after upgrading
+to activate this component; an unchanged manifest needs no rewrite.
 
 
 BrainBar cask recovery is a formula-supervised `brainbar-activation` interval worker.
