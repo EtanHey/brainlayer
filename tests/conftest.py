@@ -249,8 +249,9 @@ def pytest_configure(config):
 
 def pytest_sessionfinish(session, exitstatus):
     """Inspect the final artifacts after test/fixture teardown, including failed runs."""
-    roots = [Path(__file__).resolve().parents[1]]
-    strays = find_stray_apps(*roots)
+    # Nested sessions can import this plugin from another checkout. Ownership follows rootdir,
+    # and a main-checkout run must leave sibling worktrees to their own sessions or a CLI sweep.
+    strays = find_stray_apps(session.config.rootpath, include_worktrees=False)
     if strays:
         reporter = session.config.pluginmanager.getplugin("terminalreporter")
         if reporter:

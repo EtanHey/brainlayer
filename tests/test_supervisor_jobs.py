@@ -143,6 +143,7 @@ def test_successful_interval_waits_without_failure_backoff_or_catchup(short_path
             # A missed interval starts once; its next deadline is in the future.
             child.retry_at = time.monotonic() - 100
             s._tick()
+            await s._wait_start(child)
             assert child.starts == 2
             assert child.retry_at > time.monotonic()
         finally:
