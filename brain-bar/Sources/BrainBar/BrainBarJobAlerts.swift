@@ -117,16 +117,21 @@ extension BadgeStatePresentation {
     func reconciled(with alerts: BrainBarJobAlerts?) -> Self {
         let prefix = "job_alert_"
         guard let alerts, activeMessages.count == activeCodes.count else { return self }
-        let kept = zip(activeCodes, activeMessages).compactMap { code, message -> (String, String)? in
-            guard code.hasPrefix(prefix) else { return (code, message) }
-            return alerts.active[String(code.dropFirst(prefix.count))].map { (code, $0) }
+        let severities = activeSeverities.isEmpty
+            ? Array(repeating: "critical", count: activeCodes.count) : activeSeverities
+        guard severities.count == activeCodes.count else { return self }
+        let kept = activeCodes.indices.compactMap { index -> (String, String, String)? in
+            let code = activeCodes[index], message = activeMessages[index], severity = severities[index]
+            guard code.hasPrefix(prefix) else { return (code, message, severity) }
+            return alerts.active[String(code.dropFirst(prefix.count))].map { (code, $0, severity) }
         }
         guard kept.map(\.0) != activeCodes || kept.map(\.1) != activeMessages else { return self }
         return Self(
-            badgeOn: !kept.isEmpty,
+            badgeOn: kept.contains { $0.2 != "warning" },
             reason: kept.map(\.1).joined(separator: "; "),
             activeCodes: kept.map(\.0),
-            activeMessages: kept.map(\.1)
+            activeMessages: kept.map(\.1),
+            activeSeverities: kept.map(\.2)
         )
     }
 }

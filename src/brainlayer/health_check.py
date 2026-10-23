@@ -112,6 +112,7 @@ class HealthIssue:
     code: str
     severity: str
     message: str
+    expected_episode: dict[str, Any] | None = None
 
 
 @dataclass
@@ -1403,8 +1404,8 @@ def _run_health_check_locked(
     heal_issue_labels: dict[str, tuple[str, Path]] = {}
     heal_issue_details: dict[str, dict[str, Any]] = {}
 
-    def add_issue(code: str, severity: str, message: str) -> None:
-        result.issues.append(HealthIssue(code, severity, message))
+    def add_issue(code: str, severity: str, message: str, *, expected_episode: dict[str, Any] | None = None) -> None:
+        result.issues.append(HealthIssue(code, severity, message, expected_episode=expected_episode))
         _emit_heal_event(
             {
                 "_type": "health_issue_detected",
@@ -1464,7 +1465,7 @@ def _run_health_check_locked(
         from .badge_state import build_badge_state_document, write_badge_state
 
         try:
-            write_badge_state(config.badge_state_path, build_badge_state_document(result))
+            write_badge_state(config.badge_state_path, build_badge_state_document(result, now=now_fn()))
         except (OSError, ValueError) as exc:
             add_issue("badge_state_write_failed", "critical", f"badge state write failed: {exc}")
             try:
@@ -1656,10 +1657,14 @@ def _run_health_check_locked(
         else:
             result.canary_ok = False
             result.canary_status = "retrieval_failed"
+            error = response.get("error") if isinstance(response, dict) else None
+            data = error.get("data") if isinstance(error, dict) else None
+            episode = data.get("expected_episode") if isinstance(data, dict) else None
             add_issue(
                 "brain_search_canary_failed",
                 "critical",
                 f"BrainBar brain_search canary retrieval failed: {text[:240]}",
+                expected_episode=episode if isinstance(episode, dict) else None,
             )
             heal_issue_labels["brain_search_canary_failed"] = (
                 config.brainbar_daemon_label,

@@ -22,6 +22,26 @@ struct BadgeStateDocument: Codable, Sendable {
         let code: String
         let severity: String
         let message: String
+        let episode: Episode?
+    }
+
+    struct Episode: Codable, Sendable {
+        let kind, owner, episodeId: String
+        let startedAt, observedAt, deadline: Date
+        let expectedCodes: [String]
+
+        func allows(_ issue: Issue, now: Date) -> Bool {
+            // Keep these bounds aligned with badge_state.py. No sleep grace,
+            // host-load heuristic, or snapshot exemption for unrelated faults.
+            issue.severity == "critical" && issue.code == "brain_search_canary_failed"
+                && ["snapshot", "maintenance"].contains(kind)
+                && !owner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !episodeId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && expectedCodes.contains(issue.code)
+                && startedAt <= observedAt && observedAt <= now && now < deadline
+                && deadline.timeIntervalSince(startedAt) <= 3600
+                && now.timeIntervalSince(observedAt) <= 300
+        }
     }
 }
 
@@ -31,6 +51,8 @@ struct BadgeStatePresentation: Equatable, Sendable {
     let activeCodes: [String]
     /// Each active issue's message, in `activeCodes` order; `reason` joins them.
     var activeMessages: [String] = []
+    /// Empty only for legacy in-memory callers, whose active issues are critical.
+    var activeSeverities: [String] = []
 
     static func failVisible(_ reason: String) -> Self {
         .init(badgeOn: true, reason: reason, activeCodes: [])
@@ -146,14 +168,21 @@ enum BadgeStateReader {
                 return .failVisible(reason)
             }
             guard let badgeOn = document.alerts.badgeOn, let active = document.alerts.active,
-                  badgeOn == !active.isEmpty else {
+                  badgeOn == active.contains(where: { $0.severity != "warning" }) else {
                 return .failVisible("Badge alert state is internally inconsistent.")
             }
+            // Re-evaluate on every read: an expired or unsupported suppression
+            // must become visible even when the producer has not run again.
+            let restored = (document.alerts.suppressed ?? []).filter { issue in
+                issue.episode?.allows(issue, now: now) != true
+            }
+            let visible = active + restored
             return .init(
-                badgeOn: badgeOn,
-                reason: badgeOn ? active.map(\.message).joined(separator: "; ") : "",
-                activeCodes: active.map(\.code),
-                activeMessages: active.map(\.message)
+                badgeOn: visible.contains { $0.severity != "warning" },
+                reason: visible.map(\.message).joined(separator: "; "),
+                activeCodes: visible.map(\.code),
+                activeMessages: visible.map(\.message),
+                activeSeverities: visible.map(\.severity)
             )
         } catch {
             return .failVisible("Badge state unreadable: \(error.localizedDescription)")

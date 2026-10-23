@@ -94,8 +94,8 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
     /// The menu's first, informational row; its tooltip retains the full reason.
     static func statusLineTitle(for badge: BadgeStatePresentation) -> String {
-        guard badge.badgeOn else { return "Nothing needs attention" }
-        let prefix = "Needs attention: "
+        guard badge.badgeOn || !badge.activeMessages.isEmpty else { return "Nothing needs attention" }
+        let prefix = badge.badgeOn ? "Needs attention: " : "Info: "
         let title = prefix + badge.reason
         guard title.count > statusLineTitleMaxCharacters else { return title }
 
@@ -278,7 +278,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
             }
         }
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
-        statusLineItem.toolTip = badgePresentation.badgeOn ? badgePresentation.reason : nil
+        statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
 #if BRAINBAR_UI
         if let title = Self.showLogItemTitle(
@@ -294,7 +294,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         contextMenuForTesting.delegate = self
         contextMenuForTesting.autoenablesItems = false
         statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
-        statusLineItem.toolTip = badgePresentation.badgeOn ? badgePresentation.reason : nil
+        statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
         statusLineItem.isEnabled = false
         contextMenuForTesting.addItem(statusLineItem)
 #if BRAINBAR_UI
