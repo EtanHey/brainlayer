@@ -62,8 +62,8 @@ def is_binary(path: Path) -> bool:
     return False
 
 
-def find_stray_apps(*roots: Path) -> list[Path]:
-    """Return prohibited bundles and docs.local binaries; inspect no paths outside roots."""
+def find_stray_apps(*roots: Path, include_worktrees: bool = True) -> list[Path]:
+    """Find prohibited artifacts; CLI sweeps include worktrees, pytest owns only its checkout."""
     strays = set()
     for root in roots:
         root = root.resolve(strict=True)
@@ -77,6 +77,8 @@ def find_stray_apps(*roots: Path) -> list[Path]:
             for name in children[:]:
                 path = here / name
                 if name == ".git" or (name == ".build.noindex" and not in_docs):
+                    children.remove(name)
+                elif not include_worktrees and here == root and name == ".worktrees":
                     children.remove(name)
                 elif name.endswith(".app"):
                     strays.add(path)
