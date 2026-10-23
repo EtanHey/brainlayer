@@ -75,7 +75,15 @@ def _start_fake_brainbar_vacuum_server(socket_path: Path, source_db: Path):
                                 "content": [
                                     {
                                         "type": "text",
-                                        "text": json.dumps({"status": "ok", "target_path": str(target_path)}),
+                                        "text": json.dumps(
+                                            {
+                                                "status": "ok",
+                                                "target_path": str(target_path),
+                                                "db_path": str(source_db),
+                                                "db_dev": os.stat(source_db).st_dev,
+                                                "db_ino": os.stat(source_db).st_ino,
+                                            }
+                                        ),
                                     }
                                 ]
                             },
@@ -543,6 +551,7 @@ def test_create_snapshot_routes_vacuum_into_over_brainbar_socket(tmp_path):
     assert request["params"]["name"] == "brain_backup_vacuum_into"
     requested_target = Path(request["params"]["arguments"]["target_path"])
     assert requested_target.name.startswith(".2026-05-13.db.attempt-1-")
+    assert request["params"]["arguments"]["expected_db_path"] == os.path.realpath(source)
     assert snapshot.name == "2026-05-13.db.zst"
 
 

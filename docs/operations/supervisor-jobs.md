@@ -69,6 +69,17 @@ sibling keg CLI and packaged wrappers. Override `--lib-dir`/`--state-dir`/`--log
 `--socket`/`--manifest` select fixtures. Restart honors OFF/disable/pause; env/log actions return paths only.
 JSON traces the legacy label, evidence source and definition; live keg verification remains separate.
 
+The macOS daemon adds an hourly `transcript-backup-recovery` component when its
+manifest contains the configured observability environment. It runs
+`maintenance-calendar --recover-transcripts` with the same calendar custody directory.
+Under that lock, a verified upload or verified no-op receipt less than 24 hours old
+skips recovery. Missing, invalid, future, failed and local-only receipts do not.
+Otherwise only `jsonl-backup` runs; indexing, maintenance and database backup are
+excluded. Existing disable/pause gates still apply. Failed uploads retain failure
+receipts and retry on a later interval; recovery does not replace nightly coverage
+in the calendar journal. Reinstall/restart the consolidated daemon after upgrading
+to activate this component; an unchanged manifest needs no rewrite.
+
 
 BrainBar cask recovery is a formula-supervised `brainbar-activation` interval worker.
 The cask upgrade stops BrainBar; the supervisor re-activates it automatically after brew exits.
