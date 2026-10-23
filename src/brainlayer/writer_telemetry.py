@@ -271,15 +271,17 @@ class IngestMetrics:
 
     @staticmethod
     def origins(events, key):
+        """Return origins only when every member has a valid epoch for this field."""
         values = []
         for event in events:
             if not isinstance(event, dict):
-                continue
+                return []
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
             metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
             value = payload.get(key, metadata.get(key))
-            if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
-                values.append(float(value))
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                return []
+            values.append(float(value))
         return values
 
     def run(self, stage, function, *args, **kwargs):

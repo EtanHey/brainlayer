@@ -349,3 +349,210 @@ def test_ingest_watermarks_follow_line_queue_fts_and_vector_commit(tmp_path, mon
     ]
     assert events[-1]["queue_to_commit_ms"] == 6000
     assert not any(value in json.dumps(events) for value in (content, str(source)))
+
+
+def _assert_ingest_origins(event, *, queued, observed):
+    for origin, lag, expected in (
+        ("queued_at", "queue_to_commit_ms", queued),
+        ("ingest_observed_at", "observed_to_commit_ms", observed),
+    ):
+        assert event[f"oldest_{origin}"] == expected
+        assert event[lag] == (None if expected is None else (1010 - expected) * 1000)
+
+
+@pytest.mark.parametrize("wrapped", [False, True], ids=["direct", "payload-metadata"])
+@pytest.mark.parametrize("field", ["queued_at", "ingest_observed_at"])
+@pytest.mark.parametrize("bad", [None, "invalid", 0, -1, float("nan"), float("inf"), True])
+def test_ingest_mixed_origin_cohort_is_unmeasurable_per_field(tmp_path, monkeypatch, wrapped, field, bad):
+    import brainlayer.writer_telemetry as telemetry
+
+    log_path = _configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1010)
+    first = {"queued_at": 1000, "ingest_observed_at": 999}
+    second = {"queued_at": 1002, "ingest_observed_at": 1001}
+    if bad is None:
+        second.pop(field)
+    else:
+        second[field] = bad
+    events = [first, second]
+    if wrapped:
+        events = [{"payload": {"metadata": event}} for event in events]
+    metrics = telemetry.IngestMetrics("drain", "realtime", events)
+    metrics.committed(events)
+    metrics.finish()
+
+    for event in (json.loads(line) for line in log_path.read_text().splitlines()):
+        _assert_ingest_origins(
+            event,
+            queued=None if field == "queued_at" else 1000,
+            observed=None if field == "ingest_observed_at" else 999,
+        )
+        assert event["queue_wait_ms"] == (None if field == "queued_at" else 10000)
+        assert event["rows_committed"] == 2
+    summary = json.loads(next(tmp_path.glob("writer-telemetry-summary-*.json")).read_text())
+    lag = "queue_to_commit_ms" if field == "queued_at" else "observed_to_commit_ms"
+    for group in summary["groups"].values():
+        assert lag not in group
+        assert f"oldest_{field}" not in group.get("watermarks", {})
+        if field == "queued_at":
+            assert "queue_wait_ms" not in group
+
+
+@pytest.mark.parametrize("events", [[], [{}], [{}, {"metadata": {}}]], ids=["empty", "legacy", "all-legacy"])
+def test_ingest_empty_and_legacy_cohorts_clear_previous_origins(tmp_path, monkeypatch, events):
+    import brainlayer.writer_telemetry as telemetry
+
+    log_path = _configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1010)
+    complete = [{"queued_at": 1000, "ingest_observed_at": 999}]
+    metrics = telemetry.IngestMetrics("watcher", "realtime", complete)
+    metrics.committed(complete)
+    metrics.set_events(events)
+    metrics.committed(events)
+    metrics.finish()
+    emitted = [json.loads(line) for line in log_path.read_text().splitlines()]
+    _assert_ingest_origins(emitted[0], queued=1000, observed=999)
+    for event in emitted[1:]:
+        _assert_ingest_origins(event, queued=None, observed=None)
+        assert event["queue_wait_ms"] is None
+        assert event["rows_committed"] == len(events)
+    summary = json.loads(next(tmp_path.glob("writer-telemetry-summary-*.json")).read_text())
+    for key, group in summary["groups"].items():
+        for field in ("queue_to_commit_ms", "observed_to_commit_ms"):
+            if key.endswith("|ingest_committed"):
+                assert group[field]["count"] == 1
+            else:
+                assert field not in group
+
+
+@pytest.mark.parametrize("mode", ["normal", "burn"])
+@pytest.mark.parametrize("field", ["queued_at", "ingest_observed_at"])
+@pytest.mark.parametrize("origin_state", ["complete", "missing", "invalid", "legacy"])
+def test_drain_ingest_origin_completeness_uses_actual_committed_cohort(
+    tmp_path, monkeypatch, mode, field, origin_state
+):
+    import brainlayer.writer_telemetry as telemetry
+
+    log_path = _configure(monkeypatch, tmp_path)
+    db_path, queue_dir = tmp_path / "cohorts.db", tmp_path / "queue"
+    _seed_store(db_path)
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1010)
+    first = enqueue_store(
+        content="Saffron cultivation needs arid soil and careful seasonal irrigation.", queue_dir=queue_dir
+    )
+    second = enqueue_store(
+        content="Orbital mechanics describes a satellite trajectory around distant planets.", queue_dir=queue_dir
+    )
+    paths = [first, second]
+    events = [json.loads(path.read_text()) for path in paths]
+    for index, event in enumerate(events):
+        event["queued_at"] = 1000 + index
+        event["metadata"]["ingest_observed_at"] = 999 + index
+        if origin_state != "complete" and (index == 1 or origin_state == "legacy"):
+            target = event if field == "queued_at" else event["metadata"]
+            if origin_state == "invalid":
+                target[field] = "invalid"
+            else:
+                target.pop(field)
+    if mode == "normal":
+        # Both rows must share one normal transaction, rather than two single-row cohorts.
+        first.write_text("".join(json.dumps(event) + "\n" for event in events))
+        second.unlink()
+        assert drain_once(db_path=db_path, queue_dir=queue_dir, log_path=tmp_path / "drain.log") == 2
+    else:
+        for path, event in zip(paths, events):
+            path.write_text(json.dumps(event) + "\n")
+        result = burn_drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            batch_size=10,
+            max_events_per_transaction=10,
+            log_path=tmp_path / "drain.log",
+        )
+        assert result.applied_events == 2
+    conn = apsw.Connection(str(db_path))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (2,)
+    finally:
+        conn.close()
+    committed = [
+        event
+        for line in log_path.read_text().splitlines()
+        if (event := json.loads(line))["event"] == "ingest_committed"
+    ]
+    assert len(committed) == 1
+    assert committed[0]["rows_committed"] == 2
+    queued = None if field == "queued_at" and origin_state != "complete" else 1000
+    observed = None if field == "ingest_observed_at" and origin_state != "complete" else 999
+    _assert_ingest_origins(committed[0], queued=queued, observed=observed)
+    summary = json.loads(next(tmp_path.glob("writer-telemetry-summary-*.json")).read_text())
+    for key, group in summary["groups"].items():
+        if "|ingest_" not in key:
+            continue
+        for origin, lag, expected in (
+            ("queued_at", "queue_to_commit_ms", queued),
+            ("ingest_observed_at", "observed_to_commit_ms", observed),
+        ):
+            if expected is None:
+                assert lag not in group
+                assert f"oldest_{origin}" not in group.get("watermarks", {})
+            else:
+                assert group[lag]["count"] == 1
+                assert group["watermarks"][f"oldest_{origin}"] == expected
+
+
+@pytest.mark.parametrize("arbitrated", [False, True], ids=["direct", "queued"])
+def test_watcher_ingest_origin_cohorts_follow_commit_boundaries(tmp_path, monkeypatch, arbitrated):
+    import brainlayer.watcher_bridge as bridge
+    import brainlayer.writer_telemetry as telemetry
+
+    log_path = _configure(monkeypatch, tmp_path)
+    db_path, queue_dir = tmp_path / "watch-cohorts.db", tmp_path / "queue"
+    _seed_store(db_path)
+    monkeypatch.setenv("BRAINLAYER_QUEUE_DIR", str(queue_dir))
+    monkeypatch.setenv("BRAINLAYER_DRAIN_EMBED", "0")
+    monkeypatch.setattr(telemetry, "_WALL_TIME", lambda: 1010)
+    # The direct writer commits each chunk separately; the queue writer can batch them.
+    entries = [
+        {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": content},
+            "_source_file": str(tmp_path / "session.jsonl"),
+        }
+        for content in (
+            "Saffron cultivation needs arid soil and careful seasonal irrigation to protect the harvest from fungal diseases.",
+            "Orbital mechanics describes a satellite trajectory around distant planets by tracking gravitational forces and momentum.",
+        )
+    ]
+    entries[0]["_ingest_observed_at"] = 999
+    stores = []
+
+    def tracked_store(*args, **kwargs):
+        store = VectorStore(*args, **kwargs)
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(bridge, "VectorStore", tracked_store)
+    try:
+        assert bridge.create_flush_callback(db_path, arbitrated=arbitrated)(entries) == 2
+    finally:
+        for store in stores:
+            store.close()
+    if arbitrated:
+        result = burn_drain_once(
+            db_path=db_path,
+            queue_dir=queue_dir,
+            batch_size=10,
+            max_events_per_transaction=10,
+            log_path=tmp_path / "drain.log",
+        )
+        assert result.applied_events == 2
+    committed = [
+        event
+        for line in log_path.read_text().splitlines()
+        if (event := json.loads(line))["event"] == "ingest_committed"
+    ]
+    assert [event["rows_committed"] for event in committed] == ([2] if arbitrated else [1, 1])
+    assert [event["observed_to_commit_ms"] for event in committed] == ([None] if arbitrated else [11000, None])
+    assert [event["oldest_ingest_observed_at"] for event in committed] == ([None] if arbitrated else [999, None])
