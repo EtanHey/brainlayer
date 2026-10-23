@@ -235,6 +235,76 @@ final class BrainBarStatusPopoverControllerTests: XCTestCase {
         XCTAssertNil(releasedButton)
     }
 
+    func test_D1_missing_log_menu_offers_an_action_without_claiming_it_already_opened() {
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent(UUID().uuidString)
+        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
+            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
+            snapshotDirectory: root, archiveDirectory: root)
+        for key in ["unknown-job", "maintenance-light"] {
+            let badge = BadgeStatePresentation(badgeOn: true, reason: "Failed", activeCodes: ["job_alert_\(key)"])
+            XCTAssertEqual(BrainBarStatusPopoverController.showLogItemTitle(for: badge, paths: paths, fileExists: { _ in false }),
+                "Open logs folder")
+        }
+    }
+
+    func test_D1_native_menu_action_opens_file_or_folder_and_scopes_failure_feedback() throws {
+        let root = URL(fileURLWithPath: brainBarTestTemporaryPath()).appendingPathComponent("brainbar-d1-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = BrainBarBackupSources.Paths(launchAgents: root, databaseLog: root.appendingPathComponent("backup.log"),
+            archiveLog: root.appendingPathComponent("archive.log"), maintenanceLog: root.appendingPathComponent("maintenance.log"),
+            snapshotDirectory: root, archiveDirectory: root)
+        let workspace = D1Workspace()
+        let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+        let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+        let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+            dashboardPanelController: panel, statusBar: TestStatusItemHost())
+        controller.setLogPathsForTesting(paths)
+        defer { controller.stop() }
+        let menu = controller.contextMenuForTesting
+        let action = try XCTUnwrap(menu.items.first { $0.action == NSSelectorFromString("showJobAlertLog:") })
+        XCTAssertTrue(action.target === controller)
+        XCTAssertFalse(menu.autoenablesItems)
+        func badge(_ key: String, reason: String = "Failed") {
+            controller.setBadgeForTesting(.init(badgeOn: true, reason: reason, activeCodes: ["job_alert_\(key)"]),
+                alertsURL: root.appendingPathComponent("absent-alerts.json"))
+            controller.menuNeedsUpdate(menu)
+        }
+        for key in ["unknown-job", "maintenance-light"] {
+            badge(key)
+            XCTAssertFalse(action.isHidden)
+            XCTAssertTrue(action.isEnabled, "the fallback must be clickable")
+            if action.isEnabled {
+                XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+            }
+            XCTAssertEqual(workspace.opened.last?.path, root.path)
+        }
+        try Data("log".utf8).write(to: paths.maintenanceLog)
+        badge("maintenance-light")
+        XCTAssertEqual(action.title, "Show log")
+        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        XCTAssertEqual(workspace.opened.last, paths.maintenanceLog)
+
+        workspace.acceptsOpen = false
+        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        controller.menuNeedsUpdate(menu)
+        let note = menu.items.first { !$0.isHidden && $0.title.contains("Could not open") }
+        XCTAssertNotNil(note)
+        XCTAssertNil(note?.action, "feedback must not pretend to be an opener")
+        XCTAssertEqual(note?.isEnabled, false)
+        XCTAssertTrue(action.isEnabled, "failure feedback must not disable retry")
+        workspace.acceptsOpen = true
+        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        XCTAssertFalse(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open") })
+        workspace.acceptsOpen = false
+        XCTAssertTrue(NSApplication.shared.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        badge("maintenance-light", reason: "A different failure")
+        XCTAssertFalse(menu.items.contains { !$0.isHidden && $0.title.contains("Could not open") })
+        controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: root)
+        controller.menuNeedsUpdate(menu)
+        XCTAssertTrue(action.isHidden)
+    }
+
     private func packageRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -257,4 +327,13 @@ private final class RecordingBrainBusEventSource: BrainBusEventSource, @unchecke
         }
         return AsyncStream { _ in }
     }
+}
+
+private final class D1Workspace: BrainBarWorkspaceActing, @unchecked Sendable {
+    var opened: [URL] = []
+    var acceptsOpen = true
+    func open(_ url: URL) { opened.append(url) }
+    func openLog(_ url: URL) -> Bool { opened.append(url); return acceptsOpen }
+    func reveal(_ url: URL) {}
+    func copy(_ text: String) {}
 }

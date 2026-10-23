@@ -109,6 +109,54 @@ def test_active_job_alert_enters_backup_health_surface_from_supplied_env(tmp_pat
     assert build_backups_section(env=env, record_input=future_record, now=NOW)["state"] == "unmeasurable"
 
 
+def test_usable_expiring_consent_does_not_force_backup_error(tmp_path):
+    from types import SimpleNamespace
+
+    from brainlayer import drive_credentials, job_alerts
+
+    token, client, alerts = tmp_path / "token.json", tmp_path / "client.json", tmp_path / "alerts.json"
+    token.write_text(
+        json.dumps(
+            {
+                "access_token": "fixture-access",
+                "refresh_token": "fixture-refresh",
+                "consented_at": "2026-09-07T12:00:00Z",
+            }
+        )
+    )
+    token.chmod(0o600)
+    client.write_text(
+        json.dumps(
+            {
+                "installed": {
+                    "token_uri": "https://example.invalid/token",
+                    "client_id": "fixture",
+                    "client_secret": "fixture",
+                }
+            }
+        )
+    )
+    alerts.write_text(json.dumps({"drive-consent": "prior consent episode"}))
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        now=NOW,
+        credentials_class=lambda **_: SimpleNamespace(valid=True, expired=False, expiry=None),
+        request_factory=object,
+        alert_reporter=lambda key, reason: job_alerts.report(key, reason, path=alerts, notify=lambda _: None),
+    )
+    env = {**_env("healthy-dev"), "BRAINLAYER_JOB_ALERT_PATH": str(alerts)}
+
+    def record(path, **kwargs):
+        return {"path": str(path), "status": kwargs.get("status", "read")}
+
+    result = build_backups_section(env=env, record_input=record, now=NOW)
+
+    assert status["state"] == "expiring"
+    assert result["freshness"] == "fresh"
+    assert result["error_type"] is None
+
+
 @pytest.mark.parametrize(
     ("case", "freshness", "error_type"),
     [

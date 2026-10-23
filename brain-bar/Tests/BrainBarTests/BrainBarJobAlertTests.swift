@@ -258,21 +258,22 @@ final class BrainBarJobAlertTests: XCTestCase {
         XCTAssertNil(BrainBarJobAlerts.logURL(forKey: nil, paths: paths))
     }
 
-    func test_show_log_opens_an_existing_log_and_otherwise_reveals_the_logs_folder() throws {
+    func test_show_log_opens_an_existing_log_or_the_logs_folder() throws {
         final class Recorder: BrainBarWorkspaceActing, @unchecked Sendable {
             var opened: [URL] = [], revealed: [URL] = []
             func open(_ url: URL) { opened.append(url) }
+            func openLog(_ url: URL) -> Bool { open(url); return true }
             func reveal(_ url: URL) { revealed.append(url) }
             func copy(_ text: String) {}
         }
         let workspace = Recorder()
         BrainBarJobAlerts.showLog(forKey: "maintenance-light", paths: paths, workspace: workspace)
-        XCTAssertEqual(workspace.revealed, [root.appendingPathComponent("logs")], "no log yet: show where it will be")
+        XCTAssertEqual(workspace.opened.map(\.path), [root.appendingPathComponent("logs").path], "no log yet: open where it will be")
         try Data("{}\n".utf8).write(to: paths.maintenanceLog)
         BrainBarJobAlerts.showLog(forKey: "maintenance-light", paths: paths, workspace: workspace)
-        XCTAssertEqual(workspace.opened, [paths.maintenanceLog])
+        XCTAssertEqual(workspace.opened.last, paths.maintenanceLog)
         BrainBarJobAlerts.showLog(forKey: nil, paths: paths, workspace: workspace)
-        XCTAssertEqual(workspace.revealed.last, root.appendingPathComponent("logs"), "an unknown job reveals the logs folder")
+        XCTAssertEqual(workspace.opened.last?.path, root.appendingPathComponent("logs").path, "an unknown job opens the logs folder")
     }
 
     // MARK: the menu
@@ -357,7 +358,7 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
 @MainActor
 final class BrainBarJobAlertRoundOneTests: XCTestCase {
     private let alert = "BrainLayer light maintenance failed: post-maintenance search latency pathological"
-    private let missing = "No maintenance log yet; it's written on the next run."
+    private let missing = "No maintenance log yet; it's written on the next run. Opened the logs folder."
     private let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
         .appendingPathComponent("brainbar-job-alert-r1-\(UUID().uuidString)", isDirectory: true)
 
@@ -365,6 +366,8 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         var opened: [URL] = [], revealed: [URL] = []
         func open(_ url: URL) { opened.append(url) }
         func reveal(_ url: URL) { revealed.append(url) }
+        var acceptsOpen = true
+        func openLog(_ url: URL) -> Bool { opened.append(url); return acceptsOpen }
         func copy(_ text: String) {}
     }
 
@@ -393,6 +396,45 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         return moved.replacingBackupsErrorType("job_alert:\(alert)")
     }
 
+    func test_D1_unknown_and_nil_job_open_the_existing_logs_folder() {
+        for key: String? in [nil, "unknown-job"] {
+            let workspace = Recorder()
+            let result = BrainBarJobAlerts.showLog(forKey: key, paths: paths, workspace: workspace)
+            XCTAssertEqual(workspace.opened, [paths.maintenanceLog.deletingLastPathComponent()])
+            XCTAssertTrue(result.message?.contains("Opened the logs folder") == true)
+        }
+    }
+
+    func test_D1_missing_folder_never_claims_it_opened() throws {
+        try FileManager.default.removeItem(at: paths.maintenanceLog.deletingLastPathComponent())
+        let workspace = Recorder()
+        let result = BrainBarJobAlerts.showLog(forKey: nil, paths: paths, workspace: workspace)
+        XCTAssertTrue(workspace.opened.isEmpty)
+        XCTAssertTrue(workspace.revealed.isEmpty)
+        XCTAssertTrue(result.message?.contains("logs folder does not exist") == true)
+        XCTAssertFalse(result.message?.contains("showing") == true)
+    }
+
+    func test_D1_workspace_refusal_is_reported_for_both_file_and_folder() throws {
+        for hasLog in [false, true] {
+            if hasLog { try Data("log".utf8).write(to: paths.maintenanceLog) }
+            let workspace = Recorder()
+            workspace.acceptsOpen = false
+            let result = BrainBarJobAlerts.showLog(forKey: "maintenance-light", paths: paths, workspace: workspace)
+            XCTAssertTrue(result.message?.contains("Could not open") == true)
+            XCTAssertNotEqual(result, .opened(paths.maintenanceLog))
+        }
+    }
+
+    func test_D1_missing_known_log_opens_its_own_parent_directory() throws {
+        try FileManager.default.createDirectory(at: paths.calendarLogDirectory, withIntermediateDirectories: true)
+        let workspace = Recorder()
+        let result = BrainBarJobAlerts.showLog(forKey: "index", paths: paths, workspace: workspace,
+            fileExists: { $0 == self.paths.calendarLogDirectory })
+        XCTAssertEqual(workspace.opened, [paths.calendarLogDirectory])
+        XCTAssertTrue(result.message?.contains("No index log yet") == true)
+    }
+
     // MARK: B1
 
     func test_show_log_result_names_a_missing_log_and_opens_an_existing_one() throws {
@@ -406,10 +448,10 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
             BrainBarJobAlerts.showLog(forKey: "maintenance-light", paths: paths, workspace: workspace),
             .opened(paths.maintenanceLog)
         )
-        XCTAssertEqual(workspace.opened, [paths.maintenanceLog])
+        XCTAssertEqual(workspace.opened, [paths.maintenanceLog.deletingLastPathComponent(), paths.maintenanceLog])
         XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: "backup-daily"), "No database backup log yet; it's written on the next run.")
         XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: "jsonl-backup"), "No transcript backup log yet; it's written on the next run.")
-        XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: nil), "BrainBar doesn't know this job's log; showing the logs folder.")
+        XCTAssertEqual(BrainBarJobAlerts.missingLogMessage(forKey: nil), "BrainBar doesn't know this job's log.")
     }
 
     func test_backups_page_shows_the_missing_log_message() throws {
@@ -425,7 +467,10 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         try Data("{}\n".utf8).write(to: paths.maintenanceLog)
         model.showJobAlertLog()
         XCTAssertNil(model.jobAlertLogMessage, "an opened log leaves no message")
-        XCTAssertEqual(workspace.opened, [paths.maintenanceLog])
+        XCTAssertEqual(workspace.opened, [paths.maintenanceLog.deletingLastPathComponent(), paths.maintenanceLog])
+        workspace.acceptsOpen = false
+        model.showJobAlertLog()
+        XCTAssertTrue(model.jobAlertLogMessage?.contains("Could not open log") == true)
     }
 
     func test_dashboard_shows_the_missing_log_message() throws {
@@ -436,13 +481,16 @@ final class BrainBarJobAlertRoundOneTests: XCTestCase {
         try Data("{}\n".utf8).write(to: paths.maintenanceLog)
         BrainBarJobAlerts.showLog(for: document(), paths: paths, workspace: workspace, panelState: panel)
         XCTAssertNil(panel.jobAlertLogMessage(forReason: alert))
+        workspace.acceptsOpen = false
+        BrainBarJobAlerts.showLog(for: document(), paths: paths, workspace: workspace, panelState: panel)
+        XCTAssertTrue(panel.jobAlertLogMessage(forReason: alert)?.contains("Could not open log") == true)
     }
 
-    func test_menu_says_there_is_no_log_yet_instead_of_offering_show_log() throws {
+    func test_menu_offers_a_folder_action_until_the_log_exists() throws {
         let badge = BadgeStatePresentation(badgeOn: true, reason: alert, activeCodes: ["job_alert_maintenance-light"])
         XCTAssertEqual(
             BrainBarStatusPopoverController.showLogItemTitle(for: badge, paths: paths),
-            missing
+            "Open logs folder"
         )
         try Data("{}\n".utf8).write(to: paths.maintenanceLog)
         XCTAssertEqual(BrainBarStatusPopoverController.showLogItemTitle(for: badge, paths: paths), "Show log")
@@ -569,10 +617,10 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
         // The initial read may already be in flight; pin the first alert, then press Show log.
         model.setObservabilityResultForTesting(.readable(document(first)))
         model.showJobAlertLog()
-        XCTAssertEqual(model.jobAlertLogMessage, "No maintenance log yet; it's written on the next run.")
-        // Missing logs both reveal the existing folder and return a note. Before injection,
+        XCTAssertEqual(model.jobAlertLogMessage, "No maintenance log yet; it's written on the next run. Opened the logs folder.")
+        // Missing logs open the existing folder and return an acknowledged note. Before injection,
         // this test reached Finder; teardown then removed the folder under the open window.
-        XCTAssertEqual(workspace.recorded.map(\.0), ["reveal"])
+        XCTAssertEqual(workspace.recorded.map(\.0), ["open"])
         XCTAssertEqual(workspace.recorded.map(\.1), [root.appendingPathComponent("logs").path])
         model.setObservabilityResultForTesting(.readable(next))
         XCTAssertNil(model.jobAlertLogMessage, "a different alert must not inherit the old note")
@@ -581,7 +629,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
     func test_the_dashboard_note_never_outlives_its_alert() {
         let panel = BrainBarDashboardPanelState()
         BrainBarJobAlerts.showLog(for: document(first), paths: paths, workspace: BrainBarWorkspaceStub(), panelState: panel)
-        XCTAssertEqual(panel.jobAlertLogMessage(forReason: first), "No maintenance log yet; it's written on the next run.")
+        XCTAssertEqual(panel.jobAlertLogMessage(forReason: first), "No maintenance log yet; it's written on the next run. Opened the logs folder.")
         XCTAssertNil(panel.jobAlertLogMessage(forReason: second))
     }
 
@@ -604,6 +652,7 @@ final class BrainBarJobAlertRoundOneFollowUpTests: XCTestCase {
 }
 
 private struct BrainBarWorkspaceStub: BrainBarWorkspaceActing {
+    func openLog(_ url: URL) -> Bool { true }
     func reveal(_ url: URL) {}
     func copy(_ text: String) {}
 }
