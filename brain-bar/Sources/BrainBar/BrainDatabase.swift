@@ -4742,17 +4742,29 @@ final class BrainDatabase: @unchecked Sendable {
         try sync(fd)
     }
 
-    private static func createDurableQueueDirectory(
-        at directory: URL, sync: ((URL) throws -> Void)? = nil
+    static func createDurableQueueDirectory(
+        at directory: URL, sync: ((URL) throws -> Void)? = nil,
+        create: (URL) throws -> Void = {
+            try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: false)
+        }
     ) throws {
-        let parent = directory.deletingLastPathComponent()
+        let directory = directory.standardizedFileURL
         // Only the filesystem root is an implicit durable anchor. Visibility
         // cannot prove a creator (or a previous failed attempt) synced a dirent.
-        guard parent.path != directory.path else { return }
-        try createDurableQueueDirectory(at: parent, sync: sync)
+        guard directory.pathComponents.count > 1 else { return }
+        let parent = directory.deletingLastPathComponent()
+        try createDurableQueueDirectory(at: parent, sync: sync, create: create)
         var isDirectory: ObjCBool = false
         if !FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) || !isDirectory.boolValue {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            do {
+                try create(directory)
+            } catch {
+                // A peer can create the directory after our existence check.
+                // It still owes the same parent barrier below as our own mkdir.
+                var createdDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &createdDirectory),
+                      createdDirectory.boolValue else { throw error }
+            }
         }
         if let sync { try sync(parent) } else { try syncQueueDirectory(parent) }
     }

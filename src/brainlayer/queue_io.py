@@ -1,13 +1,18 @@
-"""Durable JSONL queue for BrainLayer write arbitration."""
+"""JSONL queue for BrainLayer write arbitration.
+
+POSIX publication syncs file data and directory entries; Darwin also flushes the
+device cache. Windows runtimes without directory handles warn that directory-entry
+durability is unavailable, while still syncing file data before atomic rename.
+"""
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import sys
 import time
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,11 +36,24 @@ def _sync_queue_fd(fd: int) -> None:
     os.fsync(fd)
     if sys.platform == "darwin":
         # fsync only reaches the drive cache; ask Darwin to flush it to media.
+        import fcntl
+
         fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
 
 
 def _sync_directory(directory: Path) -> None:
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if directory_flag is None:
+        if sys.platform != "win32":
+            raise OSError("Queue directory sync requires os.O_DIRECTORY on this platform")
+        warnings.warn(
+            "Windows queue directory-entry durability is unavailable without os.O_DIRECTORY; "
+            "file data is still synced before atomic rename",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    fd = os.open(directory, os.O_RDONLY | directory_flag)
     try:
         _sync_queue_fd(fd)
     finally:
