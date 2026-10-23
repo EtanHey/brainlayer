@@ -295,17 +295,23 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
     private let alert = "BrainLayer light maintenance failed; check the maintenance log"
 
     private func viewModel(_ result: ObservabilityReadResult) throws -> BrainBarSettingsViewModel {
+        let now: Date
+        switch result {
+        case .readable(let document): now = document.generatedAt
+        case .unreadable: now = BrainBarDashboardFixture.fetchedAt
+        }
         let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-job-alert-page-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = BrainLayerConfigStore(configURL: root.appendingPathComponent("brainlayer.env"))
         try store.save(.defaultConfig)
         let ok = BrainLayerLaunchdJobObservation(loadState: .loaded, runs: 1, lastExitCode: 0,
-                                                 lastRunAt: Date(), nextRunAt: Date(), isContinuous: false)
+                                                 lastRunAt: now, nextRunAt: now, isContinuous: false)
         return BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(), store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdObservations: [.backupDaily: ok, .jsonlBackup: ok],
             refreshStatusOnLoad: false,
+            now: { now },
             initialObservabilityResult: result
         )
     }
@@ -342,7 +348,7 @@ final class BrainBarBackupsJobAlertPageTests: XCTestCase {
                            thresholdHours: b.thresholdHours, retentionInvariant: b.retentionInvariant,
                            survivingArchives30D: b.survivingArchives30D, errorType: nil,
                            lastVerifiedUpload: b.lastVerifiedUpload,
-                           dbSnapshot: .init(lastAt: Date().addingTimeInterval(-48 * 3600),
+                           dbSnapshot: .init(lastAt: doc.generatedAt.addingTimeInterval(-48 * 3600),
                                              destination: "fixture.db.zst", verified: true), launchd: b.launchd)
         )
         let model = try viewModel(.readable(stale))
