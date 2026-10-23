@@ -5,6 +5,7 @@ These tests use only private scratch queue paths and synthetic store content.
 
 import asyncio
 import json
+import sqlite3
 
 import pytest
 
@@ -83,7 +84,8 @@ def test_prepublication_unified_failure_uses_one_legacy_fallback(tmp_path, monke
 
 
 @pytest.mark.parametrize("message", ["directory sync failed", "directory busy after publication"])
-def test_store_does_not_acknowledge_or_retry_an_unconfirmed_publication(tmp_path, monkeypatch, message):
+@pytest.mark.parametrize("consumed", [False, True])
+def test_store_does_not_acknowledge_or_retry_an_unconfirmed_publication(tmp_path, monkeypatch, message, consumed):
     unified_dir = tmp_path / "unified"
     unified_dir.mkdir()
     legacy_path = tmp_path / "pending-stores.jsonl"
@@ -91,10 +93,22 @@ def test_store_does_not_acknowledge_or_retry_an_unconfirmed_publication(tmp_path
     monkeypatch.setattr(store_handler, "_interactive_queue_reason", lambda: "DB_BUSY")
     real_sync = queue_io._sync_directory
     attempts = []
+    published_paths = []
+    database = tmp_path / "private-drainer.db"
 
     def fail_published(directory):
         if directory == unified_dir and list(unified_dir.glob("*.jsonl")):
             attempts.append(directory)
+            published_path = next(unified_dir.glob("*.jsonl"))
+            published_paths.append(published_path)
+            if consumed:
+                # Simulate the drainer winning the race, with a real private
+                # SQLite commit before the producer sees its failed barrier.
+                event = json.loads(published_path.read_text())
+                with sqlite3.connect(database) as connection:
+                    connection.execute("CREATE TABLE committed_intents (chunk_id TEXT PRIMARY KEY)")
+                    connection.execute("INSERT INTO committed_intents VALUES (?)", (event["chunk_id"],))
+                published_path.unlink()
             raise OSError(message)
         return real_sync(directory)
 
@@ -103,8 +117,11 @@ def test_store_does_not_acknowledge_or_retry_an_unconfirmed_publication(tmp_path
         asyncio.run(store_handler._store(content="Synthetic unconfirmed store intent", memory_type="note"))
 
     published = list(unified_dir.glob("*.jsonl"))
-    assert len(published) == 1
-    assert failure.value.published_path == published[0]
+    assert len(published) == (0 if consumed else 1)
+    assert failure.value.published_path == published_paths[0]
+    if consumed:
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM committed_intents").fetchone()[0] == 1
     assert "do not retry" in str(failure.value)
     assert attempts == [unified_dir]
     assert not legacy_path.exists()
