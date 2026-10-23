@@ -137,6 +137,33 @@ def test_exact_duplicate_merge_preserves_fts_rowids_and_retrieval(indexed_merge_
     )
 
 
+@pytest.mark.parametrize("content_class", ["knowledge", "operational"])
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content", "seen"])
+def test_duplicate_merge_preserves_historical_audit_rows(indexed_merge_store, content_class, merge_kind):
+    conn = indexed_merge_store.conn
+    conn.execute(
+        "INSERT INTO dedupe_audit VALUES (?, ?, ?, ?, ?)",
+        ("old-canary-雪", "historical-kept", "historical mechanism  ", None, "2000-01-01T00:00:00+00:00"),
+    )
+    old_id = conn.execute("SELECT rowid FROM dedupe_audit").fetchone()[0]
+    old_bytes_sql = """SELECT rowid, CAST(chunk_id_dropped AS BLOB), CAST(chunk_id_kept AS BLOB),
+        CAST(mechanism AS BLOB), hamming_distance, CAST(ts AS BLOB)
+        FROM dedupe_audit WHERE rowid = ?"""
+    before = conn.execute(old_bytes_sql, (old_id,)).fetchall()
+    before_indexes = _fts_snapshot(conn)
+    before_count = conn.execute("SELECT count(*) FROM dedupe_audit").fetchone()[0]
+
+    _merge_indexed_chunk(conn, content_class, merge_kind)
+
+    assert conn.execute("SELECT count(*) FROM dedupe_audit").fetchone()[0] == before_count + 1
+    assert conn.execute(old_bytes_sql, (old_id,)).fetchall() == before
+    dropped = f"{content_class}-duplicate" if merge_kind == "duplicate" else f"{content_class}-canonical"
+    assert conn.execute(
+        "SELECT chunk_id_dropped, chunk_id_kept FROM dedupe_audit WHERE rowid != ?", (old_id,)
+    ).fetchall() == [(dropped, f"{content_class}-canonical")]
+    assert _fts_snapshot(conn) == before_indexes
+
+
 @pytest.mark.parametrize("indexed_merge_store", ["zebra, amber", '["zebra","amber"]'], indirect=True)
 @pytest.mark.parametrize("content_class", ["knowledge", "operational"])
 @pytest.mark.parametrize("merge_kind", ["duplicate", "content"])

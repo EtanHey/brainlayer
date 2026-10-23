@@ -26,7 +26,6 @@ SIMHASH_THRESHOLD = 3
 SHINGLE_WIDTH = 4
 MIN_SIMHASH_TOKENS = 8
 ALIAS_GRACE_DAYS = 90
-AUDIT_RETENTION_DAYS = 30
 BUSY_RETRY_ATTEMPTS = 5
 
 _ISO_TIMESTAMP_RE = re.compile(
@@ -477,8 +476,6 @@ def record_dedupe_audit(
         """,
         (dropped_id, kept_id, mechanism, hamming_distance_value, now),
     )
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=AUDIT_RETENTION_DAYS)).isoformat()
-    conn.cursor().execute("DELETE FROM dedupe_audit WHERE ts < ?", (cutoff,))
 
 
 def write_alias(conn: Any, *, old_chunk_id: str, canonical_chunk_id: str, deprecated_at: str | None = None) -> None:
