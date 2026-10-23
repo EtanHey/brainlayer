@@ -240,8 +240,8 @@ def append_event(event: dict[str, Any]) -> bool:
                     handle.write(encoded)
                 try:
                     _rollup(path, payload)
-                except OSError:
-                    pass  # Derived summary I/O cannot negate a successful raw append.
+                except Exception:
+                    pass  # Derived summary failure cannot negate a successful raw append.
         finally:
             _SINK_LOCK.release()
         return True

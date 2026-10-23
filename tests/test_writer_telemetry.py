@@ -647,3 +647,40 @@ def test_invalid_incoming_watermark_is_absent_and_keeps_raw_truth(tmp_path, monk
     group = _strict_summary(target)["groups"]["unknown|unknown|unknown"]
     assert group["count"] == 1
     assert field not in group.get("watermarks", {})
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("derived failure"), KeyboardInterrupt(), SystemExit(7)])
+def test_derived_failure_boundary_preserves_raw_receipt_without_suppressing_interruptions(
+    tmp_path, monkeypatch, failure
+):
+    import brainlayer.writer_telemetry as telemetry
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    log.parent.mkdir(parents=True)
+    summary = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    preserved = b'{"schema_version":1,"groups":{"unrelated":{"count":9}}}'
+    summary.write_bytes(preserved)
+
+    def fail_rollup(*_args):
+        raise failure
+
+    monkeypatch.setattr(telemetry, "_rollup", fail_rollup)
+    event = {"event": "txn_finished", "finished_at": "2026-10-23T12:00:00+00:00"}
+    if isinstance(failure, Exception):
+        result = telemetry.append_event(event)
+    else:
+        with pytest.raises(type(failure)):
+            telemetry.append_event(event)
+    expected = {"schema_version": 1, **event}
+    assert log.read_bytes() == (json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    assert summary.read_bytes() == preserved
+    if isinstance(failure, Exception):
+        assert result is True
+
+
+def test_preappend_serialization_failure_still_reports_no_receipt(tmp_path, monkeypatch):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    assert append_event({"event": object()}) is False
+    assert not log.exists()

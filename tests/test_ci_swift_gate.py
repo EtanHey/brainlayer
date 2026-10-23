@@ -115,6 +115,37 @@ def test_macos_swift_job_builds_and_tests_brain_bar_package():
     assert swift_job is not None, "CI must include a macOS Swift job that builds and tests brain-bar"
 
 
+def test_failed_native_job_preserves_only_new_test_crash_reports(tmp_path, monkeypatch):
+    workflow = _load_workflow()
+    _, job = _find_swift_job(workflow)
+    collector = next(step for step in job["steps"] if step.get("name") == "Preserve native test crash reports")
+    home, temporary = tmp_path / "home", tmp_path / "runner"
+    reports = home / "Library/Logs/DiagnosticReports"
+    reports.mkdir(parents=True)
+    temporary.mkdir()
+    (temporary / "brainbar-test-start").write_text("1000")
+    for name, modified in [
+        ("xctest-new.ips", 1001),
+        ("BrainBarPackageTests-new.crash", 1002),
+        ("xctest-old.ips", 999),
+        ("unrelated-new.ips", 1003),
+    ]:
+        report = reports / name
+        report.write_text(name)
+        os.utime(report, (modified, modified))
+    (reports / "xctest-link.ips").symlink_to(reports / "unrelated-new.ips")
+    monkeypatch.setenv("RUNNER_TEMP", str(temporary))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    code = collector["run"].split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    exec(compile(code, "native-crash-collector", "exec"), {})
+    destination = temporary / "brainbar-native-crashes"
+    assert {p.name for p in destination.iterdir()} == {"xctest-new.ips", "BrainBarPackageTests-new.crash"}
+    for copied in destination.iterdir():
+        assert copied.read_bytes() == (reports / copied.name).read_bytes()
+    assert len(list(reports.iterdir())) == 5, "diagnostic collection must not delete any input"
+    assert collector["if"] == "failure() && steps.brainbar-tests.outcome == 'failure'"
+
+
 @pytest.mark.parametrize("swift_exit,leak,expected", [(0, False, 0), (7, False, 7), (0, True, 1)])
 def test_swift_wrapper_executes_tests_and_preserves_failure_gates(monkeypatch, swift_exit, leak, expected):
     path = REPO_ROOT / "brain-bar/Tests/BrainBarTests/Scripts/run_swift_tests.py"
