@@ -423,21 +423,34 @@ def _merged_content(existing: str, incoming: str) -> str:
 
 
 def _changed_merge_fields(
-    *, existing_content: str, merged_content: str, existing_tags: Any, merged_tags: list[str], created_at: str | None
+    *,
+    existing_content: str,
+    merged_content: str,
+    existing_tags: Any,
+    merged_tags: list[str],
+    created_at: str | None,
+    existing_fingerprints: tuple[Any, ...],
 ) -> dict[str, Any]:
     """Omit unchanged indexed columns: SQLite UPDATE OF fires even for equal values."""
-    updates: dict[str, Any] = {}
+    fields = compute_dedupe_fields(merged_content, created_at)
+    fingerprints = {
+        "dedupe_hash": fields.dedupe_hash,
+        "simhash": fields.simhash,
+        "simhash_band_0": fields.bands[0],
+        "simhash_band_1": fields.bands[1],
+        "simhash_band_2": fields.bands[2],
+        "simhash_band_3": fields.bands[3],
+    }
+    # An unchanged body can still have missing or stale lookup metadata.
+    updates = {
+        column: value
+        for (column, value), existing in zip(fingerprints.items(), existing_fingerprints, strict=True)
+        if value != existing
+    }
     if merged_content != existing_content:
-        fields = compute_dedupe_fields(merged_content, created_at)
         updates.update(
             content=merged_content,
             char_count=len(merged_content),
-            dedupe_hash=fields.dedupe_hash,
-            simhash=fields.simhash,
-            simhash_band_0=fields.bands[0],
-            simhash_band_1=fields.bands[1],
-            simhash_band_2=fields.bands[2],
-            simhash_band_3=fields.bands[3],
         )
     merged_tags_json = json.dumps(merged_tags) if merged_tags else None
     # Legacy CSV must be rewritten: only valid JSON populates chunk_tags.
@@ -553,7 +566,8 @@ def merge_duplicate_chunk(
     cursor = conn.cursor()
     row = cursor.execute(
         """
-        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at
+        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at,
+               dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
         FROM chunks WHERE id = ?
         """,
         (canonical_id,),
@@ -568,7 +582,7 @@ def merge_duplicate_chunk(
         existing_seen,
         existing_last,
         existing_created,
-    ) = row
+    ) = row[:7]
     incoming_seen = int(incoming.get("seen_count") or 1)
     merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
     merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
@@ -590,6 +604,7 @@ def merge_duplicate_chunk(
             existing_tags=existing_tags,
             merged_tags=merged_tags,
             created_at=existing_created,
+            existing_fingerprints=row[7:],
         )
     )
     if merged_importance is not None:
@@ -747,7 +762,8 @@ def merge_existing_chunk_content(
     cursor = conn.cursor()
     row = cursor.execute(
         """
-        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at
+        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at,
+               dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
         FROM chunks
         WHERE id = ?
         """,
@@ -763,7 +779,7 @@ def merge_existing_chunk_content(
         existing_seen,
         existing_last,
         existing_created,
-    ) = row
+    ) = row[:7]
     incoming_content = str(incoming.get("content") or "")
     merged_content = _merged_content(str(existing_content), incoming_content)
     content_changed = merged_content != str(existing_content)
@@ -784,6 +800,7 @@ def merge_existing_chunk_content(
             existing_tags=existing_tags,
             merged_tags=merged_tags,
             created_at=existing_created,
+            existing_fingerprints=row[7:],
         )
     )
     if merged_importance is not None:

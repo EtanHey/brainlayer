@@ -282,11 +282,14 @@ def test_unchanged_merge_repairs_fingerprints_for_later_duplicate_lookup(
         assert hit is not None
         assert hit.canonical_chunk_id == chunk_id
         assert hit.mechanism == mechanism
-    assert conn.execute(
-        """SELECT dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
+    assert (
+        conn.execute(
+            """SELECT dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
            FROM chunks WHERE id = ?""",
-        (chunk_id,),
-    ).fetchone() == expected_values
+            (chunk_id,),
+        ).fetchone()
+        == expected_values
+    )
     assert conn.execute("SELECT content, tags, seen_count FROM chunks WHERE id = ?", (chunk_id,)).fetchone() == (
         content,
         '["amber", "zebra"]',
