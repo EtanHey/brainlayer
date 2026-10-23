@@ -200,10 +200,9 @@ private struct BrainBarDashboardContent: View {
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
-#if DEBUG
     var observabilityCadence: ObservabilityCadence? = nil
-#endif
     var referenceNow: Date? = nil
+    var backupReferenceNow: Date? = nil
     var calendar: Calendar = .current
     var locale: Locale = .current
     var panelState: BrainBarDashboardPanelState? = nil
@@ -222,13 +221,11 @@ private struct BrainBarDashboardContent: View {
         var view = BrainBarDashboardView(
             collector: collector, workspace: workspace, receiptStore: receiptStore,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: observabilityResult,
-            referenceNow: referenceNow, calendar: calendar, locale: locale,
+            referenceNow: referenceNow, backupReferenceNow: backupReferenceNow, calendar: calendar, locale: locale,
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
             panelState: panelState ?? standalonePanelState
         )
-#if DEBUG
         view.observabilityCadenceOverride = observabilityCadence
-#endif
         return view
     }
 }
@@ -246,7 +243,7 @@ private struct BrainBarJobsDashboardContent: View {
     var body: some View {
         BrainBarDashboardContent(collector: collector, workspace: workspace,
             hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
-            referenceNow: model.observabilityNow, panelState: panelState,
+            observabilityCadence: model.observabilityCadence, backupReferenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking)
             // One cadence for the view's lifetime: samples on appear, then every 60 s.
             .task { await model.monitorLaunchdStatus() }
@@ -266,6 +263,14 @@ enum BrainBarHeroBackupTruth: Sendable, Equatable {
     case stale(ObservabilityBackupStatus, ageText: String)
     case unavailable(String)
     case checking(String)
+
+    var statusNotice: String? {
+        switch self {
+        case .measured: nil
+        case let .stale(_, ageText): "Backup status is \(ageText); waiting for a fresh observability check."
+        case let .unavailable(reason), let .checking(reason): reason
+        }
+    }
 
     static func derive(
         from result: ObservabilityReadResult,
@@ -287,6 +292,7 @@ enum BrainBarHeroBackupTruth: Sendable, Equatable {
                 return .unavailable(detail ?? reason)
             }
             let status = ObservabilityPresentation.backupStatus(for: document.backups, now: now)
+            if document.generatedAt > now { return .stale(status, ageText: "from the future") }
             return snapshot.isStale ? .stale(status, ageText: snapshot.ageText) : .measured(status)
         case let .unreadable(reason):
             return reason == "Loading observability data." ? .checking(reason) : .unavailable(reason)
@@ -322,32 +328,32 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
         let dbBackup: ObservabilityStatusLine
         let transcriptBackup: ObservabilityStatusLine
         let backupFailure: String?
-        let staleBackupAge: String?
+        let staleBackupNotice: String?
         let checkingReason: String?
         switch backupTruth {
         case let .measured(status):
             dbBackup = status.snapshot
             transcriptBackup = status.upload
             backupFailure = status.attentionLine?.text
-            staleBackupAge = nil
+            staleBackupNotice = nil
             checkingReason = nil
-        case let .stale(status, ageText):
+        case let .stale(status, _):
             dbBackup = status.snapshot
             transcriptBackup = status.upload
             backupFailure = status.attentionLine?.text
-            staleBackupAge = ageText
+            staleBackupNotice = backupTruth.statusNotice
             checkingReason = nil
         case let .unavailable(reason):
             dbBackup = .init(text: reason, tone: .neutral)
             transcriptBackup = .init(text: reason, tone: .neutral)
             backupFailure = reason
-            staleBackupAge = nil
+            staleBackupNotice = nil
             checkingReason = nil
         case let .checking(reason):
             dbBackup = .init(text: "Checking DB snapshot status", tone: .neutral)
             transcriptBackup = .init(text: "Checking transcript backup status", tone: .neutral)
             backupFailure = nil
-            staleBackupAge = nil
+            staleBackupNotice = nil
             checkingReason = reason
         }
 
@@ -363,10 +369,10 @@ struct BrainBarHeroPresentation: Sendable, Equatable {
             health = ("Needs attention", backupFailure, .red)
         } else if let checkingReason {
             health = ("Checking health", checkingReason, .amber)
-        } else if let staleBackupAge {
+        } else if let staleBackupNotice {
             health = (
                 "Check health",
-                "Backup status is \(staleBackupAge); waiting for a fresh observability check.",
+                staleBackupNotice,
                 .amber
             )
         } else if case .unknown = flow.watcherStatus {
@@ -487,7 +493,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         jobsChecking: Bool = false,
         calendar: Calendar = .current,
         locale: Locale = .current,
-        observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence
+        observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence,
+        backupNow: Date? = nil
     ) -> Self {
         let snapshotIsLive: Bool = if case .live = snapshotFreshness { true } else { false }
         let otherLiveHeroAttention = snapshotIsLive
@@ -570,7 +577,7 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         let indexedTodayUnavailableText: String?
         if case let .readable(document) = observability, document.backups.state == "measured" {
             backupLines = ObservabilityPresentation.backupReceiptLines(
-                for: document.backups, locale: locale, now: now, calendar: calendar)
+                for: document.backups, locale: locale, now: backupNow ?? now, calendar: calendar)
         } else {
             backupLines = [
                 .init(text: "Database · Drive · status unavailable", tone: .red),
@@ -903,10 +910,9 @@ private struct BrainBarDashboardView: View {
     let hotkeyStatus: String
     var dbPath: String? = nil
     var observabilityResult: ObservabilityReadResult? = nil
-#if DEBUG
     var observabilityCadenceOverride: ObservabilityCadence? = nil
-#endif
     var referenceNow: Date? = nil
+    var backupReferenceNow: Date? = nil
     var calendar: Calendar = .current
     var locale: Locale = .current
     var jobAttentionReasons: [String] = []
@@ -925,13 +931,9 @@ private struct BrainBarDashboardView: View {
     @State private var vectorSignalDetailExpanded = false
     @State private var vectorSignalRootFrame: CGRect = .zero
     @State private var liveObservabilityResult: ObservabilityReadResult = .unreadable("Loading observability data.")
-#if DEBUG
     private var observabilityCadence: ObservabilityCadence {
         observabilityCadenceOverride ?? ObservabilityReader.installedHealthCheckCadence
     }
-#else
-    private let observabilityCadence = ObservabilityReader.installedHealthCheckCadence
-#endif
     @State private var vectorDetailHeight: CGFloat = 0
     @State private var ingestHelpPresented = false
     @State private var lastSearchReceipt: BrainBarOperationReceipt?
@@ -990,7 +992,7 @@ private struct BrainBarDashboardView: View {
     private var jobAlert: (text: String, reason: String, document: ObservabilityDocument)? {
         guard case let .readable(document) = effectiveObservabilityResult,
               let reason = BrainBarJobAlerts.rawReason(document) else { return nil }
-        let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: currentNow)
+        let status = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: currentBackupNow)
         guard status.errorIsJobAlert, let error = status.error, error.tone == .red else { return nil }
         return (error.text, reason, document)
     }
@@ -1013,7 +1015,7 @@ private struct BrainBarDashboardView: View {
     private var heroPresentation: BrainBarHeroPresentation {
         let backupTruth = BrainBarHeroBackupTruth.derive(
             from: effectiveObservabilityResult,
-            now: currentNow,
+            now: currentBackupNow,
             cadence: observabilityCadence
         )
         return BrainBarHeroPresentation.derive(
@@ -1025,6 +1027,7 @@ private struct BrainBarDashboardView: View {
     }
 
     private var currentNow: Date { referenceNow ?? Date() }
+    private var currentBackupNow: Date { backupReferenceNow ?? currentNow }
 
     private var onePagePresentation: BrainBarOnePagePresentation {
         BrainBarOnePagePresentation.derive(
@@ -1037,7 +1040,7 @@ private struct BrainBarDashboardView: View {
             jobAttentionReasons: jobAttentionReasons, jobsChecking: jobsChecking,
             calendar: calendar,
             locale: locale,
-            observabilityCadence: observabilityCadence
+            observabilityCadence: observabilityCadence, backupNow: currentBackupNow
         )
     }
 
@@ -1127,6 +1130,9 @@ private struct BrainBarDashboardView: View {
             previousAllCommitBuckets = collector.stats.recentActivityBuckets
             previousWriteBuckets = collector.stats.recentAgentWriteBuckets
             previousWatcherBuckets = collector.stats.recentWatcherWriteBuckets
+        }
+        .onChange(of: referenceNow) { _, now in
+            receiptDisplayNow = now ?? Date()
         }
         .onReceive(NotificationCenter.default.publisher(for: BrainBarOperationReceipts.changed)
             .receive(on: DispatchQueue.main)) { _ in
@@ -1442,6 +1448,10 @@ private struct BrainBarDashboardView: View {
         .brainBarCardShapeProbe("receipt.\(label)")
         .accessibilityElement(children: .combine)
         .help(help)
+#if DEBUG
+        .onAppear { panelState.renderedReceiptValues[label] = value }
+        .onChange(of: value) { _, value in panelState.renderedReceiptValues[label] = value }
+#endif
     }
 
     private func ingestSeriesChart(_ series: PipelineSeries) -> some View {
@@ -3294,6 +3304,7 @@ enum BrainBarDashboardPreview {
         hotkeyStatus: String = "Hotkey ⌃⌥Space ready",
         observabilityResult: ObservabilityReadResult? = nil,
         now: Date? = nil,
+        backupNow: Date? = nil,
         calendar: Calendar = goldenCalendar,
         locale: Locale = goldenLocale,
         panelState: BrainBarDashboardPanelState? = nil,
@@ -3312,7 +3323,7 @@ enum BrainBarDashboardPreview {
                     hotkeyStatus: hotkeyStatus,
                     observabilityResult: observabilityResult,
                     observabilityCadence: observabilityCadence,
-                    referenceNow: now,
+                    referenceNow: now, backupReferenceNow: backupNow,
                     calendar: calendar,
                     locale: locale,
                     panelState: panelState,

@@ -21,6 +21,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
     @Published private(set) var observabilityNow: Date
+    let observabilityCadence: ObservabilityCadence
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
     @Published private(set) var configReadSucceeded = true
     @Published private(set) var embeddingProcess: BrainBarEmbeddingProcessState
@@ -94,6 +95,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         now: @escaping @Sendable () -> Date = Date.init,
         observabilityURL: URL? = nil,
         initialObservabilityResult: ObservabilityReadResult? = nil,
+        observabilityCadence: ObservabilityCadence = ObservabilityReader.installedHealthCheckCadence,
         confirmAPIKeyOverwrite: (() -> Bool)? = nil,
         observabilityRead: @escaping @Sendable (URL) async -> ObservabilityReadResult = { url in
             await Task.detached { ObservabilityReader.readReconciled(url: url) }.value
@@ -116,6 +118,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         self.now = now
         self.observabilityURL = observabilityURL
         self.observabilityRead = observabilityRead
+        self.observabilityCadence = observabilityCadence
         self.confirmAPIKeyOverwrite = confirmAPIKeyOverwrite
         self.watcherHealthURL = watcherHealthURL
         self.watcherHealthRead = watcherHealthRead
@@ -379,13 +382,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
     var backupChecks: BrainBarBackupChecks? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return BrainBarBackupChecks.derive(document.backups, now: observabilityNow, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine)
+        return BrainBarBackupChecks.derive(document.backups, now: observabilityNow,
+            jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, statusNotice: backupTruth.statusNotice)
     }
 
     /// The Backups page's one verdict (#1029 review B1), from the same Drive presentation the card
     /// shows, the Backups job group and the backup checks, in the checks' own words.
     func backupsHealth(drive: DriveAuthPresentation?) -> BrainBarBackupsHealth {
-        BrainBarBackupsHealth.derive(
+        let verdict = BrainBarBackupsHealth.derive(
             job: groupStatus(.backups),
             drive: drive,
             status: backupStatus,
@@ -393,6 +397,9 @@ final class BrainBarSettingsViewModel: ObservableObject {
             attentionSentence: backupChecks?.attentionSentence,
             isCheckingStatus: !hasCompletedObservabilityRead
         )
+        if verdict.badge == .attention || !hasCompletedObservabilityRead { return verdict }
+        if let reason = backupTruth.statusNotice { return .init(badge: .unknown, reason: reason) }
+        return verdict
     }
 
     /// A job alert (#1031) in its own words, shown once on the Backups page as its own card.
@@ -413,7 +420,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         // Each failure once per screen (lead UX r1 on #1064): the job-alert card, the Google Drive
         // card and the Recovery checks card each say their own; the header keeps only the badge.
         let reason = backupsHealth(drive: drive).reason
-        let shownElsewhere = [jobAlert, drive?.line, backupChecks?.attentionSentence].compactMap { $0 }
+        let shownElsewhere = [jobAlert, drive?.line, backupChecks?.attentionSentence, backupChecks?.statusNotice].compactMap { $0 }
         return reason.flatMap { shownElsewhere.contains($0) ? nil : $0 }
     }
 
@@ -463,7 +470,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         case let .unreadable(value):
             value
         case let .readable(document):
-            if document.backups.state == "measured" { nil }
+            if document.backups.state == "measured" { backupTruth.statusNotice }
             else if document.backups.reason.localizedCaseInsensitiveContains("no backup or maintenance LaunchAgents"),
                     let observation = launchdObservations[.jsonlBackup], observation.ownership != .legacy {
                 (observation.backupScheduleLine?.text ?? "Job owner unknown") + "; backup history has not been measured."
@@ -530,6 +537,10 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
     var dashboardObservabilityResult: ObservabilityReadResult {
         hasCompletedObservabilityRead ? observabilityResult : .unreadable("Loading observability data.")
+    }
+
+    var backupTruth: BrainBarHeroBackupTruth {
+        .derive(from: dashboardObservabilityResult, now: observabilityNow, cadence: observabilityCadence)
     }
 
     var backupReceiptLines: [ObservabilityStatusLine]? {

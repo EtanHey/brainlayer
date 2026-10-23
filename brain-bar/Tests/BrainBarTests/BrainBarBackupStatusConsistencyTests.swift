@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import BrainBar
 
@@ -144,7 +145,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
                                              loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
                 initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
                 refreshStatusOnLoad: false, now: { Date(timeIntervalSince1970: 1_790_769_600) },
-                initialObservabilityResult: .readable(document))
+                initialObservabilityResult: .readable(document), observabilityCadence: .known(300))
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: auth, reason: nil, expiresAt: now.addingTimeInterval(48 * 3600)))
@@ -198,7 +199,7 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
                 XCTAssertEqual(model.observabilityNow, referenceNow)
                 let hero = BrainBarHeroPresentation.derive(
                     flow: DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: model.observabilityNow),
-                    stats: collector.stats, backupTruth: .measured(ObservabilityPresentation.backupStatus(for: current.backups, now: model.observabilityNow)))
+                    stats: collector.stats, backupTruth: BrainBarHeroBackupTruth.derive(from: model.dashboardObservabilityResult, now: model.observabilityNow, cadence: model.observabilityCadence))
                 let dashboard = BrainBarOnePagePresentation.derive(
                     snapshotFreshness: .live(ageSeconds: 0), hero: hero, observability: model.dashboardObservabilityResult,
                     stats: collector.stats, agentActivity: BrainBarDashboardFixture.agentActivity, now: model.observabilityNow)
@@ -211,8 +212,108 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         XCTAssertEqual(tones, [.red, .green])
     }
 
+    @MainActor
+    func testR1MountedDashboardReceiptAgesAdvanceForExistingAndArrivingReceipts() {
+        let receipts = BrainBarOperationReceipts()
+        receipts.record(.init(kind: .search, durationMillis: 10, count: 1, recordedAt: now.addingTimeInterval(-10)))
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let state = BrainBarDashboardPanelState()
+        func dashboard(_ clock: Date) -> AnyView {
+            BrainBarDashboardPreview.make(collector: collector, receiptStore: receipts,
+                observabilityResult: BrainBarDashboardFixture.healthyObservabilityResult,
+                now: clock, panelState: state, observabilityCadence: .known(300))
+        }
+        let host = NSHostingView(rootView: dashboard(now))
+        host.frame = NSRect(x: 0, y: 0, width: 1000, height: 1600)
+        func text() -> String {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
+            return state.renderedReceiptValues.values.joined(separator: "\n")
+        }
+        let initial = text()
+        XCTAssertTrue(initial.contains("just now"), "Mounted receipt text unavailable: \(initial)")
+        host.rootView = dashboard(now.addingTimeInterval(600))
+        receipts.record(.init(kind: .ingest, durationMillis: 20, count: 2, recordedAt: now.addingTimeInterval(300)))
+        let advanced = text()
+        XCTAssertTrue(advanced.contains("10 min ago"), advanced)
+        XCTAssertTrue(advanced.contains("5 min ago"), advanced)
+    }
+
+    @MainActor
+    func testR1LiveReceiptAgesIgnoreAdvancingBackupClock() {
+        let live = Date()
+        let receipts = BrainBarOperationReceipts()
+        receipts.record(.init(kind: .search, durationMillis: 10, count: 1, recordedAt: live.addingTimeInterval(-120)))
+        let collector = BrainBarDashboardFixture.makeCollector()
+        let state = BrainBarDashboardPanelState()
+        func dashboard(_ backup: Date) -> AnyView {
+            BrainBarDashboardPreview.make(collector: collector, receiptStore: receipts,
+                observabilityResult: BrainBarDashboardFixture.healthyObservabilityResult,
+                backupNow: backup, panelState: state, observabilityCadence: .known(300))
+        }
+        let host = NSHostingView(rootView: dashboard(live.addingTimeInterval(-600)))
+        host.frame = NSRect(x: 0, y: 0, width: 1000, height: 1600)
+        func settle() { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25)) }
+        settle()
+        XCTAssertTrue(state.renderedReceiptValues["Last search"]?.contains("2 min ago") == true)
+        host.rootView = dashboard(live.addingTimeInterval(600))
+        receipts.record(.init(kind: .ingest, durationMillis: 20, count: 2, recordedAt: live.addingTimeInterval(-180)))
+        settle()
+        XCTAssertTrue(state.renderedReceiptValues["Last search"]?.contains("2 min ago") == true)
+        XCTAssertTrue(state.renderedReceiptValues["Last store"]?.contains("3 min ago") == true)
+    }
+
+    @MainActor
+    func testR1StaleAndFutureEnvelopesCannotBeHealthyWithFreshCopyReceipts() throws {
+        guard case let .readable(base) = try BrainBarOnePageTestFixture.healthyResult() else { return XCTFail("fixture") }
+        for offset in [-1200.0, 600.0] {
+            var root = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(try replacingBackups(base, with: backups()))) as? [String: Any])
+            root["generatedAt"] = now.addingTimeInterval(offset).timeIntervalSinceReferenceDate
+            let document = try JSONDecoder().decode(ObservabilityDocument.self, from: JSONSerialization.data(withJSONObject: root))
+            let truth = BrainBarHeroBackupTruth.derive(from: .readable(document), now: now, cadence: .known(300))
+            if case .measured = truth { XCTFail("untrusted envelope must not be measured") }
+            let model = BrainBarSettingsViewModel(workspace: BrainBarRecordingWorkspace(),
+                store: BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/fixture/config"),
+                    loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
+                initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
+                refreshStatusOnLoad: false, now: { Date(timeIntervalSince1970: 1_790_769_600) },
+                initialObservabilityResult: .readable(document), observabilityCadence: .known(300))
+            XCTAssertEqual(model.backupTruth.statusNotice, truth.statusNotice)
+            let collector = BrainBarDashboardFixture.makeCollector(watcherHeartbeatAt: now)
+            let hero = BrainBarHeroPresentation.derive(
+                flow: DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now),
+                stats: collector.stats, backupTruth: truth)
+            XCTAssertEqual(hero.healthTone, .amber)
+            XCTAssertEqual(hero.healthReason, truth.statusNotice)
+            XCTAssertEqual(model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).badge, .unknown)
+            XCTAssertNotNil(model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).reason)
+            XCTAssertNotEqual(model.backupChecks?.summary, "All 6 checks pass")
+            XCTAssertEqual(model.backupChecks?.verdictTone, .neutral)
+            XCTAssertEqual(model.backupReceiptLines?.map(\.tone), [.green, .green], "historical copies are still verified")
+            let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+            runtime.jobsModel = model
+            runtime.driveAuth.setForPreview(status: .init(state: .valid, reason: nil, expiresAt: now.addingTimeInterval(5 * 86400)))
+            let workspace = BrainBarRecordingWorkspace()
+            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+            let menu = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+                dashboardPanelController: panel, statusBar: TestStatusItemHost())
+            defer { menu.stop() }
+            menu.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []), alertsURL: URL(fileURLWithPath: "/fixture/absent-alerts"))
+            menu.menuNeedsUpdate(menu.contextMenuForTesting)
+            XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Info:") == true)
+            XCTAssertEqual(menu.contextMenuForTesting.items.first?.toolTip, model.backupsHealth(drive: drive(expiresIn: 5 * 86400)).reason)
+            XCTAssertEqual(model.backupsHealth(drive: drive(.invalid)).badge, .attention)
+            model.setObservabilityResultForTesting(.readable(document.replacingBackupsErrorType("job_alert:Fixture failure")))
+            XCTAssertEqual(model.backupsHealth(drive: drive()).badge, .attention)
+            XCTAssertEqual(model.backupChecks?.verdictTone, .red)
+            menu.menuNeedsUpdate(menu.contextMenuForTesting)
+            XCTAssertTrue(menu.contextMenuForTesting.items.first?.title.hasPrefix("Needs attention:") == true)
+        }
+    }
+
     private func replacingBackups(_ document: ObservabilityDocument, with backups: ObservabilityDocument.Backups) throws -> ObservabilityDocument {
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
+        root["generatedAt"] = now.timeIntervalSinceReferenceDate
         root["backups"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(backups))
         return try JSONDecoder().decode(ObservabilityDocument.self, from: JSONSerialization.data(withJSONObject: root))
     }
