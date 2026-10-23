@@ -270,6 +270,11 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
         observability: ObservabilityReadResult, workspace: Recorder = Recorder(),
         jsonl: BrainLayerLaunchdJobObservation? = nil
     ) throws -> (BrainBarSettingsViewModel, URL) {
+        let now: Date
+        switch observability {
+        case .readable(let document): now = document.generatedAt
+        case .unreadable: now = BrainBarDashboardFixture.fetchedAt
+        }
         let root = URL(fileURLWithPath: brainBarTestTemporaryPath(), isDirectory: true)
             .appendingPathComponent("brainbar-plain-paths-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -279,10 +284,11 @@ final class BrainBarSettingsPlainPathsTests: XCTestCase {
         let viewModel = BrainBarSettingsViewModel(workspace: workspace, store: store,
             launchdStatusProvider: StaticBrainLayerLaunchdStatusProvider(states: [:]),
             initialLaunchdObservations: [
-                .backupDaily: .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
-                .jsonlBackup: jsonl ?? .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: Date(), nextRunAt: Date(), isContinuous: false),
+                .backupDaily: .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: now, nextRunAt: now, isContinuous: false),
+                .jsonlBackup: jsonl ?? .init(loadState: .loaded, runs: 1, lastExitCode: 0, lastRunAt: now, nextRunAt: now, isContinuous: false),
             ],
             refreshStatusOnLoad: false,
+            now: { now },
             initialObservabilityResult: observability)
         return (viewModel, configURL)
     }
