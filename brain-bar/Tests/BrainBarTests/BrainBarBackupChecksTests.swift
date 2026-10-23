@@ -176,6 +176,44 @@ final class BrainBarBackupChecksTests: XCTestCase {
         XCTAssertNil(result.attentionSentence)
     }
 
+    func test_future_transcript_receipt_check_says_invalid_timestamp_and_stays_red() throws {
+        let iso = ISO8601DateFormatter()
+        let referenceNow = iso.date(from: "2026-09-14T12:00:00Z")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let dates = [referenceNow.addingTimeInterval(1), referenceNow.addingTimeInterval(86_400),
+                     iso.date(from: "2027-01-01T12:00:00Z")!]
+        for date in dates {
+            for verified in [true, false] {
+                for noOp in [false, true] {
+                    var state = ObservabilityDocument.Backups(
+                        state: "measured", reason: "", inputs: [], freshness: "fresh", thresholdHours: 36,
+                        retentionInvariant: "PASS", survivingArchives30D: 6, errorType: nil,
+                        lastVerifiedUpload: .init(at: date, ageHours: 0, archiveId: "fixture-archive", verified: verified),
+                        dbSnapshot: .init(lastAt: referenceNow.addingTimeInterval(-7200), destination: "fixture.db.zst", verified: true),
+                        launchd: .init(label: launchdLabel, bootstrapped: true, disabledDirPresent: false))
+                    if noOp {
+                        state.transcriptAttempt = .init(at: referenceNow.addingTimeInterval(-60), status: "no-op", verified: true, uploaded: false)
+                    }
+                    let result = BrainBarBackupChecks.derive(state, now: referenceNow, locale: locale, calendar: calendar)
+                    let row = try XCTUnwrap(result.checks.first { $0.id == "upload" })
+                    XCTAssertEqual(row.value, "Invalid timestamp")
+                    XCTAssertEqual(row.tone, .red)
+                    XCTAssertEqual(result.verdictTone, .red)
+                    XCTAssertEqual(result.attentionSentence, "Transcripts in Google Drive: Invalid timestamp")
+                }
+            }
+        }
+    }
+
+    func test_receipt_at_now_remains_verified_with_generic_relative_clamping_unchanged() {
+        let result = checks(backups(uploadAgeHours: 0))
+        XCTAssertEqual(result.checks.first { $0.id == "upload" }?.value, "Verified just now")
+        XCTAssertEqual(result.checks.first { $0.id == "upload" }?.tone, .green)
+        XCTAssertEqual(result.summary, "All 6 checks pass")
+        XCTAssertEqual(BrainBarBackupChecks.relative(now.addingTimeInterval(1), now: now, locale: locale), "just now")
+    }
+
     /// #1029 B1 still holds: each check's tone is the tone of the status line it replaces, so
     /// the badge can never be green beside a red check, or red beside an all-green list.
     func test_every_check_tone_matches_the_status_line_it_replaces() {

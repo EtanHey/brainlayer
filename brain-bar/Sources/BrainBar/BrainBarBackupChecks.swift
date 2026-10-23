@@ -60,6 +60,8 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         if lines.snapshot.tone == .red, backups.dbSnapshot?.verified == true { snapshot = lines.snapshot.text }
         let idle = backups.verifiedIdle(now: now)
         if idle { upload = lines.upload.text }
+        let invalidUploadTimestamp = backups.lastVerifiedUpload.map { $0.at > now } == true
+        if invalidUploadTimestamp { upload = "Invalid timestamp" }
         let job: String = if let jobStatus { jobStatus.text }
             else if backups.launchd?.bootstrapped == true { "Scheduled" }
             else if backups.launchd?.disabledDirPresent == true { "Paused by a safety stop" }
@@ -76,7 +78,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         }
 
         var checks = [
-            Check(id: "upload", title: "Transcripts in Google Drive", value: upload, tone: lines.upload.tone),
+            Check(id: "upload", title: "Transcripts in Google Drive", value: upload, tone: invalidUploadTimestamp ? .red : lines.upload.tone),
             Check(id: "snapshot", title: "Database copy", value: snapshot, tone: lines.snapshot.tone),
             Check(id: "job", title: "Daily transcript backup", value: job, tone: lines.job.tone),
             Check(id: "freshness", title: lines.freshnessCheckTitle, value: lines.freshnessCheckValue, tone: lines.freshness.tone),
