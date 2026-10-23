@@ -26,7 +26,6 @@ SIMHASH_THRESHOLD = 3
 SHINGLE_WIDTH = 4
 MIN_SIMHASH_TOKENS = 8
 ALIAS_GRACE_DAYS = 90
-AUDIT_RETENTION_DAYS = 30
 BUSY_RETRY_ATTEMPTS = 5
 
 _ISO_TIMESTAMP_RE = re.compile(
@@ -422,6 +421,44 @@ def _merged_content(existing: str, incoming: str) -> str:
     return marker + "".join(f"\n\n{index}. {item}" for index, item in enumerate(originals, start=1))
 
 
+def _changed_merge_fields(
+    *,
+    existing_content: str,
+    merged_content: str,
+    existing_tags: Any,
+    merged_tags: list[str],
+    created_at: str | None,
+    existing_fingerprints: tuple[Any, ...],
+) -> dict[str, Any]:
+    """Omit unchanged indexed columns: SQLite UPDATE OF fires even for equal values."""
+    fields = compute_dedupe_fields(merged_content, created_at)
+    fingerprints = {
+        "dedupe_hash": fields.dedupe_hash,
+        "simhash": fields.simhash,
+        "simhash_band_0": fields.bands[0],
+        "simhash_band_1": fields.bands[1],
+        "simhash_band_2": fields.bands[2],
+        "simhash_band_3": fields.bands[3],
+    }
+    # An unchanged body can still have missing or stale lookup metadata.
+    updates = {
+        column: value
+        for (column, value), existing in zip(fingerprints.items(), existing_fingerprints, strict=True)
+        if value != existing
+    }
+    if merged_content != existing_content:
+        updates.update(
+            content=merged_content,
+            char_count=len(merged_content),
+        )
+    merged_tags_json = json.dumps(merged_tags) if merged_tags else None
+    # Legacy CSV must be rewritten: only valid JSON populates chunk_tags.
+    # Exact representation equality also preserves canonical ordering/formatting.
+    if existing_tags != merged_tags_json:
+        updates["tags"] = merged_tags_json
+    return updates
+
+
 def record_dedupe_audit(
     conn: Any,
     *,
@@ -439,8 +476,6 @@ def record_dedupe_audit(
         """,
         (dropped_id, kept_id, mechanism, hamming_distance_value, now),
     )
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=AUDIT_RETENTION_DAYS)).isoformat()
-    conn.cursor().execute("DELETE FROM dedupe_audit WHERE ts < ?", (cutoff,))
 
 
 def write_alias(conn: Any, *, old_chunk_id: str, canonical_chunk_id: str, deprecated_at: str | None = None) -> None:
@@ -535,7 +570,8 @@ def merge_duplicate_chunk(
     cursor = conn.cursor()
     row = cursor.execute(
         """
-        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at
+        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at,
+               dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
         FROM chunks WHERE id = ?
         """,
         (canonical_id,),
@@ -550,31 +586,31 @@ def merge_duplicate_chunk(
         existing_seen,
         existing_last,
         existing_created,
-    ) = row
+    ) = row[:7]
     incoming_seen = int(incoming.get("seen_count") or 1)
     merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
     merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
     merged_content = _merged_content(str(existing_content), str(incoming.get("content") or ""))
     content_changed = merged_content != str(existing_content)
-    fields = compute_dedupe_fields(merged_content, existing_created)
     last_seen_at = _latest_timestamp(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
     )
 
     updates: dict[str, Any] = {
-        "content": merged_content,
-        "char_count": len(merged_content),
-        "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + incoming_seen,
         "last_seen_at": last_seen_at,
-        "dedupe_hash": fields.dedupe_hash,
-        "simhash": fields.simhash,
-        "simhash_band_0": fields.bands[0],
-        "simhash_band_1": fields.bands[1],
-        "simhash_band_2": fields.bands[2],
-        "simhash_band_3": fields.bands[3],
     }
+    updates.update(
+        _changed_merge_fields(
+            existing_content=str(existing_content),
+            merged_content=merged_content,
+            existing_tags=existing_tags,
+            merged_tags=merged_tags,
+            created_at=existing_created,
+            existing_fingerprints=row[7:],
+        )
+    )
     if merged_importance is not None:
         updates["importance"] = merged_importance
     if merged_half_life is not None:
@@ -732,7 +768,8 @@ def merge_existing_chunk_content(
     cursor = conn.cursor()
     row = cursor.execute(
         """
-        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at
+        SELECT content, tags, importance, half_life_days, COALESCE(seen_count, 1), last_seen_at, created_at,
+               dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
         FROM chunks
         WHERE id = ?
         """,
@@ -748,11 +785,10 @@ def merge_existing_chunk_content(
         existing_seen,
         existing_last,
         existing_created,
-    ) = row
+    ) = row[:7]
     incoming_content = str(incoming.get("content") or "")
     merged_content = _merged_content(str(existing_content), incoming_content)
     content_changed = merged_content != str(existing_content)
-    fields = compute_dedupe_fields(merged_content, existing_created)
     merged_tags = sorted(_loads_tags(existing_tags) | _loads_tags(incoming.get("tags")))
     merged_importance = _max_optional_number(existing_importance, incoming.get("importance"))
     merged_half_life = _max_optional_number(existing_half_life, incoming.get("half_life_days"))
@@ -760,18 +796,19 @@ def merge_existing_chunk_content(
         existing_last, existing_created, incoming.get("last_seen_at"), incoming.get("created_at")
     )
     updates: dict[str, Any] = {
-        "content": merged_content,
-        "char_count": len(merged_content),
-        "tags": json.dumps(merged_tags) if merged_tags else None,
         "seen_count": int(existing_seen or 1) + int(incoming.get("seen_count") or 1),
         "last_seen_at": last_seen_at,
-        "dedupe_hash": fields.dedupe_hash,
-        "simhash": fields.simhash,
-        "simhash_band_0": fields.bands[0],
-        "simhash_band_1": fields.bands[1],
-        "simhash_band_2": fields.bands[2],
-        "simhash_band_3": fields.bands[3],
     }
+    updates.update(
+        _changed_merge_fields(
+            existing_content=str(existing_content),
+            merged_content=merged_content,
+            existing_tags=existing_tags,
+            merged_tags=merged_tags,
+            created_at=existing_created,
+            existing_fingerprints=row[7:],
+        )
+    )
     if merged_importance is not None:
         updates["importance"] = merged_importance
     if merged_half_life is not None:

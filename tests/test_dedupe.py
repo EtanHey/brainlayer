@@ -3,6 +3,8 @@ import os
 import shutil
 import sqlite3
 
+import pytest
+
 from brainlayer._helpers import serialize_f32
 from brainlayer.vector_store import VectorStore
 
@@ -39,6 +41,287 @@ def _chunk(
     if half_life_days is not None:
         chunk["half_life_days"] = half_life_days
     return chunk
+
+
+@pytest.fixture
+def indexed_merge_store(tmp_path, request):
+    """Use production FTS triggers, with a later row so a rebuild changes rowids."""
+    store = VectorStore(tmp_path / "indexed-merges.db")
+    stored_tags = getattr(request, "param", '["amber", "zebra"]')
+    for content_class in ("knowledge", "operational"):
+        for chunk_id, content in (("canonical", "Quartz retrieval original"), ("later", "Unrelated orchard")):
+            store.conn.execute(
+                """INSERT INTO chunks(id, content, metadata, source_file, tags, content_class, created_at, seen_count)
+                   VALUES (?, ?, '{}', 'test.jsonl', ?, ?, ?, 1)""",
+                (f"{content_class}-{chunk_id}", content, stored_tags, content_class, "2026-10-22T01:00:00Z"),
+            )
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+def _merge_indexed_chunk(conn, content_class, merge_kind, *, content="Quartz retrieval original", tags=None):
+    from brainlayer.dedupe import merge_duplicate_chunk, merge_existing_chunk_content, merge_existing_chunk_seen
+
+    chunk_id = f"{content_class}-canonical"
+    incoming = {
+        "content": content,
+        "tags": ["zebra", "amber"] if tags is None else tags,
+        "created_at": "2026-10-22T02:00:00Z",
+        "importance": 9,
+        "half_life_days": 90,
+    }
+    # Match drain's transaction ownership; merge helpers retain their savepoints.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if merge_kind == "duplicate":
+            changed = merge_duplicate_chunk(
+                conn,
+                canonical_id=chunk_id,
+                duplicate_id=f"{content_class}-duplicate",
+                incoming=incoming,
+                mechanism="sha256" if content == "Quartz retrieval original" else "simhash",
+                hamming_distance_value=0,
+                ensure_schema=False,
+            )
+        else:
+            merge = merge_existing_chunk_content if merge_kind == "content" else merge_existing_chunk_seen
+            changed = merge(conn, chunk_id=chunk_id, incoming=incoming, ensure_schema=False)
+        conn.execute("COMMIT")
+        return changed
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def _fts_snapshot(conn):
+    return {
+        table: conn.execute(f"SELECT rowid, * FROM {table} ORDER BY rowid").fetchall()
+        for table in ("chunks_fts", "chunks_fts_operational", "chunks_fts_trigram", "chunk_fts_rowids", "chunk_tags")
+    }
+
+
+def _fts_matches(conn, table, query):
+    return conn.execute(f"SELECT chunk_id FROM {table} WHERE {table} MATCH ? ORDER BY chunk_id", (query,)).fetchall()
+
+
+@pytest.mark.parametrize("content_class", ["knowledge", "operational"])
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content", "seen"])
+def test_exact_duplicate_merge_preserves_fts_rowids_and_retrieval(indexed_merge_store, content_class, merge_kind):
+    conn = indexed_merge_store.conn
+    conn.execute("CREATE TEMP TABLE merge_tag_writes (chunk_id TEXT)")
+    conn.execute("""CREATE TEMP TRIGGER record_merge_tag_write AFTER UPDATE OF tags ON chunks BEGIN
+        INSERT INTO merge_tag_writes VALUES (new.id);
+    END""")
+    before = _fts_snapshot(conn)
+    table = "chunks_fts" if content_class == "knowledge" else "chunks_fts_operational"
+    matches = _fts_matches(conn, table, "quartz")
+    assert matches == [(f"{content_class}-canonical",)]
+
+    _merge_indexed_chunk(conn, content_class, merge_kind)
+
+    assert _fts_snapshot(conn) == before
+    assert conn.execute("SELECT * FROM merge_tag_writes").fetchall() == []
+    assert _fts_matches(conn, table, "quartz") == matches
+    assert conn.execute(
+        "SELECT seen_count, last_seen_at, importance, half_life_days FROM chunks WHERE id = ?",
+        (f"{content_class}-canonical",),
+    ).fetchone() == (2, "2026-10-22T02:00:00Z", 9.0, 90.0)
+    expected_dropped = f"{content_class}-duplicate" if merge_kind == "duplicate" else f"{content_class}-canonical"
+    assert conn.execute("SELECT chunk_id_dropped, chunk_id_kept FROM dedupe_audit").fetchall() == [
+        (expected_dropped, f"{content_class}-canonical")
+    ]
+    assert conn.execute("SELECT old_chunk_id, canonical_chunk_id FROM chunk_id_alias").fetchall() == (
+        [(expected_dropped, f"{content_class}-canonical")] if merge_kind == "duplicate" else []
+    )
+
+
+@pytest.mark.parametrize("content_class", ["knowledge", "operational"])
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content", "seen"])
+def test_duplicate_merge_preserves_historical_audit_rows(indexed_merge_store, content_class, merge_kind):
+    conn = indexed_merge_store.conn
+    conn.execute(
+        "INSERT INTO dedupe_audit VALUES (?, ?, ?, ?, ?)",
+        ("old-canary-雪", "historical-kept", "historical mechanism  ", None, "2000-01-01T00:00:00+00:00"),
+    )
+    old_id = conn.execute("SELECT rowid FROM dedupe_audit").fetchone()[0]
+    old_bytes_sql = """SELECT rowid, CAST(chunk_id_dropped AS BLOB), CAST(chunk_id_kept AS BLOB),
+        CAST(mechanism AS BLOB), hamming_distance, CAST(ts AS BLOB)
+        FROM dedupe_audit WHERE rowid = ?"""
+    before = conn.execute(old_bytes_sql, (old_id,)).fetchall()
+    before_indexes = _fts_snapshot(conn)
+    before_count = conn.execute("SELECT count(*) FROM dedupe_audit").fetchone()[0]
+
+    _merge_indexed_chunk(conn, content_class, merge_kind)
+
+    assert conn.execute("SELECT count(*) FROM dedupe_audit").fetchone()[0] == before_count + 1
+    assert conn.execute(old_bytes_sql, (old_id,)).fetchall() == before
+    dropped = f"{content_class}-duplicate" if merge_kind == "duplicate" else f"{content_class}-canonical"
+    assert conn.execute(
+        "SELECT chunk_id_dropped, chunk_id_kept FROM dedupe_audit WHERE rowid != ?", (old_id,)
+    ).fetchall() == [(dropped, f"{content_class}-canonical")]
+    assert _fts_snapshot(conn) == before_indexes
+
+
+@pytest.mark.parametrize("indexed_merge_store", ["zebra, amber", '["zebra","amber"]'], indirect=True)
+@pytest.mark.parametrize("content_class", ["knowledge", "operational"])
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"])
+def test_duplicate_merge_normalizes_legacy_tags_and_refreshes_tag_search(
+    indexed_merge_store, content_class, merge_kind
+):
+    conn = indexed_merge_store.conn
+    chunk_id = f"{content_class}-canonical"
+    before_tags = conn.execute("SELECT tags FROM chunks WHERE id = ?", (chunk_id,)).fetchone()[0]
+    if before_tags == "zebra, amber":
+        assert conn.execute("SELECT tag FROM chunk_tags WHERE chunk_id = ?", (chunk_id,)).fetchall() == []
+
+    assert _merge_indexed_chunk(conn, content_class, merge_kind) is False
+
+    assert conn.execute("SELECT tags FROM chunks WHERE id = ?", (chunk_id,)).fetchone() == ('["amber", "zebra"]',)
+    assert conn.execute("SELECT tag FROM chunk_tags WHERE chunk_id = ? ORDER BY tag", (chunk_id,)).fetchall() == [
+        ("amber",),
+        ("zebra",),
+    ]
+    assert conn.execute(
+        """SELECT chunks.id FROM chunks JOIN chunk_tags ON chunk_tags.chunk_id = chunks.id
+           WHERE chunk_tags.tag = 'amber' AND chunks.id = ?""",
+        (chunk_id,),
+    ).fetchall() == [(chunk_id,)]
+
+
+@pytest.mark.parametrize("content_class", ["knowledge", "operational"])
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"])
+@pytest.mark.parametrize("changed_field", ["content", "tags"])
+def test_changed_duplicate_merge_refreshes_retrieval(indexed_merge_store, content_class, merge_kind, changed_field):
+    conn = indexed_merge_store.conn
+    tables = ["chunks_fts", "chunks_fts_trigram"] if content_class == "knowledge" else ["chunks_fts_operational"]
+    before = _fts_snapshot(conn)["chunk_fts_rowids"]
+    for table in tables:
+        assert _fts_matches(conn, table, "sapphire") == []
+    change = {"content": "Quartz retrieval original sapphire"} if changed_field == "content" else {"tags": ["sapphire"]}
+
+    assert _merge_indexed_chunk(conn, content_class, merge_kind, **change) == (changed_field == "content")
+
+    assert _fts_snapshot(conn)["chunk_fts_rowids"] != before
+    for table in tables:
+        assert _fts_matches(conn, table, "sapphire") == [(f"{content_class}-canonical",)]
+        assert _fts_matches(conn, table, "quartz") == [(f"{content_class}-canonical",)]
+    if changed_field == "tags":
+        assert conn.execute(
+            "SELECT tag FROM chunk_tags WHERE chunk_id = ? ORDER BY tag", (f"{content_class}-canonical",)
+        ).fetchall() == [("amber",), ("sapphire",), ("zebra",)]
+
+
+def test_unchanged_duplicate_merge_avoids_fts_writes_at_scale(indexed_merge_store):
+    """Count actual FTS shadow-table writes, without a machine-dependent time limit."""
+    conn = indexed_merge_store.conn
+    for index in range(96):
+        conn.execute(
+            "INSERT INTO chunks(id, content, metadata, source_file) VALUES (?, ?, '{}', 'test.jsonl')",
+            (f"filler-{index}", f"Orchard filler {index}"),
+        )
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone() == (100,)
+    writes = []
+    conn.set_update_hook(
+        lambda operation, database, table, rowid: writes.append(table) if table.startswith("chunks_fts") else None
+    )
+    try:
+        # Reproduce the old assignment behavior on the same full-schema temp DB.
+        conn.execute("UPDATE chunks SET content = content, tags = tags WHERE id = 'knowledge-canonical'")
+        legacy_writes = len(writes)
+        writes.clear()
+        for _ in range(20):
+            _merge_indexed_chunk(conn, "knowledge", "duplicate")
+        print(f"N=100: legacy FTS shadow writes/merge={legacy_writes}; unchanged merges=20, FTS writes={len(writes)}")
+        assert legacy_writes > 0
+        assert len(writes) == 0
+    finally:
+        conn.set_update_hook(None)
+
+
+@pytest.mark.parametrize("merge_kind", ["duplicate", "content"], ids=["cross-id", "same-id"])
+@pytest.mark.parametrize("fingerprint_state", ["missing", "stale", "valid"])
+def test_unchanged_merge_repairs_fingerprints_for_later_duplicate_lookup(
+    indexed_merge_store, merge_kind, fingerprint_state
+):
+    """Repair lookup metadata without rebuilding retrieval or changing peer rows."""
+    from brainlayer.dedupe import (
+        compute_dedupe_fields,
+        find_duplicate,
+        hamming_distance,
+        merge_duplicate_chunk,
+        merge_existing_chunk_content,
+    )
+
+    conn = indexed_merge_store.conn
+    chunk_id = "knowledge-canonical"
+    created_at = "2026-10-22T01:00:00Z"
+    words = [f"token{index}" for index in range(100)]
+    content = " ".join(words)
+    near_content = " ".join(["changed0", *words[1:]])
+    expected = compute_dedupe_fields(content, created_at)
+    near_fields = compute_dedupe_fields(near_content, created_at)
+    # The second lookup must exercise band selection and SimHash, not exact hash.
+    assert near_fields.dedupe_hash != expected.dedupe_hash
+    assert hamming_distance(expected.simhash, near_fields.simhash) <= 3
+    assert any(left == right for left, right in zip(expected.bands, near_fields.bands))
+    expected_values = (expected.dedupe_hash, expected.simhash, *expected.bands)
+    stored_values = expected_values
+    if fingerprint_state == "missing":
+        stored_values = (None,) * 6
+    elif fingerprint_state == "stale":
+        stale_simhash = f"{int(expected.simhash, 16) ^ ((1 << 64) - 1):016x}"
+        stored_values = ("stale-exact-hash", stale_simhash, *(stale_simhash[i : i + 4] for i in range(0, 16, 4)))
+    conn.execute(
+        """UPDATE chunks SET content = ?, char_count = ?, dedupe_hash = ?, simhash = ?,
+           simhash_band_0 = ?, simhash_band_1 = ?, simhash_band_2 = ?, simhash_band_3 = ? WHERE id = ?""",
+        (content, len(content), *stored_values, chunk_id),
+    )
+    before_fts = _fts_snapshot(conn)
+    peers = conn.execute("SELECT * FROM chunks WHERE id != ? ORDER BY id", (chunk_id,)).fetchall()
+    incoming = {"content": content, "tags": ["zebra", "amber"], "created_at": "2026-10-22T02:00:00Z"}
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if merge_kind == "duplicate":
+            changed = merge_duplicate_chunk(
+                conn,
+                canonical_id=chunk_id,
+                duplicate_id="fingerprint-duplicate",
+                incoming=incoming,
+                mechanism="sha256",
+                hamming_distance_value=0,
+                ensure_schema=False,
+            )
+        else:
+            changed = merge_existing_chunk_content(conn, chunk_id=chunk_id, incoming=incoming, ensure_schema=False)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+    assert changed is False
+    assert _fts_snapshot(conn) == before_fts
+    assert conn.execute("SELECT * FROM chunks WHERE id != ? ORDER BY id", (chunk_id,)).fetchall() == peers
+    for probe_content, mechanism in ((content, "sha256"), (near_content, "simhash")):
+        hit, _ = find_duplicate(conn, chunk_id="later-probe", content=probe_content, created_at=created_at)
+        assert hit is not None
+        assert hit.canonical_chunk_id == chunk_id
+        assert hit.mechanism == mechanism
+    assert (
+        conn.execute(
+            """SELECT dedupe_hash, simhash, simhash_band_0, simhash_band_1, simhash_band_2, simhash_band_3
+           FROM chunks WHERE id = ?""",
+            (chunk_id,),
+        ).fetchone()
+        == expected_values
+    )
+    assert conn.execute("SELECT content, tags, seen_count FROM chunks WHERE id = ?", (chunk_id,)).fetchone() == (
+        content,
+        '["amber", "zebra"]',
+        2,
+    )
 
 
 def test_normalized_exact_hash_preserves_timestamps_but_ignores_stopwords_and_whitespace():
