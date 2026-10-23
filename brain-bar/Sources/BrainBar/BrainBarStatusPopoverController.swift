@@ -50,6 +50,14 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     let statusItemForTesting: any BrainBarStatusItem
     let contextMenuForTesting: NSMenu
 
+#if BRAINBAR_UI
+    private var logPathsOverride: BrainBarBackupSources.Paths?
+    private var logNote: (key: String, reason: String, message: String)?
+    private let logNoteItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private var logPaths: BrainBarBackupSources.Paths {
+        logPathsOverride ?? .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath())
+    }
+#endif
     private let workspace: any BrainBarWorkspaceActing
     private let runtime: BrainBarRuntime
     private let dashboardPanelController: BrainBarDashboardPanelController
@@ -122,8 +130,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
 #if BRAINBAR_UI
-    /// The Show log row's title: "Show log" when the job's log exists, else the sentence saying
-    /// there is none yet (the row is then informational). Nil when no job alert is active.
+    /// An action label, never a claim that a file or folder has already opened.
     static func showLogItemTitle(
         for badge: BadgeStatePresentation,
         paths: BrainBarBackupSources.Paths,
@@ -131,7 +138,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     ) -> String? {
         guard let key = jobAlertKey(for: badge) else { return nil }
         if let log = BrainBarJobAlerts.logURL(forKey: key, paths: paths), fileExists(log) { return showLogTitle }
-        return BrainBarJobAlerts.missingLogMessage(forKey: key)
+        return "Open logs folder"
     }
 #endif
 
@@ -259,6 +266,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     }
 
 #if DEBUG
+#if BRAINBAR_UI
+    func setLogPathsForTesting(_ paths: BrainBarBackupSources.Paths) { logPathsOverride = paths }
+#endif
     func setBadgeForTesting(_ raw: BadgeStatePresentation, alertsURL: URL) {
         rawBadgePresentation = raw
         badgePresentation = raw
@@ -281,12 +291,16 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
 #if BRAINBAR_UI
-        if let title = Self.showLogItemTitle(
-            for: badgePresentation, paths: .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath())
-        ) {
+        let key = Self.jobAlertKey(for: badgePresentation)
+        if let key, let title = Self.showLogItemTitle(for: badgePresentation, paths: logPaths) {
             showLogItem.title = title
-            showLogItem.isEnabled = title == Self.showLogTitle
+            showLogItem.isEnabled = true
+            showLogItem.toolTip = title == Self.showLogTitle ? nil : BrainBarJobAlerts.missingLogMessage(forKey: key)
         }
+        if logNote?.key != key || logNote?.reason != badgePresentation.reason { logNote = nil }
+        logNoteItem.title = logNote?.message ?? ""
+        logNoteItem.toolTip = logNote?.message
+        logNoteItem.isHidden = logNote == nil
 #endif
     }
 
@@ -301,6 +315,9 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
         showLogItem.action = #selector(showJobAlertLog(_:))
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
         contextMenuForTesting.addItem(showLogItem)
+        logNoteItem.isEnabled = false
+        logNoteItem.isHidden = true
+        contextMenuForTesting.addItem(logNoteItem)
 #endif
         contextMenuForTesting.addItem(NSMenuItem.separator())
         contextMenuForTesting.addItem(
@@ -345,11 +362,10 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
 
 #if BRAINBAR_UI
     @objc private func showJobAlertLog(_ sender: Any?) {
-        BrainBarJobAlerts.showLog(
-            forKey: Self.jobAlertKey(for: badgePresentation),
-            paths: .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath()),
-            workspace: workspace
-        )
+        guard let key = Self.jobAlertKey(for: badgePresentation) else { return }
+        let result = BrainBarJobAlerts.showLog(forKey: key, paths: logPaths, workspace: workspace)
+        logNote = result.message.map { (key, badgePresentation.reason, $0) }
+        menuNeedsUpdate(contextMenuForTesting)
     }
 #endif
 
