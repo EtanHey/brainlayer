@@ -272,6 +272,16 @@
         "target": "sqlite3.connect"
       }
     },
+    "12ab97afccad3102bd0767c66e327c217703543c9c08924b540b85ed9bc6179f": {
+      "non_cloud_purpose": "Run the local disposable observability worker with one deadline for read-only SQLite collection and JSON serialization; no model loading or network sender.",
+      "site": {
+        "call_sha256": "2fd4b9e08f332bd466f0a353d1c6d2b5e733292ed139a877b82e68239e8080cb",
+        "kind": "child_process",
+        "owner": "<module>._bounded_db_sections",
+        "path": "src/brainlayer/observability_surface.py",
+        "target": "subprocess.run"
+      }
+    },
     "1339e7e76a70f2ac20093b86e49903c8e65989238b4114d56f60a1ab6e5fa4cb": {
       "non_cloud_purpose": "Operator-only macOS probe job management via local /bin/launchctl bootstrap/print/bootout for one random own-label job in the existing gui UID domain. No production service restart, password, keychain unlock, login, model API or Internet transport. Site: <module>.run subprocess.run.",
       "site": {
@@ -892,16 +902,6 @@
         "target": "saved_session.get"
       }
     },
-    "2d81f86c7f960dd55f7655138bd445cc16fce8cf165a4cacde02e26c8b9514b8": {
-      "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/observability_surface.py <module>._build_document",
-      "site": {
-        "call_sha256": "db797196adee360766d8384d2e435c018f484af94f2c629f3d49429f219d7c88",
-        "kind": "generic_send",
-        "owner": "<module>._build_document",
-        "path": "src/brainlayer/observability_surface.py",
-        "target": "sqlite3.connect"
-      }
-    },
     "2df98a842c0139a5733568c0f508b667e391b0f97e36df9c708ab23a6a01bdbb": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: scripts/mine_frustrations.py <module>.main",
       "site": {
@@ -1470,6 +1470,16 @@
         "target": "sock.connect_ex"
       }
     },
+    "445826b2c61b1ebde1f9fba11de5ee81f04e0363aeb980e86a48b5950f64145f": {
+      "non_cloud_purpose": "Import subprocess only for the bounded local disposable read-only observability DB worker and its failure handling; no model loading or network sender.",
+      "site": {
+        "call_sha256": "9d97d469cf8d66465563e1e22c6dab3b6107819aba2d9956c7080016c1ab9c1b",
+        "kind": "import_binding",
+        "owner": "<module>",
+        "path": "src/brainlayer/observability_surface.py",
+        "target": "import subprocess"
+      }
+    },
     "45e22878748a1b01fb5453beef092207ae4976194d56b033331bd42603647e8d": {
       "non_cloud_purpose": "Retained local data/OS/MCP operation: src/brainlayer/index_completeness.py <module>.rollback_repair",
       "site": {
@@ -1728,6 +1738,16 @@
         "owner": "<module>.init",
         "path": "src/brainlayer/cli/__init__.py",
         "target": "subprocess.CalledProcessError"
+      }
+    },
+    "50f9807b97e378ac40ed9c9b2ec6b072bb36729359f348d4b727bb6393c9237d": {
+      "non_cloud_purpose": "Handle the local disposable read-only DB worker deadline by returning explicit unmeasurable sections; no model loading or network sender.",
+      "site": {
+        "call_sha256": "1b7cb65a24712b797899490ddf718930caed0e6c3b88de8205b76493ee49027d",
+        "kind": "callable_reference",
+        "owner": "<module>._bounded_db_sections",
+        "path": "src/brainlayer/observability_surface.py",
+        "target": "subprocess.TimeoutExpired"
       }
     },
     "510636185e1db06d07cf297a79bed83f00fa08fead34f37ea405c0c5edec4494": {
@@ -3044,6 +3064,16 @@
         "owner": "<module>._optional_brain_dependency",
         "path": "src/brainlayer/clustering.py",
         "target": "importlib.import_module"
+      }
+    },
+    "8a07d483c60e326ddd4cdfecbdc521382003056168e9473c6e824bbf398391c7": {
+      "non_cloud_purpose": "Open the local observability SQLite DB with mode=ro and query_only in the disposable collection worker; no model loading or network sender.",
+      "site": {
+        "call_sha256": "db797196adee360766d8384d2e435c018f484af94f2c629f3d49429f219d7c88",
+        "kind": "generic_send",
+        "owner": "<module>._collect_db_sections",
+        "path": "src/brainlayer/observability_surface.py",
+        "target": "sqlite3.connect"
       }
     },
     "8aca0d2aa5e8b625bc7b27ac73b9458ecd2708ebe98ee630e0c34670f9acb445": {
@@ -5804,6 +5834,16 @@
         "owner": "<module>.main",
         "path": "hooks/post-commit.py",
         "target": "subprocess.CalledProcessError"
+      }
+    },
+    "fb6583ca061883824c3a7d3fe0374c94b31429874b9f5c1be776fb0115d3b2fe": {
+      "non_cloud_purpose": "Handle local disposable read-only DB subprocess failures with explicit unmeasurable sections; no model loading or network sender.",
+      "site": {
+        "call_sha256": "cc683a58fabd9cf77fdd68bfe74e2a582706ccd4edb71e3d47fa4b6254b91911",
+        "kind": "callable_reference",
+        "owner": "<module>._bounded_db_sections",
+        "path": "src/brainlayer/observability_surface.py",
+        "target": "subprocess.SubprocessError"
       }
     },
     "fbf4405e1f058504bcc6cba1838751f128c782ac13c0fdc7c8519e80e9693703": {

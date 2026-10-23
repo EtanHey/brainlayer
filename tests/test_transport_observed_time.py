@@ -71,16 +71,16 @@ def test_full_document_reads_mid_run_receipt_with_fresh_time(tmp_path, monkeypat
     Clock.current = NOW
     monkeypatch.setattr(surface, "datetime", Clock)
     monkeypatch.setattr(transport, "datetime", Clock)
-    stores = surface._stores
+    collect = surface._bounded_db_sections
 
-    def slow_stores(*args):
-        result = stores(*args)
+    def slow_collection(*args):
+        result = collect(*args)
         written = NOW + timedelta(seconds=5)
         rewrite(path, payload, generated=written, mtime=written)
         Clock.current = NOW + timedelta(seconds=6)
         return result
 
-    monkeypatch.setattr(surface, "_stores", slow_stores)
+    monkeypatch.setattr(surface, "_bounded_db_sections", slow_collection)
     env = {"BRAINLAYER_DB": str(db), "BRAINLAYER_JOB_ALERT_PATH": str(tmp_path / "alerts.json")}
     for name in ("JSONL_BACKUP_LOG", "BACKUP_DAILY_LOG", "LAUNCHD_OUTPUT", "DISABLED_DIR"):
         env["BRAINLAYER_OBSERVABILITY_" + name] = str(tmp_path / name)
