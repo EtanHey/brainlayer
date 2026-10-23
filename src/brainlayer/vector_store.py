@@ -2471,6 +2471,25 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                 (chunk_id, embedding_bytes),
             )
 
+    def _insert_current_chunk_vector(self, cursor, chunk_id: str, content: str, embedding: List[float]) -> bool:
+        """Publish a missing active vector only for the encoded body, under the writer lock."""
+        if not self.conn.in_transaction:
+            raise RuntimeError("current vector publication requires a write transaction")
+        eligible = cursor.execute(
+            """
+            SELECT 1 FROM chunks c
+            LEFT JOIN chunk_vectors_rowids r ON c.id = r.id
+            WHERE c.id = ? AND c.content = ? AND c.content != ''
+              AND c.archived_at IS NULL AND c.superseded_by IS NULL
+              AND c.aggregated_into IS NULL AND r.id IS NULL
+            """,
+            (chunk_id, content),
+        ).fetchone()
+        if not eligible:
+            return False
+        self._upsert_chunk_vector(cursor, chunk_id, embedding)
+        return True
+
     def _blend_chunk_vector(self, cursor, chunk_id: str, embedding: List[float]) -> List[float]:
         """Approximate a merged duplicate by preserving canonical and incoming vectors."""
         row = cursor.execute("SELECT embedding FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone()
@@ -2649,10 +2668,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 # Incoming/previous vectors cannot describe the merged body.
                                 # Leave it pending for canonical-content embedding by hotlane.
                                 self._delete_chunk_vector(cursor, duplicate.canonical_chunk_id)
-                            elif embedding is not None and not self._chunk_vector_exists(
-                                cursor, duplicate.canonical_chunk_id
-                            ):
-                                self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, embedding)
+                            elif embedding is not None:
+                                self._insert_current_chunk_vector(
+                                    cursor, duplicate.canonical_chunk_id, chunk["content"], embedding
+                                )
                             continue
                         if merge_existing_chunk_seen(
                             self.conn,
@@ -2664,8 +2683,8 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 "last_seen_at": chunk.get("last_seen_at") or created_at,
                             },
                         ):
-                            if embedding is not None and not self._chunk_vector_exists(cursor, chunk_id):
-                                self._upsert_chunk_vector(cursor, chunk_id, embedding)
+                            if embedding is not None:
+                                self._insert_current_chunk_vector(cursor, chunk_id, chunk["content"], embedding)
                             continue
 
                         has_provenance_class = getattr(self, "_has_provenance_class", False)

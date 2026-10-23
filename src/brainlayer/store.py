@@ -264,8 +264,8 @@ def store_memory(
                         ).fetchone()
                         if merged_row:
                             pending_reembed = (stored_chunk_id, str(merged_row[0]))
-                    elif not store._chunk_vector_exists(cursor, stored_chunk_id):
-                        store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
+                    else:
+                        store._insert_current_chunk_vector(cursor, stored_chunk_id, content, embedding)
             else:
                 duplicate, dedupe_fields = find_duplicate(
                     store.conn,
@@ -297,8 +297,8 @@ def store_memory(
                             ).fetchone()
                             if merged_row:
                                 pending_reembed = (stored_chunk_id, str(merged_row[0]))
-                        elif not store._chunk_vector_exists(cursor, stored_chunk_id):
-                            store._upsert_chunk_vector(cursor, stored_chunk_id, embedding)
+                        else:
+                            store._insert_current_chunk_vector(cursor, stored_chunk_id, content, embedding)
                 else:
                     stored_chunk_id = incoming_chunk_id
                     outcome = "stored"
@@ -394,10 +394,12 @@ def store_memory(
                 _set_busy_timeout_for_deadline(store.conn, busy_deadline)
                 cursor.execute("BEGIN IMMEDIATE")
                 transaction_started = True
-                store._upsert_chunk_vector(cursor, reembed_chunk_id, merged_embedding)
+                published = store._insert_current_chunk_vector(
+                    cursor, reembed_chunk_id, reembed_content, merged_embedding
+                )
                 cursor.execute("COMMIT")
                 transaction_started = False
-                telemetry_span.finish("commit")
+                telemetry_span.finish("commit", rows_touched=int(published))
                 break
             except apsw.BusyError as exc:
                 if transaction_started:
@@ -427,6 +429,20 @@ def store_memory(
         # a suppressed duplicate is indistinguishable from a fresh insert.
         "outcome": outcome,
     }
+
+
+def _publish_pending_embedding(store: VectorStore, chunk_id: str, content: str, embedding: List[float]) -> bool:
+    """Recheck the encoded snapshot and publish both indexes in one short transaction."""
+    cursor = store.conn.cursor()
+    cursor.execute("BEGIN IMMEDIATE")
+    try:
+        published = store._insert_current_chunk_vector(cursor, chunk_id, content, embedding)
+        cursor.execute("COMMIT")
+        return published
+    except Exception:
+        if store.conn.in_transaction:
+            cursor.execute("ROLLBACK")
+        raise
 
 
 def embed_pending_chunks(
@@ -481,10 +497,9 @@ def embed_pending_chunks(
             embeddings = embed_batch_fn([content for _, content in rows])
             if len(embeddings) != len(rows):
                 raise ValueError(f"batch embedder returned {len(embeddings)} embeddings for {len(rows)} chunks")
-            for (chunk_id, _), embedding in zip(rows, embeddings):
+            for (chunk_id, content), embedding in zip(rows, embeddings):
                 try:
-                    store._upsert_chunk_vector(cursor, chunk_id, embedding)
-                    count += 1
+                    count += int(_publish_pending_embedding(store, chunk_id, content, embedding))
                 except Exception as e:
                     logger.warning("Failed to write pending chunk %s: %s", chunk_id, e)
         except Exception as e:
@@ -492,16 +507,14 @@ def embed_pending_chunks(
             for chunk_id, content in rows:
                 try:
                     embedding = embed_fn(content)
-                    store._upsert_chunk_vector(cursor, chunk_id, embedding)
-                    count += 1
+                    count += int(_publish_pending_embedding(store, chunk_id, content, embedding))
                 except Exception as row_error:
                     logger.warning("Failed to embed chunk %s: %s", chunk_id, row_error)
     else:
         for chunk_id, content in rows:
             try:
                 embedding = embed_fn(content)
-                store._upsert_chunk_vector(cursor, chunk_id, embedding)
-                count += 1
+                count += int(_publish_pending_embedding(store, chunk_id, content, embedding))
             except Exception as e:
                 logger.warning("Failed to embed chunk %s: %s", chunk_id, e)
 
@@ -538,12 +551,14 @@ def embed_hot_chunk(
         """,
         (chunk_id,),
     ).fetchone()
+    cursor.close()  # Release the read snapshot before encoding and acquiring the writer lock.
     if row is None:
         return False
 
     try:
         embedding = embed_fn(row[0])
-        store._upsert_chunk_vector(cursor, chunk_id, embedding)
+        if not _publish_pending_embedding(store, chunk_id, row[0], embedding):
+            return False
     except Exception as e:
         logger.warning("Failed to hot-embed chunk %s: %s", chunk_id, e)
         return False

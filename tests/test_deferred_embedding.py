@@ -374,6 +374,8 @@ class TestBackgroundEmbedder:
                 self.params.append(params)
                 if "SELECT c.id, c.content FROM chunks c" in sql:
                     return [("pending-rowid", "Needs vector")]
+                if sql in {"BEGIN IMMEDIATE", "COMMIT"}:
+                    return []
                 raise AssertionError(f"unexpected SQL: {sql}")
 
         class FakeConn:
@@ -391,8 +393,10 @@ class TestBackgroundEmbedder:
                 self.conn = FakeConn(self.cursor)
                 self.upserts = []
 
-            def _upsert_chunk_vector(self, cursor, chunk_id, embedding):
+            def _insert_current_chunk_vector(self, cursor, chunk_id, content, embedding):
+                assert content == "Needs vector"
                 self.upserts.append((cursor, chunk_id, embedding))
+                return True
 
         fake_store = FakeStore()
         count = embed_pending_chunks(
