@@ -42,6 +42,24 @@ asleep. Timeout failure history resets only after a successful/deferred interval
 Disabled/paused intervals have no next-run deadline; cleanup refusal retains custody,
 records an error and retries without stopping the supervisor or spawning duplicates.
 
+Child startup (including log opens, process creation and durable custody registration)
+and custody removal run in executor workers, with one shared journal writer. Status
+does not advertise a gated startup PID as ready. Pause and shutdown wait for an
+in-flight startup before acknowledging group quiescence. Cancelling a worker's waiter
+does not release the journal lock while its write is still running.
+
+Heartbeats remain on the event loop with the existing 30-second guard timeout. Slow
+I/O can finish without starving loop progress. Each executor operation has a
+120-second budget; while an operation is overdue the supervisor withholds heartbeats,
+so a permanently stuck worker also triggers the guard. A wedged event loop cannot
+send heartbeats at all. The guard retains group custody and the existing bounded
+quiescence/EOF cleanup protocol in both cases.
+
+Guard readiness allows 30 seconds after process creation for interpreter/import
+startup, independently of the heartbeat timeout. Timeout, EOF and an unexpected
+readiness byte report distinct startup errors with parent and guard PIDs. Expected
+control-client disconnects during reply/close are ignored without replaying mutations.
+
 ## CLI consumers
 
 `brainlayer daemon --manifest /absolute/jobs.json` starts the daemon. The command
