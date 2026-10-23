@@ -130,22 +130,112 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         XCTAssertFalse(lines[0].text.contains("Oct 21"))
     }
 
+    private func datedBackups(_ date: Date, noOp: Bool = false, snapshotDate: Date? = nil, clock: Date? = nil) -> ObservabilityDocument.Backups {
+        let base = backups()
+        var result = ObservabilityDocument.Backups(
+            state: base.state, reason: base.reason, inputs: [], freshness: base.freshness,
+            thresholdHours: base.thresholdHours, retentionInvariant: base.retentionInvariant,
+            survivingArchives30D: base.survivingArchives30D, errorType: nil,
+            lastVerifiedUpload: .init(at: date, ageHours: 1, archiveId: "fixture-archive", verified: true),
+            dbSnapshot: .init(lastAt: snapshotDate ?? date, destination: "fixture.db.zst", verified: true), launchd: base.launchd)
+        if noOp {
+            result.transcriptAttempt = .init(at: (clock ?? now).addingTimeInterval(-60), status: "no-op", verified: true, uploaded: false)
+        }
+        return result
+    }
+
+    func testReceiptDatesKeepTheCalendarYearAcrossLocalYearBoundaries() {
+        let iso = ISO8601DateFormatter()
+        let referenceNow = iso.date(from: "2026-01-01T00:30:00Z")!
+        let cases: [(String, Int, String)] = [
+            ("2025-12-31T23:00:00Z", 0, "Dec 31, 2025 at 23:00"),
+            ("2025-12-31T23:00:00Z", 2, "today 01:00"),
+            ("2025-12-31T23:00:00Z", -2, "today 21:00"),
+            ("2025-12-30T23:00:00Z", 2, "Dec 31, 2025 at 01:00"),
+            ("2025-12-30T23:00:00Z", -2, "Dec 30 at 21:00"),
+        ]
+        for (date, offset, expected) in cases {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: offset * 3600)!
+            let lines = ObservabilityPresentation.backupReceiptLines(
+                for: datedBackups(iso.date(from: date)!), locale: locale, now: referenceNow, calendar: calendar)
+            XCTAssertEqual(lines.map(\.text), ["Database", "Transcripts"].map { "\($0) · Drive · last good \(expected)" })
+        }
+    }
+
+    func testFutureReceiptDatesAreExplicitlyInvalidAndRedIncludingWithinToday() {
+        let iso = ISO8601DateFormatter()
+        let referenceNow = iso.date(from: "2026-10-23T18:50:00Z")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let cases = [
+            ("2026-10-23T18:50:01Z", "today 18:50"),
+            ("2026-10-24T01:35:00Z", "Oct 24 at 01:35"),
+            ("2027-01-01T01:35:00Z", "Jan 1, 2027 at 01:35"),
+        ]
+        for (date, expected) in cases {
+            let lines = ObservabilityPresentation.backupReceiptLines(
+                for: datedBackups(iso.date(from: date)!), locale: locale, now: referenceNow, calendar: calendar)
+            XCTAssertEqual(lines.map(\.text), ["Database", "Transcripts"].map { "\($0) · Drive · invalid timestamp \(expected)" })
+            XCTAssertEqual(lines.map(\.tone), [.red, .red])
+        }
+        let atNow = ObservabilityPresentation.backupReceiptLines(
+            for: datedBackups(referenceNow), locale: locale, now: referenceNow, calendar: calendar)
+        XCTAssertEqual(atNow.map(\.text), ["Database", "Transcripts"].map { "\($0) · Drive · last good today 18:50" })
+        XCTAssertEqual(atNow.map(\.tone), [.green, .green])
+    }
+
+    func testNoOpRetainsHistoricalYearAndFlagsFutureHistoryWithoutLosingNoChanges() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let old = ISO8601DateFormatter().date(from: "2025-12-31T23:00:00Z")!
+        let historical = ObservabilityPresentation.backupReceiptLines(
+            for: datedBackups(old, noOp: true), locale: locale, now: now, calendar: calendar)
+        XCTAssertEqual(historical.map(\.text), ["Database · Drive · last good Dec 31, 2025 at 23:00",
+                                             "Transcripts · Drive · no changes since Dec 31, 2025 at 23:00"])
+        XCTAssertEqual(historical.map(\.tone), [.red, .neutral])
+        let future = ObservabilityPresentation.backupReceiptLines(
+            for: datedBackups(now.addingTimeInterval(60), noOp: true), locale: locale, now: now, calendar: calendar)
+        XCTAssertTrue(future.last!.text.hasPrefix("Transcripts · Drive · no changes since invalid timestamp today "))
+        XCTAssertEqual(future.map(\.tone), [.red, .red])
+    }
+
     @MainActor
     func testMenuUsesPublishedReceiptSnapshotAndClockAndPreservesFailureSeverity() throws {
         guard case let .readable(base) = try BrainBarOnePageTestFixture.healthyResult() else { return XCTFail("fixture unreadable") }
         let cases: [(ObservabilityDocument.Backups, DriveAuthStatus.State, Bool)] = [
             (backups(), .valid, false), (backups(age: 48), .valid, true),
+            (datedBackups(now.addingTimeInterval(86400)), .valid, true),
+            (datedBackups(now.addingTimeInterval(-366 * 86400)), .valid, true),
             (backups(error: "job_alert:Fixture backup failed"), .valid, true), (backups(), .invalid, true),
         ]
-        for (b, auth, needsAttention) in cases {
-            let document = try replacingBackups(base, with: b)
+        let referenceNow = ISO8601DateFormatter().date(from: "2026-09-14T12:00:00Z")!
+        let future = ISO8601DateFormatter().date(from: "2027-01-01T12:00:00Z")!
+        let noOpCases: [(ObservabilityDocument.Backups, DriveAuthStatus.State, Bool, Date)] = [future, referenceNow, referenceNow.addingTimeInterval(-48 * 3600)].map {
+            (datedBackups($0, noOp: true, snapshotDate: referenceNow.addingTimeInterval(-7200), clock: referenceNow), .valid, $0 > referenceNow, referenceNow)
+        }
+        for (b, auth, needsAttention, now) in cases.map({ ($0.0, $0.1, $0.2, now) }) + noOpCases {
+            let document = try replacingBackups(base, with: b, clock: now)
             let model = BrainBarSettingsViewModel(
                 workspace: BrainBarRecordingWorkspace(),
                 store: BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/fixture/config"),
                                              loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
                 initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
-                refreshStatusOnLoad: false, now: { Date(timeIntervalSince1970: 1_790_769_600) },
+                refreshStatusOnLoad: false, now: { now },
                 initialObservabilityResult: .readable(document), observabilityCadence: .known(300))
+            if b.verifiedIdle(now: now) {
+                let health = model.backupsHealth(drive: drive(expiresIn: 5 * 86400))
+                XCTAssertEqual(health.badge, needsAttention ? .attention : .idle)
+                XCTAssertEqual(health.badge.title, needsAttention ? "Needs attention" : "Idle — no new transcripts")
+                XCTAssertEqual(model.backupsHealth(drive: nil).badge, needsAttention ? .attention : .idle)
+                XCTAssertEqual(model.backupChecks?.verdictTone, needsAttention ? .red : .neutral)
+                if needsAttention { XCTAssertEqual(health.reason, model.backupChecks?.attentionSentence) }
+                let collector = BrainBarDashboardFixture.makeCollector()
+                let hero = BrainBarHeroPresentation.derive(
+                    flow: DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now),
+                    stats: collector.stats, backupTruth: model.backupTruth)
+                XCTAssertEqual(hero.backupFailureReason != nil, needsAttention)
+            }
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: auth, reason: nil, expiresAt: now.addingTimeInterval(48 * 3600)))
@@ -311,9 +401,9 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         }
     }
 
-    private func replacingBackups(_ document: ObservabilityDocument, with backups: ObservabilityDocument.Backups) throws -> ObservabilityDocument {
+    private func replacingBackups(_ document: ObservabilityDocument, with backups: ObservabilityDocument.Backups, clock: Date? = nil) throws -> ObservabilityDocument {
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
-        root["generatedAt"] = now.timeIntervalSinceReferenceDate
+        root["generatedAt"] = (clock ?? now).timeIntervalSinceReferenceDate
         root["backups"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(backups))
         return try JSONDecoder().decode(ObservabilityDocument.self, from: JSONSerialization.data(withJSONObject: root))
     }
