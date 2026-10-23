@@ -1728,7 +1728,12 @@ def burn_drain_once(
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
                                 metrics.run(
-                                    "apply", _insert_precomputed_embedding, conn, applied.chunk_id, embedding_bytes, content=content
+                                    "apply",
+                                    _insert_precomputed_embedding,
+                                    conn,
+                                    applied.chunk_id,
+                                    embedding_bytes,
+                                    content=content,
                                 )
                         path_fallback_markers.extend(applied.fallback_markers)
                     if path_fallback_markers:
@@ -1910,7 +1915,12 @@ def drain_once(
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
                                 metrics.run(
-                                    "apply", _insert_precomputed_embedding, conn, result.chunk_id, embedding_bytes, content=content
+                                    "apply",
+                                    _insert_precomputed_embedding,
+                                    conn,
+                                    result.chunk_id,
+                                    embedding_bytes,
+                                    content=content,
                                 )
                         if result.collision_chunk_id:
                             collision_ids.append(result.collision_chunk_id)
