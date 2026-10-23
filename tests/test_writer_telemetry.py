@@ -259,3 +259,36 @@ def test_fts_sampling_skips_missing_shadow_tables_without_sqlite_errors(tmp_path
         span.complete()
 
     assert "no such table" not in caplog.text.lower()
+
+
+def test_daily_summary_survives_raw_rotation_and_keeps_seven_complete_days(tmp_path, monkeypatch):
+    from brainlayer.writer_telemetry import append_event
+
+    log_path, _ = _configure_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("BRAINLAYER_WRITER_TELEMETRY_MAX_BYTES", "300")
+    for day in range(1, 10):
+        for duration in (10, 100, 1000):
+            assert append_event(
+                {
+                    "event": "txn_finished",
+                    "finished_at": f"2026-10-{day:02}T12:00:00+00:00",
+                    "producer": "drain",
+                    "lane": "realtime",
+                    "outcome": "commit",
+                    "duration_ms": duration,
+                    "lock_wait_ms": 2,
+                    "lock_held_ms": duration - 2,
+                }
+            )
+    summaries = sorted(log_path.parent.glob("writer-telemetry-summary-*.json"))
+    assert len(summaries) == 8  # current UTC day plus seven complete dates
+    assert summaries[0].name == "writer-telemetry-summary-2026-10-02.json"
+    for path in summaries:
+        summary = json.loads(path.read_text())
+        group = summary["groups"]["drain|realtime|commit"]
+        assert group["count"] == 3
+        assert group["duration_ms"]["max"] == 1000
+        assert group["duration_ms"]["sum"] == 1110
+        assert sum(group["lock_held_ms"]["histogram"].values()) == 3
+        assert path.stat().st_size < 65536
+    assert len(list(log_path.parent.glob("writer-telemetry.jsonl*"))) <= 3
