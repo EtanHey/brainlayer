@@ -728,17 +728,19 @@ enum ObservabilityPresentation {
             formatter.locale = locale
             formatter.timeZone = calendar.timeZone
             let today = calendar.isDate(date, inSameDayAs: now)
-            formatter.dateFormat = today ? "HH:mm" : "MMM d 'at' HH:mm"
-            return prefix + (today ? "today " : "") + formatter.string(from: date)
+            let sameYear = calendar.isDate(date, equalTo: now, toGranularity: .year)
+            formatter.dateFormat = today ? "HH:mm" : sameYear ? "MMM d 'at' HH:mm" : "MMM d, yyyy 'at' HH:mm"
+            let label = date > now ? "invalid timestamp " : prefix
+            return label + (today ? "today " : "") + formatter.string(from: date)
         }
         let database = ObservabilityStatusLine(
             text: "Database · Drive · \(backups.dbSnapshot.flatMap { $0.verified ? moment($0.lastAt) : nil } ?? "no verified copy")",
-            tone: status.snapshot.tone)
+            tone: backups.dbSnapshot.map { $0.lastAt > now } == true ? .red : status.snapshot.tone)
         let transcript = ObservabilityStatusLine(
             text: backups.verifiedIdle(now: now)
                 ? "Transcripts · Drive · no changes\(backups.lastVerifiedUpload.map { " since " + moment($0.at, prefix: "") } ?? "")"
                 : "Transcripts · Drive · \(backups.lastVerifiedUpload.flatMap { $0.verified ? moment($0.at) : nil } ?? "no verified copy")",
-            tone: status.upload.tone)
+            tone: backups.lastVerifiedUpload.map { $0.at > now } == true ? .red : status.upload.tone)
         return [database] + [status.snapshotUpload].compactMap { $0 } + [transcript]
     }
 
