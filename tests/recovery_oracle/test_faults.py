@@ -53,3 +53,26 @@ def test_catch_up_oracle_rejects_stuck_backlog(world, monkeypatch, broken):
         monkeypatch.setattr(world, "hotlane", lambda: 0)
     with pytest.raises(AssertionError, match="backlog did not converge"):
         catch_up(world, timeout=0.2)
+
+
+@pytest.mark.parametrize("missing", ["transactions", "statements", "BEGIN IMMEDIATE", "COMMIT"])
+def test_lock_measurement_rejects_missing_transaction_evidence(world, monkeypatch, missing):
+    monkeypatch.setenv("BRAINLAYER_ARBITRATED", "1")
+    world.store("otter")
+    world.drain()
+    path = world.guard(world.root / "writer.jsonl")
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    committed = [e for e in events if e.get("event") == "txn_finished" and e.get("outcome") == "commit"]
+    assert committed, "negative control requires real committed transaction evidence"
+    assert any(e.get("event") == "ingest_committed" for e in events)
+    if missing == "transactions":
+        events = [e for e in events if e.get("event") != "txn_finished"]
+    else:
+        for event in committed:
+            if missing == "statements":
+                del event["statements"]
+            else:
+                event["statements"] = [s for s in event["statements"] if s["normalized_sql"] != missing]
+    path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    with pytest.raises(AssertionError, match="missing.*drain"):
+        world.lock_holds()
