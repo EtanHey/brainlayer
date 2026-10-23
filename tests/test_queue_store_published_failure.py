@@ -3,6 +3,7 @@
 These tests use only private scratch queue paths and synthetic store content.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -79,3 +80,31 @@ def test_prepublication_unified_failure_uses_one_legacy_fallback(tmp_path, monke
     events = [json.loads(line) for line in legacy_path.read_text(encoding="utf-8").splitlines()]
     assert len(events) == 1
     assert events[0]["content"] == "synthetic legacy intent"
+
+
+@pytest.mark.parametrize("message", ["directory sync failed", "directory busy after publication"])
+def test_store_does_not_acknowledge_or_retry_an_unconfirmed_publication(tmp_path, monkeypatch, message):
+    unified_dir = tmp_path / "unified"
+    unified_dir.mkdir()
+    legacy_path = tmp_path / "pending-stores.jsonl"
+    _use_private_queues(monkeypatch, unified_dir, legacy_path)
+    monkeypatch.setattr(store_handler, "_interactive_queue_reason", lambda: "DB_BUSY")
+    real_sync = queue_io._sync_directory
+    attempts = []
+
+    def fail_published(directory):
+        if directory == unified_dir and list(unified_dir.glob("*.jsonl")):
+            attempts.append(directory)
+            raise OSError(message)
+        return real_sync(directory)
+
+    monkeypatch.setattr(queue_io, "_sync_directory", fail_published)
+    with pytest.raises(OSError, match=message) as failure:
+        asyncio.run(store_handler._store(content="Synthetic unconfirmed store intent", memory_type="note"))
+
+    published = list(unified_dir.glob("*.jsonl"))
+    assert len(published) == 1
+    assert failure.value.published_path == published[0]
+    assert "do not retry" in str(failure.value)
+    assert attempts == [unified_dir]
+    assert not legacy_path.exists()

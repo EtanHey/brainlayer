@@ -18,6 +18,14 @@ from pathlib import Path
 from typing import Any
 
 
+class PublishedQueueSyncError(OSError):
+    """An intent is visible, but its directory barrier did not confirm durability."""
+
+    def __init__(self, published_path: Path, error: Exception):
+        self.published_path = published_path
+        super().__init__(f"{error}; queue intent published at {published_path}; durability unconfirmed, do not retry")
+
+
 def _safe_source_name(source: str) -> str:
     safe = "".join(char if char.isalnum() or char in {".", "_", "-"} else "_" for char in source)
     return safe.strip("._-") or "queue"
@@ -109,11 +117,15 @@ def enqueue_jsonl_batch(events: list[dict[str, Any]], *, source: str, queue_dir:
     _write_synced_queue_file(tmp_path, "\n".join(lines) + "\n")
     try:
         tmp_path.replace(final_path)
-        _sync_directory(resolved_dir)
-    finally:
-        # A post-rename sync failure leaves the published intent for recovery,
-        # but still raises: the caller must not acknowledge durable publication.
+    except BaseException:
         tmp_path.unlink(missing_ok=True)
+        raise
+    try:
+        _sync_directory(resolved_dir)
+    except Exception as error:
+        # Preserve the visible intent. Callers must neither acknowledge durable
+        # publication nor create a second fallback copy after this boundary.
+        raise PublishedQueueSyncError(final_path, error) from error
     return final_path
 
 
