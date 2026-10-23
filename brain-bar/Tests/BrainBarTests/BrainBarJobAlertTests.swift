@@ -86,7 +86,7 @@ final class BrainBarJobAlertTests: XCTestCase {
     func test_a_clean_run_clears_a_job_alert_before_the_next_observability_write() {
         let reconciled = BrainBarJobAlerts(active: [:]).reconcile(document(errorType: "job_alert:\(alert)"))
         XCTAssertNil(reconciled.backups.errorType)
-        XCTAssertNil(ObservabilityPresentation.backupStatus(for: reconciled.backups).attentionLine)
+        XCTAssertNil(ObservabilityPresentation.backupStatus(for: reconciled.backups, now: reconciled.generatedAt).attentionLine)
     }
 
     func test_reconciling_keeps_a_live_alert_and_never_guesses_from_an_unknown_file() {

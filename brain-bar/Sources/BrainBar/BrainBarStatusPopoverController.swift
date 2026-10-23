@@ -54,6 +54,7 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
     private var logPathsOverride: BrainBarBackupSources.Paths?
     private var logNote: (key: String, reason: String, message: String)?
     private let logNoteItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private var backupReceiptItems: [NSMenuItem] = []
     private var logPaths: BrainBarBackupSources.Paths {
         logPathsOverride ?? .live(databasePath: runtime.databasePath ?? BrainBarServer.defaultDBPath())
     }
@@ -287,8 +288,40 @@ final class BrainBarStatusPopoverController: NSObject, NSMenuDelegate {
                 updateTooltip()
             }
         }
-        statusLineItem.title = Self.statusLineTitle(for: badgePresentation)
-        statusLineItem.toolTip = badgePresentation.reason.isEmpty ? nil : badgePresentation.reason
+        var menuBadge = badgePresentation
+#if BRAINBAR_UI
+        for item in backupReceiptItems { menu.removeItem(item) }
+        backupReceiptItems.removeAll()
+        if let model = runtime.jobsModel {
+            let drive = DriveAuthPresentation.derive(status: runtime.driveAuth.status,
+                isReconnecting: runtime.driveAuth.isReconnecting, lastOutcome: runtime.driveAuth.lastOutcome,
+                now: model.observabilityNow, formatDate: BrainBarDriveAuthFormat.date)
+            let health = model.backupsHealth(drive: drive)
+            if !menuBadge.badgeOn, let reason = health.reason,
+               health.badge == .attention || menuBadge.activeMessages.isEmpty {
+                menuBadge = health.badge == .attention ? .failVisible(reason)
+                    : .init(badgeOn: false, reason: reason, activeCodes: [], activeMessages: [reason])
+            }
+            // This property derives from the published document AND observabilityNow shared
+            // with Dashboard and Backups. Opening the menu never starts another receipt read.
+            for (index, line) in (model.backupReceiptLines ?? []).enumerated() {
+                let item = NSMenuItem(title: line.text, action: nil, keyEquivalent: "")
+                item.identifier = NSUserInterfaceItemIdentifier("brainbar.menu.backup.\(index)")
+                item.isEnabled = false
+                item.toolTip = "observability.json · database snapshot creation / transcript upload receipt · shared check clock"
+                let color: NSColor = switch line.tone {
+                case .green: BrainBarDesignTokens.Colors.statusOK
+                case .red: BrainBarDesignTokens.Colors.statusError
+                case .neutral: BrainBarDesignTokens.Colors.statusUnknown
+                }
+                item.attributedTitle = NSAttributedString(string: line.text, attributes: [.foregroundColor: color])
+                menu.insertItem(item, at: 1 + index)
+                backupReceiptItems.append(item)
+            }
+        }
+#endif
+        statusLineItem.title = Self.statusLineTitle(for: menuBadge)
+        statusLineItem.toolTip = menuBadge.reason.isEmpty ? nil : menuBadge.reason
         showLogItem.isHidden = Self.jobAlertKey(for: badgePresentation) == nil
 #if BRAINBAR_UI
         let key = Self.jobAlertKey(for: badgePresentation)

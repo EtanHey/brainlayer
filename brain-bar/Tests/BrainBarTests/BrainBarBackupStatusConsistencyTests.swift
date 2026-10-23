@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import BrainBar
 
@@ -126,6 +127,50 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         let local = sources.rows(now: referenceNow, calendar: calendar, formatDate: { iso.string(from: $0) })[0].localCopy
         XCTAssertEqual(local?.lastPathComponent, "2026-10-21.db.zst")
         XCTAssertFalse(lines[0].text.contains("Oct 21"))
+    }
+
+    @MainActor
+    func testMenuUsesPublishedReceiptSnapshotAndClockAndPreservesFailureSeverity() throws {
+        guard case let .readable(base) = try BrainBarOnePageTestFixture.healthyResult() else { return XCTFail("fixture unreadable") }
+        let cases: [(ObservabilityDocument.Backups, DriveAuthStatus.State, Bool)] = [
+            (backups(), .valid, false), (backups(age: 48), .valid, true),
+            (backups(error: "job_alert:Fixture backup failed"), .valid, true), (backups(), .invalid, true),
+        ]
+        for (b, auth, needsAttention) in cases {
+            let document = try replacingBackups(base, with: b)
+            let model = BrainBarSettingsViewModel(
+                workspace: BrainBarRecordingWorkspace(),
+                store: BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/fixture/config"),
+                                             loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
+                initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
+                refreshStatusOnLoad: false, now: { Date(timeIntervalSince1970: 1_790_769_600) },
+                initialObservabilityResult: .readable(document))
+            let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
+            runtime.jobsModel = model
+            runtime.driveAuth.setForPreview(status: .init(state: auth, reason: nil, expiresAt: now.addingTimeInterval(48 * 3600)))
+            let workspace = BrainBarRecordingWorkspace()
+            let panel = BrainBarDashboardPanelController(workspace: workspace, runtime: runtime)
+            let controller = BrainBarStatusPopoverController(workspace: workspace, runtime: runtime,
+                dashboardPanelController: panel, statusBar: TestStatusItemHost())
+            defer { controller.stop() }
+            let menu = controller.contextMenuForTesting
+            controller.setBadgeForTesting(.init(badgeOn: false, reason: "", activeCodes: []),
+                                          alertsURL: URL(fileURLWithPath: "/fixture/absent-alerts"))
+            controller.menuNeedsUpdate(menu)
+            let receipts = menu.items.filter { $0.identifier?.rawValue.hasPrefix("brainbar.menu.backup.") == true }
+            XCTAssertEqual(receipts.map(\.title), model.backupReceiptLines?.map(\.text))
+            XCTAssertTrue(receipts.allSatisfy { !$0.isEnabled && $0.action == nil })
+            XCTAssertTrue(receipts.allSatisfy { $0.toolTip?.contains("observability.json") == true })
+            XCTAssertEqual(menu.items.first?.title.hasPrefix("Needs attention:"), needsAttention)
+            if !needsAttention { XCTAssertTrue(menu.items.first?.title.hasPrefix("Info:") == true) }
+            for (item, line) in zip(receipts, model.backupReceiptLines ?? []) where line.tone == .red {
+                XCTAssertEqual(item.attributedTitle?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                               BrainBarDesignTokens.Colors.statusError)
+            }
+            runtime.jobsModel = nil
+            controller.menuNeedsUpdate(menu)
+            XCTAssertFalse(menu.items.contains { $0.identifier?.rawValue.hasPrefix("brainbar.menu.backup.") == true })
+        }
     }
 
     @MainActor
