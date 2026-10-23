@@ -879,8 +879,8 @@ final class BrainDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let path: String
-    /// dev/inode of the file this connection opened, captured right after open. A later path
-    /// check compares against THIS, never against whatever the pathname names at request time.
+    /// Identity of SQLite's main filename, validated through its open VFS file with HAS_MOVED.
+    /// This is a VFS-validated pathname identity, not a descriptor-derived stat.
     private(set) var openedFileIdentity: FileIdentity?
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
@@ -895,6 +895,8 @@ final class BrainDatabase: @unchecked Sendable {
     var observeStorePolicyForTesting: ((Int32, Int) -> Void)?
     var onStoreTransactionForTesting: (() -> Void)?
     var onBackupStagingCreatedForTesting: (() -> Void)?
+    private var onConnectionOpenedForTesting: ((OpaquePointer) -> Void)?
+    var backupHasMovedResultForTesting: (result: Int32, moved: Int32)?
 #endif
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
@@ -908,10 +910,25 @@ final class BrainDatabase: @unchecked Sendable {
         openAndConfigure()
     }
 
+#if DEBUG
+    init(path: String, openConfiguration: OpenConfiguration,
+         onConnectionOpenedForTesting: @escaping (OpaquePointer) -> Void,
+         hasMovedResultForTesting: (result: Int32, moved: Int32)? = nil) {
+        self.path = path
+        self.openConfiguration = openConfiguration
+        self.onConnectionOpenedForTesting = onConnectionOpenedForTesting
+        self.backupHasMovedResultForTesting = hasMovedResultForTesting
+        openAndConfigure()
+    }
+#endif
+
     private func openAndConfigure() {
         do {
             db = try openConnection(path: path)
-            openedFileIdentity = FileIdentity(path: path)
+#if DEBUG
+            if let db { onConnectionOpenedForTesting?(db) }
+#endif
+            openedFileIdentity = validatedMainFileIdentity()
             NSLog("[BrainBar] Connection opened, configuring...")
             try configureConnection(db)
             NSLog("[BrainBar] Connection configured, checking schema...")
@@ -1195,6 +1212,28 @@ final class BrainDatabase: @unchecked Sendable {
         }
     }
 
+    private func validatedMainFileIdentity() -> FileIdentity? {
+        guard let db, let filename = sqlite3_db_filename(db, "main"), filename.pointee != 0,
+              let identity = FileIdentity(path: String(cString: filename)) else { return nil }
+        // HAS_MOVED consults the actual sqlite3_file. A stat of the configured alias alone
+        // can instead capture a replacement installed between sqlite3_open_v2 and this check.
+        var moved: Int32 = -1
+        let result: Int32
+#if DEBUG
+        if let injected = backupHasMovedResultForTesting {
+            result = injected.result
+            moved = injected.moved
+        } else {
+            result = sqlite3_file_control(db, "main", SQLITE_FCNTL_HAS_MOVED, &moved)
+        }
+#else
+        result = sqlite3_file_control(db, "main", SQLITE_FCNTL_HAS_MOVED, &moved)
+#endif
+        // Unsupported, failed or unwritten output is not proof of an unchanged open file.
+        guard result == SQLITE_OK, moved == 0 else { return nil }
+        return identity
+    }
+
     var databasePath: String { path }
     static let backupIdentityMismatchPrefix = "BrainBar database identity mismatch"
 
@@ -1203,6 +1242,9 @@ final class BrainDatabase: @unchecked Sendable {
     /// `expectedPath` must name that same dev/inode. A missing path never matches.
     func openDatabaseIdentityMismatch(expectedPath: String) -> String? {
         guard let opened = openedFileIdentity else { return "the open database identity is unknown" }
+        guard validatedMainFileIdentity() == opened else {
+            return "the SQLite main file identity cannot be validated or its open file moved"
+        }
         guard FileIdentity(path: path) == opened else {
             return "the open database was moved, replaced or unlinked from \(path) since it was opened"
         }
@@ -1215,9 +1257,7 @@ final class BrainDatabase: @unchecked Sendable {
 
     func vacuumInto(targetPath: String, expectedDatabasePath: String? = nil) throws -> Int64 {
         guard let db else { throw DBError.notOpen }
-        if let expectedDatabasePath, let mismatch = openDatabaseIdentityMismatch(expectedPath: expectedDatabasePath) {
-            throw DBError.exec(SQLITE_MISUSE, "\(Self.backupIdentityMismatchPrefix): \(mismatch)")
-        }
+        try requireBackupDatabaseIdentity(expectedDatabasePath)
         let trimmedTarget = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTarget.isEmpty else {
             throw DBError.exec(SQLITE_MISUSE, "target_path is required")
@@ -1272,6 +1312,7 @@ final class BrainDatabase: @unchecked Sendable {
         onBackupStagingCreatedForTesting?()
 #endif
 
+        try requireBackupDatabaseIdentity(expectedDatabasePath)
         var stmt: OpaquePointer?
         let prepareRC = sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &stmt, nil)
         guard prepareRC == SQLITE_OK, let stmt else { throw DBError.prepare(prepareRC) }
@@ -1294,6 +1335,7 @@ final class BrainDatabase: @unchecked Sendable {
               named.st_dev == owned.st_dev, named.st_ino == owned.st_ino else {
             throw DBError.exec(SQLITE_IOERR, "private backup target identity changed")
         }
+        try requireBackupDatabaseIdentity(expectedDatabasePath)
         try syncBackupTarget(targetURL, fileDescriptor: rawFD)
         try FileManager.default.linkItem(at: stagedRaw, to: targetURL)
         let receipt: [String: Any] = [
@@ -1306,6 +1348,12 @@ final class BrainDatabase: @unchecked Sendable {
         try FileManager.default.linkItem(at: stagedReceipt, to: completionMarkerURL)
         try syncBackupTarget(targetURL, fileDescriptor: rawFD)
         return Int64(written.st_size)
+    }
+
+    private func requireBackupDatabaseIdentity(_ expectedPath: String?) throws {
+        if let mismatch = openDatabaseIdentityMismatch(expectedPath: expectedPath ?? path) {
+            throw DBError.exec(SQLITE_MISUSE, "\(Self.backupIdentityMismatchPrefix): \(mismatch)")
+        }
     }
 
     private func syncBackupTarget(_ targetURL: URL, fileDescriptor: Int32) throws {
