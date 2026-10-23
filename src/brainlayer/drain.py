@@ -1370,9 +1370,18 @@ def _precompute_event_embeddings(
     return precomputed
 
 
-def _insert_precomputed_embedding(conn: apsw.Connection, chunk_id: str, embedding_bytes: bytes) -> None:
+def _insert_precomputed_embedding(
+    conn: apsw.Connection, chunk_id: str, embedding_bytes: bytes, *, content: str
+) -> None:
     if "chunk_vectors" not in _table_names(conn):
         return
+    canonical = conn.execute("SELECT content FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+    # The precomputed vector describes the incoming event, never a merged body.
+    # Changed merges invalidate in dedupe; hotlane repairs the canonical text.
+    if canonical is None or canonical[0] != content:
+        return
+    if conn.execute("SELECT 1 FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,)).fetchone():
+        return  # An unchanged replay keeps its existing canonical vector.
     conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk_id,))
     conn.execute("INSERT INTO chunk_vectors (chunk_id, embedding) VALUES (?, ?)", (chunk_id, embedding_bytes))
     if "chunk_vectors_binary" in _table_names(conn):
@@ -1719,7 +1728,7 @@ def burn_drain_once(
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
                                 metrics.run(
-                                    "apply", _insert_precomputed_embedding, conn, applied.chunk_id, embedding_bytes
+                                    "apply", _insert_precomputed_embedding, conn, applied.chunk_id, embedding_bytes, content=content
                                 )
                         path_fallback_markers.extend(applied.fallback_markers)
                     if path_fallback_markers:
@@ -1901,7 +1910,7 @@ def drain_once(
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
                                 metrics.run(
-                                    "apply", _insert_precomputed_embedding, conn, result.chunk_id, embedding_bytes
+                                    "apply", _insert_precomputed_embedding, conn, result.chunk_id, embedding_bytes, content=content
                                 )
                         if result.collision_chunk_id:
                             collision_ids.append(result.collision_chunk_id)

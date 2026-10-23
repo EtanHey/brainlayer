@@ -79,3 +79,19 @@ PR 1 measured 152 passed / 1 failed in 8.53 s. Resident recon baseline remains
 separate: drain held up to 180.584 s, queue age 116.35 min, 2,902 missing vectors,
 index rc124, deferred-row creation-to-ingest up to 228 s; total DEFERRED loss and
 receipt-latency denominators were unmeasurable. These test results do not replace it.
+
+## #1450 fix follow-up
+
+The standalone repro outside this harness (`tests/test_store_vector_invalidation.py`)
+plus the index regression failed **9 tests / passed 4** on unchanged main. The fix
+invalidates both vector indexes in the content-merge savepoint; drain accepts a
+precomputed embedding only for the exact canonical body and retains valid vectors
+on unchanged merges; index defers changed canonicals instead of blending vectors.
+No encoder runs while the writer lock is held. FTS remains available during repair.
+
+With that fix and the strict marker still present, the all-status case produced
+**XPASS(strict)** and failed, proving the baseline flips. The fix removes that one
+marker without changing the oracle assertions. Final focused validation, including
+all fault scenarios: **187 passed in 16.08 s**. The independent pre-harness suite
+passed **169 tests**; a temporary source overlay of #1446 passed **41 tests** and
+was removed. #1446 is compatible and is neither a cause nor a dependency of #1450.
