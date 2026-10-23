@@ -46,7 +46,7 @@ from .runtime_store import _without_connection_maintenance_hooks
 from .vector_store import _configure_writer_pragmas
 from .wal_checkpoint import checkpoint_guard
 from .wal_checkpoint import get_wal_size as _wal_size_bytes
-from .writer_telemetry import start_writer_span
+from .writer_telemetry import IngestMetrics, start_writer_span
 
 logger = logging.getLogger(__name__)
 _sleep = time.sleep
@@ -1046,10 +1046,13 @@ def _apply_watcher(conn: apsw.Connection, event: dict[str, Any]) -> ApplyResult:
         return ApplyResult()
     tags = event.get("tags")
     ingested_at = int(time.time())
+    metadata = dict(event.get("metadata") or {})
+    if event.get("queued_at") is not None:
+        metadata["ingest_queued_at"] = event["queued_at"]
     values = {
         "id": chunk_id,
         "content": content,
-        "metadata": json.dumps(event.get("metadata") or {}),
+        "metadata": json.dumps(metadata),
         "source_file": source_file,
         "project": event.get("project"),
         "content_type": event.get("content_type") or "assistant_text",
@@ -1432,10 +1435,11 @@ def _queue_telemetry(paths: list[Path], events: list[dict[str, Any]]) -> dict[st
             mtimes.append(path.stat().st_mtime)
         except OSError:
             continue
+    queued = IngestMetrics.origins(events, "queued_at") or mtimes
     return {
         "lane": lane,
         "queue_source": ",".join(sources) if sources else "unknown",
-        "queue_wait_ms": max(0.0, (time.time() - min(mtimes)) * 1000.0) if mtimes else None,
+        "queue_wait_ms": max(0.0, (time.time() - min(queued)) * 1000.0) if queued else None,
     }
 
 
@@ -1671,9 +1675,16 @@ def burn_drain_once(
         ):
             result.failed_files = len(batch)
             return result
-        precomputed_embeddings = _precompute_event_embeddings(all_events, embed_fn)
+        encoding_metrics = IngestMetrics("drain", queue_telemetry["lane"], all_events)
+        precomputed_embeddings = encoding_metrics.run("encode", _precompute_event_embeddings, all_events, embed_fn)
+        if not _embedding_enabled():
+            encoding_metrics.fields["encode_ms"] = 0
         for schema_attempt in range(2):
-            conn = _open_connection(db_path)
+            metrics = (
+                encoding_metrics if schema_attempt == 0 else IngestMetrics("drain", queue_telemetry["lane"], all_events)
+            )
+            committed_events = []
+            conn = metrics.run("open", _open_connection, db_path)
             telemetry_span = start_writer_span(
                 conn,
                 db_path=db_path,
@@ -1689,8 +1700,8 @@ def burn_drain_once(
                 _ensure_watcher_liveness_schema(conn)
                 _ensure_rewind_archive_schema(conn)
                 ensure_dedupe_schema(conn)
-                conn.execute("BEGIN IMMEDIATE")
-                prefetched_state = _prefetch_enrichment_state(conn, all_events)
+                metrics.run("begin", conn.execute, "BEGIN IMMEDIATE")
+                prefetched_state = metrics.run("apply", _prefetch_enrichment_state, conn, all_events)
                 fallback_markers_by_path: dict[Path, list[FallbackReplayMarker]] = {}
                 attempt_applied_events = 0
                 attempt_skipped_verified_stale = 0
@@ -1699,7 +1710,9 @@ def burn_drain_once(
                     for event in events:
                         if _is_verified_redundant_enrichment(event, prefetched_state):
                             payload = _event_payload(event)
-                            enqueue_provenance_resolution_for_entities(
+                            metrics.run(
+                                "apply",
+                                enqueue_provenance_resolution_for_entities,
                                 conn,
                                 payload.get("entities"),
                                 chunk_id=payload.get("chunk_id"),
@@ -1707,21 +1720,30 @@ def burn_drain_once(
                             )
                             attempt_skipped_verified_stale += 1
                             continue
-                        applied = _apply_event(conn, event)
+                        applied = metrics.run("apply", _apply_event, conn, event)
                         attempt_applied_events += 1
                         if applied.chunk_id:
+                            committed_events.append(event)
                             content = str(_event_payload(event).get("content") or "").strip()
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
-                                _insert_precomputed_embedding(conn, applied.chunk_id, embedding_bytes, content=content)
+                                metrics.run(
+                                    "apply",
+                                    _insert_precomputed_embedding,
+                                    conn,
+                                    applied.chunk_id,
+                                    embedding_bytes,
+                                    content=content,
+                                )
                         path_fallback_markers.extend(applied.fallback_markers)
                     if path_fallback_markers:
                         fallback_markers_by_path[path] = path_fallback_markers
-                conn.execute("COMMIT")
+                metrics.run("commit", conn.execute, "COMMIT")
+                metrics.committed(committed_events)
                 telemetry_span.finish("commit", rows_touched=attempt_applied_events)
                 result.applied_events += attempt_applied_events
                 result.skipped_verified_stale += attempt_skipped_verified_stale
-                result.checkpoints += _post_commit_checkpoint(conn, db_path, log_path)
+                result.checkpoints += metrics.run("checkpoint", _post_commit_checkpoint, conn, db_path, log_path)
                 break
             except Exception as exc:
                 try:
@@ -1745,6 +1767,7 @@ def burn_drain_once(
                 _log(log_path, f"burn drain failed; batch preserved: {exc}")
                 return result
             finally:
+                metrics.finish("commit" if metrics.fields.get("committed_at") is not None else "error")
                 if conn is not None:
                     conn.close()
 
@@ -1846,7 +1869,12 @@ def drain_once(
                 break
 
             stop_draining = False
-            precomputed_embeddings = _precompute_event_embeddings(events_to_apply, embed_fn)
+            encoding_metrics = IngestMetrics("drain", queue_telemetry["lane"], events_to_apply)
+            precomputed_embeddings = encoding_metrics.run(
+                "encode", _precompute_event_embeddings, events_to_apply, embed_fn
+            )
+            if not _embedding_enabled():
+                encoding_metrics.fields["encode_ms"] = 0
             for attempt in range(5):
                 conn: apsw.Connection | None = None
                 telemetry_span = None
@@ -1854,8 +1882,14 @@ def drain_once(
                 collision_ids: list[str] = []
                 store_chunk_ids: list[str] = []
                 fallback_markers: list[FallbackReplayMarker] = []
+                metrics = (
+                    encoding_metrics
+                    if attempt == 0
+                    else IngestMetrics("drain", queue_telemetry["lane"], events_to_apply)
+                )
+                committed_events = []
                 try:
-                    conn = _open_connection(db_path)
+                    conn = metrics.run("open", _open_connection, db_path)
                     telemetry_span = start_writer_span(
                         conn,
                         db_path=db_path,
@@ -1870,20 +1904,29 @@ def drain_once(
                     _ensure_watcher_liveness_schema(conn)
                     _ensure_rewind_archive_schema(conn)
                     ensure_dedupe_schema(conn)
-                    conn.execute("BEGIN IMMEDIATE")
+                    metrics.run("begin", conn.execute, "BEGIN IMMEDIATE")
                     for event in events_to_apply:
-                        result = _apply_event(conn, event)
+                        result = metrics.run("apply", _apply_event, conn, event)
                         if result.chunk_id:
+                            committed_events.append(event)
                             store_chunk_ids.append(result.chunk_id)
                             fallback_markers.extend(result.fallback_markers)
                             content = str(_event_payload(event).get("content") or "").strip()
                             embedding_bytes = precomputed_embeddings.get(content)
                             if embedding_bytes:
-                                _insert_precomputed_embedding(conn, result.chunk_id, embedding_bytes, content=content)
+                                metrics.run(
+                                    "apply",
+                                    _insert_precomputed_embedding,
+                                    conn,
+                                    result.chunk_id,
+                                    embedding_bytes,
+                                    content=content,
+                                )
                         if result.collision_chunk_id:
                             collision_ids.append(result.collision_chunk_id)
                         attempt_drained += 1
-                    conn.execute("COMMIT")
+                    metrics.run("commit", conn.execute, "COMMIT")
+                    metrics.committed(committed_events)
                     telemetry_span.finish("commit", rows_touched=attempt_drained)
                     _record_drain_unblocked(db_path, log_path, blocked_reporter)
                     # Best-effort WAL checkpoint. Keep the live writer path PASSIVE:
@@ -1891,7 +1934,7 @@ def drain_once(
                     # WAL, which stalls queue drain before it can publish health.
                     # journal_size_limit and the scheduled wal-checkpoint job reclaim
                     # disk later. The except keeps a busy checkpoint non-fatal.
-                    _post_commit_checkpoint(conn, db_path, log_path)
+                    metrics.run("checkpoint", _post_commit_checkpoint, conn, db_path, log_path)
                     drained += attempt_drained
                     collisions_dropped += len(collision_ids)
                     for chunk_id in collision_ids:
@@ -1944,6 +1987,7 @@ def drain_once(
                     _log(log_path, f"drain failed for {path.name}: {exc}")
                     break
                 finally:
+                    metrics.finish("commit" if metrics.fields.get("committed_at") is not None else "error")
                     if conn is not None:
                         conn.close()
             if stop_draining:

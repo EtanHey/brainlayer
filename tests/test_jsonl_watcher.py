@@ -589,6 +589,7 @@ class TestJSONLTailer:
         lines = tailer.read_new_lines()
         first_line_end = len(b'{"good":"line"}\n')
 
+        assert 0 < lines[0].pop("_ingest_observed_at") <= time.time()
         assert lines == [{"good": "line", "_line_end_offset": first_line_end}]
         assert tailer.offset == first_line_end
         assert tailer._buffer.startswith(b"not json at all\n")
