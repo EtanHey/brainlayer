@@ -245,12 +245,17 @@ private struct BrainBarJobsDashboardContent: View {
 
     var body: some View {
         BrainBarDashboardContent(collector: collector, workspace: workspace,
-            hotkeyStatus: hotkeyStatus, dbPath: dbPath, panelState: panelState,
+            hotkeyStatus: hotkeyStatus, dbPath: dbPath, observabilityResult: model.dashboardObservabilityResult,
+            referenceNow: model.observabilityNow, panelState: panelState,
             jobAttentionReasons: model.dashboardJobAttentionReasons, jobsChecking: model.dashboardJobsChecking)
             // One cadence for the view's lifetime: samples on appear, then every 60 s.
             .task { await model.monitorLaunchdStatus() }
+            .task { await model.monitorObservabilityStatus() }
             .onChange(of: collector.isManualRefreshInProgress) { _, refreshing in
-                if refreshing { model.refreshLaunchdStatus() }
+                if refreshing {
+                    model.refreshLaunchdStatus()
+                    model.refreshObservabilityStatus()
+                }
             }
     }
 }
@@ -564,16 +569,8 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         let indexedToday: Int?
         let indexedTodayUnavailableText: String?
         if case let .readable(document) = observability, document.backups.state == "measured" {
-            let snapshot = document.backups.dbSnapshot
-            let upload = document.backups.lastVerifiedUpload
-            let shared = ObservabilityPresentation.backupStatus(for: document.backups, locale: locale, now: now, calendar: calendar)
-            let databaseLine = ObservabilityStatusLine(
-                    text: "Database · Drive · \(snapshot.flatMap { $0.verified ? backupMoment($0.lastAt, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
-                    tone: shared.snapshot.tone)
-            let transcriptLine = ObservabilityStatusLine(
-                    text: document.backups.verifiedIdle(now: now) ? "Transcripts · Drive · no changes\(upload.map { " since " + backupMoment($0.at, now: now, calendar: calendar, locale: locale, prefix: "") } ?? "")" : "Transcripts · Drive · \(upload.flatMap { $0.verified ? backupMoment($0.at, now: now, calendar: calendar, locale: locale) : nil } ?? "no verified copy")",
-                    tone: shared.upload.tone)
-            backupLines = [databaseLine] + [shared.snapshotUpload].compactMap { $0 } + [transcriptLine]
+            backupLines = ObservabilityPresentation.backupReceiptLines(
+                for: document.backups, locale: locale, now: now, calendar: calendar)
         } else {
             backupLines = [
                 .init(text: "Database · Drive · status unavailable", tone: .red),
@@ -710,18 +707,6 @@ struct BrainBarOnePagePresentation: Sendable, Equatable {
         if seconds < 60 { return "\(seconds) s" }
         if seconds < 3_600 { return "\(seconds / 60) min" }
         return "\(seconds / 3_600) h"
-    }
-
-    private static func backupMoment(_ date: Date, now: Date, calendar: Calendar, locale: Locale, prefix: String = "last good ") -> String {
-        if calendar.isDate(date, inSameDayAs: now) {
-            return "\(prefix)today \(shortTime(date, calendar: calendar, locale: locale))"
-        }
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.locale = locale
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "MMM d 'at' HH:mm"
-        return "\(prefix)\(formatter.string(from: date))"
     }
 }
 

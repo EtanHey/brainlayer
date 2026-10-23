@@ -571,7 +571,7 @@ enum ObservabilityPresentation {
         let idle = backups.verifiedIdle(now: now)
         var upload = backups.lastVerifiedUpload.map { value in
             ObservabilityStatusLine(
-                text: "\(value.verified ? "Last verified transcript upload" : "Last transcript upload (NOT verified)"): \(localDate(value.at)) (\(hours(value.ageHours)) ago) · transcript archive \(value.archiveId)",
+                text: "\(value.verified ? "Last verified transcript upload" : "Last transcript upload (NOT verified)"): \(localDate(value.at)) (\(hours(max(0, now.timeIntervalSince(value.at) / 3600))) ago) · transcript archive \(value.archiveId)",
                 tone: value.verified ? .green : .red
             )
         } ?? .init(text: "No verified transcript upload on record", tone: .red)
@@ -580,16 +580,18 @@ enum ObservabilityPresentation {
             let since = backups.lastVerifiedUpload.map { " since \(idleDate($0.at, calendar: calendar, locale: locale))" } ?? ""
             upload = .init(text: "No new transcripts\(since) · checked \(relative(attempt.at, now: now, locale: locale))", tone: .neutral)
         }
+        let staleTranscript = !idle && backups.thresholdHours != nil &&
+            backups.lastVerifiedUpload.map { $0.verified && !backups.isRecent($0.at, now: now) } == true
+        if staleTranscript { upload = .init(text: upload.text, tone: .red) }
 
         var snapshot = backups.dbSnapshot.map { value in
             ObservabilityStatusLine(
                 text: "Latest DB snapshot (\(value.verified ? "verified" : "NOT verified")): \(localDate(value.lastAt)) → \(value.destination)",
                 tone: value.verified ? .green : .red)
         } ?? .init(text: "No verified DB snapshot on record", tone: .red)
-        // New v2 evidence gets an independent offsite age check. Legacy documents retain their
-        // contract, except when the producer itself says the backups are stale (#1420): then an
-        // out-of-window DB copy is the stale copy, and the DB dot and check cannot stay green.
-        let staleOffsite = (backups.localSnapshot != nil || backups.transcriptAttempt != nil || backups.freshness == "stale") &&
+        // Judge the receipt at presentation time too: a cached producer's "fresh" flag cannot
+        // keep an offsite copy green after its declared freshness window has elapsed.
+        let staleOffsite = (backups.thresholdHours != nil || backups.localSnapshot != nil || backups.transcriptAttempt != nil || backups.freshness == "stale") &&
             backups.dbSnapshot.map { $0.verified && !backups.isRecent($0.lastAt, now: now) } == true
         let offsiteAge = backups.dbSnapshot.map { relative($0.lastAt, now: now, locale: locale) } ?? "unknown"
         let pendingState = backups.localSnapshot.map { ["pending", "in_progress"].contains($0.uploadState) } == true
@@ -647,6 +649,12 @@ enum ObservabilityPresentation {
         case _ where backups.localSnapshot?.uploadState == "nothing_pending":
             freshness = .init(text: missingLocalSnapshot, tone: .red)
             freshnessCheckValue = freshness.text
+        case _ where staleOffsite:
+            freshness = .init(text: staleText, tone: .red)
+            freshnessCheckValue = staleText
+        case _ where staleTranscript:
+            freshness = .init(text: "Backup freshness (DB + transcript): stale (> \(threshold) h)", tone: .red)
+            freshnessCheckValue = plainThreshold.map { "A copy is older than \($0)" } ?? "A copy is out of date"
         case "fresh" where idle:
             freshness = .init(text: "Checked \(relative(backups.transcriptAttempt!.at, now: now, locale: locale)); nothing new", tone: .neutral)
             freshnessCheckTitle = "Transcript coverage"
@@ -703,6 +711,35 @@ enum ObservabilityPresentation {
             uploadQueued: backups.localSnapshot?.uploadState == "pending",
             freshnessCheckTitle: freshnessCheckTitle, freshnessCheckValue: freshnessCheckValue
         )
+    }
+
+    /// Verified receipt dates shared by Dashboard, Backups, and menu consumers. `lastAt` is
+    /// snapshot creation; upload `at` is the successful attempt's timestamp, never log mtime.
+    static func backupReceiptLines(
+        for backups: ObservabilityDocument.Backups,
+        locale: Locale = .current,
+        now: Date,
+        calendar: Calendar = .current
+    ) -> [ObservabilityStatusLine] {
+        let status = backupStatus(for: backups, locale: locale, now: now, calendar: calendar)
+        func moment(_ date: Date, prefix: String = "last good ") -> String {
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.locale = locale
+            formatter.timeZone = calendar.timeZone
+            let today = calendar.isDate(date, inSameDayAs: now)
+            formatter.dateFormat = today ? "HH:mm" : "MMM d 'at' HH:mm"
+            return prefix + (today ? "today " : "") + formatter.string(from: date)
+        }
+        let database = ObservabilityStatusLine(
+            text: "Database · Drive · \(backups.dbSnapshot.flatMap { $0.verified ? moment($0.lastAt) : nil } ?? "no verified copy")",
+            tone: status.snapshot.tone)
+        let transcript = ObservabilityStatusLine(
+            text: backups.verifiedIdle(now: now)
+                ? "Transcripts · Drive · no changes\(backups.lastVerifiedUpload.map { " since " + moment($0.at, prefix: "") } ?? "")"
+                : "Transcripts · Drive · \(backups.lastVerifiedUpload.flatMap { $0.verified ? moment($0.at) : nil } ?? "no verified copy")",
+            tone: status.upload.tone)
+        return [database] + [status.snapshotUpload].compactMap { $0 } + [transcript]
     }
 
     static func relative(_ date: Date, now: Date, locale: Locale = .current) -> String {

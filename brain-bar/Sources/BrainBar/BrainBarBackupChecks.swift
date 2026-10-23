@@ -30,6 +30,11 @@ struct BrainBarBackupChecks: Equatable, Sendable {
     let attentionSentence: String?
     var scheduleUnknown = false
 
+    var verdictTone: ObservabilityStatusTone {
+        if alertTone == .red || checks.contains(where: { $0.tone == .red }) { return .red }
+        return scheduleUnknown || checks.contains(where: { $0.tone == .neutral }) ? .neutral : .green
+    }
+
     static func derive(
         _ backups: ObservabilityDocument.Backups,
         now: Date,
@@ -80,7 +85,8 @@ struct BrainBarBackupChecks: Equatable, Sendable {
             checks.insert(.init(id: "snapshot-upload", title: "Local database snapshot", value: annotation.text, tone: annotation.tone), at: 2)
         }
         let failing = checks.filter { $0.tone == .red }.count
-        let summary: String = if failing == 0 && lines.uploadInProgress { lines.uploadQueued ? "Upload queued" : "Upload in progress" }
+        let summary: String = if failing == 0 && lines.error?.tone == .red { "Backup alert needs attention" }
+            else if failing == 0 && lines.uploadInProgress { lines.uploadQueued ? "Upload queued" : "Upload in progress" }
             else if failing == 0 && idle { "Idle — no new transcripts" }
             else if jobStatus?.tone == .neutral { jobStatus?.text.hasPrefix("Skipped") == true ? "Skipped"
             : jobStatus?.text.hasPrefix("Deferred") == true ? "Deferred" : "Job schedule unknown" } else { switch failing {
@@ -143,11 +149,11 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         var rows: [Detail] = []
         if let upload = backups.lastVerifiedUpload {
             rows.append(.init(label: "Drive file ID — latest transcript archive", value: upload.archiveId))
-            rows.append(.init(label: "Last transcript upload", value: exact(upload.at)))
+            rows.append(.init(label: "Transcript upload receipt — attempt time", value: exact(upload.at)))
         }
         if let snapshot = backups.dbSnapshot {
             rows.append(.init(label: "Database copy file", value: snapshot.destination))
-            rows.append(.init(label: "Last database copy", value: exact(snapshot.lastAt)))
+            rows.append(.init(label: "Offsite database snapshot — created", value: exact(snapshot.lastAt)))
         }
         if let local = backups.localSnapshot {
             if let destination = local.destination { rows.append(.init(label: "Local database snapshot", value: destination)) }
@@ -196,8 +202,7 @@ struct BrainBarBackupChecksCard: View {
     }
 
     var body: some View {
-        let failing = checks.checks.contains { $0.tone == .red }
-        let verdictTone: ObservabilityStatusTone = failing ? .red : checks.scheduleUnknown || checks.checks.contains { $0.tone == .neutral } ? .neutral : .green
+        let verdictTone = checks.verdictTone
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Recovery checks").font(.system(size: 13, weight: .semibold))

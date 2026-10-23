@@ -91,8 +91,8 @@ final class ObservabilitySnapshotTests: XCTestCase {
         let missing = try readableDocument(named: "no-op-dev")
         let live = try liveShapedDocument()
 
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups).upload.tone, .green)
-        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: healthy.backups, now: healthy.generatedAt).upload.tone, .green)
+        XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups, now: stale.generatedAt).upload.tone, .green)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: stale.backups).freshness.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: missing.backups).upload.tone, .red)
         XCTAssertEqual(ObservabilityPresentation.backupStatus(for: live.backups).job.tone, .red)

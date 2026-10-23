@@ -20,6 +20,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
     @Published private(set) var activeRuntimeObservation: BrainLayerActiveRuntimeObservation
     @Published private(set) var lastSaveReceipt: BrainLayerSettingsSaveReceipt?
     @Published private(set) var observabilityResult: ObservabilityReadResult
+    @Published private(set) var observabilityNow: Date
     @Published private(set) var launchdObservations: [BrainLayerLaunchdJob: BrainLayerLaunchdJobObservation]
     @Published private(set) var configReadSucceeded = true
     @Published private(set) var embeddingProcess: BrainBarEmbeddingProcessState
@@ -125,6 +126,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
         backupSchedules = initialBackupSchedules
         maintenanceEvidence = initialMaintenanceEvidence
         observabilityResult = initialObservabilityResult ?? .unreadable("Backup status unavailable.")
+        observabilityNow = now()
         hasCompletedObservabilityRead = initialObservabilityResult != nil || observabilityURL == nil
         hasCompletedLaunchdSample = !initialLaunchdStates.isEmpty || !initialLaunchdObservations.isEmpty
         launchdObservations = initialLaunchdObservations.isEmpty
@@ -370,14 +372,14 @@ final class BrainBarSettingsViewModel: ObservableObject {
     var backupStatus: ObservabilityBackupStatus? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return ObservabilityPresentation.backupStatus(for: document.backups, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: now())
+        return ObservabilityPresentation.backupStatus(for: document.backups, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine, now: observabilityNow)
     }
 
     /// The Backups page's checks in plain words (E1), from the same document as `backupStatus`.
     var backupChecks: BrainBarBackupChecks? {
         guard case let .readable(document) = observabilityResult,
               document.backups.state == "measured" else { return nil }
-        return BrainBarBackupChecks.derive(document.backups, now: now(), jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine)
+        return BrainBarBackupChecks.derive(document.backups, now: observabilityNow, jobStatus: launchdObservations[.jsonlBackup]?.backupScheduleLine)
     }
 
     /// The Backups page's one verdict (#1029 review B1), from the same Drive presentation the card
@@ -432,6 +434,7 @@ final class BrainBarSettingsViewModel: ObservableObject {
 
 #if DEBUG
     func setObservabilityResultForTesting(_ result: ObservabilityReadResult) {
+        observabilityNow = now()
         observabilityResult = result
         hasCompletedObservabilityRead = true
     }
@@ -505,10 +508,34 @@ final class BrainBarSettingsViewModel: ObservableObject {
             let result = await read(observabilityURL)
             guard !Task.isCancelled else { return }
             guard let self else { return }
+            observabilityNow = now()
             observabilityResult = result
             hasCompletedObservabilityRead = true
             isRefreshingObservabilityStatus = false
         }
+    }
+
+    /// The unified window keeps one published receipt snapshot for Dashboard and Backups.
+    /// SwiftUI owns this loop's cancellation; the fallback standalone dashboard has its own reader.
+    func monitorObservabilityStatus(
+        waitForNextTick: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(30)) }
+    ) async {
+        guard observabilityURL != nil else { return }
+        while !Task.isCancelled {
+            refreshObservabilityStatus()
+            await observabilityTask?.value
+            do { try await waitForNextTick() } catch { return }
+        }
+    }
+
+    var dashboardObservabilityResult: ObservabilityReadResult {
+        hasCompletedObservabilityRead ? observabilityResult : .unreadable("Loading observability data.")
+    }
+
+    var backupReceiptLines: [ObservabilityStatusLine]? {
+        guard case let .readable(document) = observabilityResult,
+              document.backups.state == "measured" else { return nil }
+        return ObservabilityPresentation.backupReceiptLines(for: document.backups, now: observabilityNow)
     }
 
     private func applyLaunchdStates(_ states: [BrainLayerLaunchdJob: BrainLayerLaunchdLoadState]) {
@@ -1118,9 +1145,21 @@ struct BrainBarSettingsView: View {
 
     @ViewBuilder
     private var backupSchedule: some View {
+        if let lines = viewModel.backupReceiptLines {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeading("Verified copies")
+                ObservabilityStatusRows(lines: lines, textColor: .brainBarTextPrimary)
+                Text("Copy dates from observability.json: database snapshot creation and transcript upload receipt. Local files below are on this Mac.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.brainBarTextMuted)
+            }
+        }
         if !viewModel.presentedBackupSchedules.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 sectionHeading("Schedule")
+                Text("Job attempt times from the maintenance calendar or each job's log.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.brainBarTextMuted)
                 ForEach(viewModel.presentedBackupSchedules) { row in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .firstTextBaseline) {
