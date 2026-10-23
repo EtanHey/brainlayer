@@ -168,4 +168,33 @@ final class BackupVacuumIdentityTests: XCTestCase {
         XCTAssertNil(result["isError"], text(result))
         XCTAssertTrue(text(result).contains("\"db_path\""), text(result))
     }
+
+    func testCompletionReceiptBindsTheSyncedRawIdentity() throws {
+        let target = directory.appendingPathComponent("receipt.db")
+        let result = vacuum(target: target, expected: servedPath)
+        XCTAssertNil(result["isError"], text(result))
+        let data = try Data(contentsOf: URL(fileURLWithPath: target.path + ".complete"))
+        let receipt = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        XCTAssertNotNil(receipt, "completion marker must bind the writer's synced raw identity")
+        let raw = try inode(target.path)
+        XCTAssertEqual((receipt?["schema_version"] as? NSNumber)?.intValue, 1)
+        XCTAssertEqual(receipt?["target_path"] as? String, target.path)
+        XCTAssertEqual((receipt?["target_dev"] as? NSNumber)?.int64Value, raw.dev)
+        XCTAssertEqual((receipt?["target_ino"] as? NSNumber)?.int64Value, raw.ino)
+    }
+
+    func testPeerAtPublicTargetBeforeWriterCompletionIsPreserved() throws {
+        let target = directory.appendingPathComponent("peer.db")
+        let peer = Data("peer owns this pathname".utf8)
+        db.onBackupStagingCreatedForTesting = {
+            do { try peer.write(to: target, options: .withoutOverwriting) }
+            catch { XCTFail("could not create peer fixture: \(error)") }
+        }
+        let result = vacuum(target: target, expected: servedPath)
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        XCTAssertEqual(try Data(contentsOf: target), peer)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path + ".complete"))
+        let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertFalse(entries.contains { $0.hasPrefix(".brainbar-vacuum-") })
+    }
 }

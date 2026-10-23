@@ -1170,7 +1170,8 @@ def _remove_owned_raw(raw: Path, owned: tuple[int, int]) -> None:
         os.rename(raw, aside)
     except FileNotFoundError:
         return
-    if _file_identity(aside) == owned:
+    captured = os.lstat(aside)
+    if (captured.st_dev, captured.st_ino) == owned:
         aside.unlink()
         print(f"Backup removed unverified raw from non-canonical staging: {raw}", flush=True)
         return
@@ -1568,6 +1569,33 @@ def _brainbar_socket_path(socket_path: Path | str | None = None) -> Path:
     return Path(os.environ.get("BRAINBAR_SOCKET_PATH", DEFAULT_BRAINBAR_SOCKET_PATH)).expanduser()
 
 
+def _completed_attempt_ownership(path: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Accept only a writer receipt binding this attempt name to its created raw inode."""
+    marker = _backup_attempt_completion_marker(path)
+    try:
+        descriptor = os.open(marker, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            marker_info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(marker_info.st_mode) or marker_info.st_size > 4096:
+                return None
+            receipt = json.loads(stream.read(4097))
+        raw_info = path.lstat()
+        if (
+            marker.is_symlink()
+            or not stat.S_ISREG(raw_info.st_mode)
+            or not isinstance(receipt, dict)
+            or type(receipt.get("schema_version")) is not int
+            or receipt["schema_version"] != 1
+            or receipt.get("target_path") != os.path.abspath(path)
+            or any(type(receipt.get(key)) is not int for key in ("target_dev", "target_ino"))
+            or (receipt["target_dev"], receipt["target_ino"]) != (raw_info.st_dev, raw_info.st_ino)
+        ):
+            return None
+        return (raw_info.st_dev, raw_info.st_ino), (marker_info.st_dev, marker_info.st_ino)
+    except (OSError, ValueError, UnicodeError):
+        return None
+
+
 def request_brainbar_vacuum_into(
     target_path: Path,
     socket_path: Path | str | None = None,
@@ -1605,7 +1633,16 @@ def request_brainbar_vacuum_into(
     resolved_attempt_dir.mkdir(parents=True, exist_ok=True)
     last_error: Exception | None = None
     unconfirmed_attempt_paths: list[Path] = []
+    completed_attempts: dict[Path, tuple[tuple[int, int], tuple[int, int]]] = {}
     for attempt in range(1, max_attempts + 1):
+        for prior_path in unconfirmed_attempt_paths:
+            if prior_path in completed_attempts:
+                continue
+            ownership = _completed_attempt_ownership(prior_path)
+            if ownership is not None:
+                completed_attempts[prior_path] = ownership
+            else:
+                print(f"Backup retaining attempt without writer-bound ownership: {prior_path}", flush=True)
         if attempt > 1 and retry_capacity_check is not None:
             # Re-measure before every retry: an unresolved request may still grow to full size
             # beside the next one, even if its target has not appeared yet.
@@ -1696,7 +1733,13 @@ def request_brainbar_vacuum_into(
                 prior_path.unlink(missing_ok=True)
                 _backup_attempt_completion_marker(prior_path).unlink(missing_ok=True)
             return promoted
-        except (BackupTimeoutError, BrainBarDatabaseIdentityError, BackupTargetConflictError):
+        except BrainBarDatabaseIdentityError:
+            for prior_path, (owned_raw, owned_marker) in completed_attempts.items():
+                _remove_owned_raw(prior_path, owned_raw)
+                if not prior_path.exists() and not prior_path.is_symlink():
+                    _remove_owned_raw(_backup_attempt_completion_marker(prior_path), owned_marker)
+            raise
+        except (BackupTimeoutError, BackupTargetConflictError):
             raise
         except BrainBarSnapshotBusyError as exc:
             if unconfirmed_attempt_paths:
