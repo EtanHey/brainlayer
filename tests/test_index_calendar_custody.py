@@ -1,7 +1,9 @@
 """Synthetic budget, stalled watchdog, and existing calendar custody checks."""
 
 import datetime as dt
+import json
 import threading
+from contextlib import contextmanager
 from time import monotonic as real_monotonic
 from types import SimpleNamespace
 
@@ -17,6 +19,133 @@ from brainlayer.vector_store import IndexDeadlineExceeded
 from tests.test_cli_index_calendar import prepare
 from tests.test_index_checkpoint_boundary import synthetic_vectors
 from tests.test_index_completion import calendar_fixture as calendar_fixture
+from tests.test_index_completion import readback
+
+
+def test_slow_batch_reserves_backlog_publication_before_outer_deadline(calendar_fixture, monkeypatch):
+    import brainlayer.runtime_store as runtime
+    from brainlayer.drive_credentials import _atomic_write
+
+    source, db, chunks, clock = calendar_fixture
+    monkeypatch.setattr(cli, "_calendar_index_budget_s", lambda: 100)
+    original_watchdog = watchdog_module.IndexWatchdog
+    watches, batches, published = [], [], []
+    original_open = runtime.open_writer_store
+    original_print = cli.rprint
+
+    def watched(**kwargs):
+        kwargs["wall_monotonic"] = lambda: clock[0]
+        watch = original_watchdog(**kwargs)
+        watches.append(watch)
+        return watch
+
+    def encode(batch, **kwargs):
+        batches.append(clock[0])
+        clock[0] += 40
+        return synthetic_vectors(batch)
+
+    @contextmanager
+    def delayed_store(*args, **kwargs):
+        with original_open(*args, **kwargs) as store:
+            upsert = store.upsert_chunks
+
+            def write(*args, **kwargs):
+                result = upsert(*args, **kwargs)
+                clock[0] += 35
+                return result
+
+            store.upsert_chunks = write
+            try:
+                yield store
+            finally:
+                assert watches[0].phase == "close_store"
+                clock[0] += 10
+
+    def publish(path, payload):
+        if path.name.startswith("index-backlog-"):
+            watch = watches[0]
+            assert watch._thread is not None and not watch._stop.is_set()
+            assert watch.phase == "publish_backlog"
+            clock[0] += 10
+            published.append(clock[0])
+        return _atomic_write(path, payload)
+
+    def output(*args, **kwargs):
+        if "INDEX_CHECKPOINTED" in str(args) or "✓" in str(args):
+            assert published, "success preceded durable backlog publication"
+            assert json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())["chunks_remaining"] == 2
+        return original_print(*args, **kwargs)
+
+    monkeypatch.setattr(watchdog_module, "IndexWatchdog", watched)
+    monkeypatch.setattr(runtime, "open_writer_store", delayed_store)
+    monkeypatch.setattr(adapter, "embed_chunks", encode)
+    monkeypatch.setattr("brainlayer.drive_credentials._atomic_write", publish)
+    monkeypatch.setattr(cli, "rprint", output)
+    result = CliRunner().invoke(cli.app, ["index", str(source)])
+    assert result.exit_code == 0 and "INDEX_CHECKPOINTED" in result.output, result.output
+    assert batches == [100.0]  # Never admit the remaining inputs inside the reserve.
+    assert published == [195.0] and published[0] < 230  # Unchanged outer custody.
+    assert watches[0]._stop.is_set()
+    state = json.loads(next(db.parent.glob("index-checkpoint-*.json")).read_text())
+    assert next(iter(state["files"].values()))["next_chunk"] == 64
+    readback(db, chunks[:64])
+
+
+@pytest.mark.parametrize("failure", ["deadline", "io"])
+def test_backlog_publication_failure_cannot_report_success(calendar_fixture, monkeypatch, failure):
+    from brainlayer.drive_credentials import _atomic_write
+
+    source, db, _, clock = calendar_fixture
+    monkeypatch.setattr(adapter, "embed_chunks", synthetic_vectors)
+
+    def publish(path, payload):
+        if path.name.startswith("index-backlog-"):
+            if failure == "io":
+                raise OSError("synthetic backlog fsync failure")
+            clock[0] = 151  # 20s budget + unchanged 30s outer allowance has elapsed.
+        return _atomic_write(path, payload)
+
+    monkeypatch.setattr("brainlayer.drive_credentials._atomic_write", publish)
+    result = CliRunner().invoke(cli.app, ["index", str(source)])
+    assert result.exit_code == 1, result.output
+    assert "INDEX_CHECKPOINTED" not in result.output and "✓" not in result.output
+
+
+def test_calendar_receipt_records_encoder_and_writer_timings(calendar_fixture, monkeypatch):
+    from brainlayer.embeddings import EmbeddingModel
+    from brainlayer.vector_store import VectorStore
+    from tests.test_index_completion import Vector
+
+    source, db, chunks, clock = calendar_fixture
+
+    class Encoder:
+        def encode(self, texts, **kwargs):
+            clock[0] += 2
+            return [Vector() for _ in texts]
+
+    model = EmbeddingModel(device="cpu")
+
+    def load():
+        clock[0] += 3
+        return Encoder()
+
+    original_upsert = VectorStore.upsert_chunks
+
+    def upsert(self, *args, **kwargs):
+        result = original_upsert(self, *args, **kwargs)
+        clock[0] += 5
+        return result
+
+    monkeypatch.setattr(model, "_load_model", load)
+    monkeypatch.setattr(adapter, "embed_chunks", model.embed_chunks)
+    monkeypatch.setattr(VectorStore, "upsert_chunks", upsert)
+    monkeypatch.setattr(cli.time, "perf_counter", lambda: clock[0])
+    result = CliRunner().invoke(cli.app, ["index", str(source)])
+    assert result.exit_code == 0, result.output
+    receipt = json.loads(next(db.parent.glob("index-backlog-*.json")).read_text())
+    assert receipt["timings_ms"] == dict(model_load_ms=3000, encode_ms=4000, write_ms=5000, checkpoint_ms=0)
+    assert result.output.index("INDEX_BACKLOG") < result.output.index("INDEX_CHECKPOINTED")
+    readback(db, chunks[:64])
 
 
 def test_stalled_calendar_alarms_while_writer_is_still_held(calendar_fixture, monkeypatch):
