@@ -110,14 +110,18 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     Histograms use power-of-two upper bounds in ms (last bucket overflows).
     The caller holds the sink's cross-process lock; no raw SQL/identities survive.
     """
-    if event.get("event") != "txn_finished" or not event.get("finished_at"):
+    finished_at = event.get("finished_at")
+    if event.get("event") != "txn_finished" or not isinstance(finished_at, str):
         return
-    day = datetime.fromisoformat(event["finished_at"]).astimezone(UTC).date()
+    try:
+        day = datetime.fromisoformat(finished_at).astimezone(UTC).date()
+    except (ValueError, OverflowError):
+        return
     prefix = f"{path.stem}-summary-"
     target = path.with_name(f"{prefix}{day}.json")
     try:
         summary = json.loads(target.read_text())
-    except (OSError, json.JSONDecodeError, UnicodeError):
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeError):
         summary = None
     if isinstance(summary, dict) and summary.get("schema_version", 1) != 1:
         return
@@ -134,7 +138,7 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     group["count"] += 1
     for field in ("duration_ms", "queue_wait_ms", "lock_wait_ms", "lock_held_ms", "queue_to_commit_ms"):
         value = event.get(field)
-        if not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
+        if type(value) not in (int, float) or not 0 <= value <= sys.float_info.max:
             continue
         metric = group.get(field)
         if not (

@@ -62,7 +62,9 @@ final class DeferredStoreTelemetryTests: XCTestCase {
             XCTAssertTrue(db.flushPendingStores().isEmpty, "duplicate replay must still clear its queue")
             DeferredStoreTelemetry.waitForWritesForTesting()
             let events = try String(contentsOf: root.appendingPathComponent("events.jsonl"), encoding: .utf8)
-                .split(separator: "\n").map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any] }
+                .split(separator: "\n").map {
+                    try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+                }
             XCTAssertEqual(events.compactMap { $0["event"] as? String }, ["queued"])
             XCTAssertEqual(events.first?["queue_id"] as? String, queued.queueID)
         }
