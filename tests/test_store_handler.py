@@ -701,6 +701,7 @@ async def test_store_busy_budget_restores_cold_vector_store_write_timeout(tmp_pa
 def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_path, monkeypatch):
     """Cold init must spend one absolute store budget across multiple DDL statements."""
     import brainlayer.vector_store as vector_store_module
+    from brainlayer import writer_telemetry
     from brainlayer.vector_store import VectorStore, temporary_write_busy_timeout_ms
 
     class StopInit(Exception):
@@ -766,8 +767,13 @@ def test_store_busy_budget_refreshes_cold_init_timeout_between_statements(tmp_pa
     store.db_path = tmp_path / "cold-init-deadline.db"
 
     with temporary_write_busy_timeout_ms(200, deadline=0.2), pytest.raises(StopInit):
-        store._init_db()
+        store._init_db_with_retry()
 
+    assert store._init_writer_telemetry_span is None
+    heartbeat_path = writer_telemetry._heartbeat_path(store.db_path)
+    with writer_telemetry._ACTIVE_LOCK:
+        assert heartbeat_path not in writer_telemetry._ACTIVE_SPANS
+    assert not heartbeat_path.exists()
     assert len(seen_timeouts) == 3
     assert seen_timeouts[1] < seen_timeouts[0]
     assert seen_timeouts[2] < seen_timeouts[1]

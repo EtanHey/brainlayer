@@ -20,6 +20,9 @@ from .paths import supervisor_socket_path
 from .service_supervisor import Component, Supervisor
 from .supervisor_adapters import ALIASES
 
+TRANSCRIPT_RECOVERY_RUN_TIMEOUT = 7500
+TRANSCRIPT_RECOVERY_EXIT_TIMEOUT = 60
+
 PLIST_KEYS = set(
     "Label ProgramArguments EnvironmentVariables StandardOutPath StandardErrorPath "
     "WorkingDirectory StartInterval RunAtLoad KeepAlive ThrottleInterval ExitTimeOut "
@@ -183,8 +186,8 @@ def with_brainbar_monitor(components, path):
                 }
                 | {"BRAINLAYER_SUPERVISOR_SOCKET": str(path)},
                 interval=3600,
-                run_timeout=7500,
-                exit_timeout=60,
+                run_timeout=TRANSCRIPT_RECOVERY_RUN_TIMEOUT,
+                exit_timeout=TRANSCRIPT_RECOVERY_EXIT_TIMEOUT,
                 stdout=logs / "transcript-backup-recovery.out.log",
                 stderr=logs / "transcript-backup-recovery.err.log",
                 policy=source.policy.copy(),
