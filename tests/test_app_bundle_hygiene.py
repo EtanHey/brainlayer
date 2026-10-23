@@ -13,6 +13,79 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK = ROOT / "scripts/check_stray_apps.py"
 
 
+def _hygiene_session(checkout, *, plugin_root=None):
+    plugin_root = plugin_root or checkout
+    tests = plugin_root / "tests"
+    tests.mkdir(parents=True, exist_ok=True)
+    (tests / "__init__.py").touch()
+    shutil.copy2(ROOT / "tests/conftest.py", tests / "conftest.py")
+    scripts = plugin_root / "scripts"
+    scripts.mkdir(exist_ok=True)
+    shutil.copy2(CHECK, scripts / CHECK.name)
+    (checkout / "pytest.ini").write_text("[pytest]\n")
+    (checkout / "test_probe.py").write_text("def test_probe():\n    pass\n")
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join((str(plugin_root), str(ROOT / "src"))),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "tests.conftest", "-q", "test_probe.py"],
+        cwd=checkout,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize("location", [".", ".worktrees/active", "import-parent-plugin"])
+def test_session_ignores_other_worktrees_but_cli_sweeps_them(tmp_path, location):
+    repo = tmp_path / "repo"
+    checkout = repo / (".worktrees/active" if location == "import-parent-plugin" else location)
+    checkout.mkdir(parents=True)
+    sibling = repo / ".worktrees/legacy/docs.local/small.png"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"\x89PNG\r\n\x1a\n")
+    if location != ".":
+        parent_artifact = repo / "docs.local/worktree-archive/small.png"
+        parent_artifact.parent.mkdir(parents=True)
+        parent_artifact.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    result = _hygiene_session(checkout, plugin_root=repo if location == "import-parent-plugin" else None)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+    sweep = subprocess.run([sys.executable, str(CHECK), str(repo)], capture_output=True, text=True)
+    assert sweep.returncode == 1, sweep.stdout + sweep.stderr
+    assert str(sibling) in sweep.stdout
+
+
+@pytest.mark.parametrize("import_parent_plugin", [False, True])
+def test_session_rejects_own_docs_binary_even_with_a_conftest_from_another_checkout(tmp_path, import_parent_plugin):
+    repo = tmp_path / "repo"
+    checkout = repo / ".worktrees/active"
+    checkout.mkdir(parents=True)
+    binary = checkout / "docs.local/small.png"
+    binary.parent.mkdir()
+    binary.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    result = _hygiene_session(checkout, plugin_root=repo if import_parent_plugin else None)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+    assert str(binary) in result.stdout
+
+
+def test_root_session_still_rejects_its_own_legacy_archive(tmp_path):
+    repo = tmp_path / "repo"
+    archive = repo / "docs.local/worktree-archive/legacy.png"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(b"\x89PNG\r\n\x1a\n")
+    os.utime(archive, (1, 1))
+    result = _hygiene_session(repo)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert str(archive) in result.stdout
+
+
 @pytest.fixture
 def scan_root(monkeypatch):
     # These deliberate docs.local source probes must not emit binary bytecode there.

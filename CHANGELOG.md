@@ -39,6 +39,20 @@
 - Search: hybrid RRF reranking now incorporates importance and recency signals
 - Embeddings: deferred from synchronous to async pipeline
 
+## [1.5.70] - 2026-10-22
+
+### Fixed
+- The supervisor keeps sending heartbeats while starting children or writing their custody records, so slow disk and process startup no longer make its own guard kill it and repeatedly restart the watcher. These operations run off the event loop with one custody writer; a stuck operation still stops heartbeats after its 120-second budget. Guard readiness now allows 30 seconds for interpreter startup and reports why it failed (#1464).
+- A child whose start identity cannot be established is marked failed and its gated wrapper is reaped without running the command. The supervisor retries with backoff instead of crashing its heartbeat loop. Unexpected startup-task failures are also recorded per child (#1465).
+
+### Tests and CI
+- Concurrent pytest children use separate temporary directories for retention cleanup (#1452). The iCloud backup naming test freezes its clock (#1458), the BrainBar store-budget test checks the selected lock policy with debug-only hooks (#1461), and the activation lock test isolates its clock and lock doubles from other threads (#1463).
+- The disposable recovery oracle adds interrupted-index, encoder failure/stall, drain-restart and bounded catch-up checks, with negative controls. The known MERGED stale-vector case remains a strict expected failure tracked in #1450; this adds coverage rather than fixing that defect (#1457).
+- Swift CI has a 15-minute job budget, and changed-only pushes map workflow changes to their owning Python checks (#1462).
+
+### Upgrade notes
+- Formula-only supervisor hotfix: BrainLayer moves to 1.5.70; the BrainBar app and cask stay at 1.5.69.
+
 ## [1.5.69] - 2026-10-22
 
 ### Fixed

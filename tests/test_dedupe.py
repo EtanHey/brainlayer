@@ -201,7 +201,7 @@ def test_identical_content_with_different_content_types_stays_separate(tmp_path)
     store.close()
 
 
-def test_simhash_merge_refreshes_canonical_vector(tmp_path):
+def test_simhash_merge_defers_canonical_vector_until_reembedded(tmp_path):
     db_path = tmp_path / "brainlayer.db"
     store = VectorStore(db_path)
     first_words = [f"token{i}" for i in range(100)]
@@ -220,7 +220,22 @@ def test_simhash_merge_refreshes_canonical_vector(tmp_path):
 
     rows = store.conn.cursor().execute("SELECT chunk_id, embedding FROM chunk_vectors").fetchall()
 
-    assert [(row[0], row[1]) for row in rows] == [("near-a", serialize_f32([0.4] * 1024))]
+    assert rows == [], "incoming/previous vectors do not describe canonical merged content"
+    assert store.conn.execute("SELECT count(*) FROM chunk_vectors_binary").fetchone() == (0,)
+    from brainlayer.store import embed_hot_chunk
+
+    encoded = []
+
+    def encode_canonical(content):
+        encoded.append(content)
+        return [0.9] * 1024
+
+    assert embed_hot_chunk(store, encode_canonical, "near-a")
+    assert encoded == [store.get_chunk("near-a")["content"]]
+    assert list(store.conn.execute("SELECT chunk_id, embedding FROM chunk_vectors")) == [
+        ("near-a", serialize_f32([0.9] * 1024))
+    ]
+    assert store.conn.execute("SELECT count(*) FROM chunk_vectors_binary").fetchone() == (1,)
     store.close()
 
 
