@@ -886,6 +886,7 @@ final class BrainDatabase: @unchecked Sendable {
 #if DEBUG
     var observeStorePolicyForTesting: ((Int32, Int) -> Void)?
     var onStoreTransactionForTesting: (() -> Void)?
+    var onBackupStagingCreatedForTesting: (() -> Void)?
 #endif
     private static let pendingStoreFileLock = NSLock()
     private(set) var isOpen = false
@@ -1232,27 +1233,74 @@ final class BrainDatabase: @unchecked Sendable {
             throw DBError.exec(SQLITE_CANTOPEN, "backup completion marker already exists: \(completionMarkerURL.path)")
         }
 
+        // VACUUM creates its file inside this writer's exclusive private directory. Acquire
+        // and pin that inode before publishing any caller-visible raw or completion receipt.
+        let staging = targetURL.deletingLastPathComponent()
+            .appendingPathComponent(".brainbar-vacuum-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]
+        )
+        let stagedRaw = staging.appendingPathComponent("raw.db")
+        var rawFD: Int32 = -1
+        var owned = stat()
+        let stagedReceipt = staging.appendingPathComponent("receipt.json")
+        var receiptIdentity: FileIdentity?
+        defer {
+            var current = stat()
+            if rawFD >= 0, lstat(stagedRaw.path, &current) == 0,
+               current.st_dev == owned.st_dev, current.st_ino == owned.st_ino {
+                unlink(stagedRaw.path)
+            }
+            if let receiptIdentity, FileIdentity(path: stagedReceipt.path) == receiptIdentity {
+                unlink(stagedReceipt.path)
+            }
+            // Never recursively remove unexpected entries, including a peer replacement.
+            if rmdir(staging.path) != 0 {
+                NSLog("[BrainBar] Retaining unconfirmed private backup files at %@", staging.path)
+            }
+            if rawFD >= 0 { Darwin.close(rawFD) }
+        }
+#if DEBUG
+        onBackupStagingCreatedForTesting?()
+#endif
+
         var stmt: OpaquePointer?
         let prepareRC = sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &stmt, nil)
         guard prepareRC == SQLITE_OK, let stmt else { throw DBError.prepare(prepareRC) }
         defer { sqlite3_finalize(stmt) }
 
-        bindText(targetURL.path, to: stmt, index: 1)
+        bindText(stagedRaw.path, to: stmt, index: 1)
         let stepRC = sqlite3_step(stmt)
-        guard stepRC == SQLITE_DONE else { throw DBError.step(stepRC) }
+        guard stepRC == SQLITE_DONE else {
+            throw DBError.exec(stepRC, String(cString: sqlite3_errmsg(db)))
+        }
 
-        let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
-        try syncBackupTarget(targetURL)
-        try Data("complete\n".utf8).write(to: completionMarkerURL, options: .atomic)
-        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        rawFD = open(stagedRaw.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard rawFD >= 0, fstat(rawFD, &owned) == 0 else {
+            throw DBError.exec(SQLITE_IOERR, "unable to pin private backup target; retained at \(stagedRaw.path)")
+        }
+        var written = stat()
+        var named = stat()
+        guard fstat(rawFD, &written) == 0, written.st_size > 0,
+              lstat(stagedRaw.path, &named) == 0,
+              named.st_dev == owned.st_dev, named.st_ino == owned.st_ino else {
+            throw DBError.exec(SQLITE_IOERR, "private backup target identity changed")
+        }
+        try syncBackupTarget(targetURL, fileDescriptor: rawFD)
+        try FileManager.default.linkItem(at: stagedRaw, to: targetURL)
+        let receipt: [String: Any] = [
+            "schema_version": 1, "target_path": targetURL.path,
+            "target_dev": Int64(owned.st_dev), "target_ino": Int64(owned.st_ino)
+        ]
+        try JSONSerialization.data(withJSONObject: receipt, options: .sortedKeys)
+            .write(to: stagedReceipt, options: .withoutOverwriting)
+        receiptIdentity = FileIdentity(path: stagedReceipt.path)
+        try FileManager.default.linkItem(at: stagedReceipt, to: completionMarkerURL)
+        try syncBackupTarget(targetURL, fileDescriptor: rawFD)
+        return Int64(written.st_size)
     }
 
-    private func syncBackupTarget(_ targetURL: URL) throws {
-        let fileDescriptor = open(targetURL.path, O_RDONLY | O_CLOEXEC)
-        guard fileDescriptor >= 0 else {
-            throw DBError.exec(SQLITE_IOERR, "unable to open backup target for fsync: \(targetURL.path)")
-        }
-        defer { Darwin.close(fileDescriptor) }
+    private func syncBackupTarget(_ targetURL: URL, fileDescriptor: Int32) throws {
         guard fsync(fileDescriptor) == 0 else {
             throw DBError.exec(SQLITE_IOERR, "unable to fsync backup target: \(targetURL.path)")
         }
