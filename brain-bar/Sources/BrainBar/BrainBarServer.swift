@@ -9,6 +9,23 @@
 import BrainBarLifecycle
 import Foundation
 
+#if DEBUG
+enum FixtureShutdownResult: Equatable, Sendable {
+    case finished
+    case timedOut
+}
+
+func drainFixtureQueueForTesting(
+    _ queue: DispatchQueue, deadline: DispatchTime,
+    flags: DispatchWorkItemFlags = [], work: @escaping @Sendable () -> Void = {}
+) -> FixtureShutdownResult {
+    guard DispatchTime.now() < deadline else { return .timedOut }
+    let completion = DispatchGroup()
+    queue.async(group: completion, flags: flags, execute: work)
+    return completion.wait(timeout: deadline) == .success ? .finished : .timedOut
+}
+#endif
+
 final class BrainBarServer: @unchecked Sendable {
     static let requestQueueLabel = "com.brainlayer.brainbar.server"
     static let daemonHeartbeatQueueLabel = "com.brainlayer.brainbar.daemon-heartbeat"
@@ -145,21 +162,21 @@ final class BrainBarServer: @unchecked Sendable {
     var beforeDatabaseOpenForTesting: (@Sendable () -> Void)?
     var onFixtureDrainStartedForTesting: (@Sendable () -> Void)?
 
-    func waitForFixtureWorkForTesting() { fixtureWork.wait() }
-
-    /// Fixture-only join: no SQLite handle or owned path may outlive teardown.
-    func stopAndDrainForTesting() {
-        queue.sync { fixtureStopping = true }
-        backupToolQueue.sync {}
-        queue.sync {
-            router?.finishOwnedWorkForTesting()
-            cleanup()
-        }
-        onFixtureDrainStartedForTesting?()
-        fixtureWork.wait()
-        queue.sync {
-            router?.finishOwnedWorkForTesting()
-            router = nil
+    /// A timeout retains every unfinished DB owner; callers must not remove files.
+    func stopAndDrainForTesting(deadline: DispatchTime = .now() + 5) -> FixtureShutdownResult {
+        guard drainFixtureQueueForTesting(queue, deadline: deadline, work: {
+            self.fixtureStopping = true
+            self.stopSources()
+            self.onFixtureDrainStartedForTesting?()
+        }) == .finished else { return .timedOut }
+        guard drainFixtureQueueForTesting(backupToolQueue, deadline: deadline) == .finished,
+              (router?.finishOwnedWorkForTesting(deadline: deadline) ?? .finished) == .finished,
+              fixtureWork.wait(timeout: deadline) == .success else { return .timedOut }
+        // Only drained owners can reach handle closure. A timed-out caller still
+        // retains its files if this finalizer finishes after the caller returns.
+        return drainFixtureQueueForTesting(queue, deadline: deadline) {
+            self.finishCleanup()
+            self.router = nil
         }
     }
 #endif
@@ -1160,6 +1177,14 @@ final class BrainBarServer: @unchecked Sendable {
     }
 
     private func cleanup() {
+        stopSources()
+        // The backup runs off the request queue so protocol traffic stays live.
+        // Drain it before closing the shared SQLite connection during shutdown.
+        backupToolQueue.sync {}
+        finishCleanup()
+    }
+
+    private func stopSources() {
         let persistent = persistentConnectionCount
         transportHealthTimer?.cancel()
         transportHealthTimer = nil
@@ -1185,9 +1210,9 @@ final class BrainBarServer: @unchecked Sendable {
         transportHealth = nil
         if listenFD >= 0 { listenFD = -1 }
         unlink(socketPath)
-        // The backup runs off the request queue so protocol traffic stays live.
-        // Drain it before closing the shared SQLite connection during shutdown.
-        backupToolQueue.sync {}
+    }
+
+    private func finishCleanup() {
         flushDeferredSubscriberDisconnects()
         let writeDatabase = database
         if providedDatabase == nil {

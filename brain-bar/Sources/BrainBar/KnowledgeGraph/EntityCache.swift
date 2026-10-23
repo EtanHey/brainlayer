@@ -92,9 +92,13 @@ final class EntityCache: @unchecked Sendable {
     }
 
 #if DEBUG
-    func stopAndDrainForTesting() {
+    func enqueueWorkForTesting(_ work: @escaping @Sendable () -> Void) {
+        queue.async(execute: work)
+    }
+
+    func stopAndDrainForTesting(deadline: DispatchTime) -> FixtureShutdownResult {
         stopRefreshTimer()
-        queue.sync(flags: .barrier) {}
+        return drainFixtureQueueForTesting(queue, deadline: deadline, flags: .barrier)
     }
 #endif
 

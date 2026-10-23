@@ -49,10 +49,14 @@ private final class FixtureCleanupAttempt: @unchecked Sendable {
     private let lock = NSLock()
     private var capturedResult: BrainBarFixtureCleanupResult?
 
-    init(server: BrainBarServer, database: BrainDatabase, path: String, deadline: DispatchTime) {
+    convenience init(server: BrainBarServer, database: BrainDatabase, path: String, deadline: DispatchTime) {
+        self.init { finishBrainBarSocketFixture(server, database: database, path: path, deadline: deadline) }
+    }
+
+    init(_ work: @escaping @Sendable () -> BrainBarFixtureCleanupResult) {
         done.enter()
         DispatchQueue.global().async {
-            let result = finishBrainBarSocketFixture(server, database: database, path: path, deadline: deadline)
+            let result = work()
             self.lock.lock()
             self.capturedResult = result
             self.lock.unlock()
@@ -250,6 +254,44 @@ final class SocketIntegrationTests: XCTestCase {
 
     private func existingFixtureDatabasePaths() -> [String] {
         ["", "-wal", "-shm"].map { tempDBPath + $0 }.filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    func testFixtureShutdownDeadlineBoundsReplayAndCacheDrains() throws {
+        let replay = DispatchQueue(label: "fixture-held-replay")
+        let router = MCPRouter(pendingStoreDrainQueue: replay)
+        try assertBoundedFixtureDrain(enqueue: { replay.async(execute: $0) },
+                                    finish: { router.finishOwnedWorkForTesting(deadline: $0) })
+        try assertBoundedFixtureDrain(enqueue: { router.entityCache.enqueueWorkForTesting($0) },
+                                    finish: { router.entityCache.stopAndDrainForTesting(deadline: $0) })
+    }
+
+    private func assertBoundedFixtureDrain(
+        enqueue: (@escaping @Sendable () -> Void) -> Void,
+        finish: @escaping @Sendable (DispatchTime) -> FixtureShutdownResult
+    ) throws {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let heldWork = DispatchGroup()
+        heldWork.enter()
+        enqueue { entered.signal(); release.wait(); heldWork.leave() }
+        var attempt: FixtureCleanupAttempt?
+        defer {
+            release.signal()
+            XCTAssertEqual(heldWork.wait(timeout: .now() + 5), .success)
+            if let attempt { XCTAssertTrue(attempt.wait(until: .now() + 5)) }
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 5), .success)
+        attempt = FixtureCleanupAttempt { finish(.now() + 0.2) }
+        let cleanup = try XCTUnwrap(attempt)
+        XCTAssertTrue(cleanup.wait(until: .now() + 2))
+        XCTAssertEqual(cleanup.result, .timedOut)
+        release.signal()
+        XCTAssertEqual(heldWork.wait(timeout: .now() + 5), .success)
+        XCTAssertTrue(cleanup.wait(until: .now() + 5))
+        let retry = FixtureCleanupAttempt { finish(.now() + 3) }
+        XCTAssertTrue(retry.wait(until: .now() + 5))
+        XCTAssertEqual(retry.result, .finished)
+        XCTAssertEqual(finish(.now()), .timedOut, "An expired absolute budget cannot restart at the next stage")
     }
 
     private func finishReleasedFixture() throws {

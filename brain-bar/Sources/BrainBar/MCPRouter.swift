@@ -281,10 +281,12 @@ final class MCPRouter: @unchecked Sendable {
 #if DEBUG
     var receiptPersistenceEnabledForTesting: Bool { receiptStore.isPersistent }
 
-    func finishOwnedWorkForTesting() {
+    func finishOwnedWorkForTesting(deadline: DispatchTime) -> FixtureShutdownResult {
         let scheduler = pendingStoreDrainScheduler
-        scheduler.queue.sync { scheduler.stoppedForTesting = true }
-        entityCache.stopAndDrainForTesting()
+        guard drainFixtureQueueForTesting(scheduler.queue, deadline: deadline, work: {
+            scheduler.stoppedForTesting = true
+        }) == .finished else { return .timedOut }
+        return entityCache.stopAndDrainForTesting(deadline: deadline)
     }
 
     // Configure before releasing the injected drain queue in a synthetic test.

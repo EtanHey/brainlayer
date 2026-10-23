@@ -2,10 +2,7 @@ import Foundation
 import XCTest
 @testable import BrainBar
 
-enum BrainBarFixtureCleanupResult: Equatable, Sendable {
-    case finished
-    case timedOut
-}
+typealias BrainBarFixtureCleanupResult = FixtureShutdownResult
 
 @discardableResult
 func finishBrainBarSocketFixture(
@@ -14,9 +11,7 @@ func finishBrainBarSocketFixture(
     path: String,
     deadline: DispatchTime = .now() + 5
 ) -> BrainBarFixtureCleanupResult {
-    // Red-stage baseline: preserve the legacy blocking call until an admitted
-    // regression run. The deadline must reach the server before this can pass.
-    server.stopAndDrainForTesting()
+    guard server.stopAndDrainForTesting(deadline: deadline) == .finished else { return .timedOut }
     database.close()
     removeBrainBarTestDatabase(path)
     return .finished
