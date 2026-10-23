@@ -4,12 +4,77 @@ import importlib
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
+
+import apsw
 
 from brainlayer.drain import burn_drain_once, drain_once
 from brainlayer.queue_io import enqueue_store
 from brainlayer.vector_store import VectorStore
+
+
+def test_lock_wait_and_lock_held_are_separate(tmp_path, monkeypatch):
+    from brainlayer.writer_telemetry import writer_span
+
+    log_path = _configure(monkeypatch, tmp_path)
+    db_path = tmp_path / "timing.db"
+    owner = apsw.Connection(str(db_path))
+    owner.execute("CREATE TABLE sample(value)")
+    contender = apsw.Connection(str(db_path))
+    owner.execute("BEGIN IMMEDIATE")
+    waiting, acquired, release, finish = (threading.Event() for _ in range(4))
+    errors = []
+    boundaries = {}
+
+    def writer():
+        try:
+            conn = contender
+
+            def busy(_attempt):
+                waiting.set()
+                return release.wait(3)
+
+            conn.set_busy_handler(busy)
+            with writer_span(
+                conn, db_path=db_path, producer="drain", lane="realtime", operation="barrier", sample_fts=False
+            ):
+                conn.execute("BEGIN IMMEDIATE")
+                acquired.set()
+                assert finish.wait(3)
+                conn.execute("INSERT INTO sample VALUES (1)")
+                conn.execute("COMMIT")
+                boundaries["committed"] = time.monotonic()
+            conn.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=writer)
+    worker.start()
+    try:
+        assert waiting.wait(3)
+        assert not acquired.is_set()
+        boundaries["wait_observed"] = time.monotonic()
+        # A causal gate, not an assumption that two racing connections overlapped.
+        time.sleep(0.05)
+        owner.execute("ROLLBACK")
+        release.set()
+        assert acquired.wait(3)
+        time.sleep(0.05)
+        finish.set()
+    finally:
+        release.set()
+        finish.set()
+        worker.join(5)
+        owner.close()
+    assert not worker.is_alive()
+    assert not errors
+    event = _finished(log_path, "barrier")[0]
+    assert event["lock_wait_ms"] >= 50
+    assert event["lock_held_ms"] >= 50
+    assert event["lock_held_ms"] < (boundaries["committed"] - boundaries["wait_observed"]) * 1000 - 40
+    assert event["lock_acquired_at"] is not None
 
 
 def _configure(monkeypatch, tmp_path: Path) -> Path:
@@ -114,3 +179,32 @@ def test_hotlane_vector_write_emits_bounded_transaction_span(tmp_path, monkeypat
     assert events[0]["lane"] == "hotlane"
     assert events[0]["rows_planned"] == 1
     assert events[0]["outcome"] == "commit"
+
+
+def test_failed_begin_never_claims_lock_held(tmp_path, monkeypatch):
+    import pytest
+
+    from brainlayer.writer_telemetry import writer_span
+
+    log_path = _configure(monkeypatch, tmp_path)
+    db_path = tmp_path / "failed-begin.db"
+    owner = apsw.Connection(str(db_path))
+    try:
+        owner.execute("CREATE TABLE sample(value)")
+        conn = apsw.Connection(str(db_path))
+        owner.execute("BEGIN IMMEDIATE")
+        with (
+            pytest.raises(apsw.BusyError),
+            writer_span(
+                conn, db_path=db_path, producer="drain", lane="realtime", operation="failed_begin", sample_fts=False
+            ),
+        ):
+            conn.execute("BEGIN IMMEDIATE")
+        conn.close()
+        owner.execute("ROLLBACK")
+    finally:
+        owner.close()
+    event = _finished(log_path, "failed_begin")[0]
+    assert event["lock_held_ms"] is None
+    assert event["lock_acquired_at"] is None
+    assert event["lock_wait_ms"] >= 0

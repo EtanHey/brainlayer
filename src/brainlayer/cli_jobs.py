@@ -16,6 +16,7 @@ def register(app, jobs_app):
         scheduled_date: str | None = typer.Option(None, "--date"),
         state_dir: Path | None = typer.Option(None, "--state-dir"),
         logs_dir: Path = typer.Option(Path.home() / "Library/Logs/brainlayer", "--logs-dir"),
+        recover_transcripts: bool = typer.Option(False, "--recover-transcripts"),
     ):
         """Run BrainLayer Maintenance for one scheduled date."""
         from .maintenance_calendar import calendar_steps, run_calendar
@@ -29,7 +30,15 @@ def register(app, jobs_app):
         if directory.resolve() == supervisor_socket_path().parent.resolve():
             raise typer.BadParameter("calendar custody directory must differ from resident supervisor")
         plan = calendar_steps(sys.executable, str(Path(sys.executable).with_name("brainlayer")), lib_dir, date)
-        code = asyncio.run(run_calendar(plan, directory, logs_dir, install_signals=True))
+        code = asyncio.run(
+            run_calendar(
+                plan,
+                directory,
+                logs_dir,
+                install_signals=True,
+                transcript_recovery=recover_transcripts,
+            )
+        )
         raise typer.Exit(code)
 
     @app.command("daemon")

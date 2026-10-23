@@ -772,6 +772,7 @@ final class BrainDatabase: @unchecked Sendable {
         let project: String?
         let queueID: String?
         let queuedAt: String?
+        let telemetry: DeferredStoreTelemetry.Origin?
         let createdAt: String?
         let chunkID: String?
         let conversationID: String?
@@ -788,6 +789,7 @@ final class BrainDatabase: @unchecked Sendable {
             case project
             case queueID = "queue_id"
             case queuedAt = "queued_at"
+            case telemetry
             case createdAt = "created_at"
             case chunkID = "chunk_id"
             case conversationID = "conversation_id"
@@ -803,6 +805,7 @@ final class BrainDatabase: @unchecked Sendable {
             project: String? = nil,
             queueID: String? = nil,
             queuedAt: String? = nil,
+            telemetry: DeferredStoreTelemetry.Origin? = nil,
             createdAt: String? = nil,
             chunkID: String? = nil,
             conversationID: String? = nil,
@@ -816,6 +819,7 @@ final class BrainDatabase: @unchecked Sendable {
             self.project = project
             self.queueID = queueID
             self.queuedAt = queuedAt
+            self.telemetry = telemetry
             self.createdAt = createdAt
             self.chunkID = chunkID
             self.conversationID = conversationID
@@ -832,6 +836,7 @@ final class BrainDatabase: @unchecked Sendable {
             project = try container.decodeIfPresent(String.self, forKey: .project)
             queueID = try container.decodeIfPresent(String.self, forKey: .queueID)
             queuedAt = try container.decodeIfPresent(String.self, forKey: .queuedAt)
+            telemetry = try container.decodeIfPresent(DeferredStoreTelemetry.Origin.self, forKey: .telemetry)
             createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
             chunkID = try container.decodeIfPresent(String.self, forKey: .chunkID)
             conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
@@ -854,6 +859,7 @@ final class BrainDatabase: @unchecked Sendable {
                 project: project,
                 queueID: queueID,
                 queuedAt: queuedAt,
+                telemetry: telemetry,
                 createdAt: createdAt,
                 chunkID: chunkID,
                 conversationID: conversationID,
@@ -873,6 +879,9 @@ final class BrainDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let path: String
+    /// dev/inode of the file this connection opened, captured right after open. A later path
+    /// check compares against THIS, never against whatever the pathname names at request time.
+    private(set) var openedFileIdentity: FileIdentity?
     private let openConfiguration: OpenConfiguration
     private let transactionLock = NSRecursiveLock()
     private var explicitTransactionIsOpen = false
@@ -901,6 +910,7 @@ final class BrainDatabase: @unchecked Sendable {
     private func openAndConfigure() {
         do {
             db = try openConnection(path: path)
+            openedFileIdentity = FileIdentity(path: path)
             NSLog("[BrainBar] Connection opened, configuring...")
             try configureConnection(db)
             NSLog("[BrainBar] Connection configured, checking schema...")
@@ -931,6 +941,7 @@ final class BrainDatabase: @unchecked Sendable {
                 sqlite3_close(db)
                 self.db = nil
             }
+            openedFileIdentity = nil
             isOpen = false
             lastOpenError = error
             NSLog("[BrainBar] Failed to open/configure database at %@: %@", path, String(describing: error))
@@ -1167,11 +1178,45 @@ final class BrainDatabase: @unchecked Sendable {
             sqlite3_close(db)
             self.db = nil
         }
+        openedFileIdentity = nil
         isOpen = false
     }
 
-    func vacuumInto(targetPath: String) throws -> Int64 {
+    struct FileIdentity: Equatable {
+        let device: Int64
+        let inode: Int64
+
+        init?(path: String) {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            device = Int64(info.st_dev)
+            inode = Int64(info.st_ino)
+        }
+    }
+
+    var databasePath: String { path }
+    static let backupIdentityMismatchPrefix = "BrainBar database identity mismatch"
+
+    /// Why `expectedPath` is not the database this connection has open, or nil when it is.
+    /// The open file must still be at the served path (not moved, replaced or unlinked), and
+    /// `expectedPath` must name that same dev/inode. A missing path never matches.
+    func openDatabaseIdentityMismatch(expectedPath: String) -> String? {
+        guard let opened = openedFileIdentity else { return "the open database identity is unknown" }
+        guard FileIdentity(path: path) == opened else {
+            return "the open database was moved, replaced or unlinked from \(path) since it was opened"
+        }
+        let candidate = expectedPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty, FileIdentity(path: candidate) == opened else {
+            return "expected_db_path \(expectedPath) is not the open database"
+        }
+        return nil
+    }
+
+    func vacuumInto(targetPath: String, expectedDatabasePath: String? = nil) throws -> Int64 {
         guard let db else { throw DBError.notOpen }
+        if let expectedDatabasePath, let mismatch = openDatabaseIdentityMismatch(expectedPath: expectedDatabasePath) {
+            throw DBError.exec(SQLITE_MISUSE, "\(Self.backupIdentityMismatchPrefix): \(mismatch)")
+        }
         let trimmedTarget = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTarget.isEmpty else {
             throw DBError.exec(SQLITE_MISUSE, "target_path is required")
@@ -1734,7 +1779,8 @@ final class BrainDatabase: @unchecked Sendable {
         project: String? = nil,
         createdAt: String? = nil,
         chunkID: String? = nil,
-        conversationID: String? = nil
+        conversationID: String? = nil,
+        reason: String = "DB_BUSY"
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
         try Self.queuePendingStore(
             dbPath: path,
@@ -1746,6 +1792,7 @@ final class BrainDatabase: @unchecked Sendable {
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID,
+            reason: reason,
             sync: pendingStoreSyncForTesting,
             directorySync: pendingStoreDirectorySyncForTesting
         )
@@ -1770,6 +1817,7 @@ final class BrainDatabase: @unchecked Sendable {
         createdAt: String? = nil,
         chunkID: String? = nil,
         conversationID: String? = nil,
+        reason: String = "DB_BUSY",
         sync: ((Int32) throws -> Void)? = nil,
         directorySync: ((URL) throws -> Void)? = nil
     ) throws -> (queueID: String, queuedAt: String, chunkID: String) {
@@ -1791,6 +1839,7 @@ final class BrainDatabase: @unchecked Sendable {
             project: project,
             queueID: queueID,
             queuedAt: queuedAt,
+            telemetry: DeferredStoreTelemetry.Origin(epoch: Date().timeIntervalSince1970, reason: reason),
             createdAt: createdAt,
             chunkID: chunkID,
             conversationID: conversationID
@@ -1802,6 +1851,8 @@ final class BrainDatabase: @unchecked Sendable {
         ) {
             return existing
         }
+        DeferredStoreTelemetry.record("queued", dbPath: dbPath, queueID: queueID, chunkID: chunkID,
+                                     origin: item.telemetry, queuedAt: queuedAt)
         return (queueID: queueID, queuedAt: queuedAt, chunkID: chunkID)
     }
 
@@ -1856,6 +1907,8 @@ final class BrainDatabase: @unchecked Sendable {
                             continue
                         }
                     } catch {
+                        DeferredStoreTelemetry.record("replay_failed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
+                                                     origin: item.telemetry, queuedAt: item.queuedAt)
                         NSLog("[BrainBar] Failed pending store dedupe lookup for %@: %@", queueID, String(describing: error))
                         remaining.append(replayLine)
                         continue
@@ -1877,6 +1930,8 @@ final class BrainDatabase: @unchecked Sendable {
                             busyTimeoutMillis: busyTimeoutMillis,
                             metadata: item.scrubMetadata
                         )
+                        DeferredStoreTelemetry.record("committed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
+                                                     origin: item.telemetry, queuedAt: item.queuedAt)
                         flushed.append(
                             FlushedPendingStore(
                                 storedChunk: stored,
@@ -1886,6 +1941,8 @@ final class BrainDatabase: @unchecked Sendable {
                             )
                         )
                     } catch {
+                        DeferredStoreTelemetry.record("replay_failed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
+                                                     origin: item.telemetry, queuedAt: item.queuedAt)
                         NSLog("[BrainBar] Failed to flush pending store item: %@", String(describing: error))
                         remaining.append(replayLine)
                     }
@@ -4851,6 +4908,7 @@ final class BrainDatabase: @unchecked Sendable {
             project: item.project,
             queueID: queueID,
             queuedAt: item.queuedAt,
+            telemetry: item.telemetry,
             createdAt: item.createdAt ?? item.queuedAt,
             chunkID: chunkID,
             conversationID: item.conversationID,

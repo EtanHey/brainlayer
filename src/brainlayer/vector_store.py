@@ -2645,13 +2645,10 @@ class VectorStore(SearchMixin, KGMixin, SessionMixin):
                                 hamming_distance_value=duplicate.hamming_distance,
                                 archive_existing_duplicate=duplicate_row_exists is not None,
                             )
-                            if content_changed and embedding is None:
+                            if content_changed:
+                                # Incoming/previous vectors cannot describe the merged body.
+                                # Leave it pending for canonical-content embedding by hotlane.
                                 self._delete_chunk_vector(cursor, duplicate.canonical_chunk_id)
-                            elif content_changed:
-                                merged_embedding = self._blend_chunk_vector(
-                                    cursor, duplicate.canonical_chunk_id, embedding
-                                )
-                                self._upsert_chunk_vector(cursor, duplicate.canonical_chunk_id, merged_embedding)
                             elif embedding is not None and not self._chunk_vector_exists(
                                 cursor, duplicate.canonical_chunk_id
                             ):
