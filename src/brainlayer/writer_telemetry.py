@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -114,19 +115,44 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     The caller holds the sink's cross-process lock; no raw SQL/identities survive.
     """
     kind = event.get("event")
-    if kind not in {"txn_finished", "ingest_committed", "ingest_finished"} or not event.get("finished_at"):
+    finished_at = event.get("finished_at")
+    if (
+        not isinstance(kind, str)
+        or kind not in {"txn_finished", "ingest_committed", "ingest_finished"}
+        or not isinstance(finished_at, str)
+    ):
         return
-    day = datetime.fromisoformat(event["finished_at"]).astimezone(UTC).date()
+    try:
+        day = datetime.fromisoformat(finished_at).astimezone(UTC).date()
+    except (ValueError, OverflowError):
+        return
     prefix = f"{path.stem}-summary-"
     target = path.with_name(f"{prefix}{day}.json")
-    summary = json.loads(target.read_text()) if target.exists() else {"schema_version": 1, "groups": {}}
+    try:
+        stored = target.read_text()
+    except (FileNotFoundError, UnicodeError):
+        summary = None
+    else:
+        try:
+            summary = json.loads(stored)
+        except json.JSONDecodeError:
+            summary = None
+        except ValueError:
+            return  # Numeric decoding failed; the schema and safe replacement are unknown.
+    if isinstance(summary, dict) and summary.get("schema_version", 1) != 1:
+        return
+    if not isinstance(summary, dict) or not isinstance(summary.get("groups"), dict):
+        summary = {"schema_version": 1, "groups": {}}
+    summary.setdefault("schema_version", 1)
     groups = summary["groups"]
     key = "|".join(str(event.get(field) or "unknown")[:64] for field in ("producer", "lane", "outcome"))
     if kind != "txn_finished":
         key += f"|{kind}"
     if key not in groups and len(groups) >= 63:
         key = "overflow"
-    group = groups.setdefault(key, {"count": 0})
+    group = groups.get(key)
+    if not isinstance(group, dict) or type(group.get("count")) is not int or group["count"] < 0:
+        group = groups[key] = {"count": 0}
     group["count"] += 1
     for field in (
         "duration_ms",
@@ -139,30 +165,59 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
         *(f"{stage}_ms" for stage in _INGEST_STAGES),
     ):
         value = event.get(field)
-        if not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
+        if type(value) not in (int, float) or not 0 <= value <= sys.float_info.max:
             continue
-        metric = group.setdefault(field, {"count": 0, "sum": 0, "max": 0, "histogram": {}})
+        metric = group.get(field)
+        if not (
+            isinstance(metric, dict)
+            and type(metric.get("count")) is int
+            and metric["count"] >= 0
+            and all(
+                type(metric.get(k)) in (int, float) and 0 <= metric[k] <= sys.float_info.max for k in ("sum", "max")
+            )
+            and isinstance(metric.get("histogram"), dict)
+            and all(isinstance(k, str) and type(v) is int and v >= 0 for k, v in metric["histogram"].items())
+        ):
+            metric = group[field] = {"count": 0, "sum": 0, "max": 0, "histogram": {}}
+        prospective_sum = metric["sum"] + value
+        if not 0 <= prospective_sum <= sys.float_info.max:
+            continue
         metric["count"] += 1
-        metric["sum"] += value
+        metric["sum"] = prospective_sum
         metric["max"] = max(metric["max"], value)
         bucket = str(min(31, math.ceil(math.log2(max(1, value)))))
         metric["histogram"][bucket] = metric["histogram"].get(bucket, 0) + 1
+    watermarks = group.get("watermarks", {})
+    if not isinstance(watermarks, dict):
+        watermarks = {}
     for field in ("committed_at", "oldest_ingest_observed_at", "oldest_queued_at"):
+        previous = watermarks.get(field)
+        if field in watermarks and (
+            type(previous) not in (int, float) or not -sys.float_info.max <= previous <= sys.float_info.max
+        ):
+            del watermarks[field]
         value = event.get(field)
-        if isinstance(value, (int, float)) and math.isfinite(value):
-            watermarks = group.setdefault("watermarks", {})
+        if type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max:
             watermarks[field] = (max if field == "committed_at" else min)(watermarks.get(field, value), value)
+    if watermarks or "watermarks" in group:
+        group["watermarks"] = watermarks
     if not _atomic_write_json(target, summary):
         raise OSError("writer summary write failed")
-    files = sorted(path.parent.glob(f"{prefix}????-??-??.json"))
-    newest = datetime.fromisoformat(files[-1].stem.removeprefix(prefix)).date()
-    for file in files:
-        if datetime.fromisoformat(file.stem.removeprefix(prefix)).date() < newest - timedelta(days=7):
-            file.unlink()
+    dated = {}
+    for file in path.parent.glob(f"{prefix}????-??-??.json"):
+        try:
+            dated[file] = datetime.fromisoformat(file.stem.removeprefix(prefix)).date()
+        except ValueError:
+            continue
+    if dated:
+        cutoff = max(dated.values()) - timedelta(days=7)
+        for file, file_day in dated.items():
+            if file_day < cutoff:
+                file.unlink(missing_ok=True)
 
 
 def append_event(event: dict[str, Any]) -> bool:
-    """Append one JSON event; drop on sink-lock contention or failure."""
+    """Report raw append success; derived summary I/O is best-effort."""
     if not telemetry_enabled():
         return False
     try:
@@ -183,7 +238,10 @@ def append_event(event: dict[str, Any]) -> bool:
                     _rotate(path, backups)
                 with path.open("ab") as handle:
                     handle.write(encoded)
-                _rollup(path, payload)
+                try:
+                    _rollup(path, payload)
+                except Exception:
+                    pass  # Derived summary failure cannot negate a successful raw append.
         finally:
             _SINK_LOCK.release()
         return True

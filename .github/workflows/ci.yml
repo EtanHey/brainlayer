@@ -68,8 +68,38 @@ jobs:
           python3 Tests/BrainBarTests/Scripts/check_release_transport_clock.py
 
       - name: Test BrainBar
+        id: brainbar-tests
         if: needs.changes.outputs.brain_bar == 'true'
-        run: cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py
+        env:
+          SWIFT_BACKTRACE: enable=yes,interactive=no
+        run: |
+          python3 -c 'import os,time; from pathlib import Path; Path(os.environ["RUNNER_TEMP"], "brainbar-test-start").write_text(str(time.time()))'
+          cd brain-bar && python3 Tests/BrainBarTests/Scripts/run_swift_tests.py
+
+      - name: Preserve native test crash reports
+        if: failure() && steps.brainbar-tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          started = float((temporary / "brainbar-test-start").read_text())
+          destination = temporary / "brainbar-native-crashes"
+          source = Path.home() / "Library/Logs/DiagnosticReports"
+          for pattern in ("xctest*.ips", "xctest*.crash", "BrainBarPackageTests*.ips", "BrainBarPackageTests*.crash"):
+              for report in source.glob(pattern):
+                  if report.is_file() and not report.is_symlink() and report.stat().st_mtime >= started:
+                      destination.mkdir(exist_ok=True)
+                      shutil.copy2(report, destination / report.name)
+          PY
+
+      - name: Upload native test crash reports
+        if: failure() && steps.brainbar-tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainbar-native-crashes-${{ github.sha }}
+          path: ${{ runner.temp }}/brainbar-native-crashes
+          if-no-files-found: ignore
 
       - name: Skip BrainBar Swift build
         if: needs.changes.outputs.brain_bar != 'true'

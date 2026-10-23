@@ -2026,8 +2026,10 @@ final class BrainDatabase: @unchecked Sendable {
                             busyTimeoutMillis: busyTimeoutMillis,
                             metadata: item.scrubMetadata
                         )
-                        DeferredStoreTelemetry.record("committed", dbPath: self.path, queueID: queueID, chunkID: chunkID,
-                                                     origin: item.telemetry, queuedAt: item.queuedAt)
+                        if stored.outcome.storedNew {
+                            DeferredStoreTelemetry.record("committed", dbPath: self.path, queueID: queueID,
+                                                         chunkID: stored.chunkID, origin: item.telemetry, queuedAt: item.queuedAt)
+                        }
                         flushed.append(
                             FlushedPendingStore(
                                 storedChunk: stored,
