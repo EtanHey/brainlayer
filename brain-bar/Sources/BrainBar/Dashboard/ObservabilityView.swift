@@ -583,6 +583,9 @@ enum ObservabilityPresentation {
         let staleTranscript = !idle && backups.thresholdHours != nil &&
             backups.lastVerifiedUpload.map { $0.verified && !backups.isRecent($0.at, now: now) } == true
         if staleTranscript { upload = .init(text: upload.text, tone: .red) }
+        if backups.lastVerifiedUpload.map({ $0.at > now }) == true {
+            upload = .init(text: "Last transcript upload has an invalid timestamp", tone: .red)
+        }
 
         var snapshot = backups.dbSnapshot.map { value in
             ObservabilityStatusLine(

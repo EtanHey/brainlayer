@@ -130,16 +130,16 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         XCTAssertFalse(lines[0].text.contains("Oct 21"))
     }
 
-    private func datedBackups(_ date: Date, noOp: Bool = false) -> ObservabilityDocument.Backups {
+    private func datedBackups(_ date: Date, noOp: Bool = false, snapshotDate: Date? = nil, clock: Date? = nil) -> ObservabilityDocument.Backups {
         let base = backups()
         var result = ObservabilityDocument.Backups(
             state: base.state, reason: base.reason, inputs: [], freshness: base.freshness,
             thresholdHours: base.thresholdHours, retentionInvariant: base.retentionInvariant,
             survivingArchives30D: base.survivingArchives30D, errorType: nil,
             lastVerifiedUpload: .init(at: date, ageHours: 1, archiveId: "fixture-archive", verified: true),
-            dbSnapshot: .init(lastAt: date, destination: "fixture.db.zst", verified: true), launchd: base.launchd)
+            dbSnapshot: .init(lastAt: snapshotDate ?? date, destination: "fixture.db.zst", verified: true), launchd: base.launchd)
         if noOp {
-            result.transcriptAttempt = .init(at: now.addingTimeInterval(-60), status: "no-op", verified: true, uploaded: false)
+            result.transcriptAttempt = .init(at: (clock ?? now).addingTimeInterval(-60), status: "no-op", verified: true, uploaded: false)
         }
         return result
     }
@@ -209,15 +209,33 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
             (datedBackups(now.addingTimeInterval(-366 * 86400)), .valid, true),
             (backups(error: "job_alert:Fixture backup failed"), .valid, true), (backups(), .invalid, true),
         ]
-        for (b, auth, needsAttention) in cases {
-            let document = try replacingBackups(base, with: b)
+        let referenceNow = ISO8601DateFormatter().date(from: "2026-09-14T12:00:00Z")!
+        let future = ISO8601DateFormatter().date(from: "2027-01-01T12:00:00Z")!
+        let noOpCases: [(ObservabilityDocument.Backups, DriveAuthStatus.State, Bool, Date)] = [future, referenceNow, referenceNow.addingTimeInterval(-48 * 3600)].map {
+            (datedBackups($0, noOp: true, snapshotDate: referenceNow.addingTimeInterval(-7200), clock: referenceNow), .valid, $0 > referenceNow, referenceNow)
+        }
+        for (b, auth, needsAttention, now) in cases.map({ ($0.0, $0.1, $0.2, now) }) + noOpCases {
+            let document = try replacingBackups(base, with: b, clock: now)
             let model = BrainBarSettingsViewModel(
                 workspace: BrainBarRecordingWorkspace(),
                 store: BrainLayerConfigStore(configURL: URL(fileURLWithPath: "/fixture/config"),
                                              loadDocumentOverride: { BrainLayerEnvDocument(config: .defaultConfig) }),
                 initialLaunchdStates: Dictionary(uniqueKeysWithValues: BrainLayerLaunchdJob.allCases.map { ($0, .running) }),
-                refreshStatusOnLoad: false, now: { Date(timeIntervalSince1970: 1_790_769_600) },
+                refreshStatusOnLoad: false, now: { now },
                 initialObservabilityResult: .readable(document), observabilityCadence: .known(300))
+            if b.verifiedIdle(now: now) {
+                let health = model.backupsHealth(drive: drive(expiresIn: 5 * 86400))
+                XCTAssertEqual(health.badge, needsAttention ? .attention : .idle)
+                XCTAssertEqual(health.badge.title, needsAttention ? "Needs attention" : "Idle — no new transcripts")
+                XCTAssertEqual(model.backupsHealth(drive: nil).badge, needsAttention ? .attention : .idle)
+                XCTAssertEqual(model.backupChecks?.verdictTone, needsAttention ? .red : .neutral)
+                if needsAttention { XCTAssertEqual(health.reason, model.backupChecks?.attentionSentence) }
+                let collector = BrainBarDashboardFixture.makeCollector()
+                let hero = BrainBarHeroPresentation.derive(
+                    flow: DashboardFlowSummary.derive(daemon: collector.daemon, stats: collector.stats, now: now),
+                    stats: collector.stats, backupTruth: model.backupTruth)
+                XCTAssertEqual(hero.backupFailureReason != nil, needsAttention)
+            }
             let runtime = BrainBarRuntime(launchMode: .menuItemDaemon)
             runtime.jobsModel = model
             runtime.driveAuth.setForPreview(status: .init(state: auth, reason: nil, expiresAt: now.addingTimeInterval(48 * 3600)))
@@ -383,9 +401,9 @@ final class BrainBarBackupStatusConsistencyTests: XCTestCase {
         }
     }
 
-    private func replacingBackups(_ document: ObservabilityDocument, with backups: ObservabilityDocument.Backups) throws -> ObservabilityDocument {
+    private func replacingBackups(_ document: ObservabilityDocument, with backups: ObservabilityDocument.Backups, clock: Date? = nil) throws -> ObservabilityDocument {
         var root = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
-        root["generatedAt"] = now.timeIntervalSinceReferenceDate
+        root["generatedAt"] = (clock ?? now).timeIntervalSinceReferenceDate
         root["backups"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(backups))
         return try JSONDecoder().decode(ObservabilityDocument.self, from: JSONSerialization.data(withJSONObject: root))
     }

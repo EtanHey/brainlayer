@@ -78,7 +78,7 @@ struct BrainBarBackupChecks: Equatable, Sendable {
         }
 
         var checks = [
-            Check(id: "upload", title: "Transcripts in Google Drive", value: upload, tone: invalidUploadTimestamp ? .red : lines.upload.tone),
+            Check(id: "upload", title: "Transcripts in Google Drive", value: upload, tone: lines.upload.tone),
             Check(id: "snapshot", title: "Database copy", value: snapshot, tone: lines.snapshot.tone),
             Check(id: "job", title: "Daily transcript backup", value: job, tone: lines.job.tone),
             Check(id: "freshness", title: lines.freshnessCheckTitle, value: lines.freshnessCheckValue, tone: lines.freshness.tone),
