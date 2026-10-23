@@ -85,6 +85,91 @@ class FakeCredentials:
         self.token = "refreshed"
 
 
+@pytest.mark.parametrize("hours_left", [48, 24, 0.5])
+@pytest.mark.parametrize("prior_consent_alert", [None, "prior consent failure"])
+def test_valid_upcoming_expiry_is_advisory_and_recovers_only_consent_alert(tmp_path, hours_left, prior_consent_alert):
+    from brainlayer import drive_credentials, job_alerts
+
+    token, client, alerts = tmp_path / "token.json", tmp_path / "client.json", tmp_path / "alerts.json"
+    _token(token)
+    _client(client)
+    consented = datetime(2026, 10, 17, 18, 50, tzinfo=UTC)
+    expires = consented + timedelta(days=7)
+    data = json.loads(token.read_text())
+    data["consented_at"] = consented.isoformat()
+    token.write_text(json.dumps(data))
+    before = token.read_bytes()
+    # A real job's failure is preserved even if its text resembles the advisory.
+    failed_job = "Drive access expires at fixture: Reconnect in BrainBar"
+    initial = {"backup-daily": failed_job}
+    if prior_consent_alert is not None:
+        initial["drive-consent"] = prior_consent_alert
+    alerts.write_text(json.dumps(initial))
+
+    def report(key, reason):
+        return job_alerts.report(key, reason, path=alerts, notify=lambda _: None)
+
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        credentials_class=FakeCredentials,
+        request_factory=object,
+        alert_reporter=report,
+        now=expires - timedelta(hours=hours_left),
+    )
+
+    assert status["state"] == "expiring"
+    assert status["expires_at"] == expires.isoformat()
+    assert status["days_left"] == pytest.approx(hours_left / 24)
+    assert job_alerts.active_alerts(alerts) == {"backup-daily": failed_job}
+    assert token.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["expired", "invalid_grant", "network", "refresh"])
+def test_upcoming_expiry_does_not_erase_alerts_when_credentials_fail(tmp_path, failure):
+    from google.auth.exceptions import TransportError
+
+    from brainlayer import drive_credentials, job_alerts
+
+    token, client, alerts = tmp_path / "token.json", tmp_path / "client.json", tmp_path / "alerts.json"
+    _token(token)
+    _client(client)
+    consented = datetime(2026, 10, 17, tzinfo=UTC)
+    data = json.loads(token.read_text())
+    data["consented_at"] = consented.isoformat()
+    token.write_text(json.dumps(data))
+    alerts.write_text(json.dumps({"drive-consent": "prior failure", "backup-daily": "upload failed"}))
+
+    class FailingCredentials(FakeCredentials):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.expired = True
+
+        def refresh(self, request):
+            if failure == "network":
+                raise TransportError("offline")
+            raise RuntimeError("invalid_grant" if failure == "invalid_grant" else "refresh failed")
+
+    def report(key, reason):
+        return job_alerts.report(key, reason, path=alerts, notify=lambda _: None)
+
+    status = drive_credentials.credential_status(
+        token_path=token,
+        client_path=client,
+        credentials_class=FailingCredentials,
+        request_factory=object,
+        alert_reporter=report,
+        now=consented + timedelta(days=7 if failure == "expired" else 6),
+    )
+
+    remaining = job_alerts.active_alerts(alerts)
+    assert status["state"] == ("expiring" if failure == "network" else "invalid")
+    assert remaining["backup-daily"] == "upload failed"
+    assert "drive-consent" in remaining
+    if failure in {"network", "refresh"}:
+        assert remaining["drive-consent"] == "prior failure"
+
+
 def test_invalid_grant_never_deletes_or_overwrites_token(tmp_path):
     from brainlayer import drive_credentials
 
@@ -376,7 +461,10 @@ def test_consent_warning_names_exact_expiry_without_changing_gate(tmp_path, hour
     else:
         drive_credentials.load_credentials(**kwargs)
         assert f"Drive access expires at {expires.isoformat()}" in caplog.text
-    assert alerts and expires.isoformat() in alerts[-1][1]
+    if hours_left <= 0:
+        assert alerts and expires.isoformat() in alerts[-1][1]
+    else:
+        assert alerts == [("drive-consent", None)]
     status = drive_credentials.credential_status(**kwargs)
     assert status["state"] == ("invalid" if hours_left <= 0 else "expiring")
     assert status["expires_at"] == expires.isoformat()
