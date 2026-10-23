@@ -1634,7 +1634,9 @@ class TestFlushPendingStores:
         assert _get_pending_store_path() == active_db.parent / "pending-stores.jsonl"
 
     @pytest.mark.parametrize("interleave_heartbeat", [False, True])
-    def test_flush_rewrites_remaining_legacy_queue_via_atomic_replace(self, tmp_path, monkeypatch, interleave_heartbeat):
+    def test_flush_rewrites_remaining_legacy_queue_via_atomic_replace(
+        self, tmp_path, monkeypatch, interleave_heartbeat
+    ):
         pending_path = tmp_path / "pending-stores.jsonl"
         pending_path.write_text(
             json.dumps({"content": "good", "memory_type": "note"})
