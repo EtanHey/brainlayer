@@ -152,6 +152,43 @@ def with_brainbar_monitor(components, path):
             stdout=path.with_name("brainbar-activation.log"),
             stderr=path.with_name("brainbar-activation.err.log"),
         )
+        source = components.get("observability")
+        if source is not None and source.env.get("BRAINLAYER_ENV_FILE"):
+            logs = source.stderr.parent if source.stderr else Path.home() / "Library/Logs/brainlayer"
+            components["transcript-backup-recovery"] = Component(
+                (
+                    sys.executable,
+                    "-m",
+                    "brainlayer",
+                    "maintenance-calendar",
+                    "--recover-transcripts",
+                    "--state-dir",
+                    str(path.parent / "calendar"),
+                    "--logs-dir",
+                    str(logs),
+                    "--lib-dir",
+                    str(Path(__file__).parent / "launchd"),
+                ),
+                env={
+                    key: value
+                    for key, value in source.env.items()
+                    if key
+                    in {
+                        "BRAINLAYER_ENV_FILE",
+                        "BRAINLAYER_DB",
+                        "BRAINLAYER_JOB_ALERT_PATH",
+                        "BRAINLAYER_JSONL_BACKUP_LOG_PATH",
+                        "BRAINLAYER_FORBID_BRAINBAR_SOCKET",
+                    }
+                }
+                | {"BRAINLAYER_SUPERVISOR_SOCKET": str(path)},
+                interval=3600,
+                run_timeout=7500,
+                exit_timeout=60,
+                stdout=logs / "transcript-backup-recovery.out.log",
+                stderr=logs / "transcript-backup-recovery.err.log",
+                policy=source.policy.copy(),
+            )
     return components
 
 

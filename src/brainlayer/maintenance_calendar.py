@@ -327,6 +327,30 @@ async def step_hold(client, guard, env, step, now_fn=None):
         await asyncio.to_thread(hold.__exit__, None, None, None)
 
 
+def _transcripts_fresh(now):
+    """Only a recent verified upload or verified idle receipt suppresses recovery."""
+    env_file = Path(os.environ.get("BRAINLAYER_ENV_FILE", get_user_env_path()))
+    key = "BRAINLAYER_JSONL_BACKUP_LOG_PATH"
+    configured = configured_brainlayer_env_value(key, env_file)
+    path = Path(configured or os.environ.get(key) or Path.home() / ".local/share/brainlayer/logs/jsonl-backup.log")
+    try:
+        with path.expanduser().open("rb") as stream:
+            end = stream.seek(0, 2)
+            stream.seek(max(0, end - 64 * 1024))
+            row = json.loads(stream.read().splitlines()[-1])
+        if not isinstance(row, dict) or row.get("verified") is not True:
+            return False
+        if row.get("status") != "no-op" and not (row.get("status") == "uploaded" and row.get("uploaded") is True):
+            return False
+        attempted = dt.datetime.fromisoformat(row["attempted_at"])
+        if attempted.tzinfo is None:
+            return False
+        age = (now.astimezone(dt.UTC) - attempted).total_seconds()
+        return 0 <= age < 24 * 60 * 60
+    except (OSError, ValueError, TypeError, KeyError, IndexError):
+        return False
+
+
 async def run_calendar(
     steps,
     directory,
@@ -339,6 +363,7 @@ async def run_calendar(
     now_fn=lambda: dt.datetime.now().astimezone(),
     sleep_fn=asyncio.sleep,
     defer_after=3,
+    transcript_recovery=False,
 ):
     if not all(math.isfinite(v) and v > 0 for v in (guard_timeout, shutdown_timeout)) or defer_after < 1:
         raise ValueError("invalid calendar timing")
@@ -360,7 +385,17 @@ async def run_calendar(
         if not isinstance(state, dict) or not isinstance(state.get("deferrals"), dict):
             raise ValueError("unknown calendar state")
         planned = isinstance(steps, CalendarPlan)
-        if planned:
+        if transcript_recovery:
+            # The freshness decision shares custody with the entire nightly plan. A competing
+            # runner cannot begin an upload between this check and our transcript step.
+            if _transcripts_fresh(now_fn()):
+                record(directory, event="transcript-recovery-skip", reason="fresh-verified-receipt")
+                return 0
+            candidates = steps.candidates if planned else steps
+            steps = tuple(step for step in candidates if step.name == "jsonl-backup")
+            if len(steps) != 1:
+                raise ValueError("transcript recovery requires one transcript step")
+        elif planned:
             marker = dt.date.fromisoformat(state["last_weekly"]) if state.get("last_weekly") else None
             steps = steps.select(marker)
         steps = tuple(steps)
@@ -370,7 +405,12 @@ async def run_calendar(
         logs.mkdir(parents=True, exist_ok=True)
         guard = launch_guard(custody, guard_timeout, 0.2, shutdown_timeout, lease_control=True)
         heartbeat = asyncio.create_task(pulse(guard, heartbeat_stop, min(0.1, guard_timeout / 4)))
-        record(directory, event="runner", guard=guard.pid, scheduled_date=date.isoformat())
+        record(
+            directory,
+            event="transcript-recovery" if transcript_recovery else "runner",
+            guard=guard.pid,
+            scheduled_date=date.isoformat(),
+        )
         if install_signals:
             for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                 handlers[sig] = signal.getsignal(sig)

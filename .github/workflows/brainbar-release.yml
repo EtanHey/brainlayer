@@ -25,6 +25,8 @@ on:
       - "!v1.5.65"
       # Formula-only backup snapshot zstd/budget/receipt fixes: retain BrainBar 1.5.66.
       - "!v1.5.67"
+      # Formula-only supervisor heartbeat hotfix: retain BrainBar 1.5.69.
+      - "!v1.5.70"
 
 permissions:
   contents: write
