@@ -175,7 +175,6 @@ def load_credentials(
                 raise DriveCredentialError(reason)
             if remaining <= dt.timedelta(hours=48):
                 reason = f"Drive access expires at {expires.isoformat()}: Reconnect in BrainBar"
-                _report_consent(alert_reporter, reason)
                 LOGGER.warning(reason)
         if not token_data.get("refresh_token"):
             raise DriveCredentialError("BrainLayer Drive token lacks refresh authorization; run brainlayer backup auth")
@@ -209,6 +208,9 @@ def load_credentials(
                 token_data["access_token"] = creds.token
                 token_data["expiry"] = creds.expiry.isoformat() if creds.expiry else None
                 _atomic_write(token, token_data)
+        # Upcoming expiry is credential_status's advisory, not a failed job.
+        # Clear a prior consent episode only after credentials load successfully.
+        _report_consent(alert_reporter, None)
         return creds
 
 
