@@ -116,7 +116,11 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
     """
     kind = event.get("event")
     finished_at = event.get("finished_at")
-    if kind not in {"txn_finished", "ingest_committed", "ingest_finished"} or not isinstance(finished_at, str):
+    if (
+        not isinstance(kind, str)
+        or kind not in {"txn_finished", "ingest_committed", "ingest_finished"}
+        or not isinstance(finished_at, str)
+    ):
         return
     try:
         day = datetime.fromisoformat(finished_at).astimezone(UTC).date()
@@ -175,16 +179,28 @@ def _rollup(path: Path, event: dict[str, Any]) -> None:
             and all(isinstance(k, str) and type(v) is int and v >= 0 for k, v in metric["histogram"].items())
         ):
             metric = group[field] = {"count": 0, "sum": 0, "max": 0, "histogram": {}}
+        prospective_sum = metric["sum"] + value
+        if not 0 <= prospective_sum <= sys.float_info.max:
+            continue
         metric["count"] += 1
-        metric["sum"] += value
+        metric["sum"] = prospective_sum
         metric["max"] = max(metric["max"], value)
         bucket = str(min(31, math.ceil(math.log2(max(1, value)))))
         metric["histogram"][bucket] = metric["histogram"].get(bucket, 0) + 1
+    watermarks = group.get("watermarks", {})
+    if not isinstance(watermarks, dict):
+        watermarks = {}
     for field in ("committed_at", "oldest_ingest_observed_at", "oldest_queued_at"):
+        previous = watermarks.get(field)
+        if field in watermarks and (
+            type(previous) not in (int, float) or not -sys.float_info.max <= previous <= sys.float_info.max
+        ):
+            del watermarks[field]
         value = event.get(field)
-        if isinstance(value, (int, float)) and math.isfinite(value):
-            watermarks = group.setdefault("watermarks", {})
+        if type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max:
             watermarks[field] = (max if field == "committed_at" else min)(watermarks.get(field, value), value)
+    if watermarks or "watermarks" in group:
+        group["watermarks"] = watermarks
     if not _atomic_write_json(target, summary):
         raise OSError("writer summary write failed")
     dated = {}

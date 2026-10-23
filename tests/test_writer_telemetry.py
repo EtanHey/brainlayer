@@ -26,6 +26,13 @@ def _events(log_path: Path) -> list[dict]:
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
 
 
+def _strict_summary(path: Path) -> dict:
+    def reject_constant(value):
+        raise ValueError(f"non-JSON numeric constant: {value}")
+
+    return json.loads(path.read_text(), parse_constant=reject_constant)
+
+
 def test_sql_fingerprint_is_stable_and_does_not_expose_literals():
     from brainlayer.writer_telemetry import fingerprint_sql
 
@@ -529,3 +536,114 @@ def test_rollup_rebuilds_oversized_stored_numbers_and_keeps_raw_append_truth(tmp
         "max": 10,
         "histogram": {"4": 2},
     }
+
+
+@pytest.mark.parametrize("kind", [[], {"unsupported": "kind"}])
+def test_nonstring_event_kind_keeps_raw_receipt_and_skips_rollup(tmp_path, monkeypatch, kind):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    result = append_event({"event": kind, "finished_at": "2026-10-23T12:00:00+00:00", "duration_ms": 10})
+    assert _events(log)[0]["event"] == kind
+    assert result is True
+    assert not list(log.parent.glob("writer-telemetry-summary-*.json"))
+
+
+@pytest.mark.parametrize("value", [1e308, 10**308], ids=["float", "integer"])
+def test_cumulative_overflow_omits_only_the_measurement_and_keeps_strict_summary(tmp_path, monkeypatch, value):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    event = {"event": "txn_finished", "finished_at": "2026-10-23T12:00:00+00:00", "duration_ms": value}
+    assert append_event(event) is True
+    target = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    before = _strict_summary(target)["groups"]["unknown|unknown|unknown"]["duration_ms"]
+    assert before == {"count": 1, "sum": value, "max": value, "histogram": {"31": 1}}
+    assert append_event(event) is True
+    assert len(_events(log)) == 2
+    group = _strict_summary(target)["groups"]["unknown|unknown|unknown"]
+    assert group["count"] == 2
+    assert group["duration_ms"] == before
+    assert append_event({**event, "duration_ms": 16}) is True
+    group = _strict_summary(target)["groups"]["unknown|unknown|unknown"]
+    assert group["count"] == 3
+    assert group["duration_ms"] == {"count": 2, "sum": value + 16, "max": value, "histogram": {"31": 1, "4": 1}}
+
+
+@pytest.mark.parametrize("watermarks", [None, [], "invalid"])
+def test_malformed_watermark_container_keeps_raw_truth_and_other_group_state(tmp_path, monkeypatch, watermarks):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    log.parent.mkdir(parents=True)
+    target = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    target.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "groups": {
+                    "drain|realtime|commit": {
+                        "count": 4,
+                        "watermarks": watermarks,
+                        "duration_ms": {"count": 1, "sum": 10, "max": 10, "histogram": {"4": 1}},
+                    }
+                },
+            }
+        )
+    )
+    result = append_event(
+        {
+            "event": "txn_finished",
+            "finished_at": "2026-10-23T12:00:00+00:00",
+            "producer": "drain",
+            "lane": "realtime",
+            "outcome": "commit",
+            "committed_at": 30,
+        }
+    )
+    assert _events(log)[0]["committed_at"] == 30
+    assert result is True
+    group = _strict_summary(target)["groups"]["drain|realtime|commit"]
+    assert group == {
+        "count": 5,
+        "watermarks": {"committed_at": 30},
+        "duration_ms": {"count": 1, "sum": 10, "max": 10, "histogram": {"4": 1}},
+    }
+
+
+@pytest.mark.parametrize("field", ["committed_at", "oldest_ingest_observed_at", "oldest_queued_at"])
+@pytest.mark.parametrize("invalid", [None, "invalid", [], True, float("nan"), float("inf"), 10**400])
+def test_invalid_stored_watermark_preserves_valid_peers_and_min_max(tmp_path, monkeypatch, field, invalid):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    log.parent.mkdir(parents=True)
+    target = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    watermarks = {"committed_at": 40, "oldest_ingest_observed_at": -5, "oldest_queued_at": 10}
+    watermarks[field] = invalid
+    target.write_text(
+        json.dumps({"schema_version": 1, "groups": {"unknown|unknown|unknown": {"count": 4, "watermarks": watermarks}}})
+    )
+    incoming = {"committed_at": 30, "oldest_ingest_observed_at": 20, "oldest_queued_at": 8}
+    result = append_event({"event": "txn_finished", "finished_at": "2026-10-23T12:00:00+00:00", **incoming})
+    assert _events(log)[0][field] == incoming[field]
+    assert result is True
+    group = _strict_summary(target)["groups"]["unknown|unknown|unknown"]
+    expected = {"committed_at": 40, "oldest_ingest_observed_at": -5, "oldest_queued_at": 8}
+    expected[field] = incoming[field]
+    assert group == {"count": 5, "watermarks": expected}
+
+
+@pytest.mark.parametrize("field", ["committed_at", "oldest_ingest_observed_at", "oldest_queued_at"])
+@pytest.mark.parametrize("invalid", [None, "invalid", True, float("nan"), float("inf"), 10**400, -(10**400)])
+def test_invalid_incoming_watermark_is_absent_and_keeps_raw_truth(tmp_path, monkeypatch, field, invalid):
+    from brainlayer.writer_telemetry import append_event
+
+    log, _ = _configure_paths(monkeypatch, tmp_path)
+    result = append_event({"event": "txn_finished", "finished_at": "2026-10-23T12:00:00+00:00", field: invalid})
+    assert json.dumps(_events(log)[0][field]) == json.dumps(invalid)
+    assert result is True
+    target = log.with_name("writer-telemetry-summary-2026-10-23.json")
+    group = _strict_summary(target)["groups"]["unknown|unknown|unknown"]
+    assert group["count"] == 1
+    assert field not in group.get("watermarks", {})
