@@ -12,7 +12,7 @@ brainlayer health-check --json --heal
 
 - Hotlane BrainBar embedding daemon is running.
 - No running hotlane command line is disabling the embedding backlog with `--backlog-batch 0`.
-- Active chunks missing semantic vectors are decreasing across ticks. One unchanged tick is tolerated; the second unchanged tick alarms.
+- Complete counts of active chunks missing semantic vectors are decreasing across ticks. One unchanged tick is tolerated; the second unchanged tick alarms. Partial windows report a lower bound and cannot trigger backlog healing.
 - BrainBar's served MCP socket can answer a `brain_search` canary successfully, including zero results.
 - The JSONL backup attempt log has a fresh terminal receipt. A verified upload and a
   verified `no-op` are healthy but remain distinct in `jsonl_backup.state`; failed,
@@ -33,9 +33,18 @@ removed by retention. Legacy receipts without
 `attempted_at` are interpreted at the launchd schedule of 05:00 in the producer
 machine's local timezone; this fallback disappears after the next stamped run.
 
-The missing-vector count is exact, but it computes the ID difference through the
-covering `chunks` and `chunk_vectors_rowids` indexes before reading chunk payloads.
-This keeps the scheduled check independent of database payload size.
+Missing-vector health work uses keyset pages on `chunks.rowid` and indexed vector-ID
+probes, bounded to 16 pages of 256 rows, 100,000 SQLite instructions (checked every
+100 instructions), and one second per tick. SQLite busy waits are limited to 50 ms.
+The stage also reserves the canary timeout plus one second from the total budget.
+`missing_embedding_scan` exposes `completeness` (`complete`, `partial`, `unknown`),
+`missing`, `scanned`, `cursor`, `measured_at`, `age_seconds`, and `reason`.
+Age is the elapsed time since this tick began measuring; no old window count is reused.
+Ticks resume at the cursor and wrap at the end, without adding counts across snapshots.
+Only a fresh sweep that finishes in one snapshot publishes an exact `missing_vectors`.
+Partial zero is not exact zero; positive partial counts remain visible as backlog
+warnings, and unfinished scans always emit an incomplete-measurement warning.
+Doctor retains its separate exact corpus-count contract.
 
 The check has a 45-second internal deadline. A query that exhausts that budget is
 interrupted and the state file is still refreshed with `slow_check: true`, the
@@ -61,12 +70,13 @@ uninterruptible `U`/`D` state are not kickstarted repeatedly; the check records 
 `heal_backoff` action and the existing circuit breaker escalates after repeated
 failed ticks.
 
-The command writes the latest successfully measured missing-vector count to
-`~/.local/share/brainlayer/health-check-state.json`; a timed-out tick preserves
-the previous count and marks the state as slow.
+The command writes the latest complete missing-vector count and the current scan to
+`~/.local/share/brainlayer/health-check-state.json`. Partial or unknown scans preserve
+the previous exact count, baseline, stall counter and heal episode. They cannot
+advance or reset missing-vector healing, and they leave the canary reachable.
 
 Missing-progress comparisons live in the private state file; the public health
-response schema is unchanged. A fresh, healthy drain heartbeat whose
+response also carries the current bounded scan. A fresh, healthy drain heartbeat whose
 `drained_total` advances resets the queue-backlog heal counter and circuit breaker
 only when measured queue depth also stays level or shrinks. A trickle of writes
 under a growing backlog does not reset escalation. Backlog alerts remain
