@@ -46,6 +46,39 @@ final class DeferredStoreTelemetryTests: XCTestCase {
         }
     }
 
+    func testRetentionCountsOnlyValidUTCDatesAndPreservesStraySummaries() throws {
+        try withLog { root in
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withFullDate]
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            let today = try XCTUnwrap(formatter.date(from: formatter.string(from: Date())))
+            let dates = (0...8).map { formatter.string(from: today.addingTimeInterval(-Double($0) * 86400)) }
+            for day in dates {
+                try Data("{}".utf8).write(to: root.appendingPathComponent("events-summary-\(day).json"))
+            }
+            let strayNames = ["aaa", "zzz", "2026-99-99", "2026-02-30", "2026-2-03"]
+            let untouched = Data("unrelated scratch bytes".utf8)
+            for suffix in strayNames {
+                try untouched.write(to: root.appendingPathComponent("events-summary-\(suffix).json"))
+            }
+            DeferredStoreTelemetry.record("queued", dbPath: "unused", queueID: "retention", chunkID: "retention",
+                                          origin: nil, queuedAt: nil)
+            DeferredStoreTelemetry.waitForWritesForTesting()
+            for suffix in strayNames {
+                let file = root.appendingPathComponent("events-summary-\(suffix).json")
+                XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "preserve non-date \(suffix)")
+                if FileManager.default.fileExists(atPath: file.path) {
+                    XCTAssertEqual(try Data(contentsOf: file), untouched)
+                }
+            }
+            let retained = try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { dates.contains(String($0.dropFirst("events-summary-".count).dropLast(".json".count))) }
+            XCTAssertEqual(Set(retained), Set(dates.prefix(8).map { "events-summary-\($0).json" }))
+            let events = try String(contentsOf: root.appendingPathComponent("events.jsonl"), encoding: .utf8)
+            XCTAssertTrue(events.contains("retention"))
+        }
+    }
+
     func testDuplicateReplayReturnsCanonicalChunkWithoutClaimingNewCommit() throws {
         try withLog { root in
             let db = BrainDatabase(path: root.appendingPathComponent("test.db").path)

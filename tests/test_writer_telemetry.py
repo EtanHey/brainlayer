@@ -437,12 +437,24 @@ def test_rollup_preserves_unsupported_summary_schema(tmp_path, monkeypatch):
     assert target.read_text() == original
 
 
+@pytest.fixture
+def finite_integer_digit_limit():
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        yield 640
+    finally:
+        sys.set_int_max_str_digits(previous)
+        assert sys.get_int_max_str_digits() == previous
+
+
 @pytest.mark.parametrize("schema_version", [1, 2])
-def test_rollup_preserves_undecodable_integer_summary_and_raw_append_truth(tmp_path, monkeypatch, schema_version):
+def test_rollup_preserves_undecodable_integer_summary_and_raw_append_truth(
+    tmp_path, monkeypatch, schema_version, finite_integer_digit_limit
+):
     from brainlayer.writer_telemetry import append_event
 
-    limit = sys.get_int_max_str_digits()
-    assert limit > 0, "this regression requires the interpreter's actual finite integer digit limit"
+    limit = finite_integer_digit_limit
     digits = "1" + "0" * limit
     print(f"integer_digit_limit={limit} fixture_digits={len(digits)} schema_version={schema_version}")
     stored = (
